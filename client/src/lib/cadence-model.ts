@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import type { Phase, PhaseStatus, PhaseStep, Project } from '@/components/cadence/data'
 
-const PHASE_STEPS: PhaseStep[] = ['discuss', 'plan', 'execute', 'verify', 'ship']
+export type { Phase, PhaseStatus, PhaseStep, Project } from '@/components/cadence/data'
+
+const PHASE_STEPS = ['discuss', 'plan', 'execute', 'verify', 'ship'] as const satisfies readonly PhaseStep[]
 const PLANNING_LIFECYCLE_STAGES = ['discussion', 'research', 'requirements', 'roadmap'] as const
 const STEP_INDEX = new Map(PHASE_STEPS.map((step, index) => [step, index]))
 
@@ -440,11 +442,11 @@ export interface OperatorApprovalAnswerShapeMeta {
 
 interface OperatorApprovalAnswerPolicyInput {
   actionId: string
-  sessionId: string | null | undefined
-  flowId: string | null | undefined
+  sessionId?: string | null
+  flowId?: string | null
   actionType: string
-  gateNodeId: string | null | undefined
-  gateKey: string | null | undefined
+  gateNodeId?: string | null
+  gateKey?: string | null
 }
 
 interface OperatorApprovalAnswerPolicy {

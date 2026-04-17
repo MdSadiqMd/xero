@@ -11,6 +11,7 @@ import type {
   RepositoryDiffResponseDto,
   RepositoryStatusChangedPayloadDto,
   RepositoryStatusResponseDto,
+  ResumeOperatorRunResponseDto,
   RuntimeRunDto,
   RuntimeRunUpdatedPayloadDto,
   RuntimeSessionDto,
@@ -18,6 +19,8 @@ import type {
   RuntimeUpdatedPayloadDto,
   SubscribeRuntimeStreamResponseDto,
   SyncNotificationAdaptersResponseDto,
+  UpsertNotificationRouteCredentialsRequestDto,
+  UpsertNotificationRouteCredentialsResponseDto,
 } from '@/src/lib/cadence-model'
 import { useCadenceDesktopState } from '@/src/features/cadence/use-cadence-desktop-state'
 
@@ -509,6 +512,7 @@ function createMockAdapter(options?: {
     routeTarget: string
     enabled: boolean
     metadataJson?: string | null
+    updatedAt: string
   }) => {
     const error = upsertRouteErrors[request.routeId]
     if (error) {
@@ -562,9 +566,31 @@ function createMockAdapter(options?: {
   const resolveOperatorAction = vi.fn(async () => {
     throw new Error('not used in runtime-run tests')
   })
-  const resumeOperatorRun = vi.fn(async () => {
-    throw new Error('not used in runtime-run tests')
-  })
+  const resumeOperatorRun = vi.fn(
+    async (
+      _projectId: string,
+      _actionId: string,
+      _options?: { userAnswer?: string | null },
+    ): Promise<ResumeOperatorRunResponseDto> => {
+      throw new Error('not used in runtime-run tests')
+    },
+  )
+
+  const getProjectSnapshot = vi.fn(async (projectId: string) => snapshots[projectId])
+  const upsertNotificationRouteCredentials = vi.fn(
+    async (
+      request: UpsertNotificationRouteCredentialsRequestDto,
+    ): Promise<UpsertNotificationRouteCredentialsResponseDto> => ({
+      projectId: request.projectId,
+      routeId: request.routeId,
+      routeKind: request.routeKind,
+      credentialScope: 'app_local',
+      hasBotToken: Boolean(request.credentials.botToken),
+      hasChatId: Boolean(request.credentials.chatId),
+      hasWebhookUrl: Boolean(request.credentials.webhookUrl),
+      updatedAt: request.updatedAt,
+    }),
+  )
 
   const adapter: CadenceDesktopAdapter = {
     isDesktopRuntime: () => true,
@@ -577,7 +603,7 @@ function createMockAdapter(options?: {
         projects: [makeProjectSummary('project-1', 'cadence')],
       },
     ),
-    getProjectSnapshot: vi.fn(async (projectId: string) => snapshots[projectId]),
+    getProjectSnapshot,
     getRepositoryStatus: vi.fn(async (projectId: string) => statuses[projectId]),
     getRepositoryDiff: vi.fn(async (projectId: string, scope: 'staged' | 'unstaged' | 'worktree') =>
       makeDiff(projectId, scope),
@@ -595,6 +621,7 @@ function createMockAdapter(options?: {
     listNotificationRoutes,
     listNotificationDispatches,
     upsertNotificationRoute: upsertNotificationRoute as never,
+    upsertNotificationRouteCredentials,
     recordNotificationDispatchOutcome: vi.fn(async () => {
       throw new Error('not used in runtime-run tests')
     }) as never,
@@ -660,7 +687,7 @@ function createMockAdapter(options?: {
 
   return {
     adapter,
-    getProjectSnapshot: adapter.getProjectSnapshot,
+    getProjectSnapshot,
     getRuntimeRun,
     listNotificationRoutes,
     listNotificationDispatches,
@@ -846,6 +873,7 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
               routeTarget: '@ops-room',
               enabled: false,
               metadataJson: null,
+              updatedAt: '2026-04-16T15:00:00Z',
             })
             .catch(() => undefined)
         }

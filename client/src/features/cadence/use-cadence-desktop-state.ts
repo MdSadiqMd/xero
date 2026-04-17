@@ -2244,7 +2244,7 @@ export function useCadenceDesktopState(
     }
 
     let disposed = false
-    let unsubscribe = () => undefined
+    let unsubscribe: () => void = () => {}
 
     if (typeof adapter.subscribeRuntimeStream !== 'function') {
       updateRuntimeStream(projectId, (currentStream) =>

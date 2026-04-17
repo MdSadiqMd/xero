@@ -10,6 +10,8 @@ import {
   type RepositoryDiffResponseDto,
   type RepositoryStatusChangedPayloadDto,
   type RepositoryStatusResponseDto,
+  type ResolveOperatorActionResponseDto,
+  type ResumeOperatorRunResponseDto,
   type RuntimeRunDto,
   type RuntimeRunUpdatedPayloadDto,
   type RuntimeSessionDto,
@@ -299,7 +301,7 @@ function createMockAdapter(options?: {
   const repositoryUnlisten = vi.fn()
   const runtimeUnlisten = vi.fn()
   const runtimeRunUnlisten = vi.fn()
-  const pickRepositoryFolder = vi.fn(async () => '/tmp/imported')
+  const pickRepositoryFolder = vi.fn(async (): Promise<string | null> => '/tmp/imported')
   const importRepository = vi.fn(async () =>
     options?.importResponse ?? {
       project: makeProjectSummary('project-2', 'orchestra'),
@@ -325,7 +327,7 @@ function createMockAdapter(options?: {
     const configuredDiff = options?.diffs?.[scope]
     return configuredDiff ?? makeDiff('project-1', scope, scope === 'unstaged' ? 'diff --git a/file b/file\n+change' : '')
   })
-  const getRuntimeRun = vi.fn(async (projectId: string) => runtimeRuns[projectId] ?? null)
+  const getRuntimeRun = vi.fn(async (projectId: string): Promise<RuntimeRunDto | null> => runtimeRuns[projectId] ?? null)
   const getRuntimeSession = vi.fn(async (projectId: string) => runtimeSessions[projectId])
   const listNotificationDispatches = vi.fn(async (projectId: string) => {
     const error = notificationDispatchErrors[projectId]
@@ -384,7 +386,7 @@ function createMockAdapter(options?: {
   )
   const startRuntimeRun = vi.fn(async (projectId: string) => runtimeRuns[projectId] ?? makeRuntimeRun(projectId))
   const startRuntimeSession = vi.fn(async (projectId: string) => makeRuntimeSession(projectId))
-  const stopRuntimeRun = vi.fn(async (projectId: string, runId: string) => {
+  const stopRuntimeRun = vi.fn(async (projectId: string, runId: string): Promise<RuntimeRunDto | null> => {
     const currentRun = runtimeRuns[projectId]
     if (!currentRun) {
       return null
@@ -411,52 +413,60 @@ function createMockAdapter(options?: {
       lastError: null,
     }),
   )
-  const resolveOperatorAction = vi.fn(async (projectId: string, actionId: string, decision: 'approve' | 'reject') => ({
-    approvalRequest: {
-      actionId,
-      sessionId: 'session-1',
-      flowId: 'flow-1',
-      actionType: 'review_worktree',
-      title: 'Review worktree changes',
-      detail: 'Inspect the pending repository diff before continuing.',
-      status: decision === 'approve' ? 'approved' : 'rejected',
-      decisionNote: null,
-      createdAt: '2026-04-13T20:01:00Z',
-      updatedAt: '2026-04-13T20:02:00Z',
-      resolvedAt: '2026-04-13T20:02:00Z',
-    },
-    verificationRecord: {
-      id: 1,
-      sourceActionId: actionId,
-      status: decision === 'approve' ? 'passed' : 'failed',
-      summary: decision === 'approve' ? 'Approved operator action.' : 'Rejected operator action.',
-      detail: null,
-      recordedAt: '2026-04-13T20:02:01Z',
-    },
-  }))
-  const resumeOperatorRun = vi.fn(async (_projectId: string, actionId: string) => ({
-    approvalRequest: {
-      actionId,
-      sessionId: 'session-1',
-      flowId: 'flow-1',
-      actionType: 'review_worktree',
-      title: 'Review worktree changes',
-      detail: 'Inspect the pending repository diff before continuing.',
-      status: 'approved',
-      decisionNote: null,
-      createdAt: '2026-04-13T20:01:00Z',
-      updatedAt: '2026-04-13T20:03:00Z',
-      resolvedAt: '2026-04-13T20:02:00Z',
-    },
-    resumeEntry: {
-      id: 1,
-      sourceActionId: actionId,
-      sessionId: 'session-1',
-      status: 'started',
-      summary: 'Operator resumed the selected project runtime session.',
-      createdAt: '2026-04-13T20:03:30Z',
-    },
-  }))
+  const resolveOperatorAction = vi.fn(
+    async (
+      projectId: string,
+      actionId: string,
+      decision: 'approve' | 'reject',
+    ): Promise<ResolveOperatorActionResponseDto> => ({
+      approvalRequest: {
+        actionId,
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        actionType: 'review_worktree',
+        title: 'Review worktree changes',
+        detail: 'Inspect the pending repository diff before continuing.',
+        status: decision === 'approve' ? 'approved' : 'rejected',
+        decisionNote: null,
+        createdAt: '2026-04-13T20:01:00Z',
+        updatedAt: '2026-04-13T20:02:00Z',
+        resolvedAt: '2026-04-13T20:02:00Z',
+      },
+      verificationRecord: {
+        id: 1,
+        sourceActionId: actionId,
+        status: decision === 'approve' ? 'passed' : 'failed',
+        summary: decision === 'approve' ? 'Approved operator action.' : 'Rejected operator action.',
+        detail: null,
+        recordedAt: '2026-04-13T20:02:01Z',
+      },
+    }),
+  )
+  const resumeOperatorRun = vi.fn(
+    async (_projectId: string, actionId: string): Promise<ResumeOperatorRunResponseDto> => ({
+      approvalRequest: {
+        actionId,
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        actionType: 'review_worktree',
+        title: 'Review worktree changes',
+        detail: 'Inspect the pending repository diff before continuing.',
+        status: 'approved',
+        decisionNote: null,
+        createdAt: '2026-04-13T20:01:00Z',
+        updatedAt: '2026-04-13T20:03:00Z',
+        resolvedAt: '2026-04-13T20:02:00Z',
+      },
+      resumeEntry: {
+        id: 1,
+        sourceActionId: actionId,
+        sessionId: 'session-1',
+        status: 'started',
+        summary: 'Operator resumed the selected project runtime session.',
+        createdAt: '2026-04-13T20:03:30Z',
+      },
+    }),
+  )
   const subscribeRuntimeStream = vi.fn(
     async (
       projectId: string,
@@ -551,6 +561,9 @@ function createMockAdapter(options?: {
     listNotificationRoutes,
     listNotificationDispatches,
     upsertNotificationRoute,
+    upsertNotificationRouteCredentials: vi.fn(async () => {
+      throw new Error('not used in use-cadence-desktop-state tests')
+    }) as never,
     recordNotificationDispatchOutcome: vi.fn(async () => {
       throw new Error('not used in use-cadence-desktop-state tests')
     }) as never,
@@ -584,6 +597,12 @@ function createMockAdapter(options?: {
       },
       syncedAt: '2026-04-17T03:00:00Z',
     })),
+    upsertWorkflowGraph: vi.fn(async () => {
+      throw new Error('not used in use-cadence-desktop-state tests')
+    }) as never,
+    applyWorkflowTransition: vi.fn(async () => {
+      throw new Error('not used in use-cadence-desktop-state tests')
+    }) as never,
     subscribeRuntimeStream,
     onProjectUpdated,
     onRepositoryStatusChanged,
@@ -1262,11 +1281,11 @@ describe('useCadenceDesktopState', () => {
       listProjects: { projects: [makeProjectSummary('project-1', 'cadence'), makeProjectSummary('project-2', 'orchestra')] },
     })
 
-    setup.getProjectSnapshot.mockImplementation(async (projectId: string) => {
+    setup.getProjectSnapshot.mockImplementation(async (projectId: string): Promise<ProjectSnapshotResponseDto> => {
       if (projectId === 'project-2') {
         const legacySnapshot = makeSnapshot(projectId, 'orchestra') as unknown as Record<string, unknown>
         delete legacySnapshot.lifecycle
-        return legacySnapshot
+        return legacySnapshot as unknown as ProjectSnapshotResponseDto
       }
 
       return makeSnapshot(projectId, 'cadence')

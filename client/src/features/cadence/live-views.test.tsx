@@ -284,6 +284,7 @@ function makeAgent(project = makeProject(), overrides: Partial<AgentPaneView> = 
     pendingApprovalCount: overrides.pendingApprovalCount ?? project.pendingApprovalCount,
     latestDecisionOutcome: overrides.latestDecisionOutcome ?? project.latestDecisionOutcome,
     resumeHistory: overrides.resumeHistory ?? project.resumeHistory,
+    notificationBroker: overrides.notificationBroker ?? project.notificationBroker,
     operatorActionStatus: overrides.operatorActionStatus ?? 'idle',
     pendingOperatorActionId: overrides.pendingOperatorActionId ?? null,
     operatorActionError: overrides.operatorActionError ?? null,
@@ -300,7 +301,7 @@ function makeAgent(project = makeProject(), overrides: Partial<AgentPaneView> = 
     notificationSyncSummary: overrides.notificationSyncSummary ?? null,
     notificationSyncError: overrides.notificationSyncError ?? null,
     notificationRouteIsRefreshing: overrides.notificationRouteIsRefreshing ?? false,
-    trustSnapshot: overrides.trustSnapshot ?? null,
+    trustSnapshot: overrides.trustSnapshot ?? undefined,
     sessionUnavailableReason:
       runtimeSession?.lastError?.message ??
       'Sign in with OpenAI to create or reuse a runtime session for this imported project.',
@@ -363,7 +364,7 @@ describe('live views', () => {
   it('renders the current empty workflow state', () => {
     render(<PhaseView workflow={makeWorkflow()} />)
 
-    expect(screen.getByText('Milestone —')).toBeVisible()
+    expect(screen.getByText('Milestone')).toBeVisible()
     expect(screen.getByText('M001')).toBeVisible()
     expect(screen.getByText('No milestone assigned')).toBeVisible()
     expect(
@@ -532,7 +533,7 @@ describe('live views', () => {
           requiresUserAnswer: true,
           answerRequirementReason: 'gate_linked',
           answerRequirementLabel: 'Required',
-          answerShapeKind: 'text',
+          answerShapeKind: 'plain_text',
           answerShapeLabel: 'Required user answer',
           answerShapeHint: 'Describe the operator decision that justifies approval.',
           answerPlaceholder: 'Provide operator input for this action.',
@@ -564,7 +565,7 @@ describe('live views', () => {
           requiresUserAnswer: true,
           answerRequirementReason: 'gate_linked',
           answerRequirementLabel: 'Required',
-          answerShapeKind: 'text',
+          answerShapeKind: 'plain_text',
           answerShapeLabel: 'Required user answer',
           answerShapeHint: 'Describe the operator decision that justifies approval.',
           answerPlaceholder: 'Provide operator input for this action.',

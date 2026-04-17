@@ -741,8 +741,8 @@ fn config_and_capability_files_lock_the_packaged_vite_shell_and_auth_opener_perm
         .expect("capabilities/default.json permissions must be an array");
     assert_eq!(
         permissions.len(),
-        3,
-        "capabilities/default.json permissions must stay least-privilege (core, dialog, scoped opener)"
+        7,
+        "capabilities/default.json permissions must stay scoped to core runtime, required window controls, dialog access, and the auth opener allowlist"
     );
     assert_eq!(
         permissions[0],
@@ -751,16 +751,36 @@ fn config_and_capability_files_lock_the_packaged_vite_shell_and_auth_opener_perm
     );
     assert_eq!(
         permissions[1],
-        json!("dialog:default"),
-        "capabilities/default.json permissions[1] drifted; dialog:default is required"
+        json!("core:window:allow-start-dragging"),
+        "capabilities/default.json permissions[1] drifted; frameless Cadence shell must retain start-dragging"
     );
     assert_eq!(
         permissions[2],
+        json!("core:window:allow-minimize"),
+        "capabilities/default.json permissions[2] drifted; packaged shell must retain minimize control"
+    );
+    assert_eq!(
+        permissions[3],
+        json!("core:window:allow-toggle-maximize"),
+        "capabilities/default.json permissions[3] drifted; packaged shell must retain maximize toggle control"
+    );
+    assert_eq!(
+        permissions[4],
+        json!("core:window:allow-close"),
+        "capabilities/default.json permissions[4] drifted; packaged shell must retain close control"
+    );
+    assert_eq!(
+        permissions[5],
+        json!("dialog:default"),
+        "capabilities/default.json permissions[5] drifted; dialog:default is required"
+    );
+    assert_eq!(
+        permissions[6],
         json!({
             "identifier": "opener:allow-open-url",
             "allow": [{ "url": "https://auth.openai.com/*" }]
         }),
-        "capabilities/default.json permissions[2] drifted; opener permission must stay scoped to https://auth.openai.com/*"
+        "capabilities/default.json permissions[6] drifted; opener permission must stay scoped to https://auth.openai.com/*"
     );
 }
 

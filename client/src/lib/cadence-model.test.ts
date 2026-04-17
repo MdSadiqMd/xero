@@ -37,6 +37,8 @@ import {
   type ProjectSnapshotResponseDto,
   type RepositoryStatusResponseDto,
   type RuntimeSessionDto,
+  type RuntimeStreamEventDto,
+  type RuntimeStreamItemDto,
 } from '@/src/lib/cadence-model'
 
 function makeSnapshot(overrides: Partial<ProjectSnapshotResponseDto> = {}): ProjectSnapshotResponseDto {
@@ -278,15 +280,15 @@ const streamSubscription = subscribeRuntimeStreamResponseSchema.parse({
 })
 
 function makeStreamEvent(
-  item: Omit<Parameters<typeof runtimeStreamItemSchema.parse>[0], 'runId' | 'sequence'>,
-  overrides: Partial<{
-    projectId: string
-    runtimeKind: string
-    runId: string
-    sessionId: string
-    flowId: string | null
-    sequence: number
-  }> = {},
+  item: Omit<RuntimeStreamItemDto, 'runId' | 'sequence'>,
+  overrides: Partial<Omit<RuntimeStreamEventDto, 'projectId' | 'item'>> & {
+    projectId?: string
+    runtimeKind?: string
+    runId?: string
+    sessionId?: string
+    flowId?: string | null
+    sequence?: number
+  } = {},
 ) {
   const sequence =
     overrides.sequence ??
@@ -297,7 +299,7 @@ function makeStreamEvent(
     runtimeKind: overrides.runtimeKind ?? streamSubscription.runtimeKind,
     runId: overrides.runId ?? streamSubscription.runId,
     sessionId: overrides.sessionId ?? streamSubscription.sessionId,
-    flowId: overrides.flowId ?? streamSubscription.flowId,
+    flowId: overrides.flowId ?? streamSubscription.flowId ?? null,
     subscribedItemKinds: streamSubscription.subscribedItemKinds,
     item: runtimeStreamItemSchema.parse({
       runId: overrides.runId ?? streamSubscription.runId,

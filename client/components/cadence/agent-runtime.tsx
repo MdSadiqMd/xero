@@ -196,7 +196,12 @@ const notificationRouteFormSchema = z
   })
 
 type NotificationRouteFormValues = z.input<typeof notificationRouteFormSchema>
-type NotificationRouteFormErrors = Partial<Record<'routeId' | 'routeKind' | 'routeTarget' | 'metadataJson' | 'form', string>>
+type NotificationRouteFieldErrorKey = 'routeId' | 'routeKind' | 'routeTarget' | 'metadataJson'
+type NotificationRouteFormErrors = Partial<Record<NotificationRouteFieldErrorKey | 'form', string>>
+
+function isNotificationRouteFieldErrorKey(value: unknown): value is NotificationRouteFieldErrorKey {
+  return value === 'routeId' || value === 'routeKind' || value === 'routeTarget' || value === 'metadataJson'
+}
 
 function getNotificationHealthBadgeVariant(health: AgentPaneView['notificationRoutes'][number]['health']): BadgeVariant {
   switch (health) {
@@ -249,7 +254,7 @@ function parseRouteFormErrors(error: unknown): NotificationRouteFormErrors {
   const nextErrors: NotificationRouteFormErrors = {}
   for (const issue of error.issues) {
     const path = issue.path[0]
-    if (path === 'routeId' || path === 'routeKind' || path === 'routeTarget' || path === 'metadataJson') {
+    if (isNotificationRouteFieldErrorKey(path)) {
       if (!nextErrors[path]) {
         nextErrors[path] = issue.message
       }
@@ -275,6 +280,7 @@ function toNotificationRouteRequest(formValues: NotificationRouteFormValues): Om
     routeTarget,
     enabled: parsedForm.enabled,
     metadataJson: metadataText.length > 0 ? metadataText : null,
+    updatedAt: new Date().toISOString(),
   }
 }
 
@@ -1537,10 +1543,7 @@ export function AgentRuntime({
     }))
 
     setRouteFormErrors((currentErrors) => {
-      const errorField =
-        field === 'routeId' || field === 'routeKind' || field === 'routeTarget' || field === 'metadataJson'
-          ? field
-          : null
+      const errorField: NotificationRouteFieldErrorKey | null = isNotificationRouteFieldErrorKey(field) ? field : null
 
       if ((!errorField || !currentErrors[errorField]) && !currentErrors.form) {
         return currentErrors
@@ -1644,6 +1647,7 @@ export function AgentRuntime({
         routeTarget: route.routeTarget,
         enabled: !route.enabled,
         metadataJson: route.metadataJson ?? null,
+        updatedAt: new Date().toISOString(),
       })
       setRoutePanelMessage(`${route.routeId} ${route.enabled ? 'disabled' : 'enabled'}.`)
     } catch (error) {
