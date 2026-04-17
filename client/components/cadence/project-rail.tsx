@@ -45,7 +45,7 @@ export function ProjectRail({
         <div className="border-b border-border px-3 py-2 text-[11px] text-destructive">{errorMessage}</div>
       ) : null}
 
-      <div className="flex-1 overflow-y-auto scrollbar-thin py-1">
+      <div className="flex-1 overflow-y-auto scrollbar-thin pb-1">
         {projects.length === 0 ? (
           <div className="px-3 py-4 text-[12px] text-muted-foreground">
             No projects imported yet.

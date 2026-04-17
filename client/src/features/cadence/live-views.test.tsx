@@ -453,8 +453,8 @@ describe('live views', () => {
 
     expect(screen.queryByRole('heading', { name: 'Authenticate to view live agent activity' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute('placeholder', 'Sign in with OpenAI to start.')
-    expect(screen.getByText('Signed out')).toBeVisible()
-    expect(screen.getByText('cadence')).toBeVisible()
+    expect(screen.queryByText('Context')).not.toBeInTheDocument()
+    expect(screen.queryByText('Signed out')).not.toBeInTheDocument()
   })
 
   it('renders the authenticated no-run agent state and can start a run', async () => {

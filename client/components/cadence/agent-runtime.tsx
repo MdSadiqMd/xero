@@ -32,7 +32,6 @@ import {
   ChevronRight,
   ExternalLink,
   GitBranch,
-  Hash,
   LoaderCircle,
   LogIn,
   LogOut,
@@ -1012,7 +1011,6 @@ export function AgentRuntime({
   const streamStatusMeta = useMemo(() => getStreamStatusMeta(agent, runtimeSession), [agent, runtimeSession])
   const repositoryPath = displayValue(agent.repositoryPath, 'No repository path available')
   const repositoryLabel = displayValue(agent.repositoryLabel, agent.project.name)
-  const accountLabel = displayValue(runtimeSession?.accountLabel, 'Not signed in')
   const sessionLabel = displayValue(runtimeSession?.sessionLabel, 'No session')
   const streamRunId = getStreamRunId(runtimeStream, renderableRuntimeRun)
   const streamSequenceLabel = formatSequence(runtimeStream?.lastSequence ?? null)
@@ -1658,9 +1656,9 @@ export function AgentRuntime({
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-border bg-card/30 px-4 py-2">
-          <div className="flex items-center gap-3 text-[11px]">
-            <span className="text-muted-foreground">Phase {agent.activePhase?.id ?? '—'}</span>
+        <div className="shrink-0 border-b border-border bg-card/30 px-4 py-[10px]">
+          <div className="flex items-center gap-3 text-[12px]">
+            <span className="text-muted-foreground">Phase</span>
             <ChevronRight className="h-3 w-3 text-muted-foreground/40" />
             <span className="font-medium text-foreground/80">{agent.activePhase?.name ?? 'None active'}</span>
             <div className="ml-auto flex items-center gap-3 text-[10px] font-mono text-muted-foreground">
@@ -2114,37 +2112,6 @@ export function AgentRuntime({
           </div>
         </div>
       </div>
-
-      <aside className="flex w-52 shrink-0 flex-col border-l border-border bg-sidebar">
-        <div className="border-b border-border px-3 py-2.5">
-          <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Context</span>
-        </div>
-        <div className="flex-1 space-y-3 overflow-y-auto scrollbar-thin px-3 py-3 text-[11px]">
-          <div>
-            <p className="mb-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Project</p>
-            <p className="font-medium text-foreground/90">{agent.project.name}</p>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-foreground/70">
-              <GitBranch className="h-3 w-3 shrink-0" />
-              <span className="truncate font-mono text-[11px]">{agent.branchLabel}</span>
-            </div>
-            <div className="flex items-center gap-2 text-foreground/70">
-              <Hash className="h-3 w-3 shrink-0" />
-              <span className="truncate font-mono text-[11px]">{agent.headShaLabel}</span>
-            </div>
-            <div className="flex items-center gap-2 text-foreground/70">
-              <Terminal className="h-3 w-3 shrink-0" />
-              <span className="truncate font-mono text-[11px]">{agent.runtimeLabel}</span>
-            </div>
-          </div>
-          <div>
-            <p className="mb-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Session</p>
-            <p className="text-foreground/80">{agent.authPhaseLabel ?? 'Signed out'}</p>
-            <p className="mt-1 truncate font-mono text-[11px] text-foreground/60">{accountLabel}</p>
-          </div>
-        </div>
-      </aside>
     </div>
   )
 }

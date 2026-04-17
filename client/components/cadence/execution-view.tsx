@@ -19,6 +19,7 @@ import {
   Loader2,
   RefreshCw,
   Terminal,
+  ChevronRight,
 } from 'lucide-react'
 import { CenteredEmptyState } from '@/components/cadence/centered-empty-state'
 import { getLangFromPath, tokenizeCode, type TokenizedLine } from '@/lib/shiki'
@@ -589,7 +590,8 @@ export function ExecutionView({
       <div className="flex items-center border-b border-border shrink-0">
         <div className="border-r border-border px-5 py-2.5">
           <div className="flex items-center gap-2 text-[13px]">
-            <span className="text-muted-foreground">Phase —</span>
+            <span className="text-muted-foreground">Phase</span>
+            <ChevronRight className="h-3 w-3 text-muted-foreground/40" />
             <h2 className="font-medium text-foreground">{execution.activePhase?.name ?? 'None active'}</h2>
           </div>
         </div>

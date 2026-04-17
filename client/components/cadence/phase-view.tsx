@@ -1,13 +1,13 @@
 "use client"
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
   safePercent,
   type PlanningLifecycleStageKindDto,
   type PlanningLifecycleStageView,
 } from '@/src/lib/cadence-model'
 import type { WorkflowPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
-import { GitBranch, Hash, LoaderCircle, Milestone, PanelRight, PanelRightClose, Play, Terminal } from 'lucide-react'
+import { LoaderCircle, Milestone, Play, ChevronRight } from 'lucide-react'
 import { CenteredEmptyState } from '@/components/cadence/centered-empty-state'
 
 interface PhaseViewProps {
@@ -65,9 +65,7 @@ function LifecycleStageCard({ card }: { card: LifecycleStageCardModel }) {
   return (
     <div
       className={`rounded-lg border p-3.5 ${
-        isEmpty
-          ? 'border-dashed border-border bg-card/30'
-          : 'border-border bg-card/60'
+        isEmpty ? 'border-dashed border-border bg-card/30' : 'border-border bg-card/60'
       }`}
     >
       <div className="flex items-center justify-between gap-3">
@@ -84,13 +82,13 @@ function LifecycleStageCard({ card }: { card: LifecycleStageCardModel }) {
           </span>
         )}
       </div>
-      {card.stage?.actionRequired && (
+      {card.stage?.actionRequired ? (
         <div className="mt-2">
           <span className="rounded-full border border-destructive/35 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium text-destructive">
             Action required
           </span>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -107,16 +105,6 @@ export function PhaseView({ workflow, onStartRun, canStartRun, isStartingRun }: 
     percentComplete: 0,
   }
   const hasLifecycle = workflow.hasLifecycle ?? lifecycle.hasStages
-
-  // Sidebar collapses by default when there's no active project/milestone
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => !hasLifecycle)
-
-  // Auto-collapse when lifecycle disappears; auto-expand when it appears for the first time
-  useEffect(() => {
-    if (!hasLifecycle) {
-      setSidebarCollapsed(true)
-    }
-  }, [hasLifecycle])
 
   const lifecycleCards = useMemo<LifecycleStageCardModel[]>(() => {
     const byStageFromList = LIFECYCLE_STAGE_ORDER.reduce<Record<PlanningLifecycleStageKindDto, PlanningLifecycleStageView[]>>(
@@ -159,16 +147,16 @@ export function PhaseView({ workflow, onStartRun, canStartRun, isStartingRun }: 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {/* Milestone header */}
         <div className="shrink-0 border-b border-border px-5 py-3">
           <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-2 min-w-0 text-[13px]">
-              <span className="shrink-0 text-muted-foreground">Milestone —</span>
+            <div className="flex min-w-0 items-center gap-2 text-[13px]">
+              <span className="shrink-0 text-muted-foreground">Milestone</span>
+              <ChevronRight className="h-3 w-3 text-muted-foreground/40" />
               <h2 className="truncate font-medium text-foreground">{milestoneLabel}</h2>
             </div>
             {hasStarted ? (
-              <div className="flex items-center gap-3 shrink-0">
-                <div className="w-24 h-1 overflow-hidden rounded-full bg-border">
+              <div className="shrink-0 flex items-center gap-3">
+                <div className="h-1 w-24 overflow-hidden rounded-full bg-border">
                   <div
                     className="h-full rounded-full bg-primary transition-all duration-500"
                     style={{ width: `${lifecyclePercent}%` }}
@@ -180,11 +168,11 @@ export function PhaseView({ workflow, onStartRun, canStartRun, isStartingRun }: 
                 </span>
               </div>
             ) : (
-              <div className="flex items-center gap-3 shrink-0 text-[12px]">
+              <div className="shrink-0 flex items-center gap-3 text-[12px]">
                 <span className="text-muted-foreground">Not started</span>
-                {canStartRun && onStartRun && (
+                {canStartRun && onStartRun ? (
                   <button
-                    className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                    className="flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
                     disabled={isStartingRun}
                     onClick={() => void onStartRun()}
                     type="button"
@@ -196,25 +184,23 @@ export function PhaseView({ workflow, onStartRun, canStartRun, isStartingRun }: 
                     )}
                     Start run
                   </button>
-                )}
+                ) : null}
               </div>
             )}
           </div>
         </div>
 
-        {/* Main content */}
-        <div className="flex flex-1 min-h-0 overflow-y-auto scrollbar-thin px-6 py-5">
+        <div className="flex min-h-0 flex-1 overflow-y-auto scrollbar-thin px-6 py-5">
           {hasLifecycle ? (
             <div className="w-full">
-              {/* Lifecycle section */}
               <section>
                 <div className="mb-3 flex items-center justify-between">
                   <h2 className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">
                     Planning lifecycle
                   </h2>
-                  {activeLifecycleLabel && (
+                  {activeLifecycleLabel ? (
                     <span className="text-[11px] text-primary">{activeLifecycleLabel} active</span>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="flex flex-col gap-2.5">
@@ -233,60 +219,6 @@ export function PhaseView({ workflow, onStartRun, canStartRun, isStartingRun }: 
           )}
         </div>
       </div>
-
-      {/* Right sidebar — project context */}
-      {sidebarCollapsed ? (
-        <aside className="flex w-9 shrink-0 flex-col border-l border-border bg-sidebar">
-          <div className="flex justify-center border-b border-border py-2.5">
-            <button
-              onClick={() => setSidebarCollapsed(false)}
-              className="rounded p-1 text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-              title="Expand context panel"
-            >
-              <PanelRight className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </aside>
-      ) : (
-        <aside className="flex w-52 shrink-0 flex-col border-l border-border bg-sidebar">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-            <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Context</span>
-            <button
-              onClick={() => setSidebarCollapsed(true)}
-              className="rounded p-1 text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-              title="Collapse context panel"
-            >
-              <PanelRightClose className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto scrollbar-thin px-3 py-3 text-[11px]">
-            <div>
-              <p className="mb-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Project</p>
-              <p className="font-medium text-foreground/90">{workflow.project.name ?? workflow.project.repository?.displayName ?? '—'}</p>
-            </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-foreground/70">
-                <GitBranch className="h-3 w-3 shrink-0" />
-                <span className="truncate font-mono text-[11px]">{workflow.project.branchLabel}</span>
-              </div>
-              <div className="flex items-center gap-2 text-foreground/70">
-                <Hash className="h-3 w-3 shrink-0" />
-                <span className="truncate font-mono text-[11px]">{workflow.project.repository?.headShaLabel ?? '—'}</span>
-              </div>
-              <div className="flex items-center gap-2 text-foreground/70">
-                <Terminal className="h-3 w-3 shrink-0" />
-                <span className="truncate font-mono text-[11px]">{workflow.project.runtimeLabel}</span>
-              </div>
-            </div>
-            {workflow.project.repository?.rootPath && (
-              <div>
-                <p className="mb-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">Path</p>
-                <p className="break-all font-mono text-[10px] text-muted-foreground">{workflow.project.repository.rootPath}</p>
-              </div>
-            )}
-          </div>
-        </aside>
-      )}
     </div>
   )
 }
