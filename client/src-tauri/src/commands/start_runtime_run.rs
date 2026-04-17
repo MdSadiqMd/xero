@@ -77,7 +77,7 @@ pub fn start_runtime_run<R: Runtime>(
     Ok(runtime_run)
 }
 
-fn is_reconnectable_runtime_run(
+pub(super) fn is_reconnectable_runtime_run(
     snapshot: &crate::db::project_store::RuntimeRunSnapshotRecord,
 ) -> bool {
     matches!(
@@ -88,7 +88,7 @@ fn is_reconnectable_runtime_run(
         == crate::db::project_store::RuntimeRunTransportLiveness::Reachable
 }
 
-fn ensure_runtime_run_auth_ready(phase: &RuntimeAuthPhase) -> CommandResult<()> {
+pub(super) fn ensure_runtime_run_auth_ready(phase: &RuntimeAuthPhase) -> CommandResult<()> {
     match phase {
         RuntimeAuthPhase::Authenticated => Ok(()),
         RuntimeAuthPhase::Starting

@@ -1,4 +1,6 @@
 pub mod apply_workflow_transition;
+pub mod cancel_autonomous_run;
+pub mod get_autonomous_run;
 pub mod get_project_snapshot;
 pub mod get_repository_diff;
 pub mod get_repository_status;
@@ -13,6 +15,7 @@ pub mod record_notification_dispatch_outcome;
 pub mod resolve_operator_action;
 pub mod resume_operator_run;
 pub(crate) mod runtime_support;
+pub mod start_autonomous_run;
 pub mod start_openai_login;
 pub mod start_runtime_run;
 pub mod start_runtime_session;
@@ -31,6 +34,8 @@ use thiserror::Error;
 use crate::db::project_store;
 
 pub use apply_workflow_transition::apply_workflow_transition;
+pub use cancel_autonomous_run::cancel_autonomous_run;
+pub use get_autonomous_run::get_autonomous_run;
 pub use get_project_snapshot::get_project_snapshot;
 pub use get_repository_diff::get_repository_diff;
 pub use get_repository_status::get_repository_status;
@@ -44,6 +49,7 @@ pub use logout_runtime_session::logout_runtime_session;
 pub use record_notification_dispatch_outcome::record_notification_dispatch_outcome;
 pub use resolve_operator_action::resolve_operator_action;
 pub use resume_operator_run::resume_operator_run;
+pub use start_autonomous_run::start_autonomous_run;
 pub use start_openai_login::start_openai_login;
 pub use start_runtime_run::start_runtime_run;
 pub use start_runtime_session::start_runtime_session;
@@ -58,15 +64,18 @@ pub use upsert_workflow_graph::upsert_workflow_graph;
 
 pub const IMPORT_REPOSITORY_COMMAND: &str = "import_repository";
 pub const LIST_PROJECTS_COMMAND: &str = "list_projects";
+pub const GET_AUTONOMOUS_RUN_COMMAND: &str = "get_autonomous_run";
 pub const GET_PROJECT_SNAPSHOT_COMMAND: &str = "get_project_snapshot";
 pub const GET_REPOSITORY_STATUS_COMMAND: &str = "get_repository_status";
 pub const GET_REPOSITORY_DIFF_COMMAND: &str = "get_repository_diff";
 pub const GET_RUNTIME_RUN_COMMAND: &str = "get_runtime_run";
 pub const GET_RUNTIME_SESSION_COMMAND: &str = "get_runtime_session";
+pub const START_AUTONOMOUS_RUN_COMMAND: &str = "start_autonomous_run";
 pub const START_OPENAI_LOGIN_COMMAND: &str = "start_openai_login";
 pub const SUBMIT_OPENAI_CALLBACK_COMMAND: &str = "submit_openai_callback";
 pub const LOGOUT_RUNTIME_SESSION_COMMAND: &str = "logout_runtime_session";
 pub const START_RUNTIME_RUN_COMMAND: &str = "start_runtime_run";
+pub const CANCEL_AUTONOMOUS_RUN_COMMAND: &str = "cancel_autonomous_run";
 pub const START_RUNTIME_SESSION_COMMAND: &str = "start_runtime_session";
 pub const STOP_RUNTIME_RUN_COMMAND: &str = "stop_runtime_run";
 pub const SUBSCRIBE_RUNTIME_STREAM_COMMAND: &str = "subscribe_runtime_stream";
@@ -87,15 +96,18 @@ pub const APPLY_WORKFLOW_TRANSITION_COMMAND: &str = "apply_workflow_transition";
 pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     IMPORT_REPOSITORY_COMMAND,
     LIST_PROJECTS_COMMAND,
+    GET_AUTONOMOUS_RUN_COMMAND,
     GET_PROJECT_SNAPSHOT_COMMAND,
     GET_REPOSITORY_STATUS_COMMAND,
     GET_REPOSITORY_DIFF_COMMAND,
     GET_RUNTIME_RUN_COMMAND,
     GET_RUNTIME_SESSION_COMMAND,
+    START_AUTONOMOUS_RUN_COMMAND,
     START_OPENAI_LOGIN_COMMAND,
     SUBMIT_OPENAI_CALLBACK_COMMAND,
     LOGOUT_RUNTIME_SESSION_COMMAND,
     START_RUNTIME_RUN_COMMAND,
+    CANCEL_AUTONOMOUS_RUN_COMMAND,
     START_RUNTIME_SESSION_COMMAND,
     STOP_RUNTIME_RUN_COMMAND,
     SUBSCRIBE_RUNTIME_STREAM_COMMAND,
@@ -962,6 +974,10 @@ pub struct ProjectSnapshotResponseDto {
     pub resume_history: Vec<ResumeHistoryEntryDto>,
     #[serde(default)]
     pub handoff_packages: Vec<WorkflowHandoffPackageDto>,
+    #[serde(default)]
+    pub autonomous_run: Option<AutonomousRunDto>,
+    #[serde(default)]
+    pub autonomous_unit: Option<AutonomousUnitDto>,
 }
 
 pub(crate) fn map_workflow_transition_event_record(
@@ -1405,6 +1421,131 @@ pub struct RuntimeUpdatedPayloadDto {
 pub struct RuntimeRunUpdatedPayloadDto {
     pub project_id: String,
     pub run: Option<RuntimeRunDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousRunStatusDto {
+    Starting,
+    Running,
+    Paused,
+    Cancelling,
+    Cancelled,
+    Stale,
+    Failed,
+    Stopped,
+    Crashed,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousRunRecoveryStateDto {
+    Healthy,
+    RecoveryRequired,
+    Terminal,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousUnitKindDto {
+    Bootstrap,
+    State,
+    Tool,
+    ActionRequired,
+    Diagnostic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousUnitStatusDto {
+    Pending,
+    Active,
+    Paused,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousLifecycleReasonDto {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousRunDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub runtime_kind: String,
+    pub supervisor_kind: String,
+    pub status: AutonomousRunStatusDto,
+    pub recovery_state: AutonomousRunRecoveryStateDto,
+    pub active_unit_id: Option<String>,
+    pub duplicate_start_detected: bool,
+    pub duplicate_start_run_id: Option<String>,
+    pub duplicate_start_reason: Option<String>,
+    pub started_at: String,
+    pub last_heartbeat_at: Option<String>,
+    pub last_checkpoint_at: Option<String>,
+    pub paused_at: Option<String>,
+    pub cancelled_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub crashed_at: Option<String>,
+    pub stopped_at: Option<String>,
+    pub pause_reason: Option<AutonomousLifecycleReasonDto>,
+    pub cancel_reason: Option<AutonomousLifecycleReasonDto>,
+    pub crash_reason: Option<AutonomousLifecycleReasonDto>,
+    pub last_error_code: Option<String>,
+    pub last_error: Option<RuntimeRunDiagnosticDto>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousUnitDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub sequence: u32,
+    pub kind: AutonomousUnitKindDto,
+    pub status: AutonomousUnitStatusDto,
+    pub summary: String,
+    pub boundary_id: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub updated_at: String,
+    pub last_error_code: Option<String>,
+    pub last_error: Option<RuntimeRunDiagnosticDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousRunStateDto {
+    pub run: Option<AutonomousRunDto>,
+    pub unit: Option<AutonomousUnitDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetAutonomousRunRequestDto {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartAutonomousRunRequestDto {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CancelAutonomousRunRequestDto {
+    pub project_id: String,
+    pub run_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

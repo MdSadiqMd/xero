@@ -1,7 +1,10 @@
 use cadence_desktop_lib::{
     commands::{
-        ApplyWorkflowTransitionRequestDto, ApplyWorkflowTransitionResponseDto, BranchSummaryDto,
-        ChangeKind, CommandError, CommandErrorClass, GetRuntimeRunRequestDto,
+        ApplyWorkflowTransitionRequestDto, ApplyWorkflowTransitionResponseDto,
+        AutonomousLifecycleReasonDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
+        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousUnitDto,
+        AutonomousUnitKindDto, AutonomousUnitStatusDto, BranchSummaryDto, ChangeKind,
+        CommandError, CommandErrorClass, GetAutonomousRunRequestDto, GetRuntimeRunRequestDto,
         ImportRepositoryRequestDto, ListNotificationDispatchesRequestDto,
         ListNotificationDispatchesResponseDto, ListNotificationRoutesRequestDto,
         ListNotificationRoutesResponseDto, ListProjectsResponseDto, NotificationDispatchDto,
@@ -20,7 +23,8 @@ use cadence_desktop_lib::{
         RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto, RuntimeRunDto, RuntimeRunStatusDto,
         RuntimeRunTransportDto, RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto,
         RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeUpdatedPayloadDto,
-        StartOpenAiLoginRequestDto, StartRuntimeRunRequestDto, StopRuntimeRunRequestDto,
+        StartAutonomousRunRequestDto, StartOpenAiLoginRequestDto, StartRuntimeRunRequestDto,
+        StopRuntimeRunRequestDto, CancelAutonomousRunRequestDto,
         SubmitNotificationReplyRequestDto, SubmitNotificationReplyResponseDto,
         SubmitOpenAiCallbackRequestDto, SubscribeRuntimeStreamRequestDto,
         SubscribeRuntimeStreamResponseDto, SyncNotificationAdaptersRequestDto,
@@ -34,7 +38,8 @@ use cadence_desktop_lib::{
         WorkflowGraphGateRequestDto, WorkflowGraphNodeDto, WorkflowHandoffPackageDto,
         WorkflowTransitionEventDto, WorkflowTransitionGateDecisionDto,
         WorkflowTransitionGateUpdateRequestDto, APPLY_WORKFLOW_TRANSITION_COMMAND,
-        CANCEL_OPENAI_CODEX_AUTH_COMMAND, COMPLETE_OPENAI_CODEX_AUTH_COMMAND,
+        CANCEL_AUTONOMOUS_RUN_COMMAND, CANCEL_OPENAI_CODEX_AUTH_COMMAND,
+        COMPLETE_OPENAI_CODEX_AUTH_COMMAND, GET_AUTONOMOUS_RUN_COMMAND,
         GET_PROJECT_SNAPSHOT_COMMAND, GET_REPOSITORY_DIFF_COMMAND, GET_REPOSITORY_STATUS_COMMAND,
         GET_RUNTIME_AUTH_STATUS_COMMAND, GET_RUNTIME_RUN_COMMAND, IMPORT_REPOSITORY_COMMAND,
         LIST_NOTIFICATION_DISPATCHES_COMMAND, LIST_NOTIFICATION_ROUTES_COMMAND,
@@ -42,7 +47,8 @@ use cadence_desktop_lib::{
         REFRESH_OPENAI_CODEX_AUTH_COMMAND, REGISTERED_COMMAND_NAMES,
         REPOSITORY_STATUS_CHANGED_EVENT, RESOLVE_OPERATOR_ACTION_COMMAND,
         RESUME_OPERATOR_RUN_COMMAND, RUNTIME_RUN_UPDATED_EVENT, RUNTIME_UPDATED_EVENT,
-        START_OPENAI_CODEX_AUTH_COMMAND, START_RUNTIME_RUN_COMMAND, STOP_RUNTIME_RUN_COMMAND,
+        START_AUTONOMOUS_RUN_COMMAND, START_OPENAI_CODEX_AUTH_COMMAND,
+        START_RUNTIME_RUN_COMMAND, STOP_RUNTIME_RUN_COMMAND,
         SUBMIT_NOTIFICATION_REPLY_COMMAND, SUBSCRIBE_RUNTIME_STREAM_COMMAND,
         SYNC_NOTIFICATION_ADAPTERS_COMMAND, UPSERT_NOTIFICATION_ROUTE_COMMAND,
         UPSERT_NOTIFICATION_ROUTE_CREDENTIALS_COMMAND, UPSERT_WORKFLOW_GRAPH_COMMAND,
@@ -175,6 +181,68 @@ fn sample_skipped_automatic_dispatch_outcome() -> WorkflowAutomaticDispatchOutco
     }
 }
 
+fn sample_autonomous_run(duplicate_start_detected: bool) -> AutonomousRunDto {
+    AutonomousRunDto {
+        project_id: "project-1".into(),
+        run_id: "run-1".into(),
+        runtime_kind: "openai_codex".into(),
+        supervisor_kind: "detached_pty".into(),
+        status: AutonomousRunStatusDto::Stale,
+        recovery_state: AutonomousRunRecoveryStateDto::RecoveryRequired,
+        active_unit_id: Some("run-1:checkpoint:2".into()),
+        duplicate_start_detected,
+        duplicate_start_run_id: duplicate_start_detected.then_some("run-1".into()),
+        duplicate_start_reason: duplicate_start_detected.then_some(
+            "Cadence reused the already-active autonomous run for this project instead of launching a duplicate supervisor."
+                .into(),
+        ),
+        started_at: "2026-04-15T23:10:00Z".into(),
+        last_heartbeat_at: Some("2026-04-15T23:10:01Z".into()),
+        last_checkpoint_at: Some("2026-04-15T23:10:02Z".into()),
+        paused_at: None,
+        cancelled_at: None,
+        completed_at: None,
+        crashed_at: Some("2026-04-15T23:10:03Z".into()),
+        stopped_at: None,
+        pause_reason: None,
+        cancel_reason: None,
+        crash_reason: Some(AutonomousLifecycleReasonDto {
+            code: "runtime_supervisor_connect_failed".into(),
+            message: "Cadence could not connect to the detached supervisor control endpoint."
+                .into(),
+        }),
+        last_error_code: Some("runtime_supervisor_connect_failed".into()),
+        last_error: Some(RuntimeRunDiagnosticDto {
+            code: "runtime_supervisor_connect_failed".into(),
+            message: "Cadence could not connect to the detached supervisor control endpoint."
+                .into(),
+        }),
+        updated_at: "2026-04-15T23:10:03Z".into(),
+    }
+}
+
+fn sample_autonomous_unit() -> AutonomousUnitDto {
+    AutonomousUnitDto {
+        project_id: "project-1".into(),
+        run_id: "run-1".into(),
+        unit_id: "run-1:checkpoint:2".into(),
+        sequence: 2,
+        kind: AutonomousUnitKindDto::State,
+        status: AutonomousUnitStatusDto::Active,
+        summary: "Supervisor heartbeat recorded.".into(),
+        boundary_id: None,
+        started_at: "2026-04-15T23:10:02Z".into(),
+        finished_at: None,
+        updated_at: "2026-04-15T23:10:03Z".into(),
+        last_error_code: Some("runtime_supervisor_connect_failed".into()),
+        last_error: Some(RuntimeRunDiagnosticDto {
+            code: "runtime_supervisor_connect_failed".into(),
+            message: "Cadence could not connect to the detached supervisor control endpoint."
+                .into(),
+        }),
+    }
+}
+
 fn sample_snapshot() -> ProjectSnapshotResponseDto {
     ProjectSnapshotResponseDto {
         project: sample_project(),
@@ -234,6 +302,8 @@ fn sample_snapshot() -> ProjectSnapshotResponseDto {
             created_at: "2026-04-13T20:06:33Z".into(),
         }],
         handoff_packages: vec![sample_handoff_package()],
+        autonomous_run: Some(sample_autonomous_run(false)),
+        autonomous_unit: Some(sample_autonomous_unit()),
     }
 }
 
@@ -246,8 +316,8 @@ fn builder_boots_and_registered_commands_return_expected_contract_shapes() {
 
     assert_eq!(
         REGISTERED_COMMAND_NAMES.len(),
-        25,
-        "expected twenty-five desktop commands"
+        28,
+        "expected twenty-eight desktop commands"
     );
 
     tauri::test::assert_ipc_response(
@@ -290,6 +360,15 @@ fn builder_boots_and_registered_commands_return_expected_contract_shapes() {
         invoke_request(
             GET_REPOSITORY_DIFF_COMMAND,
             json!({ "request": { "projectId": "project-1", "scope": "unstaged" } }),
+        ),
+        Err(CommandError::project_not_found()),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
+            GET_AUTONOMOUS_RUN_COMMAND,
+            json!({ "request": { "projectId": "project-1" } }),
         ),
         Err(CommandError::project_not_found()),
     );
@@ -348,8 +427,26 @@ fn builder_boots_and_registered_commands_return_expected_contract_shapes() {
     tauri::test::assert_ipc_response(
         &webview,
         invoke_request(
+            START_AUTONOMOUS_RUN_COMMAND,
+            json!({ "request": { "projectId": "project-1" } }),
+        ),
+        Err(CommandError::project_not_found()),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
             START_RUNTIME_RUN_COMMAND,
             json!({ "request": { "projectId": "project-1" } }),
+        ),
+        Err(CommandError::project_not_found()),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
+            CANCEL_AUTONOMOUS_RUN_COMMAND,
+            json!({ "request": { "projectId": "project-1", "runId": "run-1" } }),
         ),
         Err(CommandError::project_not_found()),
     );
@@ -938,7 +1035,57 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
                     "packageHash": "a18fc57e3d2b8f4ef67f5b50f37ba7d85f49a1be987f17fa9dc0ad5a64ff8322",
                     "createdAt": "2026-04-15T18:01:01Z"
                 }
-            ]
+            ],
+            "autonomousRun": {
+                "projectId": "project-1",
+                "runId": "run-1",
+                "runtimeKind": "openai_codex",
+                "supervisorKind": "detached_pty",
+                "status": "stale",
+                "recoveryState": "recovery_required",
+                "activeUnitId": "run-1:checkpoint:2",
+                "duplicateStartDetected": false,
+                "duplicateStartRunId": null,
+                "duplicateStartReason": null,
+                "startedAt": "2026-04-15T23:10:00Z",
+                "lastHeartbeatAt": "2026-04-15T23:10:01Z",
+                "lastCheckpointAt": "2026-04-15T23:10:02Z",
+                "pausedAt": null,
+                "cancelledAt": null,
+                "completedAt": null,
+                "crashedAt": "2026-04-15T23:10:03Z",
+                "stoppedAt": null,
+                "pauseReason": null,
+                "cancelReason": null,
+                "crashReason": {
+                    "code": "runtime_supervisor_connect_failed",
+                    "message": "Cadence could not connect to the detached supervisor control endpoint."
+                },
+                "lastErrorCode": "runtime_supervisor_connect_failed",
+                "lastError": {
+                    "code": "runtime_supervisor_connect_failed",
+                    "message": "Cadence could not connect to the detached supervisor control endpoint."
+                },
+                "updatedAt": "2026-04-15T23:10:03Z"
+            },
+            "autonomousUnit": {
+                "projectId": "project-1",
+                "runId": "run-1",
+                "unitId": "run-1:checkpoint:2",
+                "sequence": 2,
+                "kind": "state",
+                "status": "active",
+                "summary": "Supervisor heartbeat recorded.",
+                "boundaryId": null,
+                "startedAt": "2026-04-15T23:10:02Z",
+                "finishedAt": null,
+                "updatedAt": "2026-04-15T23:10:03Z",
+                "lastErrorCode": "runtime_supervisor_connect_failed",
+                "lastError": {
+                    "code": "runtime_supervisor_connect_failed",
+                    "message": "Cadence could not connect to the detached supervisor control endpoint."
+                }
+            }
         })
     );
 
@@ -1285,6 +1432,67 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
         })
     );
 
+    let autonomous_state = serde_json::to_value(AutonomousRunStateDto {
+        run: Some(sample_autonomous_run(true)),
+        unit: Some(sample_autonomous_unit()),
+    })
+    .expect("autonomous run state should serialize");
+    assert_eq!(
+        autonomous_state,
+        json!({
+            "run": {
+                "projectId": "project-1",
+                "runId": "run-1",
+                "runtimeKind": "openai_codex",
+                "supervisorKind": "detached_pty",
+                "status": "stale",
+                "recoveryState": "recovery_required",
+                "activeUnitId": "run-1:checkpoint:2",
+                "duplicateStartDetected": true,
+                "duplicateStartRunId": "run-1",
+                "duplicateStartReason": "Cadence reused the already-active autonomous run for this project instead of launching a duplicate supervisor.",
+                "startedAt": "2026-04-15T23:10:00Z",
+                "lastHeartbeatAt": "2026-04-15T23:10:01Z",
+                "lastCheckpointAt": "2026-04-15T23:10:02Z",
+                "pausedAt": null,
+                "cancelledAt": null,
+                "completedAt": null,
+                "crashedAt": "2026-04-15T23:10:03Z",
+                "stoppedAt": null,
+                "pauseReason": null,
+                "cancelReason": null,
+                "crashReason": {
+                    "code": "runtime_supervisor_connect_failed",
+                    "message": "Cadence could not connect to the detached supervisor control endpoint."
+                },
+                "lastErrorCode": "runtime_supervisor_connect_failed",
+                "lastError": {
+                    "code": "runtime_supervisor_connect_failed",
+                    "message": "Cadence could not connect to the detached supervisor control endpoint."
+                },
+                "updatedAt": "2026-04-15T23:10:03Z"
+            },
+            "unit": {
+                "projectId": "project-1",
+                "runId": "run-1",
+                "unitId": "run-1:checkpoint:2",
+                "sequence": 2,
+                "kind": "state",
+                "status": "active",
+                "summary": "Supervisor heartbeat recorded.",
+                "boundaryId": null,
+                "startedAt": "2026-04-15T23:10:02Z",
+                "finishedAt": null,
+                "updatedAt": "2026-04-15T23:10:03Z",
+                "lastErrorCode": "runtime_supervisor_connect_failed",
+                "lastError": {
+                    "code": "runtime_supervisor_connect_failed",
+                    "message": "Cadence could not connect to the detached supervisor control endpoint."
+                }
+            }
+        })
+    );
+
     let start_request = serde_json::to_value(StartOpenAiLoginRequestDto {
         project_id: "project-1".into(),
         originator: Some("cadence-tests".into()),
@@ -1316,11 +1524,23 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
     .expect("auth refresh request should serialize");
     assert_eq!(refresh_request, json!({ "projectId": "project-1" }));
 
+    let get_autonomous_run_request = serde_json::to_value(GetAutonomousRunRequestDto {
+        project_id: "project-1".into(),
+    })
+    .expect("get autonomous run request should serialize");
+    assert_eq!(get_autonomous_run_request, json!({ "projectId": "project-1" }));
+
     let get_runtime_run_request = serde_json::to_value(GetRuntimeRunRequestDto {
         project_id: "project-1".into(),
     })
     .expect("get runtime run request should serialize");
     assert_eq!(get_runtime_run_request, json!({ "projectId": "project-1" }));
+
+    let start_autonomous_run_request = serde_json::to_value(StartAutonomousRunRequestDto {
+        project_id: "project-1".into(),
+    })
+    .expect("start autonomous run request should serialize");
+    assert_eq!(start_autonomous_run_request, json!({ "projectId": "project-1" }));
 
     let start_runtime_run_request = serde_json::to_value(StartRuntimeRunRequestDto {
         project_id: "project-1".into(),
@@ -1329,6 +1549,16 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
     assert_eq!(
         start_runtime_run_request,
         json!({ "projectId": "project-1" })
+    );
+
+    let cancel_autonomous_run_request = serde_json::to_value(CancelAutonomousRunRequestDto {
+        project_id: "project-1".into(),
+        run_id: "run-1".into(),
+    })
+    .expect("cancel autonomous run request should serialize");
+    assert_eq!(
+        cancel_autonomous_run_request,
+        json!({ "projectId": "project-1", "runId": "run-1" })
     );
 
     let stop_runtime_run_request = serde_json::to_value(StopRuntimeRunRequestDto {

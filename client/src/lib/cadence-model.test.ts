@@ -110,6 +110,64 @@ function makeSnapshot(overrides: Partial<ProjectSnapshotResponseDto> = {}): Proj
   }
 }
 
+function makeAutonomousRun(overrides: Partial<NonNullable<ProjectSnapshotResponseDto['autonomousRun']>> = {}) {
+  return {
+    projectId: 'project-1',
+    runId: 'run-1',
+    runtimeKind: 'openai_codex',
+    supervisorKind: 'detached_pty',
+    status: 'stale' as const,
+    recoveryState: 'recovery_required' as const,
+    activeUnitId: 'run-1:checkpoint:2',
+    duplicateStartDetected: false,
+    duplicateStartRunId: null,
+    duplicateStartReason: null,
+    startedAt: '2026-04-15T23:10:00Z',
+    lastHeartbeatAt: '2026-04-15T23:10:01Z',
+    lastCheckpointAt: '2026-04-15T23:10:02Z',
+    pausedAt: null,
+    cancelledAt: null,
+    completedAt: null,
+    crashedAt: '2026-04-15T23:10:03Z',
+    stoppedAt: null,
+    pauseReason: null,
+    cancelReason: null,
+    crashReason: {
+      code: 'runtime_supervisor_connect_failed',
+      message: 'Cadence could not connect to the detached supervisor control endpoint.',
+    },
+    lastErrorCode: 'runtime_supervisor_connect_failed',
+    lastError: {
+      code: 'runtime_supervisor_connect_failed',
+      message: 'Cadence could not connect to the detached supervisor control endpoint.',
+    },
+    updatedAt: '2026-04-15T23:10:03Z',
+    ...overrides,
+  }
+}
+
+function makeAutonomousUnit(overrides: Partial<NonNullable<ProjectSnapshotResponseDto['autonomousUnit']>> = {}) {
+  return {
+    projectId: 'project-1',
+    runId: 'run-1',
+    unitId: 'run-1:checkpoint:2',
+    sequence: 2,
+    kind: 'state' as const,
+    status: 'active' as const,
+    summary: 'Supervisor heartbeat recorded.',
+    boundaryId: null,
+    startedAt: '2026-04-15T23:10:02Z',
+    finishedAt: null,
+    updatedAt: '2026-04-15T23:10:03Z',
+    lastErrorCode: 'runtime_supervisor_connect_failed',
+    lastError: {
+      code: 'runtime_supervisor_connect_failed',
+      message: 'Cadence could not connect to the detached supervisor control endpoint.',
+    },
+    ...overrides,
+  }
+}
+
 function makeHandoffPackage(projectId = 'project-1', transitionId = 'auto:txn-001') {
   return {
     id: 42,
@@ -1510,6 +1568,36 @@ describe('cadence-model', () => {
       const { lifecycle: _lifecycle, ...legacySnapshot } = snapshot
       projectSnapshotResponseSchema.parse(legacySnapshot)
     }).toThrow()
+  })
+
+  it('maps autonomous run and unit truth from project snapshots independently of runtime auth state', () => {
+    const project = mapProjectSnapshot(
+      makeSnapshot({
+        autonomousRun: makeAutonomousRun({ duplicateStartDetected: true, duplicateStartRunId: 'run-1' }),
+        autonomousUnit: makeAutonomousUnit(),
+      }),
+    )
+
+    expect(project.autonomousRun?.runId).toBe('run-1')
+    expect(project.autonomousRun?.statusLabel).toBe('Autonomous run stale')
+    expect(project.autonomousRun?.recoveryLabel).toBe('Recovery required')
+    expect(project.autonomousRun?.duplicateStartDetected).toBe(true)
+    expect(project.autonomousRun?.runtimeLabel).toBe('Openai Codex · Autonomous run stale')
+    expect(project.autonomousUnit?.unitId).toBe('run-1:checkpoint:2')
+    expect(project.autonomousUnit?.kindLabel).toBe('State')
+    expect(project.autonomousUnit?.statusLabel).toBe('Active')
+    expect(project.runtimeSession).toBeNull()
+    expect(project.runtimeRun).toBeNull()
+  })
+
+  it('rejects malformed autonomous run/unit payloads at the contract boundary', () => {
+    expect(() =>
+      projectSnapshotResponseSchema.parse({
+        ...makeSnapshot(),
+        autonomousRun: makeAutonomousRun(),
+        autonomousUnit: makeAutonomousUnit({ runId: 'run-2' }),
+      }),
+    ).toThrow(/Autonomous unit run id must match/)
   })
 
   it('maps repository status counts and applies branch metadata onto the active project', () => {

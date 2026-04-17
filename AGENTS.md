@@ -1,1 +1,2 @@
 - Use ShadCN for all UI where possible
+- NEVER add temporary debug or test UI during development. Use unit/e2e test only

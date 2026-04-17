@@ -5,6 +5,7 @@ import { ZodError, z } from 'zod'
 import {
   applyWorkflowTransitionRequestSchema,
   applyWorkflowTransitionResponseSchema,
+  autonomousRunStateSchema,
   importRepositoryResponseSchema,
   listNotificationDispatchesRequestSchema,
   listNotificationDispatchesResponseSchema,
@@ -41,6 +42,7 @@ import {
   upsertWorkflowGraphResponseSchema,
   type ApplyWorkflowTransitionRequestDto,
   type ApplyWorkflowTransitionResponseDto,
+  type AutonomousRunStateDto,
   type ImportRepositoryResponseDto,
   type ListNotificationDispatchesResponseDto,
   type ListNotificationRoutesResponseDto,
@@ -79,12 +81,15 @@ const COMMANDS = {
   getProjectSnapshot: 'get_project_snapshot',
   getRepositoryStatus: 'get_repository_status',
   getRepositoryDiff: 'get_repository_diff',
+  getAutonomousRun: 'get_autonomous_run',
   getRuntimeRun: 'get_runtime_run',
   getRuntimeSession: 'get_runtime_session',
   startOpenAiLogin: 'start_openai_login',
   submitOpenAiCallback: 'submit_openai_callback',
+  startAutonomousRun: 'start_autonomous_run',
   startRuntimeRun: 'start_runtime_run',
   startRuntimeSession: 'start_runtime_session',
+  cancelAutonomousRun: 'cancel_autonomous_run',
   stopRuntimeRun: 'stop_runtime_run',
   logoutRuntimeSession: 'logout_runtime_session',
   resolveOperatorAction: 'resolve_operator_action',
@@ -151,6 +156,7 @@ export interface CadenceDesktopAdapter {
   getProjectSnapshot(projectId: string): Promise<ProjectSnapshotResponseDto>
   getRepositoryStatus(projectId: string): Promise<RepositoryStatusResponseDto>
   getRepositoryDiff(projectId: string, scope: RepositoryDiffScope): Promise<RepositoryDiffResponseDto>
+  getAutonomousRun(projectId: string): Promise<AutonomousRunStateDto>
   getRuntimeRun(projectId: string): Promise<RuntimeRunDto | null>
   getRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
   startOpenAiLogin(projectId: string, options?: { originator?: string | null }): Promise<RuntimeSessionDto>
@@ -159,8 +165,10 @@ export interface CadenceDesktopAdapter {
     flowId: string,
     options?: { manualInput?: string | null },
   ): Promise<RuntimeSessionDto>
+  startAutonomousRun(projectId: string): Promise<AutonomousRunStateDto>
   startRuntimeRun(projectId: string): Promise<RuntimeRunDto>
   startRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
+  cancelAutonomousRun(projectId: string, runId: string): Promise<AutonomousRunStateDto>
   stopRuntimeRun(projectId: string, runId: string): Promise<RuntimeRunDto | null>
   logoutRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
   resolveOperatorAction(
@@ -454,6 +462,12 @@ export const cadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
   },
 
+  getAutonomousRun(projectId) {
+    return invokeTyped(COMMANDS.getAutonomousRun, autonomousRunStateSchema, {
+      request: { projectId },
+    })
+  },
+
   getRuntimeRun(projectId) {
     return invokeTyped(COMMANDS.getRuntimeRun, runtimeRunSchema.nullable(), {
       request: { projectId },
@@ -485,6 +499,12 @@ export const cadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
   },
 
+  startAutonomousRun(projectId) {
+    return invokeTyped(COMMANDS.startAutonomousRun, autonomousRunStateSchema, {
+      request: { projectId },
+    })
+  },
+
   startRuntimeRun(projectId) {
     return invokeTyped(COMMANDS.startRuntimeRun, runtimeRunSchema, {
       request: { projectId },
@@ -494,6 +514,12 @@ export const cadenceDesktopAdapter: CadenceDesktopAdapter = {
   startRuntimeSession(projectId) {
     return invokeTyped(COMMANDS.startRuntimeSession, runtimeSessionSchema, {
       request: { projectId },
+    })
+  },
+
+  cancelAutonomousRun(projectId, runId) {
+    return invokeTyped(COMMANDS.cancelAutonomousRun, autonomousRunStateSchema, {
+      request: { projectId, runId },
     })
   },
 

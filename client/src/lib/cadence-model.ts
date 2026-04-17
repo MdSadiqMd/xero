@@ -1291,18 +1291,48 @@ export const syncNotificationAdaptersResponseSchema = z
     }
   })
 
-export const projectSnapshotResponseSchema = z.object({
-  project: projectSummarySchema,
-  repository: repositorySummarySchema.nullable(),
-  phases: z.array(phaseSummarySchema),
-  lifecycle: planningLifecycleProjectionSchema,
-  approvalRequests: z.array(operatorApprovalSchema),
-  verificationRecords: z.array(verificationRecordSchema),
-  resumeHistory: z.array(resumeHistoryEntrySchema),
-  handoffPackages: z.array(workflowHandoffPackageSchema).optional(),
-  notificationDispatches: z.array(notificationDispatchSchema).optional(),
-  notificationReplyClaims: z.array(notificationReplyClaimSchema).optional(),
-})
+export const projectSnapshotResponseSchema = z
+  .object({
+    project: projectSummarySchema,
+    repository: repositorySummarySchema.nullable(),
+    phases: z.array(phaseSummarySchema),
+    lifecycle: planningLifecycleProjectionSchema,
+    approvalRequests: z.array(operatorApprovalSchema),
+    verificationRecords: z.array(verificationRecordSchema),
+    resumeHistory: z.array(resumeHistoryEntrySchema),
+    handoffPackages: z.array(workflowHandoffPackageSchema).optional(),
+    autonomousRun: z.lazy(() => autonomousRunSchema).nullable().optional(),
+    autonomousUnit: z.lazy(() => autonomousUnitSchema).nullable().optional(),
+    notificationDispatches: z.array(notificationDispatchSchema).optional(),
+    notificationReplyClaims: z.array(notificationReplyClaimSchema).optional(),
+  })
+  .superRefine((snapshot, ctx) => {
+    if (snapshot.autonomousRun && snapshot.autonomousRun.projectId !== snapshot.project.id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['autonomousRun', 'projectId'],
+        message: 'Autonomous run project id must match the selected project snapshot id.',
+      })
+    }
+
+    if (snapshot.autonomousUnit && snapshot.autonomousUnit.projectId !== snapshot.project.id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['autonomousUnit', 'projectId'],
+        message: 'Autonomous unit project id must match the selected project snapshot id.',
+      })
+    }
+
+    if (snapshot.autonomousRun && snapshot.autonomousUnit) {
+      if (snapshot.autonomousUnit.runId !== snapshot.autonomousRun.runId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['autonomousUnit', 'runId'],
+          message: 'Autonomous unit run id must match the active autonomous run id.',
+        })
+      }
+    }
+  })
 
 export const branchSummarySchema = z.object({
   name: z.string().min(1),
@@ -1679,6 +1709,102 @@ export const runtimeRunUpdatedPayloadSchema = z
     }
   })
 
+export const autonomousRunStatusSchema = z.enum([
+  'starting',
+  'running',
+  'paused',
+  'cancelling',
+  'cancelled',
+  'stale',
+  'failed',
+  'stopped',
+  'crashed',
+  'completed',
+])
+export const autonomousRunRecoveryStateSchema = z.enum(['healthy', 'recovery_required', 'terminal', 'failed'])
+export const autonomousUnitKindSchema = z.enum(['bootstrap', 'state', 'tool', 'action_required', 'diagnostic'])
+export const autonomousUnitStatusSchema = z.enum(['pending', 'active', 'paused', 'completed', 'cancelled', 'failed'])
+
+export const autonomousLifecycleReasonSchema = z
+  .object({
+    code: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+  })
+  .strict()
+
+export const autonomousRunSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    runtimeKind: z.string().trim().min(1),
+    supervisorKind: z.string().trim().min(1),
+    status: autonomousRunStatusSchema,
+    recoveryState: autonomousRunRecoveryStateSchema,
+    activeUnitId: nonEmptyOptionalTextSchema,
+    duplicateStartDetected: z.boolean(),
+    duplicateStartRunId: nonEmptyOptionalTextSchema,
+    duplicateStartReason: nonEmptyOptionalTextSchema,
+    startedAt: isoTimestampSchema,
+    lastHeartbeatAt: nonEmptyOptionalTextSchema,
+    lastCheckpointAt: nonEmptyOptionalTextSchema,
+    pausedAt: nonEmptyOptionalTextSchema,
+    cancelledAt: nonEmptyOptionalTextSchema,
+    completedAt: nonEmptyOptionalTextSchema,
+    crashedAt: nonEmptyOptionalTextSchema,
+    stoppedAt: nonEmptyOptionalTextSchema,
+    pauseReason: autonomousLifecycleReasonSchema.nullable().optional(),
+    cancelReason: autonomousLifecycleReasonSchema.nullable().optional(),
+    crashReason: autonomousLifecycleReasonSchema.nullable().optional(),
+    lastErrorCode: nonEmptyOptionalTextSchema,
+    lastError: runtimeRunDiagnosticSchema.nullable().optional(),
+    updatedAt: isoTimestampSchema,
+  })
+  .strict()
+
+export const autonomousUnitSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    unitId: z.string().trim().min(1),
+    sequence: z.number().int().nonnegative(),
+    kind: autonomousUnitKindSchema,
+    status: autonomousUnitStatusSchema,
+    summary: z.string().trim().min(1),
+    boundaryId: nonEmptyOptionalTextSchema,
+    startedAt: isoTimestampSchema,
+    finishedAt: nonEmptyOptionalTextSchema,
+    updatedAt: isoTimestampSchema,
+    lastErrorCode: nonEmptyOptionalTextSchema,
+    lastError: runtimeRunDiagnosticSchema.nullable().optional(),
+  })
+  .strict()
+
+export const autonomousRunStateSchema = z
+  .object({
+    run: autonomousRunSchema.nullable(),
+    unit: autonomousUnitSchema.nullable(),
+  })
+  .strict()
+  .superRefine((state, ctx) => {
+    if (state.run && state.unit) {
+      if (state.unit.projectId !== state.run.projectId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['unit', 'projectId'],
+          message: 'Autonomous unit project id must match the autonomous run project id.',
+        })
+      }
+
+      if (state.unit.runId !== state.run.runId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['unit', 'runId'],
+          message: 'Autonomous unit run id must match the autonomous run run id.',
+        })
+      }
+    }
+  })
+
 export const runtimeToolCallStateSchema = z.enum(['pending', 'running', 'succeeded', 'failed'])
 export const runtimeStreamItemKindSchema = z.enum([
   'transcript',
@@ -1817,6 +1943,14 @@ export type RuntimeRunTransportDto = z.infer<typeof runtimeRunTransportSchema>
 export type RuntimeRunCheckpointDto = z.infer<typeof runtimeRunCheckpointSchema>
 export type RuntimeRunDto = z.infer<typeof runtimeRunSchema>
 export type RuntimeRunUpdatedPayloadDto = z.infer<typeof runtimeRunUpdatedPayloadSchema>
+export type AutonomousRunStatusDto = z.infer<typeof autonomousRunStatusSchema>
+export type AutonomousRunRecoveryStateDto = z.infer<typeof autonomousRunRecoveryStateSchema>
+export type AutonomousUnitKindDto = z.infer<typeof autonomousUnitKindSchema>
+export type AutonomousUnitStatusDto = z.infer<typeof autonomousUnitStatusSchema>
+export type AutonomousLifecycleReasonDto = z.infer<typeof autonomousLifecycleReasonSchema>
+export type AutonomousRunDto = z.infer<typeof autonomousRunSchema>
+export type AutonomousUnitDto = z.infer<typeof autonomousUnitSchema>
+export type AutonomousRunStateDto = z.infer<typeof autonomousRunStateSchema>
 export type RuntimeToolCallStateDto = z.infer<typeof runtimeToolCallStateSchema>
 export type RuntimeStreamItemKindDto = z.infer<typeof runtimeStreamItemKindSchema>
 export type RuntimeStreamItemDto = z.infer<typeof runtimeStreamItemSchema>
@@ -2118,6 +2252,67 @@ export interface RuntimeRunView {
   isFailed: boolean
 }
 
+export interface AutonomousLifecycleReasonView {
+  code: string
+  message: string
+}
+
+export interface AutonomousRunView {
+  projectId: string
+  runId: string
+  runtimeKind: string
+  runtimeLabel: string
+  supervisorKind: string
+  supervisorLabel: string
+  status: AutonomousRunStatusDto
+  statusLabel: string
+  recoveryState: AutonomousRunRecoveryStateDto
+  recoveryLabel: string
+  activeUnitId: string | null
+  duplicateStartDetected: boolean
+  duplicateStartRunId: string | null
+  duplicateStartReason: string | null
+  startedAt: string
+  lastHeartbeatAt: string | null
+  lastCheckpointAt: string | null
+  pausedAt: string | null
+  cancelledAt: string | null
+  completedAt: string | null
+  crashedAt: string | null
+  stoppedAt: string | null
+  pauseReason: AutonomousLifecycleReasonView | null
+  cancelReason: AutonomousLifecycleReasonView | null
+  crashReason: AutonomousLifecycleReasonView | null
+  lastErrorCode: string | null
+  lastError: RuntimeRunDiagnosticDto | null
+  updatedAt: string
+  isActive: boolean
+  needsRecovery: boolean
+  isTerminal: boolean
+  isFailed: boolean
+}
+
+export interface AutonomousUnitView {
+  projectId: string
+  runId: string
+  unitId: string
+  sequence: number
+  kind: AutonomousUnitKindDto
+  kindLabel: string
+  status: AutonomousUnitStatusDto
+  statusLabel: string
+  summary: string
+  boundaryId: string | null
+  startedAt: string
+  finishedAt: string | null
+  updatedAt: string
+  lastErrorCode: string | null
+  lastError: RuntimeRunDiagnosticDto | null
+  isActive: boolean
+  isTerminal: boolean
+  isFailed: boolean
+}
+
 export type RuntimeStreamStatus = 'idle' | 'subscribing' | 'replaying' | 'live' | 'complete' | 'stale' | 'error'
 
 export interface RuntimeStreamIssueView {
@@ -2229,6 +2424,8 @@ export interface ProjectDetailView extends Project {
   notificationBroker: NotificationBrokerView
   runtimeSession?: RuntimeSessionView | null
   runtimeRun?: RuntimeRunView | null
+  autonomousRun?: AutonomousRunView | null
+  autonomousUnit?: AutonomousUnitView | null
 }
 
 export function safePercent(completed: number, total: number): number {
@@ -2484,6 +2681,80 @@ export function getRuntimeRunCheckpointKindLabel(kind: RuntimeRunCheckpointKindD
 
 function getRuntimeRunLabel(runtimeKind: string, status: RuntimeRunStatusDto): string {
   return `${humanizeRuntimeKind(runtimeKind)} · ${getRuntimeRunStatusLabel(status)}`
+}
+
+export function getAutonomousRunStatusLabel(status: AutonomousRunStatusDto): string {
+  switch (status) {
+    case 'starting':
+      return 'Autonomous run starting'
+    case 'running':
+      return 'Autonomous run active'
+    case 'paused':
+      return 'Autonomous run paused'
+    case 'cancelling':
+      return 'Autonomous run cancelling'
+    case 'cancelled':
+      return 'Autonomous run cancelled'
+    case 'stale':
+      return 'Autonomous run stale'
+    case 'failed':
+      return 'Autonomous run failed'
+    case 'stopped':
+      return 'Autonomous run stopped'
+    case 'crashed':
+      return 'Autonomous run crashed'
+    case 'completed':
+      return 'Autonomous run completed'
+  }
+}
+
+export function getAutonomousRunRecoveryLabel(recoveryState: AutonomousRunRecoveryStateDto): string {
+  switch (recoveryState) {
+    case 'healthy':
+      return 'Recovery healthy'
+    case 'recovery_required':
+      return 'Recovery required'
+    case 'terminal':
+      return 'Terminal state'
+    case 'failed':
+      return 'Recovery failed'
+  }
+}
+
+export function getAutonomousUnitKindLabel(kind: AutonomousUnitKindDto): string {
+  switch (kind) {
+    case 'bootstrap':
+      return 'Bootstrap'
+    case 'state':
+      return 'State'
+    case 'tool':
+      return 'Tool'
+    case 'action_required':
+      return 'Action required'
+    case 'diagnostic':
+      return 'Diagnostic'
+  }
+}
+
+export function getAutonomousUnitStatusLabel(status: AutonomousUnitStatusDto): string {
+  switch (status) {
+    case 'pending':
+      return 'Pending'
+    case 'active':
+      return 'Active'
+    case 'paused':
+      return 'Paused'
+    case 'completed':
+      return 'Completed'
+    case 'cancelled':
+      return 'Cancelled'
+    case 'failed':
+      return 'Failed'
+  }
+}
+
+function getAutonomousRunLabel(runtimeKind: string, status: AutonomousRunStatusDto): string {
+  return `${humanizeRuntimeKind(runtimeKind)} · ${getAutonomousRunStatusLabel(status)}`
 }
 
 function capRecent<T>(values: T[], limit: number): T[] {
@@ -3343,6 +3614,9 @@ export function mapProjectSnapshot(
     throw new Error('Cadence received a project snapshot without the required lifecycle projection.')
   }
 
+  const autonomousRun = snapshot.autonomousRun ? mapAutonomousRun(snapshot.autonomousRun) : null
+  const autonomousUnit = snapshot.autonomousUnit ? mapAutonomousUnit(snapshot.autonomousUnit) : null
+
   return {
     ...summary,
     phases: snapshot.phases.map(mapPhase),
@@ -3358,6 +3632,8 @@ export function mapProjectSnapshot(
     notificationBroker,
     runtimeSession: null,
     runtimeRun: null,
+    autonomousRun,
+    autonomousUnit,
   }
 }
 
@@ -3497,6 +3773,69 @@ export function mapRuntimeRun(runtimeRun: RuntimeRunDto): RuntimeRunView {
   }
 }
 
+export function mapAutonomousRun(autonomousRun: AutonomousRunDto): AutonomousRunView {
+  const runtimeKind = normalizeText(autonomousRun.runtimeKind, 'openai_codex')
+  const supervisorKind = normalizeText(autonomousRun.supervisorKind, 'detached_pty')
+
+  return {
+    projectId: autonomousRun.projectId,
+    runId: normalizeText(autonomousRun.runId, 'autonomous-run-unavailable'),
+    runtimeKind,
+    runtimeLabel: getAutonomousRunLabel(runtimeKind, autonomousRun.status),
+    supervisorKind,
+    supervisorLabel: humanizeRuntimeKind(supervisorKind),
+    status: autonomousRun.status,
+    statusLabel: getAutonomousRunStatusLabel(autonomousRun.status),
+    recoveryState: autonomousRun.recoveryState,
+    recoveryLabel: getAutonomousRunRecoveryLabel(autonomousRun.recoveryState),
+    activeUnitId: normalizeOptionalText(autonomousRun.activeUnitId),
+    duplicateStartDetected: autonomousRun.duplicateStartDetected,
+    duplicateStartRunId: normalizeOptionalText(autonomousRun.duplicateStartRunId),
+    duplicateStartReason: normalizeOptionalText(autonomousRun.duplicateStartReason),
+    startedAt: autonomousRun.startedAt,
+    lastHeartbeatAt: normalizeOptionalText(autonomousRun.lastHeartbeatAt),
+    lastCheckpointAt: normalizeOptionalText(autonomousRun.lastCheckpointAt),
+    pausedAt: normalizeOptionalText(autonomousRun.pausedAt),
+    cancelledAt: normalizeOptionalText(autonomousRun.cancelledAt),
+    completedAt: normalizeOptionalText(autonomousRun.completedAt),
+    crashedAt: normalizeOptionalText(autonomousRun.crashedAt),
+    stoppedAt: normalizeOptionalText(autonomousRun.stoppedAt),
+    pauseReason: autonomousRun.pauseReason ?? null,
+    cancelReason: autonomousRun.cancelReason ?? null,
+    crashReason: autonomousRun.crashReason ?? null,
+    lastErrorCode: normalizeOptionalText(autonomousRun.lastErrorCode),
+    lastError: autonomousRun.lastError ?? null,
+    updatedAt: autonomousRun.updatedAt,
+    isActive: autonomousRun.status === 'starting' || autonomousRun.status === 'running',
+    needsRecovery: autonomousRun.recoveryState === 'recovery_required',
+    isTerminal: ['cancelled', 'stopped', 'completed'].includes(autonomousRun.status),
+    isFailed: ['failed', 'crashed'].includes(autonomousRun.status),
+  }
+}
+
+export function mapAutonomousUnit(autonomousUnit: AutonomousUnitDto): AutonomousUnitView {
+  return {
+    projectId: autonomousUnit.projectId,
+    runId: autonomousUnit.runId,
+    unitId: normalizeText(autonomousUnit.unitId, 'autonomous-unit-unavailable'),
+    sequence: autonomousUnit.sequence,
+    kind: autonomousUnit.kind,
+    kindLabel: getAutonomousUnitKindLabel(autonomousUnit.kind),
+    status: autonomousUnit.status,
+    statusLabel: getAutonomousUnitStatusLabel(autonomousUnit.status),
+    summary: normalizeText(autonomousUnit.summary, 'Autonomous unit boundary recorded.'),
+    boundaryId: normalizeOptionalText(autonomousUnit.boundaryId),
+    startedAt: autonomousUnit.startedAt,
+    finishedAt: normalizeOptionalText(autonomousUnit.finishedAt),
+    updatedAt: autonomousUnit.updatedAt,
+    lastErrorCode: normalizeOptionalText(autonomousUnit.lastErrorCode),
+    lastError: autonomousUnit.lastError ?? null,
+    isActive: autonomousUnit.status === 'active',
+    isTerminal: ['completed', 'cancelled', 'failed'].includes(autonomousUnit.status),
+    isFailed: autonomousUnit.status === 'failed',
+  }
+}
+
 export function mergeRuntimeUpdated(
   currentRuntime: RuntimeSessionView | null,
   payload: RuntimeUpdatedPayloadDto,
@@ -3533,6 +3872,8 @@ export function applyProjectSummary(
     repositoryStatus: project.repositoryStatus,
     runtimeSession: project.runtimeSession ?? null,
     runtimeRun: project.runtimeRun ?? null,
+    autonomousRun: project.autonomousRun ?? null,
+    autonomousUnit: project.autonomousUnit ?? null,
   }
 }
 

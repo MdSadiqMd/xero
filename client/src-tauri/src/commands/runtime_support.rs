@@ -9,12 +9,15 @@ use tauri::{AppHandle, Emitter, Runtime};
 use crate::{
     auth::{AuthDiagnostic, AuthFlowError, OPENAI_CODEX_PROVIDER_ID},
     commands::{
-        CommandError, CommandErrorClass, CommandResult, ProjectUpdateReason,
-        ProjectUpdatedPayloadDto, RuntimeDiagnosticDto, RuntimeRunCheckpointDto,
-        RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto, RuntimeRunDto, RuntimeRunStatusDto,
-        RuntimeRunTransportDto, RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto,
-        RuntimeSessionDto, RuntimeUpdatedPayloadDto, PROJECT_UPDATED_EVENT,
-        RUNTIME_RUN_UPDATED_EVENT, RUNTIME_UPDATED_EVENT,
+        AutonomousLifecycleReasonDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
+        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousUnitDto,
+        AutonomousUnitKindDto, AutonomousUnitStatusDto, CommandError, CommandErrorClass,
+        CommandResult, ProjectUpdateReason, ProjectUpdatedPayloadDto, RuntimeDiagnosticDto,
+        RuntimeRunCheckpointDto, RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto,
+        RuntimeRunDto, RuntimeRunStatusDto, RuntimeRunTransportDto,
+        RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto, RuntimeSessionDto,
+        RuntimeUpdatedPayloadDto, PROJECT_UPDATED_EVENT, RUNTIME_RUN_UPDATED_EVENT,
+        RUNTIME_UPDATED_EVENT,
     },
     db::project_store::{
         self, RuntimeRunCheckpointKind, RuntimeRunSnapshotRecord, RuntimeRunStatus,
@@ -324,6 +327,24 @@ pub(crate) fn runtime_run_dto_from_snapshot(snapshot: &RuntimeRunSnapshotRecord)
     }
 }
 
+pub(crate) fn autonomous_run_state_from_snapshot(
+    snapshot: Option<&RuntimeRunSnapshotRecord>,
+) -> AutonomousRunStateDto {
+    AutonomousRunStateDto {
+        run: snapshot.map(|snapshot| autonomous_run_dto_from_snapshot(snapshot, false)),
+        unit: snapshot.and_then(autonomous_unit_dto_from_snapshot),
+    }
+}
+
+pub(crate) fn autonomous_run_state_with_duplicate_start(
+    snapshot: &RuntimeRunSnapshotRecord,
+) -> AutonomousRunStateDto {
+    AutonomousRunStateDto {
+        run: Some(autonomous_run_dto_from_snapshot(snapshot, true)),
+        unit: autonomous_unit_dto_from_snapshot(snapshot),
+    }
+}
+
 pub(crate) fn emit_runtime_run_updated<R: Runtime>(
     app: &AppHandle<R>,
     runtime_run: Option<&RuntimeRunDto>,
@@ -381,6 +402,89 @@ pub(crate) fn emit_runtime_run_updated_if_changed<R: Runtime>(
     })
 }
 
+fn autonomous_run_dto_from_snapshot(
+    snapshot: &RuntimeRunSnapshotRecord,
+    duplicate_start_detected: bool,
+) -> AutonomousRunDto {
+    let active_unit_id = snapshot
+        .checkpoints
+        .last()
+        .map(|checkpoint| format!("{}:checkpoint:{}", snapshot.run.run_id, checkpoint.sequence));
+    let last_error = snapshot.run.last_error.as_ref().map(|error| RuntimeRunDiagnosticDto {
+        code: error.code.clone(),
+        message: error.message.clone(),
+    });
+    let crash_reason = match snapshot.run.status {
+        RuntimeRunStatus::Stale | RuntimeRunStatus::Failed => snapshot.run.last_error.as_ref().map(|error| {
+            AutonomousLifecycleReasonDto {
+                code: error.code.clone(),
+                message: error.message.clone(),
+            }
+        }),
+        _ => None,
+    };
+    let stopped_at = snapshot.run.stopped_at.clone();
+
+    AutonomousRunDto {
+        project_id: snapshot.run.project_id.clone(),
+        run_id: snapshot.run.run_id.clone(),
+        runtime_kind: snapshot.run.runtime_kind.clone(),
+        supervisor_kind: snapshot.run.supervisor_kind.clone(),
+        status: autonomous_run_status_dto(&snapshot.run.status),
+        recovery_state: autonomous_run_recovery_state_dto(&snapshot.run.status),
+        active_unit_id,
+        duplicate_start_detected,
+        duplicate_start_run_id: duplicate_start_detected.then(|| snapshot.run.run_id.clone()),
+        duplicate_start_reason: duplicate_start_detected.then_some(
+            "Cadence reused the already-active autonomous run for this project instead of launching a duplicate supervisor."
+                .into(),
+        ),
+        started_at: snapshot.run.started_at.clone(),
+        last_heartbeat_at: snapshot.run.last_heartbeat_at.clone(),
+        last_checkpoint_at: snapshot.last_checkpoint_at.clone(),
+        paused_at: None,
+        cancelled_at: None,
+        completed_at: None,
+        crashed_at: matches!(snapshot.run.status, RuntimeRunStatus::Stale | RuntimeRunStatus::Failed)
+            .then(|| snapshot.run.updated_at.clone()),
+        stopped_at: stopped_at.clone(),
+        pause_reason: None,
+        cancel_reason: None,
+        crash_reason,
+        last_error_code: snapshot.run.last_error.as_ref().map(|error| error.code.clone()),
+        last_error,
+        updated_at: snapshot.run.updated_at.clone(),
+    }
+}
+
+fn autonomous_unit_dto_from_snapshot(snapshot: &RuntimeRunSnapshotRecord) -> Option<AutonomousUnitDto> {
+    let checkpoint = snapshot.checkpoints.last()?;
+    let unit_id = format!("{}:checkpoint:{}", snapshot.run.run_id, checkpoint.sequence);
+    let finished_at = match snapshot.run.status {
+        RuntimeRunStatus::Stopped | RuntimeRunStatus::Failed => Some(snapshot.run.updated_at.clone()),
+        _ => None,
+    };
+
+    Some(AutonomousUnitDto {
+        project_id: snapshot.run.project_id.clone(),
+        run_id: snapshot.run.run_id.clone(),
+        unit_id,
+        sequence: checkpoint.sequence,
+        kind: autonomous_unit_kind_dto(&checkpoint.kind),
+        status: autonomous_unit_status_dto(&snapshot.run.status),
+        summary: checkpoint.summary.clone(),
+        boundary_id: None,
+        started_at: checkpoint.created_at.clone(),
+        finished_at,
+        updated_at: snapshot.run.updated_at.clone(),
+        last_error_code: snapshot.run.last_error.as_ref().map(|error| error.code.clone()),
+        last_error: snapshot.run.last_error.as_ref().map(|error| RuntimeRunDiagnosticDto {
+            code: error.code.clone(),
+            message: error.message.clone(),
+        }),
+    })
+}
+
 pub(crate) fn generate_runtime_run_id() -> String {
     let mut bytes = [0_u8; 8];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -420,6 +524,45 @@ fn runtime_run_checkpoint_kind_dto(kind: RuntimeRunCheckpointKind) -> RuntimeRun
         RuntimeRunCheckpointKind::Tool => RuntimeRunCheckpointKindDto::Tool,
         RuntimeRunCheckpointKind::ActionRequired => RuntimeRunCheckpointKindDto::ActionRequired,
         RuntimeRunCheckpointKind::Diagnostic => RuntimeRunCheckpointKindDto::Diagnostic,
+    }
+}
+
+fn autonomous_run_status_dto(status: &RuntimeRunStatus) -> AutonomousRunStatusDto {
+    match status {
+        RuntimeRunStatus::Starting => AutonomousRunStatusDto::Starting,
+        RuntimeRunStatus::Running => AutonomousRunStatusDto::Running,
+        RuntimeRunStatus::Stale => AutonomousRunStatusDto::Stale,
+        RuntimeRunStatus::Stopped => AutonomousRunStatusDto::Stopped,
+        RuntimeRunStatus::Failed => AutonomousRunStatusDto::Failed,
+    }
+}
+
+fn autonomous_run_recovery_state_dto(status: &RuntimeRunStatus) -> AutonomousRunRecoveryStateDto {
+    match status {
+        RuntimeRunStatus::Starting | RuntimeRunStatus::Running => AutonomousRunRecoveryStateDto::Healthy,
+        RuntimeRunStatus::Stale => AutonomousRunRecoveryStateDto::RecoveryRequired,
+        RuntimeRunStatus::Stopped => AutonomousRunRecoveryStateDto::Terminal,
+        RuntimeRunStatus::Failed => AutonomousRunRecoveryStateDto::Failed,
+    }
+}
+
+fn autonomous_unit_kind_dto(kind: &RuntimeRunCheckpointKind) -> AutonomousUnitKindDto {
+    match kind {
+        RuntimeRunCheckpointKind::Bootstrap => AutonomousUnitKindDto::Bootstrap,
+        RuntimeRunCheckpointKind::State => AutonomousUnitKindDto::State,
+        RuntimeRunCheckpointKind::Tool => AutonomousUnitKindDto::Tool,
+        RuntimeRunCheckpointKind::ActionRequired => AutonomousUnitKindDto::ActionRequired,
+        RuntimeRunCheckpointKind::Diagnostic => AutonomousUnitKindDto::Diagnostic,
+    }
+}
+
+fn autonomous_unit_status_dto(status: &RuntimeRunStatus) -> AutonomousUnitStatusDto {
+    match status {
+        RuntimeRunStatus::Starting | RuntimeRunStatus::Running | RuntimeRunStatus::Stale => {
+            AutonomousUnitStatusDto::Active
+        }
+        RuntimeRunStatus::Stopped => AutonomousUnitStatusDto::Completed,
+        RuntimeRunStatus::Failed => AutonomousUnitStatusDto::Failed,
     }
 }
 
