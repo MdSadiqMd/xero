@@ -23,7 +23,7 @@ import type {
   UpsertNotificationRouteCredentialsRequestDto,
   UpsertNotificationRouteCredentialsResponseDto,
 } from '@/src/lib/cadence-model'
-import { useCadenceDesktopState } from '@/src/features/cadence/use-cadence-desktop-state'
+import { useCadenceDesktopState, BLOCKED_NOTIFICATION_SYNC_POLL_MS } from '@/src/features/cadence/use-cadence-desktop-state'
 
 function makeProjectSummary(id: string, name: string) {
   return {
@@ -395,6 +395,51 @@ function makeAutonomousRunState(
       lastError: null,
     },
   }
+}
+
+function makeBlockedAutonomousRunState(projectId: string, boundaryId: string): AutonomousRunStateDto {
+  const state = makeAutonomousRunState(projectId, {
+    runId: `auto-${projectId}`,
+    status: 'paused',
+    recoveryState: 'recovery_required',
+    pausedAt: '2026-04-16T20:03:00Z',
+    pauseReason: {
+      code: 'operator_pause',
+      message: 'Operator paused the autonomous run for review.',
+    },
+    updatedAt: '2026-04-16T20:03:00Z',
+  })
+
+  state.unit = {
+    ...state.unit!,
+    status: 'blocked',
+    summary: 'Blocked on operator boundary `Terminal input required`.',
+    boundaryId,
+    updatedAt: '2026-04-16T20:03:00Z',
+  }
+
+  return state
+}
+
+function makeRecoveredAutonomousRunState(projectId: string): AutonomousRunStateDto {
+  const state = makeAutonomousRunState(projectId, {
+    runId: `auto-${projectId}`,
+    status: 'running',
+    recoveryState: 'healthy',
+    pausedAt: null,
+    pauseReason: null,
+    updatedAt: '2026-04-16T20:04:00Z',
+  })
+
+  state.unit = {
+    ...state.unit!,
+    status: 'active',
+    summary: 'Recovered the current autonomous unit boundary.',
+    boundaryId: null,
+    updatedAt: '2026-04-16T20:04:00Z',
+  }
+
+  return state
 }
 
 function makeStreamResponse(
@@ -885,6 +930,9 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
         {String(state.agentView?.notificationSyncSummary?.replies.rejectedCount ?? 0)}
       </div>
       <div data-testid="sync-error">{state.agentView?.notificationSyncError?.message ?? 'none'}</div>
+      <div data-testid="sync-polling-active">{String(state.agentView?.notificationSyncPollingActive ?? false)}</div>
+      <div data-testid="sync-polling-action-id">{state.agentView?.notificationSyncPollingActionId ?? 'none'}</div>
+      <div data-testid="sync-polling-boundary-id">{state.agentView?.notificationSyncPollingBoundaryId ?? 'none'}</div>
       <div data-testid="trust-state">{state.agentView?.trustSnapshot?.state ?? 'none'}</div>
       <div data-testid="trust-credentials-state">{state.agentView?.trustSnapshot?.credentialsState ?? 'none'}</div>
       <div data-testid="trust-routes-state">{state.agentView?.trustSnapshot?.routesState ?? 'none'}</div>
@@ -1911,7 +1959,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('messages-reason')).toHaveTextContent('non-monotonic runtime stream sequence 0')
   })
 
-  it('refreshes durable approval metadata once when a new action_required stream item arrives for the active run', async () => {
+  it('starts bounded blocked-checkpoint sync polling, dedupes repeated action-required events, and stops after the boundary clears', async () => {
     const setup = createMockAdapter({
       runtimeSessions: {
         'project-1': makeRuntimeSession('project-1', {
@@ -1928,12 +1976,16 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
       },
     })
 
-    const actionId = 'scope:run:run-project-1:boundary:boundary-1:terminal_input_required'
-    let snapshotMode: 'base' | 'durable-pause' = 'base'
+    const actionId = 'flow:flow-1:run:run-project-1:boundary:boundary-1:terminal_input_required'
+    let snapshotMode: 'base' | 'blocked' | 'resolved' = 'base'
     vi.mocked(setup.getProjectSnapshot).mockImplementation(async (projectId: string) => {
       const snapshot = makeSnapshot(projectId, projectId === 'project-1' ? 'cadence' : 'orchestra')
 
-      if (projectId === 'project-1' && snapshotMode === 'durable-pause') {
+      if (projectId !== 'project-1') {
+        return snapshot
+      }
+
+      if (snapshotMode === 'blocked') {
         return {
           ...snapshot,
           approvalRequests: [
@@ -1970,15 +2022,29 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
 
       return snapshot
     })
+    vi.mocked(setup.getAutonomousRun).mockImplementation(async (projectId: string) => {
+      if (projectId !== 'project-1') {
+        return makeRecoveredAutonomousRunState(projectId)
+      }
+
+      return snapshotMode === 'blocked'
+        ? makeBlockedAutonomousRunState(projectId, 'boundary-1')
+        : makeRecoveredAutonomousRunState(projectId)
+    })
 
     render(<Harness adapter={setup.adapter} />)
+
+    const project1SyncCount = () =>
+      vi
+        .mocked(setup.syncNotificationAdapters)
+        .mock.calls.filter(([projectId]) => projectId === 'project-1').length
 
     await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
     expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0')
     expect(screen.getByTestId('resume-history-count')).toHaveTextContent('0')
+    expect(screen.getByTestId('sync-polling-active')).toHaveTextContent('false')
 
-    const initialSnapshotCalls = vi.mocked(setup.getProjectSnapshot).mock.calls.length
-    snapshotMode = 'durable-pause'
+    snapshotMode = 'blocked'
 
     act(() => {
       setup.emitRuntimeStream(0, {
@@ -2014,12 +2080,14 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('1'))
     await waitFor(() => expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_stream:action_required'))
     await waitFor(() => expect(screen.getByTestId('resume-history-count')).toHaveTextContent('1'))
+    await waitFor(() => expect(screen.getByTestId('sync-polling-active')).toHaveTextContent('true'))
+    expect(screen.getByTestId('sync-polling-action-id')).toHaveTextContent(actionId)
+    expect(screen.getByTestId('sync-polling-boundary-id')).toHaveTextContent('boundary-1')
     expect(screen.getByTestId('latest-resume-status')).toHaveTextContent('failed')
     expect(screen.getByTestId('latest-resume-source-action-id')).toHaveTextContent(actionId)
     expect(screen.getByTestId('first-approval-resume-state')).toHaveTextContent('failed')
 
-    const callsAfterFirstRefresh = vi.mocked(setup.getProjectSnapshot).mock.calls.length
-    expect(callsAfterFirstRefresh).toBeGreaterThan(initialSnapshotCalls)
+    const syncCallsAfterImmediateRefresh = project1SyncCount()
 
     act(() => {
       setup.emitRuntimeStream(0, {
@@ -2053,10 +2121,147 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     })
 
     await waitFor(() => expect(screen.getByTestId('stream-action-required-count')).toHaveTextContent('1'))
-    await new Promise((resolve) => setTimeout(resolve, 250))
-    expect(vi.mocked(setup.getProjectSnapshot).mock.calls.length).toBe(callsAfterFirstRefresh)
-    expect(screen.getByTestId('latest-resume-status')).toHaveTextContent('failed')
-    expect(screen.getByTestId('first-approval-resume-state')).toHaveTextContent('failed')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(project1SyncCount()).toBe(syncCallsAfterImmediateRefresh)
+
+    await waitFor(() => expect(project1SyncCount()).toBeGreaterThan(syncCallsAfterImmediateRefresh), {
+      timeout: BLOCKED_NOTIFICATION_SYNC_POLL_MS + 800,
+    })
+
+    snapshotMode = 'resolved'
+
+    await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0'), {
+      timeout: BLOCKED_NOTIFICATION_SYNC_POLL_MS + 800,
+    })
+    await waitFor(() => expect(screen.getByTestId('sync-polling-active')).toHaveTextContent('false'))
+
+    const syncCallsAfterBoundaryClear = project1SyncCount()
+    await new Promise((resolve) => setTimeout(resolve, BLOCKED_NOTIFICATION_SYNC_POLL_MS + 250))
+    expect(project1SyncCount()).toBe(syncCallsAfterBoundaryClear)
+  })
+
+  it('stops blocked-checkpoint sync polling when the active project changes', async () => {
+    const setup = createMockAdapter({
+      listProjects: {
+        projects: [makeProjectSummary('project-1', 'cadence'), makeProjectSummary('project-2', 'orchestra')],
+      },
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+        'project-2': makeRuntimeSession('project-2', {
+          phase: 'authenticated',
+          sessionId: 'session-2',
+          flowId: 'flow-2',
+          accountId: 'acct-2',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
+        'project-2': makeRuntimeRun('project-2', { runId: 'run-project-2' }),
+      },
+    })
+
+    const actionId = 'flow:flow-1:run:run-project-1:boundary:boundary-1:terminal_input_required'
+    let project1Blocked = false
+    vi.mocked(setup.getProjectSnapshot).mockImplementation(async (projectId: string) => {
+      const snapshot = makeSnapshot(projectId, projectId === 'project-1' ? 'cadence' : 'orchestra')
+
+      if (projectId === 'project-1' && project1Blocked) {
+        return {
+          ...snapshot,
+          approvalRequests: [
+            {
+              actionId,
+              sessionId: 'session-1',
+              flowId: 'flow-1',
+              actionType: 'terminal_input_required',
+              title: 'Terminal input required',
+              detail: 'Provide terminal input to continue this run.',
+              gateNodeId: null,
+              gateKey: null,
+              transitionFromNodeId: null,
+              transitionToNodeId: null,
+              transitionKind: null,
+              userAnswer: null,
+              status: 'pending',
+              decisionNote: null,
+              createdAt: '2026-04-16T13:00:00Z',
+              updatedAt: '2026-04-16T13:00:00Z',
+              resolvedAt: null,
+            },
+          ],
+        }
+      }
+
+      return snapshot
+    })
+    vi.mocked(setup.getAutonomousRun).mockImplementation(async (projectId: string) => {
+      if (projectId === 'project-1' && project1Blocked) {
+        return makeBlockedAutonomousRunState(projectId, 'boundary-1')
+      }
+
+      return makeRecoveredAutonomousRunState(projectId)
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    const project1SyncCount = () =>
+      vi
+        .mocked(setup.syncNotificationAdapters)
+        .mock.calls.filter(([projectId]) => projectId === 'project-1').length
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    project1Blocked = true
+
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'action_required',
+          runId: 'run-project-1',
+          sequence: 5,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: null,
+          toolName: null,
+          toolState: null,
+          actionId,
+          boundaryId: 'boundary-1',
+          actionType: 'terminal_input_required',
+          title: 'Terminal input required',
+          detail: 'Provide terminal input to continue this run.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T13:00:00Z',
+        },
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('sync-polling-active')).toHaveTextContent('true'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
+    await waitFor(() => expect(screen.getByTestId('sync-polling-active')).toHaveTextContent('false'))
+
+    const project1SyncCallsAfterSwitch = project1SyncCount()
+    await new Promise((resolve) => setTimeout(resolve, BLOCKED_NOTIFICATION_SYNC_POLL_MS + 250))
+    expect(project1SyncCount()).toBe(project1SyncCallsAfterSwitch)
   })
 
   it('loads route health, then keeps the last truthful route list when refresh fails', async () => {

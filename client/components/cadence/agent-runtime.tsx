@@ -971,6 +971,9 @@ export function AgentRuntime({
   const notificationRouteError = agent.notificationRouteError ?? null
   const notificationSyncSummary = agent.notificationSyncSummary ?? null
   const notificationSyncError = agent.notificationSyncError ?? null
+  const notificationSyncPollingActive = agent.notificationSyncPollingActive ?? false
+  const notificationSyncPollingActionId = agent.notificationSyncPollingActionId ?? null
+  const notificationSyncPollingBoundaryId = agent.notificationSyncPollingBoundaryId ?? null
   const notificationRouteMutationStatus = agent.notificationRouteMutationStatus ?? 'idle'
   const pendingNotificationRouteId = agent.pendingNotificationRouteId ?? null
   const notificationRouteMutationError = agent.notificationRouteMutationError ?? null
@@ -1368,6 +1371,30 @@ export function AgentRuntime({
     return Array.from(new Set(nextActions))
   }, [renderableRuntimeRun, runtimeSession?.isAuthenticated, streamStatus, trustPrimaryErrorCode, trustSnapshot])
   const hasTrustRecoveryActions = trustRecoveryActions.length > 0
+  const hasNotificationTrustSurface =
+    notificationSyncPollingActive ||
+    notificationRoutes.length > 0 ||
+    notificationChannelHealth.length > 0 ||
+    notificationSyncSummary !== null ||
+    notificationSyncError !== null ||
+    trustSnapshot.pendingApprovalCount > 0
+  const latestSyncTimestampLabel = notificationSyncSummary
+    ? formatTimestamp(notificationSyncSummary.syncedAt)
+    : 'No successful sync recorded yet.'
+  const remoteEscalationAlertTitle = notificationSyncPollingActive
+    ? trustSnapshot.syncState === 'degraded'
+      ? 'Remote escalation degraded'
+      : 'Remote escalation active'
+    : trustSnapshot.syncState === 'degraded'
+      ? 'Remote escalation needs attention'
+      : 'Remote escalation idle'
+  const remoteEscalationAlertDescription = notificationSyncPollingActive
+    ? trustSnapshot.syncState === 'degraded'
+      ? `Cadence is still polling configured routes for blocked boundary ${displayValue(notificationSyncPollingBoundaryId, 'unknown')} while keeping the last truthful sync summary visible. ${trustSnapshot.syncReason}`
+      : `Cadence is polling configured routes for blocked boundary ${displayValue(notificationSyncPollingBoundaryId, 'unknown')} and pending operator action ${displayValue(notificationSyncPollingActionId, 'unknown')}.`
+    : trustSnapshot.syncState === 'degraded'
+      ? trustSnapshot.syncReason
+      : 'No blocked autonomous boundary is actively polling remote routes right now.'
 
   useEffect(() => {
     setActionMessage(null)
@@ -2521,6 +2548,138 @@ export function AgentRuntime({
                 </div>
               </div>
             </section>
+            ) : null}
+
+            {hasNotificationTrustSurface ? (
+              <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Remote escalation</p>
+                      <h2 className="mt-2 text-lg font-semibold text-foreground">Remote escalation trust</h2>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={getTrustSignalBadgeVariant(trustSnapshot.state)}>{trustSnapshot.stateLabel}</Badge>
+                      {notificationSyncPollingActive ? <Badge variant="secondary">Polling blocked checkpoint</Badge> : null}
+                      {isRouteListRefreshing ? <Badge variant="outline">Refreshing routes</Badge> : null}
+                      {canRefreshNotificationRoutes ? (
+                        <Button
+                          disabled={pendingAction === 'refresh_routes'}
+                          onClick={() => void handleRefreshNotificationRoutes({ force: true })}
+                          type="button"
+                          variant="outline"
+                        >
+                          {pendingAction === 'refresh_routes' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
+                          Refresh routes
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    Cadence keeps the selected project active while remote approval routes poll for the first valid operator reply. The trust cards below preserve the last truthful sync summary even when the latest cycle degrades.
+                  </p>
+
+                  <Alert variant={trustSnapshot.syncState === 'degraded' || notificationSyncError ? 'destructive' : 'default'}>
+                    {trustSnapshot.syncState === 'degraded' || notificationSyncError ? (
+                      <AlertCircle className="h-4 w-4" />
+                    ) : (
+                      <ShieldCheck className="h-4 w-4" />
+                    )}
+                    <AlertTitle>{remoteEscalationAlertTitle}</AlertTitle>
+                    <AlertDescription>
+                      <p>{remoteEscalationAlertDescription}</p>
+                      {notificationSyncPollingActionId ? (
+                        <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                          action: {notificationSyncPollingActionId}
+                        </p>
+                      ) : null}
+                      {notificationSyncPollingBoundaryId ? (
+                        <p className="font-mono text-[11px] text-muted-foreground">
+                          boundary: {notificationSyncPollingBoundaryId}
+                        </p>
+                      ) : null}
+                    </AlertDescription>
+                  </Alert>
+
+                  {notificationSyncError ? (
+                    <Alert variant="destructive">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertTitle>Showing last truthful sync summary</AlertTitle>
+                      <AlertDescription>
+                        <p>{notificationSyncError.message}</p>
+                        <p className="font-mono text-[11px] text-destructive/80">code: {notificationSyncError.code}</p>
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                    {trustSignalCards.map((card) => (
+                      <div key={card.id} className="rounded-xl border border-border/70 bg-card/70 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-foreground">{card.title}</p>
+                          <Badge variant={getTrustSignalBadgeVariant(card.state)}>{getTrustSignalLabel(card.state)}</Badge>
+                        </div>
+                        <p className="mt-3 text-sm leading-6 text-foreground/90">{card.summary}</p>
+                        <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{card.reason}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                    <div className="space-y-3 rounded-xl border border-border/70 bg-card/70 p-4">
+                      <h3 className="text-base font-semibold text-foreground">Latest sync truth</h3>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <CountCard label="Last successful sync" value={latestSyncTimestampLabel} />
+                        <CountCard label="Pending approvals" value={String(trustSnapshot.pendingApprovalCount)} />
+                        <CountCard label="Dispatch failures" tone={trustSnapshot.syncDispatchFailedCount > 0 ? 'danger' : 'default'} value={String(trustSnapshot.syncDispatchFailedCount)} />
+                        <CountCard label="Rejected replies" tone={trustSnapshot.syncReplyRejectedCount > 0 ? 'danger' : 'default'} value={String(trustSnapshot.syncReplyRejectedCount)} />
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 rounded-xl border border-border/70 bg-card/70 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h3 className="text-base font-semibold text-foreground">Channel health</h3>
+                        <Badge variant="outline">{notificationRoutes.length} route{notificationRoutes.length === 1 ? '' : 's'}</Badge>
+                      </div>
+                      {notificationChannelHealth.length > 0 ? (
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {notificationChannelHealth.map((channel) => (
+                            <div key={channel.routeKind} className="rounded-lg border border-border/70 bg-background/70 px-3 py-3 text-sm">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-medium text-foreground">{channel.routeKindLabel}</p>
+                                <Badge variant={getNotificationHealthBadgeVariant(channel.health)}>{channel.healthLabel}</Badge>
+                              </div>
+                              <div className="mt-3 space-y-1 text-[11px] text-muted-foreground">
+                                <InfoRow label="Enabled routes" value={String(channel.enabledCount)} />
+                                <InfoRow label="Pending dispatches" value={String(channel.pendingCount)} />
+                                <InfoRow label="Failed dispatches" value={String(channel.failedCount)} />
+                                <InfoRow label="Claimed replies" value={String(channel.claimedCount)} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <FeedEmptyState
+                          body="No Telegram or Discord routes are configured for the selected project yet."
+                          title="No remote routes configured"
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  {hasTrustRecoveryActions ? (
+                    <div className="rounded-xl border border-border/70 bg-card/70 p-4">
+                      <h3 className="text-base font-semibold text-foreground">Recovery actions</h3>
+                      <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-muted-foreground">
+                        {trustRecoveryActions.map((action) => (
+                          <li key={action}>{action}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
             ) : null}
 
             {hasOperatorStateSurface ? (

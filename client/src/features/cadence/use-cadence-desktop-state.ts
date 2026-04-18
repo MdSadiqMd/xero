@@ -228,6 +228,9 @@ export interface AgentPaneView {
   notificationRouteError: OperatorActionErrorView | null
   notificationSyncSummary: SyncNotificationAdaptersResponseDto | null
   notificationSyncError: OperatorActionErrorView | null
+  notificationSyncPollingActive: boolean
+  notificationSyncPollingActionId: string | null
+  notificationSyncPollingBoundaryId: string | null
   notificationRouteMutationStatus: NotificationRouteMutationStatus
   pendingNotificationRouteId: string | null
   notificationRouteMutationError: OperatorActionErrorView | null
@@ -337,6 +340,8 @@ const ACTIVE_RUNTIME_STREAM_ITEM_KINDS: RuntimeStreamItemKindDto[] = [
   'failure',
 ]
 
+export const BLOCKED_NOTIFICATION_SYNC_POLL_MS = 400
+
 const NOTIFICATION_ROUTE_KINDS: NotificationRouteKindDto[] = ['telegram', 'discord']
 
 const NOTIFICATION_ROUTE_KIND_LABELS: Record<NotificationRouteKindDto, string> = {
@@ -344,8 +349,102 @@ const NOTIFICATION_ROUTE_KIND_LABELS: Record<NotificationRouteKindDto, string> =
   discord: 'Discord',
 }
 
+interface BlockedNotificationSyncPollTarget {
+  projectId: string
+  actionId: string
+  boundaryId: string
+}
+
 function getNotificationRouteKindLabel(routeKind: NotificationRouteKindDto): string {
   return NOTIFICATION_ROUTE_KIND_LABELS[routeKind]
+}
+
+function extractRuntimeBoundaryIdFromActionId(actionId: string, actionType: string): string | null {
+  const normalizedActionId = actionId.trim()
+  const normalizedActionType = actionType.trim()
+  if (
+    normalizedActionId.length === 0 ||
+    normalizedActionType.length === 0 ||
+    !normalizedActionId.includes(':run:') ||
+    !normalizedActionId.includes(':boundary:')
+  ) {
+    return null
+  }
+
+  const boundaryMarker = ':boundary:'
+  const boundaryMarkerIndex = normalizedActionId.indexOf(boundaryMarker)
+  if (boundaryMarkerIndex < 0) {
+    return null
+  }
+
+  const boundaryAndAction = normalizedActionId.slice(boundaryMarkerIndex + boundaryMarker.length)
+  const actionSuffix = `:${normalizedActionType}`
+  if (!boundaryAndAction.endsWith(actionSuffix)) {
+    return null
+  }
+
+  const boundaryId = boundaryAndAction.slice(0, -actionSuffix.length).trim()
+  return boundaryId.length > 0 ? boundaryId : null
+}
+
+function getBlockedNotificationSyncPollTarget(options: {
+  project: ProjectDetailView | null
+  autonomousUnit: ProjectDetailView['autonomousUnit'] | null
+  runtimeStream: RuntimeStreamView | null
+}): BlockedNotificationSyncPollTarget | null {
+  const { project, autonomousUnit, runtimeStream } = options
+  if (!project || !autonomousUnit || autonomousUnit.status !== 'blocked') {
+    return null
+  }
+
+  const boundaryId = autonomousUnit.boundaryId?.trim()
+  if (!boundaryId) {
+    return null
+  }
+
+  const pendingApprovals = project.approvalRequests.filter((approval) => approval.isPending)
+  if (pendingApprovals.length === 0) {
+    return null
+  }
+
+  const pendingActionIds = new Set(pendingApprovals.map((approval) => approval.actionId))
+  const matchingRuntimeAction = [...(runtimeStream?.actionRequired ?? [])]
+    .filter(
+      (item) =>
+        pendingActionIds.has(item.actionId) &&
+        item.boundaryId?.trim() === boundaryId,
+    )
+    .sort((left, right) => getTimestampMs(right.createdAt) - getTimestampMs(left.createdAt))[0]
+
+  if (matchingRuntimeAction) {
+    return {
+      projectId: project.id,
+      actionId: matchingRuntimeAction.actionId,
+      boundaryId,
+    }
+  }
+
+  const matchingApproval = pendingApprovals.find(
+    (approval) => extractRuntimeBoundaryIdFromActionId(approval.actionId, approval.actionType) === boundaryId,
+  )
+
+  if (!matchingApproval) {
+    return null
+  }
+
+  return {
+    projectId: project.id,
+    actionId: matchingApproval.actionId,
+    boundaryId,
+  }
+}
+
+function getBlockedNotificationSyncPollKey(target: BlockedNotificationSyncPollTarget | null): string | null {
+  if (!target) {
+    return null
+  }
+
+  return `${target.projectId}:${target.actionId}:${target.boundaryId}`
 }
 
 function getTimestampMs(value: string | null | undefined): number {
@@ -1167,6 +1266,9 @@ export function useCadenceDesktopState(
   const notificationDispatchesRef = useRef<Record<string, NotificationDispatchDto[]>>({})
   const trustSnapshotRef = useRef<Record<string, AgentTrustSnapshotView>>({})
   const runtimeRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const blockedNotificationSyncPollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const blockedNotificationSyncPollTargetRef = useRef<BlockedNotificationSyncPollTarget | null>(null)
+  const blockedNotificationSyncPollInFlightRef = useRef(false)
   const pendingRuntimeRefreshRef = useRef<{
     projectId: string
     source: Extract<RefreshSource, 'runtime_run:updated' | 'runtime_stream:action_required'>
@@ -1917,6 +2019,55 @@ export function useCadenceDesktopState(
     [loadProject],
   )
 
+  const clearBlockedNotificationSyncPoll = useCallback(() => {
+    if (blockedNotificationSyncPollTimeoutRef.current) {
+      clearTimeout(blockedNotificationSyncPollTimeoutRef.current)
+      blockedNotificationSyncPollTimeoutRef.current = null
+    }
+  }, [])
+
+  const scheduleBlockedNotificationSyncPoll = useCallback(
+    (expectedPollKey: string) => {
+      if (blockedNotificationSyncPollTimeoutRef.current) {
+        return
+      }
+
+      blockedNotificationSyncPollTimeoutRef.current = setTimeout(() => {
+        blockedNotificationSyncPollTimeoutRef.current = null
+
+        const pollTarget = blockedNotificationSyncPollTargetRef.current
+        if (!pollTarget || getBlockedNotificationSyncPollKey(pollTarget) !== expectedPollKey) {
+          return
+        }
+
+        if (activeProjectIdRef.current !== pollTarget.projectId) {
+          return
+        }
+
+        if (blockedNotificationSyncPollInFlightRef.current) {
+          scheduleBlockedNotificationSyncPoll(expectedPollKey)
+          return
+        }
+
+        blockedNotificationSyncPollInFlightRef.current = true
+        void loadProject(pollTarget.projectId, 'runtime_stream:action_required').finally(() => {
+          blockedNotificationSyncPollInFlightRef.current = false
+          const nextTarget = blockedNotificationSyncPollTargetRef.current
+          if (!nextTarget || getBlockedNotificationSyncPollKey(nextTarget) !== expectedPollKey) {
+            return
+          }
+
+          if (activeProjectIdRef.current !== nextTarget.projectId) {
+            return
+          }
+
+          scheduleBlockedNotificationSyncPoll(expectedPollKey)
+        })
+      }, BLOCKED_NOTIFICATION_SYNC_POLL_MS)
+    },
+    [loadProject],
+  )
+
   useEffect(() => {
     return () => {
       if (runtimeRefreshTimeoutRef.current) {
@@ -1924,8 +2075,11 @@ export function useCadenceDesktopState(
         runtimeRefreshTimeoutRef.current = null
       }
       pendingRuntimeRefreshRef.current = null
+      clearBlockedNotificationSyncPoll()
+      blockedNotificationSyncPollTargetRef.current = null
+      blockedNotificationSyncPollInFlightRef.current = false
     }
-  }, [])
+  }, [clearBlockedNotificationSyncPoll])
 
   const bootstrap = useCallback(async () => {
     setIsLoading(true)
@@ -2876,6 +3030,41 @@ export function useCadenceDesktopState(
   const activeNotificationSyncError = activeProject
     ? notificationSyncErrors[activeProject.id] ?? null
     : null
+  const activeBlockedNotificationSyncPollTarget = useMemo(
+    () =>
+      getBlockedNotificationSyncPollTarget({
+        project: activeProject,
+        autonomousUnit: activeAutonomousUnit,
+        runtimeStream: activeRuntimeStream,
+      }),
+    [activeAutonomousUnit, activeProject, activeRuntimeStream],
+  )
+  const activeBlockedNotificationSyncPollKey = getBlockedNotificationSyncPollKey(
+    activeBlockedNotificationSyncPollTarget,
+  )
+
+  useEffect(() => {
+    blockedNotificationSyncPollTargetRef.current = activeBlockedNotificationSyncPollTarget
+  }, [activeBlockedNotificationSyncPollTarget])
+
+  useEffect(() => {
+    clearBlockedNotificationSyncPoll()
+    blockedNotificationSyncPollInFlightRef.current = false
+
+    if (!activeBlockedNotificationSyncPollKey) {
+      return
+    }
+
+    scheduleBlockedNotificationSyncPoll(activeBlockedNotificationSyncPollKey)
+
+    return () => {
+      clearBlockedNotificationSyncPoll()
+    }
+  }, [
+    activeBlockedNotificationSyncPollKey,
+    clearBlockedNotificationSyncPoll,
+    scheduleBlockedNotificationSyncPoll,
+  ])
 
   const workflowView = useMemo<WorkflowPaneView | null>(() => {
     if (!activeProject) {
@@ -2991,6 +3180,9 @@ export function useCadenceDesktopState(
       notificationRouteError: activeNotificationRouteLoadError,
       notificationSyncSummary: activeNotificationSyncSummary,
       notificationSyncError: activeNotificationSyncError,
+      notificationSyncPollingActive: Boolean(activeBlockedNotificationSyncPollTarget),
+      notificationSyncPollingActionId: activeBlockedNotificationSyncPollTarget?.actionId ?? null,
+      notificationSyncPollingBoundaryId: activeBlockedNotificationSyncPollTarget?.boundaryId ?? null,
       notificationRouteMutationStatus,
       pendingNotificationRouteId,
       notificationRouteMutationError,
