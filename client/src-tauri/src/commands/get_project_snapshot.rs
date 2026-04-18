@@ -62,7 +62,8 @@ pub fn get_project_snapshot<R: Runtime>(
         match project_store::load_project_snapshot(Path::new(&root_path), &project_id) {
             Ok(record) => {
                 let before = load_persisted_runtime_run(Path::new(&root_path), &project_id)?;
-                let after = load_runtime_run_status(state.inner(), Path::new(&root_path), &project_id)?;
+                let after =
+                    load_runtime_run_status(state.inner(), Path::new(&root_path), &project_id)?;
                 emit_runtime_run_updated_if_changed(&app, &project_id, &before, &after)?;
 
                 let autonomous_state = sync_autonomous_run_state(

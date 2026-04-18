@@ -584,7 +584,9 @@ fn projection_from_store_error(
     error: NotificationAdapterError,
 ) -> NotificationCredentialReadinessProjection {
     let status = match error.code.as_str() {
-        "notification_adapter_credentials_missing" => NotificationCredentialReadinessStatus::Missing,
+        "notification_adapter_credentials_missing" => {
+            NotificationCredentialReadinessStatus::Missing
+        }
         "notification_adapter_credentials_malformed" => {
             NotificationCredentialReadinessStatus::Malformed
         }

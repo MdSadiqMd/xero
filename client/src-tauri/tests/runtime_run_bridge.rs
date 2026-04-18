@@ -1040,10 +1040,15 @@ fn start_autonomous_run_reuses_existing_boundary_and_persists_duplicate_start_vi
         },
     )
     .expect("second autonomous start should reconnect");
-    let duplicate = second.run.expect("duplicate autonomous start should return run state");
+    let duplicate = second
+        .run
+        .expect("duplicate autonomous start should return run state");
     assert_eq!(duplicate.run_id, running.run_id);
     assert!(duplicate.duplicate_start_detected);
-    assert_eq!(duplicate.duplicate_start_run_id.as_deref(), Some(running.run_id.as_str()));
+    assert_eq!(
+        duplicate.duplicate_start_run_id.as_deref(),
+        Some(running.run_id.as_str())
+    );
     assert_eq!(
         duplicate.duplicate_start_reason.as_deref(),
         Some(
@@ -1066,7 +1071,10 @@ fn start_autonomous_run_reuses_existing_boundary_and_persists_duplicate_start_vi
     .expect("persisted autonomous run should exist");
     assert_eq!(persisted.run_id, running.run_id);
     assert!(persisted.duplicate_start_detected);
-    assert_eq!(persisted.recovery_state, AutonomousRunRecoveryStateDto::Healthy);
+    assert_eq!(
+        persisted.recovery_state,
+        AutonomousRunRecoveryStateDto::Healthy
+    );
 
     let cancelled = cancel_autonomous_run(
         app.handle().clone(),
@@ -1081,7 +1089,10 @@ fn start_autonomous_run_reuses_existing_boundary_and_persists_duplicate_start_vi
     .expect("cancelled autonomous run should still exist");
     assert_eq!(cancelled.status, AutonomousRunStatusDto::Cancelled);
     assert!(cancelled.cancelled_at.is_some());
-    assert_eq!(cancelled.recovery_state, AutonomousRunRecoveryStateDto::Terminal);
+    assert_eq!(
+        cancelled.recovery_state,
+        AutonomousRunRecoveryStateDto::Terminal
+    );
 }
 
 #[test]
@@ -1142,7 +1153,10 @@ fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_duplicate_c
         .as_ref()
         .expect("initial autonomous unit should exist");
     assert_eq!(initial_run.run_id, started_run.run_id);
-    assert_eq!(initial_run.active_unit_id.as_deref(), Some(initial_unit.unit_id.as_str()));
+    assert_eq!(
+        initial_run.active_unit_id.as_deref(),
+        Some(initial_unit.unit_id.as_str())
+    );
 
     let (fresh_state, _fresh_registry_path, _fresh_auth_store_path) = create_state(&root);
     let fresh_app = build_mock_app(fresh_state);
@@ -1182,7 +1196,10 @@ fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_duplicate_c
         .as_ref()
         .expect("recovered autonomous unit should exist");
     assert_eq!(recovered_run.run_id, started_run.run_id);
-    assert_eq!(recovered_run.active_unit_id.as_deref(), Some(recovered_unit.unit_id.as_str()));
+    assert_eq!(
+        recovered_run.active_unit_id.as_deref(),
+        Some(recovered_unit.unit_id.as_str())
+    );
     assert_eq!(count_runtime_run_rows(&repo_root), 1);
     assert_eq!(count_autonomous_run_rows(&repo_root), 1);
 
@@ -1241,10 +1258,14 @@ fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_duplicate_c
     .run
     .expect("cancelled autonomous run should still exist");
     assert_eq!(cancelled.status, AutonomousRunStatusDto::Cancelled);
-    assert_eq!(cancelled.recovery_state, AutonomousRunRecoveryStateDto::Terminal);
+    assert_eq!(
+        cancelled.recovery_state,
+        AutonomousRunRecoveryStateDto::Terminal
+    );
 
     let stopped_runtime = wait_for_runtime_run(&fresh_app, &project_id, |runtime_run| {
-        runtime_run.run_id == started_run.run_id && runtime_run.status == RuntimeRunStatusDto::Stopped
+        runtime_run.run_id == started_run.run_id
+            && runtime_run.status == RuntimeRunStatusDto::Stopped
     });
     assert!(stopped_runtime.stopped_at.is_some());
 }
@@ -1270,8 +1291,12 @@ fn get_autonomous_run_recovers_stale_boundary_after_fresh_host_reload() {
         },
     )
     .expect("get autonomous run after fresh-host restart");
-    let run = recovered.run.expect("autonomous run should exist after restart");
-    let unit = recovered.unit.expect("autonomous unit should exist after restart");
+    let run = recovered
+        .run
+        .expect("autonomous run should exist after restart");
+    let unit = recovered
+        .unit
+        .expect("autonomous unit should exist after restart");
     assert_eq!(run.run_id, "run-unreachable");
     assert_eq!(run.status, AutonomousRunStatusDto::Stale);
     assert_eq!(
@@ -1373,7 +1398,10 @@ fn get_runtime_run_recovers_stale_unreachable_state_once_after_fresh_host_reload
     assert_eq!(second.status, first.status);
     assert_eq!(second.transport.liveness, first.transport.liveness);
     assert_eq!(second.last_error_code, first.last_error_code);
-    assert_eq!(second.last_checkpoint_sequence, first.last_checkpoint_sequence);
+    assert_eq!(
+        second.last_checkpoint_sequence,
+        first.last_checkpoint_sequence
+    );
     assert_eq!(second.checkpoints, first.checkpoints);
     assert_eq!(
         second.updated_at, first.updated_at,
@@ -2612,12 +2640,7 @@ fn resume_operator_run_delivers_approved_terminal_input_without_auth_event_drift
         "run-resume-success",
         "session-1",
         Some("flow-1"),
-        &runtime_shell::script_prompt_read_echo_and_sleep(
-            "Enter value: ",
-            "value",
-            "value=",
-            5,
-        ),
+        &runtime_shell::script_prompt_read_echo_and_sleep("Enter value: ", "value", "value=", 5),
     );
 
     wait_for_runtime_run(&app, &project_id, |runtime_run| {
@@ -2795,12 +2818,7 @@ fn resume_operator_run_records_failed_history_when_runtime_identity_session_is_s
         "run-resume-session-mismatch",
         "session-1",
         Some("flow-1"),
-        &runtime_shell::script_prompt_read_echo_and_sleep(
-            "Enter value: ",
-            "value",
-            "value=",
-            5,
-        ),
+        &runtime_shell::script_prompt_read_echo_and_sleep("Enter value: ", "value", "value=", 5),
     );
 
     wait_for_runtime_run(&app, &project_id, |runtime_run| {

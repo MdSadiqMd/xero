@@ -1742,7 +1742,12 @@ pub fn upsert_autonomous_run(
 
     let database_path = database_path_for_repo(repo_root);
     let connection = open_runtime_database(repo_root, &database_path)?;
-    read_project_row(&connection, &database_path, repo_root, &payload.run.project_id)?;
+    read_project_row(
+        &connection,
+        &database_path,
+        repo_root,
+        &payload.run.project_id,
+    )?;
 
     let transaction = connection.unchecked_transaction().map_err(|error| {
         map_runtime_run_transaction_error(
@@ -1775,15 +1780,51 @@ pub fn upsert_autonomous_run(
     }
 
     let active_unit_sequence = payload.run.active_unit_sequence.map(i64::from);
-    let duplicate_start_detected = if payload.run.duplicate_start_detected { 1 } else { 0 };
-    let pause_reason_code = payload.run.pause_reason.as_ref().map(|reason| reason.code.as_str());
-    let pause_reason_message = payload.run.pause_reason.as_ref().map(|reason| reason.message.as_str());
-    let cancel_reason_code = payload.run.cancel_reason.as_ref().map(|reason| reason.code.as_str());
-    let cancel_reason_message = payload.run.cancel_reason.as_ref().map(|reason| reason.message.as_str());
-    let crash_reason_code = payload.run.crash_reason.as_ref().map(|reason| reason.code.as_str());
-    let crash_reason_message = payload.run.crash_reason.as_ref().map(|reason| reason.message.as_str());
-    let last_error_code = payload.run.last_error.as_ref().map(|reason| reason.code.as_str());
-    let last_error_message = payload.run.last_error.as_ref().map(|reason| reason.message.as_str());
+    let duplicate_start_detected = if payload.run.duplicate_start_detected {
+        1
+    } else {
+        0
+    };
+    let pause_reason_code = payload
+        .run
+        .pause_reason
+        .as_ref()
+        .map(|reason| reason.code.as_str());
+    let pause_reason_message = payload
+        .run
+        .pause_reason
+        .as_ref()
+        .map(|reason| reason.message.as_str());
+    let cancel_reason_code = payload
+        .run
+        .cancel_reason
+        .as_ref()
+        .map(|reason| reason.code.as_str());
+    let cancel_reason_message = payload
+        .run
+        .cancel_reason
+        .as_ref()
+        .map(|reason| reason.message.as_str());
+    let crash_reason_code = payload
+        .run
+        .crash_reason
+        .as_ref()
+        .map(|reason| reason.code.as_str());
+    let crash_reason_message = payload
+        .run
+        .crash_reason
+        .as_ref()
+        .map(|reason| reason.message.as_str());
+    let last_error_code = payload
+        .run
+        .last_error
+        .as_ref()
+        .map(|reason| reason.code.as_str());
+    let last_error_message = payload
+        .run
+        .last_error
+        .as_ref()
+        .map(|reason| reason.message.as_str());
 
     transaction
         .execute(
@@ -2229,7 +2270,10 @@ fn read_autonomous_unit_attempt_by_id(
     );
 
     match row {
-        Ok(row) => Ok(Some(decode_autonomous_unit_attempt_row(row, database_path)?)),
+        Ok(row) => Ok(Some(decode_autonomous_unit_attempt_row(
+            row,
+            database_path,
+        )?)),
         Err(SqlError::QueryReturnedNoRows) => Ok(None),
         Err(other) => Err(CommandError::system_fault(
             "autonomous_unit_attempt_query_failed",
@@ -8917,15 +8961,13 @@ fn read_autonomous_run_snapshot(
     let units = read_autonomous_units(connection, database_path, expected_project_id, &run.run_id)?;
     let attempts =
         read_autonomous_unit_attempts(connection, database_path, expected_project_id, &run.run_id)?;
-    let artifacts =
-        read_autonomous_unit_artifacts(connection, database_path, expected_project_id, &run.run_id)?;
-    let history = build_autonomous_unit_history(
+    let artifacts = read_autonomous_unit_artifacts(
+        connection,
         database_path,
-        &run,
-        units,
-        attempts,
-        artifacts,
+        expected_project_id,
+        &run.run_id,
     )?;
+    let history = build_autonomous_unit_history(database_path, &run, units, attempts, artifacts)?;
 
     let unit = history
         .iter()
@@ -9007,23 +9049,26 @@ fn read_autonomous_units(
         })?;
 
     let rows = statement
-        .query_map(params![project_id, run_id, MAX_AUTONOMOUS_HISTORY_UNIT_ROWS], |row| {
-            Ok(RawAutonomousUnitRow {
-                project_id: row.get(0)?,
-                run_id: row.get(1)?,
-                unit_id: row.get(2)?,
-                sequence: row.get(3)?,
-                kind: row.get(4)?,
-                status: row.get(5)?,
-                summary: row.get(6)?,
-                boundary_id: row.get(7)?,
-                started_at: row.get(8)?,
-                finished_at: row.get(9)?,
-                last_error_code: row.get(10)?,
-                last_error_message: row.get(11)?,
-                updated_at: row.get(12)?,
-            })
-        })
+        .query_map(
+            params![project_id, run_id, MAX_AUTONOMOUS_HISTORY_UNIT_ROWS],
+            |row| {
+                Ok(RawAutonomousUnitRow {
+                    project_id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    unit_id: row.get(2)?,
+                    sequence: row.get(3)?,
+                    kind: row.get(4)?,
+                    status: row.get(5)?,
+                    summary: row.get(6)?,
+                    boundary_id: row.get(7)?,
+                    started_at: row.get(8)?,
+                    finished_at: row.get(9)?,
+                    last_error_code: row.get(10)?,
+                    last_error_message: row.get(11)?,
+                    updated_at: row.get(12)?,
+                })
+            },
+        )
         .map_err(|error| {
             CommandError::system_fault(
                 "autonomous_unit_query_failed",
@@ -9307,7 +9352,8 @@ fn build_autonomous_unit_history(
             .push(attempt);
     }
 
-    let mut artifacts_by_attempt: HashMap<String, Vec<AutonomousUnitArtifactRecord>> = HashMap::new();
+    let mut artifacts_by_attempt: HashMap<String, Vec<AutonomousUnitArtifactRecord>> =
+        HashMap::new();
     for artifact in artifacts {
         if !units.iter().any(|unit| unit.unit_id == artifact.unit_id) {
             return Err(map_runtime_run_decode_error(
@@ -9321,7 +9367,11 @@ fn build_autonomous_unit_history(
 
         let attempt_known = attempts_by_unit
             .get(&artifact.unit_id)
-            .map(|attempts| attempts.iter().any(|attempt| attempt.attempt_id == artifact.attempt_id))
+            .map(|attempts| {
+                attempts
+                    .iter()
+                    .any(|attempt| attempt.attempt_id == artifact.attempt_id)
+            })
             .unwrap_or(false);
         if !attempt_known {
             return Err(map_runtime_run_decode_error(
@@ -9573,7 +9623,9 @@ fn decode_autonomous_run_row(
     })?;
     let active_unit_sequence = raw_row
         .active_unit_sequence
-        .map(|value| decode_runtime_run_checkpoint_sequence(value, "active_unit_sequence", database_path))
+        .map(|value| {
+            decode_runtime_run_checkpoint_sequence(value, "active_unit_sequence", database_path)
+        })
         .transpose()?;
     let duplicate_start_detected = decode_runtime_run_bool(
         raw_row.duplicate_start_detected,
@@ -9602,11 +9654,8 @@ fn decode_autonomous_run_row(
         "last_checkpoint_at",
         database_path,
     )?;
-    let paused_at = decode_runtime_run_optional_non_empty_text(
-        raw_row.paused_at,
-        "paused_at",
-        database_path,
-    )?;
+    let paused_at =
+        decode_runtime_run_optional_non_empty_text(raw_row.paused_at, "paused_at", database_path)?;
     let cancelled_at = decode_runtime_run_optional_non_empty_text(
         raw_row.cancelled_at,
         "cancelled_at",
@@ -9710,7 +9759,11 @@ fn decode_autonomous_unit_row(
         )?,
         run_id: require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?,
         unit_id: require_runtime_run_non_empty_owned(raw_row.unit_id, "unit_id", database_path)?,
-        sequence: decode_runtime_run_checkpoint_sequence(raw_row.sequence, "sequence", database_path)?,
+        sequence: decode_runtime_run_checkpoint_sequence(
+            raw_row.sequence,
+            "sequence",
+            database_path,
+        )?,
         kind: parse_autonomous_unit_kind(&raw_row.kind).map_err(|details| {
             map_runtime_run_decode_error(database_path, format!("Field `kind` {details}"))
         })?,
@@ -9810,28 +9863,16 @@ fn decode_autonomous_unit_artifact_row(
     raw_row: RawAutonomousUnitArtifactRow,
     database_path: &Path,
 ) -> Result<AutonomousUnitArtifactRecord, CommandError> {
-    let project_id = require_runtime_run_non_empty_owned(
-        raw_row.project_id,
-        "project_id",
-        database_path,
-    )?;
+    let project_id =
+        require_runtime_run_non_empty_owned(raw_row.project_id, "project_id", database_path)?;
     let run_id = require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?;
     let unit_id = require_runtime_run_non_empty_owned(raw_row.unit_id, "unit_id", database_path)?;
-    let attempt_id = require_runtime_run_non_empty_owned(
-        raw_row.attempt_id,
-        "attempt_id",
-        database_path,
-    )?;
-    let artifact_id = require_runtime_run_non_empty_owned(
-        raw_row.artifact_id,
-        "artifact_id",
-        database_path,
-    )?;
-    let artifact_kind = require_runtime_run_non_empty_owned(
-        raw_row.artifact_kind,
-        "artifact_kind",
-        database_path,
-    )?;
+    let attempt_id =
+        require_runtime_run_non_empty_owned(raw_row.attempt_id, "attempt_id", database_path)?;
+    let artifact_id =
+        require_runtime_run_non_empty_owned(raw_row.artifact_id, "artifact_id", database_path)?;
+    let artifact_kind =
+        require_runtime_run_non_empty_owned(raw_row.artifact_kind, "artifact_kind", database_path)?;
     let summary = require_runtime_run_non_empty_owned(raw_row.summary, "summary", database_path)?;
     let content_hash = decode_runtime_run_optional_non_empty_text(
         raw_row.content_hash,
@@ -12017,8 +12058,16 @@ fn normalize_autonomous_run_upsert_payload(
 
     validate_non_empty_text(&unit.unit_id, "unit_id", "autonomous_run_request_invalid")?;
     validate_non_empty_text(&unit.summary, "summary", "autonomous_run_request_invalid")?;
-    validate_non_empty_text(&unit.started_at, "started_at", "autonomous_run_request_invalid")?;
-    validate_non_empty_text(&unit.updated_at, "updated_at", "autonomous_run_request_invalid")?;
+    validate_non_empty_text(
+        &unit.started_at,
+        "started_at",
+        "autonomous_run_request_invalid",
+    )?;
+    validate_non_empty_text(
+        &unit.updated_at,
+        "updated_at",
+        "autonomous_run_request_invalid",
+    )?;
     if unit.sequence == 0 {
         return Err(CommandError::system_fault(
             "autonomous_run_request_invalid",
@@ -12194,7 +12243,8 @@ fn normalize_autonomous_unit_artifact_record(
         })
         .transpose()?;
 
-    if artifact.payload.is_none() && autonomous_artifact_kind_requires_payload(&artifact.artifact_kind)
+    if artifact.payload.is_none()
+        && autonomous_artifact_kind_requires_payload(&artifact.artifact_kind)
     {
         let message = format!(
             "Cadence requires `{}` autonomous artifacts to persist a structured payload.",
@@ -12276,16 +12326,15 @@ fn decode_autonomous_artifact_payload_json(
     artifact_kind: &str,
     database_path: &Path,
 ) -> Result<AutonomousArtifactPayloadRecord, CommandError> {
-    let parsed = serde_json::from_str::<AutonomousArtifactPayloadRecord>(payload_json).map_err(
-        |error| {
+    let parsed =
+        serde_json::from_str::<AutonomousArtifactPayloadRecord>(payload_json).map_err(|error| {
             map_runtime_run_decode_error(
                 database_path,
                 format!(
                     "Autonomous artifact `{artifact_id}` stored malformed payload_json: {error}"
                 ),
             )
-        },
-    )?;
+        })?;
 
     validate_autonomous_artifact_payload(
         &parsed,
@@ -12317,9 +12366,7 @@ fn canonicalize_autonomous_artifact_payload_json(
     serde_json::to_string(&canonical).map_err(|error| {
         CommandError::system_fault(
             "autonomous_run_request_invalid",
-            format!(
-                "Cadence could not canonicalize the autonomous artifact payload JSON: {error}"
-            ),
+            format!("Cadence could not canonicalize the autonomous artifact payload JSON: {error}"),
         )
     })
 }
@@ -12549,9 +12596,7 @@ fn autonomous_artifact_payload_kind(payload: &AutonomousArtifactPayloadRecord) -
         AutonomousArtifactPayloadRecord::VerificationEvidence(_) => {
             AUTONOMOUS_ARTIFACT_KIND_VERIFICATION_EVIDENCE
         }
-        AutonomousArtifactPayloadRecord::PolicyDenied(_) => {
-            AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED
-        }
+        AutonomousArtifactPayloadRecord::PolicyDenied(_) => AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED,
     }
 }
 
@@ -12574,9 +12619,9 @@ fn canonicalize_json_value(value: serde_json::Value) -> serde_json::Value {
 
             serde_json::Value::Object(sorted.into_iter().collect())
         }
-        serde_json::Value::Array(items) => serde_json::Value::Array(
-            items.into_iter().map(canonicalize_json_value).collect(),
-        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(canonicalize_json_value).collect())
+        }
         other => other,
     }
 }
@@ -15091,7 +15136,11 @@ fn decode_runtime_run_reason(
     match (code, message) {
         (None, None) => Ok(None),
         (Some(code), Some(message)) => Ok(Some(RuntimeRunDiagnosticRecord {
-            code: require_runtime_run_non_empty_owned(code, &format!("{field}_code"), database_path)?,
+            code: require_runtime_run_non_empty_owned(
+                code,
+                &format!("{field}_code"),
+                database_path,
+            )?,
             message: require_runtime_run_non_empty_owned(
                 message,
                 &format!("{field}_message"),
@@ -15390,9 +15439,7 @@ fn parse_autonomous_unit_artifact_status(
     }
 }
 
-fn autonomous_unit_artifact_status_sql_value(
-    value: &AutonomousUnitArtifactStatus,
-) -> &'static str {
+fn autonomous_unit_artifact_status_sql_value(value: &AutonomousUnitArtifactStatus) -> &'static str {
     match value {
         AutonomousUnitArtifactStatus::Pending => "pending",
         AutonomousUnitArtifactStatus::Recorded => "recorded",

@@ -1,17 +1,15 @@
 use cadence_desktop_lib::{
     commands::{
         ApplyWorkflowTransitionRequestDto, ApplyWorkflowTransitionResponseDto,
-        AutonomousArtifactPayloadDto, AutonomousCommandResultDto,
-        AutonomousLifecycleReasonDto, AutonomousPolicyDeniedPayloadDto,
-        AutonomousRunDto, AutonomousRunRecoveryStateDto,
+        AutonomousArtifactPayloadDto, AutonomousCommandResultDto, AutonomousLifecycleReasonDto,
+        AutonomousPolicyDeniedPayloadDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
         AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousToolCallStateDto,
-        AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto,
-        AutonomousUnitArtifactStatusDto, AutonomousUnitAttemptDto, AutonomousUnitDto,
-        AutonomousUnitHistoryEntryDto, AutonomousUnitKindDto, AutonomousUnitStatusDto,
-        AutonomousVerificationEvidencePayloadDto, AutonomousVerificationOutcomeDto,
-        BranchSummaryDto, ChangeKind,
-        CommandError, CommandErrorClass, GetAutonomousRunRequestDto, GetRuntimeRunRequestDto,
-        ImportRepositoryRequestDto, ListNotificationDispatchesRequestDto,
+        AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto, AutonomousUnitArtifactStatusDto,
+        AutonomousUnitAttemptDto, AutonomousUnitDto, AutonomousUnitHistoryEntryDto,
+        AutonomousUnitKindDto, AutonomousUnitStatusDto, AutonomousVerificationEvidencePayloadDto,
+        AutonomousVerificationOutcomeDto, BranchSummaryDto, CancelAutonomousRunRequestDto,
+        ChangeKind, CommandError, CommandErrorClass, GetAutonomousRunRequestDto,
+        GetRuntimeRunRequestDto, ImportRepositoryRequestDto, ListNotificationDispatchesRequestDto,
         ListNotificationDispatchesResponseDto, ListNotificationRoutesRequestDto,
         ListNotificationRoutesResponseDto, ListProjectsResponseDto, NotificationDispatchDto,
         NotificationDispatchOutcomeStatusDto, NotificationDispatchStatusDto,
@@ -30,11 +28,11 @@ use cadence_desktop_lib::{
         RuntimeRunTransportDto, RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto,
         RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeUpdatedPayloadDto,
         StartAutonomousRunRequestDto, StartOpenAiLoginRequestDto, StartRuntimeRunRequestDto,
-        StopRuntimeRunRequestDto, CancelAutonomousRunRequestDto,
-        SubmitNotificationReplyRequestDto, SubmitNotificationReplyResponseDto,
-        SubmitOpenAiCallbackRequestDto, SubscribeRuntimeStreamRequestDto,
-        SubscribeRuntimeStreamResponseDto, SyncNotificationAdaptersRequestDto,
-        SyncNotificationAdaptersResponseDto, UpsertNotificationRouteCredentialsRequestDto,
+        StopRuntimeRunRequestDto, SubmitNotificationReplyRequestDto,
+        SubmitNotificationReplyResponseDto, SubmitOpenAiCallbackRequestDto,
+        SubscribeRuntimeStreamRequestDto, SubscribeRuntimeStreamResponseDto,
+        SyncNotificationAdaptersRequestDto, SyncNotificationAdaptersResponseDto,
+        UpsertNotificationRouteCredentialsRequestDto,
         UpsertNotificationRouteCredentialsResponseDto, UpsertNotificationRouteRequestDto,
         UpsertNotificationRouteResponseDto, UpsertWorkflowGraphRequestDto,
         UpsertWorkflowGraphResponseDto, VerificationRecordDto, VerificationRecordStatus,
@@ -53,11 +51,11 @@ use cadence_desktop_lib::{
         REFRESH_OPENAI_CODEX_AUTH_COMMAND, REGISTERED_COMMAND_NAMES,
         REPOSITORY_STATUS_CHANGED_EVENT, RESOLVE_OPERATOR_ACTION_COMMAND,
         RESUME_OPERATOR_RUN_COMMAND, RUNTIME_RUN_UPDATED_EVENT, RUNTIME_UPDATED_EVENT,
-        START_AUTONOMOUS_RUN_COMMAND, START_OPENAI_CODEX_AUTH_COMMAND,
-        START_RUNTIME_RUN_COMMAND, STOP_RUNTIME_RUN_COMMAND,
-        SUBMIT_NOTIFICATION_REPLY_COMMAND, SUBSCRIBE_RUNTIME_STREAM_COMMAND,
-        SYNC_NOTIFICATION_ADAPTERS_COMMAND, UPSERT_NOTIFICATION_ROUTE_COMMAND,
-        UPSERT_NOTIFICATION_ROUTE_CREDENTIALS_COMMAND, UPSERT_WORKFLOW_GRAPH_COMMAND,
+        START_AUTONOMOUS_RUN_COMMAND, START_OPENAI_CODEX_AUTH_COMMAND, START_RUNTIME_RUN_COMMAND,
+        STOP_RUNTIME_RUN_COMMAND, SUBMIT_NOTIFICATION_REPLY_COMMAND,
+        SUBSCRIBE_RUNTIME_STREAM_COMMAND, SYNC_NOTIFICATION_ADAPTERS_COMMAND,
+        UPSERT_NOTIFICATION_ROUTE_COMMAND, UPSERT_NOTIFICATION_ROUTE_CREDENTIALS_COMMAND,
+        UPSERT_WORKFLOW_GRAPH_COMMAND,
     },
     configure_builder_with_state,
     state::DesktopState,
@@ -1698,7 +1696,10 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
         project_id: "project-1".into(),
     })
     .expect("get autonomous run request should serialize");
-    assert_eq!(get_autonomous_run_request, json!({ "projectId": "project-1" }));
+    assert_eq!(
+        get_autonomous_run_request,
+        json!({ "projectId": "project-1" })
+    );
 
     let get_runtime_run_request = serde_json::to_value(GetRuntimeRunRequestDto {
         project_id: "project-1".into(),
@@ -1710,7 +1711,10 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
         project_id: "project-1".into(),
     })
     .expect("start autonomous run request should serialize");
-    assert_eq!(start_autonomous_run_request, json!({ "projectId": "project-1" }));
+    assert_eq!(
+        start_autonomous_run_request,
+        json!({ "projectId": "project-1" })
+    );
 
     let start_runtime_run_request = serde_json::to_value(StartRuntimeRunRequestDto {
         project_id: "project-1".into(),

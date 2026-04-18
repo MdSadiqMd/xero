@@ -960,7 +960,10 @@ fn runtime_stream_dropped_channel_does_not_poison_resubscribe() {
         &repo_root,
         "run-dropped-channel",
         &runtime_shell::script_print_lines_and_sleep(
-            &["first replay line".to_string(), "second replay line".to_string()],
+            &[
+                "first replay line".to_string(),
+                "second replay line".to_string(),
+            ],
             3,
         ),
     );

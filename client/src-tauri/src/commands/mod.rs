@@ -252,7 +252,7 @@ impl CommandError {
     pub fn policy_denied(message: impl Into<String>) -> Self {
         Self::new(
             "policy_denied",
-            CommandErrorClass::UserFixable,
+            CommandErrorClass::PolicyDenied,
             message,
             false,
         )
@@ -1154,13 +1154,13 @@ pub(crate) fn map_notification_route_credential_readiness(
         has_webhook_url: projection.has_webhook_url,
         ready: projection.ready,
         status: map_notification_route_credential_readiness_status(projection.status),
-        diagnostic: projection
-            .diagnostic
-            .map(|diagnostic| NotificationRouteCredentialReadinessDiagnosticDto {
+        diagnostic: projection.diagnostic.map(|diagnostic| {
+            NotificationRouteCredentialReadinessDiagnosticDto {
                 code: diagnostic.code,
                 message: diagnostic.message,
                 retryable: diagnostic.retryable,
-            }),
+            }
+        }),
     }
 }
 

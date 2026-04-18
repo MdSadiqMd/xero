@@ -5,8 +5,8 @@ use std::{
 
 use cadence_desktop_lib::{
     commands::{
-        list_notification_routes::list_notification_routes,
-        ListNotificationRoutesRequestDto, NotificationRouteCredentialReadinessStatusDto,
+        list_notification_routes::list_notification_routes, ListNotificationRoutesRequestDto,
+        NotificationRouteCredentialReadinessStatusDto,
     },
     configure_builder_with_state,
     db::{self, database_path_for_repo, project_store},

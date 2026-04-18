@@ -1260,7 +1260,10 @@ fn submit_runtime_run_input_rejects_mismatched_ack_and_preserves_running_project
     let snapshot = project_store::load_runtime_run(&repo_root, project_id)
         .expect("load runtime run after mismatched ack")
         .expect("runtime run should still exist after mismatched ack");
-    assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Running);
+    assert_eq!(
+        snapshot.run.status,
+        project_store::RuntimeRunStatus::Running
+    );
     assert_eq!(
         snapshot.run.transport.liveness,
         project_store::RuntimeRunTransportLiveness::Reachable
@@ -1315,7 +1318,10 @@ fn submit_runtime_run_input_preserves_running_projection_on_malformed_control_re
     let snapshot = project_store::load_runtime_run(&repo_root, project_id)
         .expect("load runtime run after malformed control response")
         .expect("runtime run should still exist after malformed control response");
-    assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Running);
+    assert_eq!(
+        snapshot.run.status,
+        project_store::RuntimeRunStatus::Running
+    );
     assert_eq!(
         snapshot.run.transport.liveness,
         project_store::RuntimeRunTransportLiveness::Reachable

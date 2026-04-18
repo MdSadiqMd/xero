@@ -12,30 +12,26 @@ use crate::{
         AutonomousArtifactPayloadDto, AutonomousCommandResultDto, AutonomousLifecycleReasonDto,
         AutonomousPolicyDeniedPayloadDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
         AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousToolCallStateDto,
-        AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto,
-        AutonomousUnitArtifactStatusDto, AutonomousUnitAttemptDto, AutonomousUnitDto,
-        AutonomousUnitHistoryEntryDto, AutonomousUnitKindDto, AutonomousUnitStatusDto,
-        AutonomousVerificationEvidencePayloadDto, AutonomousVerificationOutcomeDto,
-        CommandError, CommandErrorClass, CommandResult, ProjectUpdateReason,
-        ProjectUpdatedPayloadDto, RuntimeDiagnosticDto, RuntimeRunCheckpointDto,
-        RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto, RuntimeRunDto,
-        RuntimeRunStatusDto, RuntimeRunTransportDto, RuntimeRunTransportLivenessDto,
+        AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto, AutonomousUnitArtifactStatusDto,
+        AutonomousUnitAttemptDto, AutonomousUnitDto, AutonomousUnitHistoryEntryDto,
+        AutonomousUnitKindDto, AutonomousUnitStatusDto, AutonomousVerificationEvidencePayloadDto,
+        AutonomousVerificationOutcomeDto, CommandError, CommandErrorClass, CommandResult,
+        ProjectUpdateReason, ProjectUpdatedPayloadDto, RuntimeDiagnosticDto,
+        RuntimeRunCheckpointDto, RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto,
+        RuntimeRunDto, RuntimeRunStatusDto, RuntimeRunTransportDto, RuntimeRunTransportLivenessDto,
         RuntimeRunUpdatedPayloadDto, RuntimeSessionDto, RuntimeUpdatedPayloadDto,
         PROJECT_UPDATED_EVENT, RUNTIME_RUN_UPDATED_EVENT, RUNTIME_UPDATED_EVENT,
     },
     db::project_store::{
         self, AutonomousArtifactCommandResultRecord, AutonomousArtifactPayloadRecord,
-        AutonomousPolicyDeniedPayloadRecord, AutonomousRunRecord, AutonomousRunSnapshotRecord,
-        AutonomousRunStatus, AutonomousRunUpsertRecord, AutonomousToolCallStateRecord,
-        AutonomousToolResultPayloadRecord, AutonomousUnitArtifactRecord,
-        AutonomousUnitArtifactStatus, AutonomousUnitAttemptRecord,
-        AutonomousUnitHistoryRecord, AutonomousUnitKind, AutonomousUnitRecord,
-        AutonomousUnitStatus, AutonomousVerificationEvidencePayloadRecord,
-        AutonomousVerificationOutcomeRecord, RuntimeRunCheckpointKind,
-        RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord, RuntimeRunStatus,
-        RuntimeRunTransportLiveness, RuntimeSessionDiagnosticRecord, RuntimeSessionRecord,
+        AutonomousRunRecord, AutonomousRunSnapshotRecord, AutonomousRunStatus,
+        AutonomousRunUpsertRecord, AutonomousToolCallStateRecord, AutonomousUnitArtifactRecord,
+        AutonomousUnitArtifactStatus, AutonomousUnitAttemptRecord, AutonomousUnitHistoryRecord,
+        AutonomousUnitKind, AutonomousUnitRecord, AutonomousUnitStatus,
+        AutonomousVerificationOutcomeRecord, RuntimeRunCheckpointKind, RuntimeRunDiagnosticRecord,
+        RuntimeRunSnapshotRecord, RuntimeRunStatus, RuntimeRunTransportLiveness,
+        RuntimeSessionDiagnosticRecord, RuntimeSessionRecord,
     },
-    registry::{self, RegistryProjectRecord},
     runtime::{probe_runtime_run, RuntimeSupervisorProbeRequest},
     state::DesktopState,
 };
@@ -55,50 +51,7 @@ pub(crate) fn resolve_project_root<R: Runtime>(
     state: &DesktopState,
     project_id: &str,
 ) -> CommandResult<PathBuf> {
-    let registry_path = state.registry_file(app)?;
-    let registry = registry::read_registry(&registry_path)?;
-    let mut live_root_records = Vec::new();
-    let mut candidates = Vec::new();
-    let mut pruned_stale_roots = false;
-
-    for record in registry.projects {
-        if !Path::new(&record.root_path).is_dir() {
-            pruned_stale_roots = true;
-            continue;
-        }
-
-        if record.project_id == project_id {
-            candidates.push(record.clone());
-        }
-        live_root_records.push(record);
-    }
-
-    if pruned_stale_roots {
-        let _ = registry::replace_projects(&registry_path, live_root_records);
-    }
-
-    if candidates.is_empty() {
-        return Err(CommandError::project_not_found());
-    }
-
-    let mut first_error: Option<CommandError> = None;
-    for RegistryProjectRecord {
-        project_id,
-        root_path,
-        ..
-    } in candidates
-    {
-        match project_store::load_project_summary(Path::new(&root_path), &project_id) {
-            Ok(_) => return Ok(PathBuf::from(root_path)),
-            Err(error) => {
-                if first_error.is_none() {
-                    first_error = Some(error);
-                }
-            }
-        }
-    }
-
-    Err(first_error.unwrap_or_else(CommandError::project_not_found))
+    crate::runtime::resolve_imported_repo_root(app, state, project_id)
 }
 
 pub(crate) fn default_runtime_session(project_id: &str) -> RuntimeSessionDto {
@@ -463,8 +416,8 @@ fn reconcile_autonomous_run_snapshot(
     runtime_snapshot: &RuntimeRunSnapshotRecord,
     intent: AutonomousSyncIntent,
 ) -> AutonomousRunUpsertRecord {
-    let is_same_run = existing
-        .is_some_and(|existing| existing.run.run_id == runtime_snapshot.run.run_id);
+    let is_same_run =
+        existing.is_some_and(|existing| existing.run.run_id == runtime_snapshot.run.run_id);
     let existing_run = is_same_run.then(|| existing.expect("checked same-run autonomous snapshot"));
     let existing_unit = existing_run.and_then(|snapshot| snapshot.unit.as_ref());
     let existing_attempt = existing_run.and_then(|snapshot| snapshot.attempt.as_ref());
@@ -473,9 +426,10 @@ fn reconcile_autonomous_run_snapshot(
         || existing_run
             .map(|snapshot| snapshot.run.duplicate_start_detected)
             .unwrap_or(false);
-    let duplicate_start_run_id = duplicate_start_detected.then(|| runtime_snapshot.run.run_id.clone());
-    let duplicate_start_reason = duplicate_start_detected
-        .then_some(AUTONOMOUS_DUPLICATE_START_REASON.to_string());
+    let duplicate_start_run_id =
+        duplicate_start_detected.then(|| runtime_snapshot.run.run_id.clone());
+    let duplicate_start_reason =
+        duplicate_start_detected.then_some(AUTONOMOUS_DUPLICATE_START_REASON.to_string());
 
     let base_updated_at = if matches!(intent, AutonomousSyncIntent::DuplicateStart) {
         crate::auth::now_timestamp()
@@ -649,7 +603,10 @@ fn autonomous_run_dto_from_snapshot(snapshot: &AutonomousRunSnapshotRecord) -> A
         status: autonomous_run_status_dto(&snapshot.run.status),
         recovery_state: autonomous_run_recovery_state_dto(&snapshot.run.status),
         active_unit_id: snapshot.unit.as_ref().map(|unit| unit.unit_id.clone()),
-        active_attempt_id: snapshot.attempt.as_ref().map(|attempt| attempt.attempt_id.clone()),
+        active_attempt_id: snapshot
+            .attempt
+            .as_ref()
+            .map(|attempt| attempt.attempt_id.clone()),
         duplicate_start_detected: snapshot.run.duplicate_start_detected,
         duplicate_start_run_id: snapshot.run.duplicate_start_run_id.clone(),
         duplicate_start_reason: snapshot.run.duplicate_start_reason.clone(),
@@ -664,8 +621,16 @@ fn autonomous_run_dto_from_snapshot(snapshot: &AutonomousRunSnapshotRecord) -> A
         pause_reason: snapshot.run.pause_reason.as_ref().map(runtime_reason_dto),
         cancel_reason: snapshot.run.cancel_reason.as_ref().map(runtime_reason_dto),
         crash_reason: snapshot.run.crash_reason.as_ref().map(runtime_reason_dto),
-        last_error_code: snapshot.run.last_error.as_ref().map(|error| error.code.clone()),
-        last_error: snapshot.run.last_error.as_ref().map(runtime_run_diagnostic_dto),
+        last_error_code: snapshot
+            .run
+            .last_error
+            .as_ref()
+            .map(|error| error.code.clone()),
+        last_error: snapshot
+            .run
+            .last_error
+            .as_ref()
+            .map(runtime_run_diagnostic_dto),
         updated_at: snapshot.run.updated_at.clone(),
     }
 }

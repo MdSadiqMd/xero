@@ -57,7 +57,9 @@ pub fn script_print_line_and_sleep(line: &str, sleep_seconds: u64) -> String {
 }
 
 pub fn script_print_lines_and_sleep(lines: &[String], sleep_seconds: u64) -> String {
-    build_script(lines, sleep_seconds, |line, platform| print_line_step(platform, line))
+    build_script(lines, sleep_seconds, |line, platform| {
+        print_line_step(platform, line)
+    })
 }
 
 pub fn script_print_line_then_exit(line: &str, exit_code: i32) -> String {
@@ -117,7 +119,10 @@ pub fn script_prompt_read_echo_and_sleep(
             escape_cmd_double_quoted(prompt)
         )
     } else {
-        format!("printf '%s' '{}'; read {variable_name}", shell_quote(prompt))
+        format!(
+            "printf '%s' '{}'; read {variable_name}",
+            shell_quote(prompt)
+        )
     };
 
     let echo_step = if platform.is_windows() {

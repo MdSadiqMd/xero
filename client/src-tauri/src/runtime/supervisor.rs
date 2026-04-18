@@ -931,7 +931,9 @@ fn probe_runtime_run_with_timeout(
                 SupervisorProcessStatus::Failed => RuntimeRunStatus::Failed,
             };
             let response_error = last_error.map(protocol_diagnostic_into_record);
-            let persisted_error = response_error.clone().or_else(|| latest.run.last_error.clone());
+            let persisted_error = response_error
+                .clone()
+                .or_else(|| latest.run.last_error.clone());
 
             if latest.run.transport.liveness == RuntimeRunTransportLiveness::Reachable
                 && latest.run.status == mapped_status
@@ -981,11 +983,7 @@ fn probe_runtime_run_with_timeout(
 
             Ok(Some(updated))
         }
-        Ok(SupervisorControlResponse::Error {
-            code,
-            message,
-            ..
-        }) => {
+        Ok(SupervisorControlResponse::Error { code, message, .. }) => {
             if let Some(latest) = project_store::load_runtime_run(repo_root, project_id)? {
                 if latest.run.run_id == snapshot.run.run_id
                     && matches!(
@@ -1000,13 +998,8 @@ fn probe_runtime_run_with_timeout(
                 }
             }
 
-            let updated = mark_runtime_run_after_probe_failure(
-                state,
-                repo_root,
-                snapshot,
-                &code,
-                &message,
-            )?;
+            let updated =
+                mark_runtime_run_after_probe_failure(state, repo_root, snapshot, &code, &message)?;
             Ok(Some(updated))
         }
         Ok(_) => {

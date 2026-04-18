@@ -79,7 +79,10 @@ fn sample_checkpoint(
     }
 }
 
-fn sample_autonomous_run_record(project_id: &str, run_id: &str) -> project_store::AutonomousRunRecord {
+fn sample_autonomous_run_record(
+    project_id: &str,
+    run_id: &str,
+) -> project_store::AutonomousRunRecord {
     project_store::AutonomousRunRecord {
         project_id: project_id.into(),
         run_id: run_id.into(),
@@ -186,7 +189,10 @@ fn sample_tool_result_artifact(
     }
 }
 
-fn sample_autonomous_run(project_id: &str, run_id: &str) -> project_store::AutonomousRunUpsertRecord {
+fn sample_autonomous_run(
+    project_id: &str,
+    run_id: &str,
+) -> project_store::AutonomousRunUpsertRecord {
     project_store::AutonomousRunUpsertRecord {
         run: sample_autonomous_run_record(project_id, run_id),
         unit: Some(sample_autonomous_unit(project_id, run_id)),
@@ -903,7 +909,10 @@ fn autonomous_run_persistence_tracks_current_unit_duplicate_start_and_cancel_met
         &sample_autonomous_run(project_id, run_id),
     )
     .expect("persist autonomous run");
-    assert_eq!(persisted.run.status, project_store::AutonomousRunStatus::Running);
+    assert_eq!(
+        persisted.run.status,
+        project_store::AutonomousRunStatus::Running
+    );
     assert_eq!(persisted.run.active_unit_sequence, Some(1));
     assert_eq!(persisted.unit.as_ref().map(|unit| unit.sequence), Some(1));
     assert_eq!(
@@ -960,7 +969,10 @@ fn autonomous_run_persistence_tracks_current_unit_duplicate_start_and_cancel_met
         project_store::AutonomousRunStatus::Cancelled
     );
     assert!(cancelled.run.duplicate_start_detected);
-    assert_eq!(cancelled.run.cancelled_at.as_deref(), Some("2099-04-15T19:01:05Z"));
+    assert_eq!(
+        cancelled.run.cancelled_at.as_deref(),
+        Some("2099-04-15T19:01:05Z")
+    );
     assert_eq!(
         cancelled
             .run
@@ -1025,7 +1037,9 @@ fn autonomous_run_persistence_canonicalizes_structured_artifact_payloads_and_rel
         .clone();
     assert!(matches!(
         artifact.payload.as_ref(),
-        Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(_))
+        Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(
+            _
+        ))
     ));
 
     let stored_payload_json: String = open_state_connection(&repo_root)
@@ -1065,10 +1079,15 @@ fn autonomous_run_persistence_canonicalizes_structured_artifact_payloads_and_rel
     let recovered = project_store::load_autonomous_run(&repo_root, project_id)
         .expect("reload autonomous run with structured artifact")
         .expect("structured autonomous run should exist");
-    assert_eq!(recovered.history[0].artifacts[0].content_hash.as_deref(), Some(expected_hash.as_str()));
+    assert_eq!(
+        recovered.history[0].artifacts[0].content_hash.as_deref(),
+        Some(expected_hash.as_str())
+    );
     assert!(matches!(
         recovered.history[0].artifacts[0].payload.as_ref(),
-        Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(_))
+        Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(
+            _
+        ))
     ));
 }
 
@@ -1185,20 +1204,22 @@ fn autonomous_run_persistence_rejects_policy_denied_artifacts_without_stable_cod
         status: project_store::AutonomousUnitArtifactStatus::Rejected,
         summary: "Policy denied shell write access for the executor attempt.".into(),
         content_hash: None,
-        payload: Some(project_store::AutonomousArtifactPayloadRecord::PolicyDenied(
-            project_store::AutonomousPolicyDeniedPayloadRecord {
-                project_id: project_id.into(),
-                run_id: run_id.into(),
-                unit_id,
-                attempt_id,
-                artifact_id: "artifact-policy-denied".into(),
-                diagnostic_code: "   ".into(),
-                message: "Policy denied write access to the repository worktree.".into(),
-                tool_name: Some("shell.exec".into()),
-                action_id: Some("action-1".into()),
-                boundary_id: Some("boundary-1".into()),
-            },
-        )),
+        payload: Some(
+            project_store::AutonomousArtifactPayloadRecord::PolicyDenied(
+                project_store::AutonomousPolicyDeniedPayloadRecord {
+                    project_id: project_id.into(),
+                    run_id: run_id.into(),
+                    unit_id,
+                    attempt_id,
+                    artifact_id: "artifact-policy-denied".into(),
+                    diagnostic_code: "   ".into(),
+                    message: "Policy denied write access to the repository worktree.".into(),
+                    tool_name: Some("shell.exec".into()),
+                    action_id: Some("action-1".into()),
+                    boundary_id: Some("boundary-1".into()),
+                },
+            ),
+        ),
         created_at: "2099-04-15T19:00:20Z".into(),
         updated_at: "2099-04-15T19:00:20Z".into(),
     };
@@ -1242,7 +1263,10 @@ fn autonomous_run_decode_fails_closed_when_structured_payload_json_is_tampered()
     open_state_connection(&repo_root)
         .execute(
             "UPDATE autonomous_unit_artifacts SET payload_json = ?1 WHERE artifact_id = ?2",
-            params!["{\"kind\":\"tool_result\",\"toolCallId\":", "artifact-tool-result"],
+            params![
+                "{\"kind\":\"tool_result\",\"toolCallId\":",
+                "artifact-tool-result"
+            ],
         )
         .expect("tamper structured payload json");
 
@@ -1273,11 +1297,8 @@ fn autonomous_run_decode_fails_closed_when_unit_row_is_missing() {
         },
     )
     .expect("persist runtime run for autonomous decode failure");
-    project_store::upsert_autonomous_run(
-        &repo_root,
-        &sample_autonomous_run(project_id, run_id),
-    )
-    .expect("persist autonomous run before corruption");
+    project_store::upsert_autonomous_run(&repo_root, &sample_autonomous_run(project_id, run_id))
+        .expect("persist autonomous run before corruption");
 
     let connection = open_state_connection(&repo_root);
     connection
