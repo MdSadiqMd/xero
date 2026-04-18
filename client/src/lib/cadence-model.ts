@@ -1723,7 +1723,18 @@ export const autonomousRunStatusSchema = z.enum([
 ])
 export const autonomousRunRecoveryStateSchema = z.enum(['healthy', 'recovery_required', 'terminal', 'failed'])
 export const autonomousUnitKindSchema = z.enum(['bootstrap', 'state', 'tool', 'action_required', 'diagnostic'])
-export const autonomousUnitStatusSchema = z.enum(['pending', 'active', 'paused', 'completed', 'cancelled', 'failed'])
+export const autonomousUnitStatusSchema = z.enum([
+  'pending',
+  'active',
+  'blocked',
+  'paused',
+  'completed',
+  'cancelled',
+  'failed',
+])
+export const autonomousUnitArtifactStatusSchema = z.enum(['pending', 'recorded', 'rejected', 'redacted'])
+export const autonomousToolCallStateSchema = z.enum(['pending', 'running', 'succeeded', 'failed'])
+export const autonomousVerificationOutcomeSchema = z.enum(['passed', 'failed', 'blocked'])
 
 export const autonomousLifecycleReasonSchema = z
   .object({
@@ -1731,6 +1742,70 @@ export const autonomousLifecycleReasonSchema = z
     message: z.string().trim().min(1),
   })
   .strict()
+
+export const autonomousCommandResultSchema = z
+  .object({
+    exitCode: z.number().int().nullable().optional(),
+    timedOut: z.boolean(),
+    summary: z.string().trim().min(1),
+  })
+  .strict()
+
+export const autonomousToolResultPayloadSchema = z
+  .object({
+    kind: z.literal('tool_result'),
+    projectId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    unitId: z.string().trim().min(1),
+    attemptId: z.string().trim().min(1),
+    artifactId: z.string().trim().min(1),
+    toolCallId: z.string().trim().min(1),
+    toolName: z.string().trim().min(1),
+    toolState: autonomousToolCallStateSchema,
+    commandResult: autonomousCommandResultSchema.nullable().optional(),
+    actionId: nonEmptyOptionalTextSchema,
+    boundaryId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
+export const autonomousVerificationEvidencePayloadSchema = z
+  .object({
+    kind: z.literal('verification_evidence'),
+    projectId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    unitId: z.string().trim().min(1),
+    attemptId: z.string().trim().min(1),
+    artifactId: z.string().trim().min(1),
+    evidenceKind: z.string().trim().min(1),
+    label: z.string().trim().min(1),
+    outcome: autonomousVerificationOutcomeSchema,
+    commandResult: autonomousCommandResultSchema.nullable().optional(),
+    actionId: nonEmptyOptionalTextSchema,
+    boundaryId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
+export const autonomousPolicyDeniedPayloadSchema = z
+  .object({
+    kind: z.literal('policy_denied'),
+    projectId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    unitId: z.string().trim().min(1),
+    attemptId: z.string().trim().min(1),
+    artifactId: z.string().trim().min(1),
+    diagnosticCode: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+    toolName: nonEmptyOptionalTextSchema,
+    actionId: nonEmptyOptionalTextSchema,
+    boundaryId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
+export const autonomousArtifactPayloadSchema = z.discriminatedUnion('kind', [
+  autonomousToolResultPayloadSchema,
+  autonomousVerificationEvidencePayloadSchema,
+  autonomousPolicyDeniedPayloadSchema,
+])
 
 export const autonomousRunSchema = z
   .object({
@@ -1741,6 +1816,7 @@ export const autonomousRunSchema = z
     status: autonomousRunStatusSchema,
     recoveryState: autonomousRunRecoveryStateSchema,
     activeUnitId: nonEmptyOptionalTextSchema,
+    activeAttemptId: nonEmptyOptionalTextSchema,
     duplicateStartDetected: z.boolean(),
     duplicateStartRunId: nonEmptyOptionalTextSchema,
     duplicateStartReason: nonEmptyOptionalTextSchema,
@@ -1779,13 +1855,170 @@ export const autonomousUnitSchema = z
   })
   .strict()
 
+export const autonomousUnitAttemptSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    unitId: z.string().trim().min(1),
+    attemptId: z.string().trim().min(1),
+    attemptNumber: z.number().int().nonnegative(),
+    childSessionId: z.string().trim().min(1),
+    status: autonomousUnitStatusSchema,
+    boundaryId: nonEmptyOptionalTextSchema,
+    startedAt: isoTimestampSchema,
+    finishedAt: nonEmptyOptionalTextSchema,
+    updatedAt: isoTimestampSchema,
+    lastErrorCode: nonEmptyOptionalTextSchema,
+    lastError: runtimeRunDiagnosticSchema.nullable().optional(),
+  })
+  .strict()
+
+export const autonomousUnitArtifactSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    unitId: z.string().trim().min(1),
+    attemptId: z.string().trim().min(1),
+    artifactId: z.string().trim().min(1),
+    artifactKind: z.string().trim().min(1),
+    status: autonomousUnitArtifactStatusSchema,
+    summary: z.string().trim().min(1),
+    contentHash: nonEmptyOptionalTextSchema,
+    payload: autonomousArtifactPayloadSchema.nullable().optional(),
+    createdAt: isoTimestampSchema,
+    updatedAt: isoTimestampSchema,
+  })
+  .strict()
+  .superRefine((artifact, ctx) => {
+    const payload = artifact.payload
+    if (!payload) {
+      return
+    }
+
+    if (payload.projectId !== artifact.projectId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payload', 'projectId'],
+        message: 'Autonomous artifact payload project id must match the enclosing artifact project id.',
+      })
+    }
+
+    if (payload.runId !== artifact.runId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payload', 'runId'],
+        message: 'Autonomous artifact payload run id must match the enclosing artifact run id.',
+      })
+    }
+
+    if (payload.unitId !== artifact.unitId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payload', 'unitId'],
+        message: 'Autonomous artifact payload unit id must match the enclosing artifact unit id.',
+      })
+    }
+
+    if (payload.attemptId !== artifact.attemptId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payload', 'attemptId'],
+        message: 'Autonomous artifact payload attempt id must match the enclosing artifact attempt id.',
+      })
+    }
+
+    if (payload.artifactId !== artifact.artifactId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payload', 'artifactId'],
+        message: 'Autonomous artifact payload artifact id must match the enclosing artifact id.',
+      })
+    }
+  })
+
+export const autonomousUnitHistoryEntrySchema = z
+  .object({
+    unit: autonomousUnitSchema,
+    latestAttempt: autonomousUnitAttemptSchema.nullable().optional(),
+    artifacts: z.array(autonomousUnitArtifactSchema).optional(),
+  })
+  .strict()
+  .superRefine((entry, ctx) => {
+    const latestAttempt = entry.latestAttempt ?? null
+
+    if (latestAttempt) {
+      if (latestAttempt.projectId !== entry.unit.projectId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['latestAttempt', 'projectId'],
+          message: 'Autonomous history attempt project id must match the enclosing unit project id.',
+        })
+      }
+
+      if (latestAttempt.runId !== entry.unit.runId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['latestAttempt', 'runId'],
+          message: 'Autonomous history attempt run id must match the enclosing unit run id.',
+        })
+      }
+
+      if (latestAttempt.unitId !== entry.unit.unitId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['latestAttempt', 'unitId'],
+          message: 'Autonomous history attempt unit id must match the enclosing unit id.',
+        })
+      }
+    }
+
+    entry.artifacts?.forEach((artifact, index) => {
+      if (artifact.projectId !== entry.unit.projectId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['artifacts', index, 'projectId'],
+          message: 'Autonomous history artifacts must reference the same project as the enclosing unit.',
+        })
+      }
+
+      if (artifact.runId !== entry.unit.runId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['artifacts', index, 'runId'],
+          message: 'Autonomous history artifacts must reference the same run as the enclosing unit.',
+        })
+      }
+
+      if (artifact.unitId !== entry.unit.unitId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['artifacts', index, 'unitId'],
+          message: 'Autonomous history artifacts must reference the same unit as the enclosing history entry.',
+        })
+      }
+
+      if (latestAttempt && artifact.attemptId !== latestAttempt.attemptId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['artifacts', index, 'attemptId'],
+          message: 'Autonomous history artifacts must reference the latest attempt id for the enclosing history entry.',
+        })
+      }
+    })
+  })
+
 export const autonomousRunStateSchema = z
   .object({
     run: autonomousRunSchema.nullable(),
     unit: autonomousUnitSchema.nullable(),
+    attempt: autonomousUnitAttemptSchema.nullable().optional(),
+    history: z.array(autonomousUnitHistoryEntrySchema).optional(),
   })
   .strict()
   .superRefine((state, ctx) => {
+    const attempt = state.attempt ?? null
+    const history = state.history ?? []
+
     if (state.run && state.unit) {
       if (state.unit.projectId !== state.run.projectId) {
         ctx.addIssue({
@@ -1803,6 +2036,76 @@ export const autonomousRunStateSchema = z
         })
       }
     }
+
+    if (state.run && attempt) {
+      if (attempt.projectId !== state.run.projectId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempt', 'projectId'],
+          message: 'Autonomous attempt project id must match the autonomous run project id.',
+        })
+      }
+
+      if (attempt.runId !== state.run.runId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempt', 'runId'],
+          message: 'Autonomous attempt run id must match the autonomous run run id.',
+        })
+      }
+
+      if (state.run.activeAttemptId && attempt.attemptId !== state.run.activeAttemptId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempt', 'attemptId'],
+          message: 'Autonomous attempt id must match the active attempt id reported on the run.',
+        })
+      }
+    }
+
+    if (state.unit && attempt) {
+      if (attempt.projectId !== state.unit.projectId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempt', 'projectId'],
+          message: 'Autonomous attempt project id must match the autonomous unit project id.',
+        })
+      }
+
+      if (attempt.runId !== state.unit.runId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempt', 'runId'],
+          message: 'Autonomous attempt run id must match the autonomous unit run id.',
+        })
+      }
+
+      if (attempt.unitId !== state.unit.unitId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['attempt', 'unitId'],
+          message: 'Autonomous attempt unit id must match the autonomous unit id.',
+        })
+      }
+    }
+
+    history.forEach((entry, index) => {
+      if (state.run && entry.unit.projectId !== state.run.projectId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['history', index, 'unit', 'projectId'],
+          message: 'Autonomous history unit project id must match the autonomous run project id.',
+        })
+      }
+
+      if (state.run && entry.unit.runId !== state.run.runId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['history', index, 'unit', 'runId'],
+          message: 'Autonomous history unit run id must match the autonomous run run id.',
+        })
+      }
+    })
   })
 
 export const runtimeToolCallStateSchema = z.enum(['pending', 'running', 'succeeded', 'failed'])
@@ -1947,9 +2250,20 @@ export type AutonomousRunStatusDto = z.infer<typeof autonomousRunStatusSchema>
 export type AutonomousRunRecoveryStateDto = z.infer<typeof autonomousRunRecoveryStateSchema>
 export type AutonomousUnitKindDto = z.infer<typeof autonomousUnitKindSchema>
 export type AutonomousUnitStatusDto = z.infer<typeof autonomousUnitStatusSchema>
+export type AutonomousUnitArtifactStatusDto = z.infer<typeof autonomousUnitArtifactStatusSchema>
+export type AutonomousToolCallStateDto = z.infer<typeof autonomousToolCallStateSchema>
+export type AutonomousVerificationOutcomeDto = z.infer<typeof autonomousVerificationOutcomeSchema>
 export type AutonomousLifecycleReasonDto = z.infer<typeof autonomousLifecycleReasonSchema>
+export type AutonomousCommandResultDto = z.infer<typeof autonomousCommandResultSchema>
+export type AutonomousToolResultPayloadDto = z.infer<typeof autonomousToolResultPayloadSchema>
+export type AutonomousVerificationEvidencePayloadDto = z.infer<typeof autonomousVerificationEvidencePayloadSchema>
+export type AutonomousPolicyDeniedPayloadDto = z.infer<typeof autonomousPolicyDeniedPayloadSchema>
+export type AutonomousArtifactPayloadDto = z.infer<typeof autonomousArtifactPayloadSchema>
 export type AutonomousRunDto = z.infer<typeof autonomousRunSchema>
 export type AutonomousUnitDto = z.infer<typeof autonomousUnitSchema>
+export type AutonomousUnitAttemptDto = z.infer<typeof autonomousUnitAttemptSchema>
+export type AutonomousUnitArtifactDto = z.infer<typeof autonomousUnitArtifactSchema>
+export type AutonomousUnitHistoryEntryDto = z.infer<typeof autonomousUnitHistoryEntrySchema>
 export type AutonomousRunStateDto = z.infer<typeof autonomousRunStateSchema>
 export type RuntimeToolCallStateDto = z.infer<typeof runtimeToolCallStateSchema>
 export type RuntimeStreamItemKindDto = z.infer<typeof runtimeStreamItemKindSchema>
@@ -2269,6 +2583,7 @@ export interface AutonomousRunView {
   recoveryState: AutonomousRunRecoveryStateDto
   recoveryLabel: string
   activeUnitId: string | null
+  activeAttemptId: string | null
   duplicateStartDetected: boolean
   duplicateStartRunId: string | null
   duplicateStartReason: string | null
@@ -2311,6 +2626,77 @@ export interface AutonomousUnitView {
   isActive: boolean
   isTerminal: boolean
   isFailed: boolean
+}
+
+export interface AutonomousUnitAttemptView {
+  projectId: string
+  runId: string
+  unitId: string
+  attemptId: string
+  attemptNumber: number
+  childSessionId: string
+  status: AutonomousUnitStatusDto
+  statusLabel: string
+  boundaryId: string | null
+  startedAt: string
+  finishedAt: string | null
+  updatedAt: string
+  lastErrorCode: string | null
+  lastError: RuntimeRunDiagnosticDto | null
+  isActive: boolean
+  isTerminal: boolean
+  isFailed: boolean
+}
+
+export interface AutonomousCommandResultView {
+  exitCode: number | null
+  timedOut: boolean
+  summary: string
+}
+
+export interface AutonomousUnitArtifactView {
+  projectId: string
+  runId: string
+  unitId: string
+  attemptId: string
+  artifactId: string
+  artifactKind: string
+  artifactKindLabel: string
+  status: AutonomousUnitArtifactStatusDto
+  statusLabel: string
+  summary: string
+  contentHash: string | null
+  payload: AutonomousArtifactPayloadDto | null
+  createdAt: string
+  updatedAt: string
+  detail: string | null
+  commandResult: AutonomousCommandResultView | null
+  toolName: string | null
+  toolState: AutonomousToolCallStateDto | null
+  toolStateLabel: string | null
+  evidenceKind: string | null
+  verificationOutcome: AutonomousVerificationOutcomeDto | null
+  verificationOutcomeLabel: string | null
+  diagnosticCode: string | null
+  actionId: string | null
+  boundaryId: string | null
+  isToolResult: boolean
+  isVerificationEvidence: boolean
+  isPolicyDenied: boolean
+}
+
+export interface AutonomousUnitHistoryEntryView {
+  unit: AutonomousUnitView
+  latestAttempt: AutonomousUnitAttemptView | null
+  artifacts: AutonomousUnitArtifactView[]
+}
+
+export interface AutonomousRunInspectionView {
+  autonomousRun: AutonomousRunView | null
+  autonomousUnit: AutonomousUnitView | null
+  autonomousAttempt: AutonomousUnitAttemptView | null
+  autonomousHistory: AutonomousUnitHistoryEntryView[]
+  autonomousRecentArtifacts: AutonomousUnitArtifactView[]
 }
 
 export type RuntimeStreamStatus = 'idle' | 'subscribing' | 'replaying' | 'live' | 'complete' | 'stale' | 'error'
@@ -2426,6 +2812,9 @@ export interface ProjectDetailView extends Project {
   runtimeRun?: RuntimeRunView | null
   autonomousRun?: AutonomousRunView | null
   autonomousUnit?: AutonomousUnitView | null
+  autonomousAttempt?: AutonomousUnitAttemptView | null
+  autonomousHistory: AutonomousUnitHistoryEntryView[]
+  autonomousRecentArtifacts: AutonomousUnitArtifactView[]
 }
 
 export function safePercent(completed: number, total: number): number {
@@ -3634,6 +4023,9 @@ export function mapProjectSnapshot(
     runtimeRun: null,
     autonomousRun,
     autonomousUnit,
+    autonomousAttempt: null,
+    autonomousHistory: [],
+    autonomousRecentArtifacts: [],
   }
 }
 
