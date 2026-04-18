@@ -249,6 +249,15 @@ impl CommandError {
         Self::new(code, CommandErrorClass::UserFixable, message, false)
     }
 
+    pub fn policy_denied(message: impl Into<String>) -> Self {
+        Self::new(
+            "policy_denied",
+            CommandErrorClass::UserFixable,
+            message,
+            false,
+        )
+    }
+
     pub fn retryable(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(code, CommandErrorClass::Retryable, message, true)
     }
@@ -1478,6 +1487,86 @@ pub enum AutonomousUnitArtifactStatusDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousToolCallStateDto {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousVerificationOutcomeDto {
+    Passed,
+    Failed,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCommandResultDto {
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousToolResultPayloadDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub tool_state: AutonomousToolCallStateDto,
+    pub command_result: Option<AutonomousCommandResultDto>,
+    pub action_id: Option<String>,
+    pub boundary_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousVerificationEvidencePayloadDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub evidence_kind: String,
+    pub label: String,
+    pub outcome: AutonomousVerificationOutcomeDto,
+    pub command_result: Option<AutonomousCommandResultDto>,
+    pub action_id: Option<String>,
+    pub boundary_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousPolicyDeniedPayloadDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub diagnostic_code: String,
+    pub message: String,
+    pub tool_name: Option<String>,
+    pub action_id: Option<String>,
+    pub boundary_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum AutonomousArtifactPayloadDto {
+    ToolResult(AutonomousToolResultPayloadDto),
+    VerificationEvidence(AutonomousVerificationEvidencePayloadDto),
+    PolicyDenied(AutonomousPolicyDeniedPayloadDto),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousLifecycleReasonDto {
     pub code: String,
@@ -1562,6 +1651,8 @@ pub struct AutonomousUnitArtifactDto {
     pub status: AutonomousUnitArtifactStatusDto,
     pub summary: String,
     pub content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<AutonomousArtifactPayloadDto>,
     pub created_at: String,
     pub updated_at: String,
 }

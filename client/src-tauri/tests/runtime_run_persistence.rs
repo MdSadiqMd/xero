@@ -6,6 +6,7 @@ use cadence_desktop_lib::{
     state::DesktopState,
 };
 use rusqlite::{params, Connection};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 fn seed_project(root: &TempDir, project_id: &str, repository_id: &str, repo_name: &str) -> PathBuf {
@@ -139,6 +140,49 @@ fn sample_autonomous_attempt(
         finished_at: None,
         updated_at: "2099-04-15T19:00:20Z".into(),
         last_error: None,
+    }
+}
+
+fn sample_tool_result_artifact(
+    project_id: &str,
+    run_id: &str,
+) -> project_store::AutonomousUnitArtifactRecord {
+    let unit_id = format!("{run_id}:unit:1");
+    let attempt_id = format!("{run_id}:unit:1:attempt:1");
+    let artifact_id = "artifact-tool-result".to_string();
+
+    project_store::AutonomousUnitArtifactRecord {
+        project_id: project_id.into(),
+        run_id: run_id.into(),
+        unit_id: unit_id.clone(),
+        attempt_id: attempt_id.clone(),
+        artifact_id: artifact_id.clone(),
+        artifact_kind: "tool_result".into(),
+        status: project_store::AutonomousUnitArtifactStatus::Recorded,
+        summary: "Shell tool result persisted for the active executor attempt.".into(),
+        content_hash: None,
+        payload: Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(
+            project_store::AutonomousToolResultPayloadRecord {
+                project_id: project_id.into(),
+                run_id: run_id.into(),
+                unit_id,
+                attempt_id,
+                artifact_id,
+                tool_call_id: "tool-call-1".into(),
+                tool_name: "shell.exec".into(),
+                tool_state: project_store::AutonomousToolCallStateRecord::Succeeded,
+                command_result: Some(project_store::AutonomousArtifactCommandResultRecord {
+                    exit_code: Some(0),
+                    timed_out: false,
+                    summary: "Command exited successfully after capturing structured evidence."
+                        .into(),
+                }),
+                action_id: Some("action-1".into()),
+                boundary_id: Some("boundary-1".into()),
+            },
+        )),
+        created_at: "2099-04-15T19:00:20Z".into(),
+        updated_at: "2099-04-15T19:00:20Z".into(),
     }
 }
 
@@ -943,6 +987,268 @@ fn autonomous_run_persistence_tracks_current_unit_duplicate_start_and_cancel_met
             .map(|attempt| attempt.attempt_number),
         Some(1)
     );
+}
+
+#[test]
+fn autonomous_run_persistence_canonicalizes_structured_artifact_payloads_and_reloads_them() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Supervisor launched and connected to the project PTY.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for structured artifact persistence");
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![sample_tool_result_artifact(project_id, run_id)];
+
+    let persisted = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect("persist autonomous run with structured artifact");
+    let artifact = &persisted.history[0].artifacts[0];
+    let payload_hash = artifact
+        .content_hash
+        .as_ref()
+        .expect("structured artifact should compute content hash")
+        .clone();
+    assert!(matches!(
+        artifact.payload.as_ref(),
+        Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(_))
+    ));
+
+    let stored_payload_json: String = open_state_connection(&repo_root)
+        .query_row(
+            "SELECT payload_json FROM autonomous_unit_artifacts WHERE artifact_id = ?1",
+            params![artifact.artifact_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("read stored structured payload json");
+    let expected_payload_json = concat!(
+        "{",
+        "\"actionId\":\"action-1\"",
+        ",\"artifactId\":\"artifact-tool-result\"",
+        ",\"attemptId\":\"run-1:unit:1:attempt:1\"",
+        ",\"boundaryId\":\"boundary-1\"",
+        ",\"commandResult\":{\"exitCode\":0,\"summary\":\"Command exited successfully after capturing structured evidence.\",\"timedOut\":false}",
+        ",\"kind\":\"tool_result\"",
+        ",\"projectId\":\"project-1\"",
+        ",\"runId\":\"run-1\"",
+        ",\"toolCallId\":\"tool-call-1\"",
+        ",\"toolName\":\"shell.exec\"",
+        ",\"toolState\":\"succeeded\"",
+        ",\"unitId\":\"run-1:unit:1\"",
+        "}"
+    );
+    assert_eq!(stored_payload_json, expected_payload_json);
+
+    let mut hasher = Sha256::new();
+    hasher.update(stored_payload_json.as_bytes());
+    let expected_hash = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(payload_hash, expected_hash);
+
+    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
+        .expect("reload autonomous run with structured artifact")
+        .expect("structured autonomous run should exist");
+    assert_eq!(recovered.history[0].artifacts[0].content_hash.as_deref(), Some(expected_hash.as_str()));
+    assert!(matches!(
+        recovered.history[0].artifacts[0].payload.as_ref(),
+        Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(_))
+    ));
+}
+
+#[test]
+fn autonomous_run_persistence_rejects_structured_artifact_payload_linkage_mismatch() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for linkage mismatch");
+
+    let mut artifact = sample_tool_result_artifact(project_id, run_id);
+    if let Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(tool)) =
+        artifact.payload.as_mut()
+    {
+        tool.attempt_id = "run-1:unit:1:attempt:99".into();
+    }
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![artifact];
+
+    let error = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect_err("payload linkage mismatch should be rejected");
+    assert_eq!(error.code, "autonomous_run_request_invalid");
+}
+
+#[test]
+fn autonomous_run_persistence_rejects_secret_bearing_structured_payload_content() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for secret-bearing payload rejection");
+
+    let mut artifact = sample_tool_result_artifact(project_id, run_id);
+    if let Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(tool)) =
+        artifact.payload.as_mut()
+    {
+        if let Some(command_result) = tool.command_result.as_mut() {
+            command_result.summary = "Authorization: Bearer sk-secret-token".into();
+        }
+    }
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![artifact];
+
+    let error = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect_err("secret-bearing payload should be rejected");
+    assert_eq!(error.code, "autonomous_run_request_invalid");
+}
+
+#[test]
+fn autonomous_run_persistence_rejects_policy_denied_artifacts_without_stable_code() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+    let unit_id = format!("{run_id}:unit:1");
+    let attempt_id = format!("{run_id}:unit:1:attempt:1");
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for policy denial rejection");
+
+    let artifact = project_store::AutonomousUnitArtifactRecord {
+        project_id: project_id.into(),
+        run_id: run_id.into(),
+        unit_id: unit_id.clone(),
+        attempt_id: attempt_id.clone(),
+        artifact_id: "artifact-policy-denied".into(),
+        artifact_kind: "policy_denied".into(),
+        status: project_store::AutonomousUnitArtifactStatus::Rejected,
+        summary: "Policy denied shell write access for the executor attempt.".into(),
+        content_hash: None,
+        payload: Some(project_store::AutonomousArtifactPayloadRecord::PolicyDenied(
+            project_store::AutonomousPolicyDeniedPayloadRecord {
+                project_id: project_id.into(),
+                run_id: run_id.into(),
+                unit_id,
+                attempt_id,
+                artifact_id: "artifact-policy-denied".into(),
+                diagnostic_code: "   ".into(),
+                message: "Policy denied write access to the repository worktree.".into(),
+                tool_name: Some("shell.exec".into()),
+                action_id: Some("action-1".into()),
+                boundary_id: Some("boundary-1".into()),
+            },
+        )),
+        created_at: "2099-04-15T19:00:20Z".into(),
+        updated_at: "2099-04-15T19:00:20Z".into(),
+    };
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![artifact];
+
+    let error = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect_err("policy_denied artifact without diagnostic code should be rejected");
+    assert_eq!(error.code, "policy_denied");
+}
+
+#[test]
+fn autonomous_run_decode_fails_closed_when_structured_payload_json_is_tampered() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run before payload tampering");
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![sample_tool_result_artifact(project_id, run_id)];
+    project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect("persist structured artifact before tampering");
+
+    open_state_connection(&repo_root)
+        .execute(
+            "UPDATE autonomous_unit_artifacts SET payload_json = ?1 WHERE artifact_id = ?2",
+            params!["{\"kind\":\"tool_result\",\"toolCallId\":", "artifact-tool-result"],
+        )
+        .expect("tamper structured payload json");
+
+    let error = project_store::load_autonomous_run(&repo_root, project_id)
+        .expect_err("malformed payload json should fail closed");
+    assert_eq!(error.code, "runtime_run_decode_failed");
 }
 
 #[test]

@@ -1,10 +1,14 @@
 use cadence_desktop_lib::{
     commands::{
         ApplyWorkflowTransitionRequestDto, ApplyWorkflowTransitionResponseDto,
-        AutonomousLifecycleReasonDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
-        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousUnitArtifactDto,
+        AutonomousArtifactPayloadDto, AutonomousCommandResultDto,
+        AutonomousLifecycleReasonDto, AutonomousPolicyDeniedPayloadDto,
+        AutonomousRunDto, AutonomousRunRecoveryStateDto,
+        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousToolCallStateDto,
+        AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto,
         AutonomousUnitArtifactStatusDto, AutonomousUnitAttemptDto, AutonomousUnitDto,
         AutonomousUnitHistoryEntryDto, AutonomousUnitKindDto, AutonomousUnitStatusDto,
+        AutonomousVerificationEvidencePayloadDto, AutonomousVerificationOutcomeDto,
         BranchSummaryDto, ChangeKind,
         CommandError, CommandErrorClass, GetAutonomousRunRequestDto, GetRuntimeRunRequestDto,
         ImportRepositoryRequestDto, ListNotificationDispatchesRequestDto,
@@ -274,13 +278,33 @@ fn sample_autonomous_artifact() -> AutonomousUnitArtifactDto {
         run_id: "run-1".into(),
         unit_id: "run-1:unit:researcher".into(),
         attempt_id: "run-1:unit:researcher:attempt:1".into(),
-        artifact_id: "artifact-research-summary".into(),
-        artifact_kind: "research_summary".into(),
+        artifact_id: "artifact-tool-result".into(),
+        artifact_kind: "tool_result".into(),
         status: AutonomousUnitArtifactStatusDto::Recorded,
-        summary: "Research summary persisted for downstream planning.".into(),
+        summary: "Shell tool result persisted for downstream verification.".into(),
         content_hash: Some(
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
         ),
+        payload: Some(AutonomousArtifactPayloadDto::ToolResult(
+            AutonomousToolResultPayloadDto {
+                project_id: "project-1".into(),
+                run_id: "run-1".into(),
+                unit_id: "run-1:unit:researcher".into(),
+                attempt_id: "run-1:unit:researcher:attempt:1".into(),
+                artifact_id: "artifact-tool-result".into(),
+                tool_call_id: "tool-call-1".into(),
+                tool_name: "shell.exec".into(),
+                tool_state: AutonomousToolCallStateDto::Succeeded,
+                command_result: Some(AutonomousCommandResultDto {
+                    exit_code: Some(0),
+                    timed_out: false,
+                    summary: "Command exited successfully after persisting structured evidence."
+                        .into(),
+                }),
+                action_id: Some("action-1".into()),
+                boundary_id: Some("boundary-1".into()),
+            },
+        )),
         created_at: "2026-04-15T23:10:03Z".into(),
         updated_at: "2026-04-15T23:10:03Z".into(),
     }
@@ -1607,11 +1631,29 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
                             "runId": "run-1",
                             "unitId": "run-1:unit:researcher",
                             "attemptId": "run-1:unit:researcher:attempt:1",
-                            "artifactId": "artifact-research-summary",
-                            "artifactKind": "research_summary",
+                            "artifactId": "artifact-tool-result",
+                            "artifactKind": "tool_result",
                             "status": "recorded",
-                            "summary": "Research summary persisted for downstream planning.",
+                            "summary": "Shell tool result persisted for downstream verification.",
                             "contentHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            "payload": {
+                                "kind": "tool_result",
+                                "projectId": "project-1",
+                                "runId": "run-1",
+                                "unitId": "run-1:unit:researcher",
+                                "attemptId": "run-1:unit:researcher:attempt:1",
+                                "artifactId": "artifact-tool-result",
+                                "toolCallId": "tool-call-1",
+                                "toolName": "shell.exec",
+                                "toolState": "succeeded",
+                                "commandResult": {
+                                    "exitCode": 0,
+                                    "timedOut": false,
+                                    "summary": "Command exited successfully after persisting structured evidence."
+                                },
+                                "actionId": "action-1",
+                                "boundaryId": "boundary-1"
+                            },
                             "createdAt": "2026-04-15T23:10:03Z",
                             "updatedAt": "2026-04-15T23:10:03Z"
                         }

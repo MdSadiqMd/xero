@@ -9,10 +9,13 @@ use tauri::{AppHandle, Emitter, Runtime};
 use crate::{
     auth::{AuthDiagnostic, AuthFlowError, OPENAI_CODEX_PROVIDER_ID},
     commands::{
-        AutonomousLifecycleReasonDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
-        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousUnitArtifactDto,
+        AutonomousArtifactPayloadDto, AutonomousCommandResultDto, AutonomousLifecycleReasonDto,
+        AutonomousPolicyDeniedPayloadDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
+        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousToolCallStateDto,
+        AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto,
         AutonomousUnitArtifactStatusDto, AutonomousUnitAttemptDto, AutonomousUnitDto,
         AutonomousUnitHistoryEntryDto, AutonomousUnitKindDto, AutonomousUnitStatusDto,
+        AutonomousVerificationEvidencePayloadDto, AutonomousVerificationOutcomeDto,
         CommandError, CommandErrorClass, CommandResult, ProjectUpdateReason,
         ProjectUpdatedPayloadDto, RuntimeDiagnosticDto, RuntimeRunCheckpointDto,
         RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto, RuntimeRunDto,
@@ -21,10 +24,14 @@ use crate::{
         PROJECT_UPDATED_EVENT, RUNTIME_RUN_UPDATED_EVENT, RUNTIME_UPDATED_EVENT,
     },
     db::project_store::{
-        self, AutonomousRunRecord, AutonomousRunSnapshotRecord, AutonomousRunStatus,
-        AutonomousRunUpsertRecord, AutonomousUnitArtifactRecord, AutonomousUnitArtifactStatus,
-        AutonomousUnitAttemptRecord, AutonomousUnitHistoryRecord, AutonomousUnitKind,
-        AutonomousUnitRecord, AutonomousUnitStatus, RuntimeRunCheckpointKind,
+        self, AutonomousArtifactCommandResultRecord, AutonomousArtifactPayloadRecord,
+        AutonomousPolicyDeniedPayloadRecord, AutonomousRunRecord, AutonomousRunSnapshotRecord,
+        AutonomousRunStatus, AutonomousRunUpsertRecord, AutonomousToolCallStateRecord,
+        AutonomousToolResultPayloadRecord, AutonomousUnitArtifactRecord,
+        AutonomousUnitArtifactStatus, AutonomousUnitAttemptRecord,
+        AutonomousUnitHistoryRecord, AutonomousUnitKind, AutonomousUnitRecord,
+        AutonomousUnitStatus, AutonomousVerificationEvidencePayloadRecord,
+        AutonomousVerificationOutcomeRecord, RuntimeRunCheckpointKind,
         RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord, RuntimeRunStatus,
         RuntimeRunTransportLiveness, RuntimeSessionDiagnosticRecord, RuntimeSessionRecord,
     },
@@ -740,8 +747,102 @@ fn autonomous_artifact_dto_from_record(
         status: autonomous_artifact_status_dto(&artifact.status),
         summary: artifact.summary.clone(),
         content_hash: artifact.content_hash.clone(),
+        payload: artifact
+            .payload
+            .as_ref()
+            .map(autonomous_artifact_payload_dto_from_record),
         created_at: artifact.created_at.clone(),
         updated_at: artifact.updated_at.clone(),
+    }
+}
+
+fn autonomous_artifact_payload_dto_from_record(
+    payload: &AutonomousArtifactPayloadRecord,
+) -> AutonomousArtifactPayloadDto {
+    match payload {
+        AutonomousArtifactPayloadRecord::ToolResult(tool) => {
+            AutonomousArtifactPayloadDto::ToolResult(AutonomousToolResultPayloadDto {
+                project_id: tool.project_id.clone(),
+                run_id: tool.run_id.clone(),
+                unit_id: tool.unit_id.clone(),
+                attempt_id: tool.attempt_id.clone(),
+                artifact_id: tool.artifact_id.clone(),
+                tool_call_id: tool.tool_call_id.clone(),
+                tool_name: tool.tool_name.clone(),
+                tool_state: autonomous_tool_call_state_dto(&tool.tool_state),
+                command_result: tool
+                    .command_result
+                    .as_ref()
+                    .map(autonomous_command_result_dto_from_record),
+                action_id: tool.action_id.clone(),
+                boundary_id: tool.boundary_id.clone(),
+            })
+        }
+        AutonomousArtifactPayloadRecord::VerificationEvidence(evidence) => {
+            AutonomousArtifactPayloadDto::VerificationEvidence(
+                AutonomousVerificationEvidencePayloadDto {
+                    project_id: evidence.project_id.clone(),
+                    run_id: evidence.run_id.clone(),
+                    unit_id: evidence.unit_id.clone(),
+                    attempt_id: evidence.attempt_id.clone(),
+                    artifact_id: evidence.artifact_id.clone(),
+                    evidence_kind: evidence.evidence_kind.clone(),
+                    label: evidence.label.clone(),
+                    outcome: autonomous_verification_outcome_dto(&evidence.outcome),
+                    command_result: evidence
+                        .command_result
+                        .as_ref()
+                        .map(autonomous_command_result_dto_from_record),
+                    action_id: evidence.action_id.clone(),
+                    boundary_id: evidence.boundary_id.clone(),
+                },
+            )
+        }
+        AutonomousArtifactPayloadRecord::PolicyDenied(policy) => {
+            AutonomousArtifactPayloadDto::PolicyDenied(AutonomousPolicyDeniedPayloadDto {
+                project_id: policy.project_id.clone(),
+                run_id: policy.run_id.clone(),
+                unit_id: policy.unit_id.clone(),
+                attempt_id: policy.attempt_id.clone(),
+                artifact_id: policy.artifact_id.clone(),
+                diagnostic_code: policy.diagnostic_code.clone(),
+                message: policy.message.clone(),
+                tool_name: policy.tool_name.clone(),
+                action_id: policy.action_id.clone(),
+                boundary_id: policy.boundary_id.clone(),
+            })
+        }
+    }
+}
+
+fn autonomous_command_result_dto_from_record(
+    command_result: &AutonomousArtifactCommandResultRecord,
+) -> AutonomousCommandResultDto {
+    AutonomousCommandResultDto {
+        exit_code: command_result.exit_code,
+        timed_out: command_result.timed_out,
+        summary: command_result.summary.clone(),
+    }
+}
+
+fn autonomous_tool_call_state_dto(
+    state: &AutonomousToolCallStateRecord,
+) -> AutonomousToolCallStateDto {
+    match state {
+        AutonomousToolCallStateRecord::Pending => AutonomousToolCallStateDto::Pending,
+        AutonomousToolCallStateRecord::Running => AutonomousToolCallStateDto::Running,
+        AutonomousToolCallStateRecord::Succeeded => AutonomousToolCallStateDto::Succeeded,
+        AutonomousToolCallStateRecord::Failed => AutonomousToolCallStateDto::Failed,
+    }
+}
+
+fn autonomous_verification_outcome_dto(
+    outcome: &AutonomousVerificationOutcomeRecord,
+) -> AutonomousVerificationOutcomeDto {
+    match outcome {
+        AutonomousVerificationOutcomeRecord::Passed => AutonomousVerificationOutcomeDto::Passed,
+        AutonomousVerificationOutcomeRecord::Failed => AutonomousVerificationOutcomeDto::Failed,
+        AutonomousVerificationOutcomeRecord::Blocked => AutonomousVerificationOutcomeDto::Blocked,
     }
 }
 

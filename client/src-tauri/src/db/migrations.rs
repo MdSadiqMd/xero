@@ -647,6 +647,12 @@ pub fn migrations() -> &'static Migrations<'static> {
                     ON autonomous_unit_artifacts(project_id, run_id, attempt_id, created_at DESC, artifact_id ASC);
                 "#,
             ),
+            M::up(
+                r#"
+                ALTER TABLE autonomous_unit_artifacts
+                    ADD COLUMN payload_json TEXT;
+                "#,
+            ),
         ])
     });
 

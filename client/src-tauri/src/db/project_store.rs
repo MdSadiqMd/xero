@@ -4,7 +4,7 @@ use std::{
 };
 
 use rusqlite::{params, Connection, Error as SqlError, ErrorCode, OptionalExtension, Transaction};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -30,6 +30,9 @@ const MAX_RUNTIME_RUN_CHECKPOINT_SUMMARY_CHARS: usize = 280;
 const MAX_AUTONOMOUS_HISTORY_UNIT_ROWS: i64 = 16;
 const MAX_AUTONOMOUS_HISTORY_ATTEMPT_ROWS: i64 = 32;
 const MAX_AUTONOMOUS_HISTORY_ARTIFACT_ROWS: i64 = 64;
+const AUTONOMOUS_ARTIFACT_KIND_TOOL_RESULT: &str = "tool_result";
+const AUTONOMOUS_ARTIFACT_KIND_VERIFICATION_EVIDENCE: &str = "verification_evidence";
+const AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED: &str = "policy_denied";
 const MAX_WORKFLOW_TRANSITION_EVENT_ROWS: i64 = 200;
 const MAX_WORKFLOW_HANDOFF_PACKAGE_ROWS: i64 = 200;
 const MAX_LIFECYCLE_TRANSITION_EVENT_ROWS: i64 = 64;
@@ -331,6 +334,86 @@ pub enum AutonomousUnitArtifactStatus {
     Redacted,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousToolCallStateRecord {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousVerificationOutcomeRecord {
+    Passed,
+    Failed,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousArtifactCommandResultRecord {
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousToolResultPayloadRecord {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub tool_state: AutonomousToolCallStateRecord,
+    pub command_result: Option<AutonomousArtifactCommandResultRecord>,
+    pub action_id: Option<String>,
+    pub boundary_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousVerificationEvidencePayloadRecord {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub evidence_kind: String,
+    pub label: String,
+    pub outcome: AutonomousVerificationOutcomeRecord,
+    pub command_result: Option<AutonomousArtifactCommandResultRecord>,
+    pub action_id: Option<String>,
+    pub boundary_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousPolicyDeniedPayloadRecord {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub diagnostic_code: String,
+    pub message: String,
+    pub tool_name: Option<String>,
+    pub action_id: Option<String>,
+    pub boundary_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum AutonomousArtifactPayloadRecord {
+    ToolResult(AutonomousToolResultPayloadRecord),
+    VerificationEvidence(AutonomousVerificationEvidencePayloadRecord),
+    PolicyDenied(AutonomousPolicyDeniedPayloadRecord),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutonomousRunRecord {
     pub project_id: String,
@@ -400,6 +483,7 @@ pub struct AutonomousUnitArtifactRecord {
     pub status: AutonomousUnitArtifactStatus,
     pub summary: String,
     pub content_hash: Option<String>,
+    pub payload: Option<AutonomousArtifactPayloadRecord>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -910,6 +994,7 @@ struct RawAutonomousUnitArtifactRow {
     status: String,
     summary: String,
     content_hash: Option<String>,
+    payload_json: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -1653,7 +1738,7 @@ pub fn upsert_autonomous_run(
     repo_root: &Path,
     payload: &AutonomousRunUpsertRecord,
 ) -> Result<AutonomousRunSnapshotRecord, CommandError> {
-    validate_autonomous_run_upsert_payload(payload)?;
+    let payload = normalize_autonomous_run_upsert_payload(payload)?;
 
     let database_path = database_path_for_repo(repo_root);
     let connection = open_runtime_database(repo_root, &database_path)?;
@@ -2024,6 +2109,12 @@ fn persist_autonomous_unit_artifact(
     database_path: &Path,
     artifact: &AutonomousUnitArtifactRecord,
 ) -> Result<(), CommandError> {
+    let payload_json = artifact
+        .payload
+        .as_ref()
+        .map(canonicalize_autonomous_artifact_payload_json)
+        .transpose()?;
+
     transaction
         .execute(
             r#"
@@ -2037,15 +2128,17 @@ fn persist_autonomous_unit_artifact(
                 status,
                 summary,
                 content_hash,
+                payload_json,
                 created_at,
                 updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(artifact_id) DO UPDATE SET
                 artifact_kind = excluded.artifact_kind,
                 status = excluded.status,
                 summary = excluded.summary,
                 content_hash = excluded.content_hash,
+                payload_json = excluded.payload_json,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at
             "#,
@@ -2059,6 +2152,7 @@ fn persist_autonomous_unit_artifact(
                 autonomous_unit_artifact_status_sql_value(&artifact.status),
                 artifact.summary.as_str(),
                 artifact.content_hash.as_deref(),
+                payload_json.as_deref(),
                 artifact.created_at.as_str(),
                 artifact.updated_at.as_str(),
             ],
@@ -9082,6 +9176,7 @@ fn read_autonomous_unit_artifacts(
                 status,
                 summary,
                 content_hash,
+                payload_json,
                 created_at,
                 updated_at
             FROM autonomous_unit_artifacts
@@ -9115,8 +9210,9 @@ fn read_autonomous_unit_artifacts(
                     status: row.get(6)?,
                     summary: row.get(7)?,
                     content_hash: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
+                    payload_json: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
                 })
             },
         )
@@ -9714,50 +9810,103 @@ fn decode_autonomous_unit_artifact_row(
     raw_row: RawAutonomousUnitArtifactRow,
     database_path: &Path,
 ) -> Result<AutonomousUnitArtifactRecord, CommandError> {
+    let project_id = require_runtime_run_non_empty_owned(
+        raw_row.project_id,
+        "project_id",
+        database_path,
+    )?;
+    let run_id = require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?;
+    let unit_id = require_runtime_run_non_empty_owned(raw_row.unit_id, "unit_id", database_path)?;
+    let attempt_id = require_runtime_run_non_empty_owned(
+        raw_row.attempt_id,
+        "attempt_id",
+        database_path,
+    )?;
+    let artifact_id = require_runtime_run_non_empty_owned(
+        raw_row.artifact_id,
+        "artifact_id",
+        database_path,
+    )?;
+    let artifact_kind = require_runtime_run_non_empty_owned(
+        raw_row.artifact_kind,
+        "artifact_kind",
+        database_path,
+    )?;
+    let summary = require_runtime_run_non_empty_owned(raw_row.summary, "summary", database_path)?;
     let content_hash = decode_runtime_run_optional_non_empty_text(
         raw_row.content_hash,
         "content_hash",
         database_path,
     )?;
     if let Some(content_hash) = content_hash.as_deref() {
-        if content_hash.len() != 64 || content_hash.chars().any(|ch| !ch.is_ascii_hexdigit() || ch.is_ascii_uppercase()) {
+        validate_workflow_handoff_package_hash(
+            content_hash,
+            "content_hash",
+            database_path,
+            "runtime_run_decode_failed",
+        )?;
+    }
+
+    let payload = raw_row
+        .payload_json
+        .map(|payload_json| {
+            decode_autonomous_artifact_payload_json(
+                &payload_json,
+                &project_id,
+                &run_id,
+                &unit_id,
+                &attempt_id,
+                &artifact_id,
+                &artifact_kind,
+                database_path,
+            )
+        })
+        .transpose()?;
+
+    if payload.is_some() && content_hash.is_none() {
+        return Err(map_runtime_run_decode_error(
+            database_path,
+            format!(
+                "Autonomous artifact `{artifact_id}` stored structured payload JSON without a matching content_hash."
+            ),
+        ));
+    }
+
+    if let (Some(payload), Some(content_hash)) = (payload.as_ref(), content_hash.as_deref()) {
+        let canonical_payload = canonicalize_autonomous_artifact_payload_json(payload)?;
+        let expected_hash = compute_workflow_handoff_package_hash(&canonical_payload);
+        if content_hash != expected_hash {
             return Err(map_runtime_run_decode_error(
                 database_path,
                 format!(
-                    "Field `content_hash` must be a lowercase 64-character hex digest, found `{content_hash}`."
+                    "Autonomous artifact `{artifact_id}` stored content_hash `{content_hash}` but canonical payload hash is `{expected_hash}`."
                 ),
             ));
         }
     }
 
+    if payload.is_none() && autonomous_artifact_kind_requires_payload(&artifact_kind) {
+        return Err(map_runtime_run_decode_error(
+            database_path,
+            format!(
+                "Autonomous artifact `{artifact_id}` of kind `{artifact_kind}` must persist a structured payload JSON value."
+            ),
+        ));
+    }
+
     Ok(AutonomousUnitArtifactRecord {
-        project_id: require_runtime_run_non_empty_owned(
-            raw_row.project_id,
-            "project_id",
-            database_path,
-        )?,
-        run_id: require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?,
-        unit_id: require_runtime_run_non_empty_owned(raw_row.unit_id, "unit_id", database_path)?,
-        attempt_id: require_runtime_run_non_empty_owned(
-            raw_row.attempt_id,
-            "attempt_id",
-            database_path,
-        )?,
-        artifact_id: require_runtime_run_non_empty_owned(
-            raw_row.artifact_id,
-            "artifact_id",
-            database_path,
-        )?,
-        artifact_kind: require_runtime_run_non_empty_owned(
-            raw_row.artifact_kind,
-            "artifact_kind",
-            database_path,
-        )?,
+        project_id,
+        run_id,
+        unit_id,
+        attempt_id,
+        artifact_id,
+        artifact_kind,
         status: parse_autonomous_unit_artifact_status(&raw_row.status).map_err(|details| {
             map_runtime_run_decode_error(database_path, format!("Field `status` {details}"))
         })?,
-        summary: require_runtime_run_non_empty_owned(raw_row.summary, "summary", database_path)?,
+        summary,
         content_hash,
+        payload,
         created_at: require_runtime_run_non_empty_owned(
             raw_row.created_at,
             "created_at",
@@ -11851,9 +12000,9 @@ fn validate_autonomous_run_payload(payload: &AutonomousRunRecord) -> Result<(), 
     Ok(())
 }
 
-fn validate_autonomous_run_upsert_payload(
+fn normalize_autonomous_run_upsert_payload(
     payload: &AutonomousRunUpsertRecord,
-) -> Result<(), CommandError> {
+) -> Result<AutonomousRunUpsertRecord, CommandError> {
     validate_autonomous_run_payload(&payload.run)?;
 
     let Some(unit) = payload.unit.as_ref() else {
@@ -11863,7 +12012,7 @@ fn validate_autonomous_run_upsert_payload(
                 "Cadence requires a durable autonomous unit row before attempts or artifacts can be persisted.",
             ));
         }
-        return Ok(());
+        return Ok(payload.clone());
     };
 
     validate_non_empty_text(&unit.unit_id, "unit_id", "autonomous_run_request_invalid")?;
@@ -11931,7 +12080,11 @@ fn validate_autonomous_run_upsert_payload(
             ));
         }
         if let Some(boundary_id) = attempt.boundary_id.as_deref() {
-            validate_non_empty_text(boundary_id, "attempt_boundary_id", "autonomous_run_request_invalid")?;
+            validate_non_empty_text(
+                boundary_id,
+                "attempt_boundary_id",
+                "autonomous_run_request_invalid",
+            )?;
         }
         if let Some(reason) = attempt.last_error.as_ref() {
             validate_non_empty_text(
@@ -11947,79 +12100,485 @@ fn validate_autonomous_run_upsert_payload(
         }
     }
 
-    for artifact in &payload.artifacts {
-        validate_non_empty_text(
-            &artifact.artifact_id,
-            "artifact_id",
+    let normalized_artifacts = payload
+        .artifacts
+        .iter()
+        .map(|artifact| {
+            normalize_autonomous_unit_artifact_record(
+                artifact,
+                &payload.run,
+                unit,
+                payload.attempt.as_ref(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(AutonomousRunUpsertRecord {
+        run: payload.run.clone(),
+        unit: Some(unit.clone()),
+        attempt: payload.attempt.clone(),
+        artifacts: normalized_artifacts,
+    })
+}
+
+fn normalize_autonomous_unit_artifact_record(
+    artifact: &AutonomousUnitArtifactRecord,
+    run: &AutonomousRunRecord,
+    unit: &AutonomousUnitRecord,
+    attempt: Option<&AutonomousUnitAttemptRecord>,
+) -> Result<AutonomousUnitArtifactRecord, CommandError> {
+    validate_non_empty_text(
+        &artifact.artifact_id,
+        "artifact_id",
+        "autonomous_run_request_invalid",
+    )?;
+    validate_non_empty_text(
+        &artifact.artifact_kind,
+        "artifact_kind",
+        "autonomous_run_request_invalid",
+    )?;
+    validate_non_empty_text(
+        &artifact.summary,
+        "artifact_summary",
+        "autonomous_run_request_invalid",
+    )?;
+    validate_non_empty_text(
+        &artifact.created_at,
+        "artifact_created_at",
+        "autonomous_run_request_invalid",
+    )?;
+    validate_non_empty_text(
+        &artifact.updated_at,
+        "artifact_updated_at",
+        "autonomous_run_request_invalid",
+    )?;
+
+    if artifact.project_id != run.project_id
+        || artifact.run_id != run.run_id
+        || artifact.unit_id != unit.unit_id
+    {
+        return Err(CommandError::system_fault(
             "autonomous_run_request_invalid",
-        )?;
-        validate_non_empty_text(
-            &artifact.artifact_kind,
-            "artifact_kind",
+            "Cadence requires autonomous artifacts to share the parent run and unit linkage.",
+        ));
+    }
+    if attempt.is_some_and(|attempt| artifact.attempt_id != attempt.attempt_id) {
+        return Err(CommandError::system_fault(
             "autonomous_run_request_invalid",
-        )?;
-        validate_non_empty_text(
-            &artifact.summary,
-            "artifact_summary",
+            "Cadence requires autonomous artifacts to link to the persisted attempt id.",
+        ));
+    }
+    if let Some(secret_hint) = find_prohibited_runtime_persistence_content(&artifact.summary) {
+        return Err(CommandError::user_fixable(
             "autonomous_run_request_invalid",
-        )?;
-        validate_non_empty_text(
-            &artifact.created_at,
-            "artifact_created_at",
-            "autonomous_run_request_invalid",
-        )?;
-        validate_non_empty_text(
-            &artifact.updated_at,
-            "artifact_updated_at",
-            "autonomous_run_request_invalid",
-        )?;
-        if artifact.project_id != payload.run.project_id
-            || artifact.run_id != payload.run.run_id
-            || artifact.unit_id != unit.unit_id
-        {
-            return Err(CommandError::system_fault(
+            format!(
+                "Autonomous artifact summaries must not include {secret_hint}. Remove secret-bearing content before retrying."
+            ),
+        ));
+    }
+
+    let canonical_payload = artifact
+        .payload
+        .as_ref()
+        .map(|payload| {
+            validate_autonomous_artifact_payload(
+                payload,
+                &artifact.project_id,
+                &artifact.run_id,
+                &artifact.unit_id,
+                &artifact.attempt_id,
+                &artifact.artifact_id,
+                &artifact.artifact_kind,
+            )?;
+            canonicalize_autonomous_artifact_payload_json(payload)
+        })
+        .transpose()?;
+
+    if artifact.payload.is_none() && autonomous_artifact_kind_requires_payload(&artifact.artifact_kind)
+    {
+        let message = format!(
+            "Cadence requires `{}` autonomous artifacts to persist a structured payload.",
+            artifact.artifact_kind
+        );
+        return if artifact.artifact_kind == AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED {
+            Err(CommandError::policy_denied(message))
+        } else {
+            Err(CommandError::user_fixable(
                 "autonomous_run_request_invalid",
-                "Cadence requires autonomous artifacts to share the parent run and unit linkage.",
-            ));
+                message,
+            ))
+        };
+    }
+
+    let normalized_hash = match canonical_payload.as_deref() {
+        Some(payload_json) => {
+            let expected_hash = compute_workflow_handoff_package_hash(payload_json);
+            if let Some(content_hash) = artifact.content_hash.as_deref() {
+                validate_non_empty_text(
+                    content_hash,
+                    "artifact_content_hash",
+                    "autonomous_run_request_invalid",
+                )?;
+                if content_hash.len() != 64
+                    || content_hash
+                        .chars()
+                        .any(|ch| !ch.is_ascii_hexdigit() || ch.is_ascii_uppercase())
+                {
+                    return Err(CommandError::user_fixable(
+                        "autonomous_run_request_invalid",
+                        "Cadence requires autonomous artifact content hashes to be lowercase 64-character hex digests.",
+                    ));
+                }
+                if content_hash != expected_hash {
+                    return Err(CommandError::user_fixable(
+                        "autonomous_run_request_invalid",
+                        "Cadence requires autonomous artifact content_hash values to match the canonical structured payload.",
+                    ));
+                }
+            }
+            Some(expected_hash)
         }
-        if payload
-            .attempt
-            .as_ref()
-            .is_some_and(|attempt| artifact.attempt_id != attempt.attempt_id)
-        {
-            return Err(CommandError::system_fault(
-                "autonomous_run_request_invalid",
-                "Cadence requires autonomous artifacts to link to the persisted attempt id.",
-            ));
+        None => {
+            if let Some(content_hash) = artifact.content_hash.as_deref() {
+                validate_non_empty_text(
+                    content_hash,
+                    "artifact_content_hash",
+                    "autonomous_run_request_invalid",
+                )?;
+                if content_hash.len() != 64
+                    || content_hash
+                        .chars()
+                        .any(|ch| !ch.is_ascii_hexdigit() || ch.is_ascii_uppercase())
+                {
+                    return Err(CommandError::user_fixable(
+                        "autonomous_run_request_invalid",
+                        "Cadence requires autonomous artifact content hashes to be lowercase 64-character hex digests.",
+                    ));
+                }
+            }
+            artifact.content_hash.clone()
         }
-        if let Some(secret_hint) = find_prohibited_runtime_persistence_content(&artifact.summary) {
-            return Err(CommandError::user_fixable(
-                "autonomous_run_request_invalid",
+    };
+
+    Ok(AutonomousUnitArtifactRecord {
+        content_hash: normalized_hash,
+        ..artifact.clone()
+    })
+}
+
+fn decode_autonomous_artifact_payload_json(
+    payload_json: &str,
+    project_id: &str,
+    run_id: &str,
+    unit_id: &str,
+    attempt_id: &str,
+    artifact_id: &str,
+    artifact_kind: &str,
+    database_path: &Path,
+) -> Result<AutonomousArtifactPayloadRecord, CommandError> {
+    let parsed = serde_json::from_str::<AutonomousArtifactPayloadRecord>(payload_json).map_err(
+        |error| {
+            map_runtime_run_decode_error(
+                database_path,
                 format!(
-                    "Autonomous artifact summaries must not include {secret_hint}. Remove secret-bearing content before retrying."
+                    "Autonomous artifact `{artifact_id}` stored malformed payload_json: {error}"
                 ),
-            ));
-        }
-        if let Some(content_hash) = artifact.content_hash.as_deref() {
+            )
+        },
+    )?;
+
+    validate_autonomous_artifact_payload(
+        &parsed,
+        project_id,
+        run_id,
+        unit_id,
+        attempt_id,
+        artifact_id,
+        artifact_kind,
+    )
+    .map_err(|error| map_runtime_run_decode_error(database_path, error.message))?;
+
+    Ok(parsed)
+}
+
+fn canonicalize_autonomous_artifact_payload_json(
+    payload: &AutonomousArtifactPayloadRecord,
+) -> Result<String, CommandError> {
+    let value = serde_json::to_value(payload).map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_run_request_invalid",
+            format!(
+                "Cadence could not serialize the autonomous artifact payload to canonical JSON: {error}"
+            ),
+        )
+    })?;
+
+    let canonical = canonicalize_json_value(value);
+    serde_json::to_string(&canonical).map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_run_request_invalid",
+            format!(
+                "Cadence could not canonicalize the autonomous artifact payload JSON: {error}"
+            ),
+        )
+    })
+}
+
+fn validate_autonomous_artifact_payload(
+    payload: &AutonomousArtifactPayloadRecord,
+    project_id: &str,
+    run_id: &str,
+    unit_id: &str,
+    attempt_id: &str,
+    artifact_id: &str,
+    artifact_kind: &str,
+) -> Result<(), CommandError> {
+    let expected_kind = autonomous_artifact_payload_kind(payload);
+    if artifact_kind != expected_kind {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            format!(
+                "Cadence requires autonomous artifact kind `{artifact_kind}` to match payload kind `{expected_kind}`."
+            ),
+        ));
+    }
+
+    match payload {
+        AutonomousArtifactPayloadRecord::ToolResult(tool) => {
+            validate_autonomous_artifact_payload_linkage(
+                &tool.project_id,
+                &tool.run_id,
+                &tool.unit_id,
+                &tool.attempt_id,
+                &tool.artifact_id,
+                project_id,
+                run_id,
+                unit_id,
+                attempt_id,
+                artifact_id,
+            )?;
             validate_non_empty_text(
-                content_hash,
-                "artifact_content_hash",
+                &tool.tool_call_id,
+                "tool_call_id",
                 "autonomous_run_request_invalid",
             )?;
-            if content_hash.len() != 64
-                || content_hash
-                    .chars()
-                    .any(|ch| !ch.is_ascii_hexdigit() || ch.is_ascii_uppercase())
-            {
-                return Err(CommandError::user_fixable(
-                    "autonomous_run_request_invalid",
-                    "Cadence requires autonomous artifact content hashes to be lowercase 64-character hex digests.",
+            validate_non_empty_text(
+                &tool.tool_name,
+                "tool_name",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_autonomous_artifact_text(&tool.tool_name, "tool_name")?;
+            validate_autonomous_artifact_action_boundary_linkage(
+                tool.action_id.as_deref(),
+                tool.boundary_id.as_deref(),
+            )?;
+            if let Some(command_result) = tool.command_result.as_ref() {
+                validate_autonomous_artifact_command_result(command_result)?;
+            }
+        }
+        AutonomousArtifactPayloadRecord::VerificationEvidence(evidence) => {
+            validate_autonomous_artifact_payload_linkage(
+                &evidence.project_id,
+                &evidence.run_id,
+                &evidence.unit_id,
+                &evidence.attempt_id,
+                &evidence.artifact_id,
+                project_id,
+                run_id,
+                unit_id,
+                attempt_id,
+                artifact_id,
+            )?;
+            validate_non_empty_text(
+                &evidence.evidence_kind,
+                "evidence_kind",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_non_empty_text(
+                &evidence.label,
+                "evidence_label",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_autonomous_artifact_text(&evidence.evidence_kind, "evidence_kind")?;
+            validate_autonomous_artifact_text(&evidence.label, "evidence_label")?;
+            validate_autonomous_artifact_action_boundary_linkage(
+                evidence.action_id.as_deref(),
+                evidence.boundary_id.as_deref(),
+            )?;
+            if let Some(command_result) = evidence.command_result.as_ref() {
+                validate_autonomous_artifact_command_result(command_result)?;
+            }
+        }
+        AutonomousArtifactPayloadRecord::PolicyDenied(policy) => {
+            validate_autonomous_artifact_payload_linkage(
+                &policy.project_id,
+                &policy.run_id,
+                &policy.unit_id,
+                &policy.attempt_id,
+                &policy.artifact_id,
+                project_id,
+                run_id,
+                unit_id,
+                attempt_id,
+                artifact_id,
+            )?;
+            if policy.diagnostic_code.trim().is_empty() {
+                return Err(CommandError::policy_denied(
+                    "Cadence requires policy_denied artifacts to include a stable diagnostic_code.",
                 ));
             }
+            validate_non_empty_text(
+                &policy.diagnostic_code,
+                "policy_denied_code",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_non_empty_text(
+                &policy.message,
+                "policy_denied_message",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_autonomous_artifact_text(&policy.message, "policy_denied_message")?;
+            if let Some(tool_name) = policy.tool_name.as_deref() {
+                validate_non_empty_text(
+                    tool_name,
+                    "policy_denied_tool_name",
+                    "autonomous_run_request_invalid",
+                )?;
+                validate_autonomous_artifact_text(tool_name, "policy_denied_tool_name")?;
+            }
+            validate_autonomous_artifact_action_boundary_linkage(
+                policy.action_id.as_deref(),
+                policy.boundary_id.as_deref(),
+            )?;
         }
     }
 
     Ok(())
+}
+
+fn validate_autonomous_artifact_payload_linkage(
+    payload_project_id: &str,
+    payload_run_id: &str,
+    payload_unit_id: &str,
+    payload_attempt_id: &str,
+    payload_artifact_id: &str,
+    project_id: &str,
+    run_id: &str,
+    unit_id: &str,
+    attempt_id: &str,
+    artifact_id: &str,
+) -> Result<(), CommandError> {
+    for (value, field) in [
+        (payload_project_id, "payload_project_id"),
+        (payload_run_id, "payload_run_id"),
+        (payload_unit_id, "payload_unit_id"),
+        (payload_attempt_id, "payload_attempt_id"),
+        (payload_artifact_id, "payload_artifact_id"),
+    ] {
+        validate_non_empty_text(value, field, "autonomous_run_request_invalid")?;
+    }
+
+    if payload_project_id != project_id
+        || payload_run_id != run_id
+        || payload_unit_id != unit_id
+        || payload_attempt_id != attempt_id
+        || payload_artifact_id != artifact_id
+    {
+        return Err(CommandError::system_fault(
+            "autonomous_run_request_invalid",
+            "Cadence requires autonomous artifact payload linkage to match the owning project/run/unit/attempt/artifact row.",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_autonomous_artifact_action_boundary_linkage(
+    action_id: Option<&str>,
+    boundary_id: Option<&str>,
+) -> Result<(), CommandError> {
+    match (action_id, boundary_id) {
+        (Some(action_id), Some(boundary_id)) => {
+            validate_non_empty_text(
+                action_id,
+                "artifact_action_id",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_non_empty_text(
+                boundary_id,
+                "artifact_boundary_id",
+                "autonomous_run_request_invalid",
+            )?;
+            Ok(())
+        }
+        (None, None) => Ok(()),
+        _ => Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires autonomous artifact action_id and boundary_id to be provided together.",
+        )),
+    }
+}
+
+fn validate_autonomous_artifact_command_result(
+    command_result: &AutonomousArtifactCommandResultRecord,
+) -> Result<(), CommandError> {
+    validate_non_empty_text(
+        &command_result.summary,
+        "artifact_command_summary",
+        "autonomous_run_request_invalid",
+    )?;
+    validate_autonomous_artifact_text(&command_result.summary, "artifact_command_summary")
+}
+
+fn validate_autonomous_artifact_text(value: &str, field: &str) -> Result<(), CommandError> {
+    if let Some(secret_hint) = find_prohibited_runtime_persistence_content(value) {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            format!(
+                "Autonomous artifact field `{field}` must not include {secret_hint}. Remove secret-bearing content before retrying."
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn autonomous_artifact_payload_kind(payload: &AutonomousArtifactPayloadRecord) -> &'static str {
+    match payload {
+        AutonomousArtifactPayloadRecord::ToolResult(_) => AUTONOMOUS_ARTIFACT_KIND_TOOL_RESULT,
+        AutonomousArtifactPayloadRecord::VerificationEvidence(_) => {
+            AUTONOMOUS_ARTIFACT_KIND_VERIFICATION_EVIDENCE
+        }
+        AutonomousArtifactPayloadRecord::PolicyDenied(_) => {
+            AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED
+        }
+    }
+}
+
+fn autonomous_artifact_kind_requires_payload(kind: &str) -> bool {
+    matches!(
+        kind,
+        AUTONOMOUS_ARTIFACT_KIND_TOOL_RESULT
+            | AUTONOMOUS_ARTIFACT_KIND_VERIFICATION_EVIDENCE
+            | AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED
+    )
+}
+
+fn canonicalize_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut sorted = std::collections::BTreeMap::new();
+            for (key, nested) in map {
+                sorted.insert(key, canonicalize_json_value(nested));
+            }
+
+            serde_json::Value::Object(sorted.into_iter().collect())
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items.into_iter().map(canonicalize_json_value).collect(),
+        ),
+        other => other,
+    }
 }
 
 fn normalize_runtime_checkpoint_summary(summary: &str) -> String {
