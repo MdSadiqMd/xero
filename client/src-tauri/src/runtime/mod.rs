@@ -1,5 +1,6 @@
 pub mod autonomous_orchestrator;
 pub mod autonomous_tool_runtime;
+pub mod autonomous_workflow_progression;
 pub mod platform_adapter;
 pub mod protocol;
 pub mod stream;

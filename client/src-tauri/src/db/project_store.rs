@@ -4687,6 +4687,29 @@ pub fn apply_workflow_transition(
     })
 }
 
+pub fn load_workflow_transition_event(
+    repo_root: &Path,
+    expected_project_id: &str,
+    transition_id: &str,
+) -> Result<Option<WorkflowTransitionEventRecord>, CommandError> {
+    validate_non_empty_text(
+        transition_id,
+        "transition_id",
+        "workflow_transition_request_invalid",
+    )?;
+
+    let database_path = database_path_for_repo(repo_root);
+    let connection = open_project_database(repo_root, &database_path)?;
+    read_project_row(&connection, &database_path, repo_root, expected_project_id)?;
+
+    read_transition_event_by_transition_id(
+        &connection,
+        &database_path,
+        expected_project_id,
+        transition_id,
+    )
+}
+
 pub fn load_recent_workflow_transition_events(
     repo_root: &Path,
     expected_project_id: &str,

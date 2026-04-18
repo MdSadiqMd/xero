@@ -2626,6 +2626,309 @@ fn planning_lifecycle_gate_pause_branch_requires_explicit_resume_without_duplica
 }
 
 #[test]
+fn start_autonomous_run_progresses_lifecycle_graph_and_reuses_handoff_linkage_on_replay() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, repo_root) = seed_project(&root, &app);
+
+    seed_authenticated_runtime(&app, &auth_store_path, &project_id);
+    seed_planning_lifecycle_workflow(&repo_root, &project_id, false);
+
+    let started = start_autonomous_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StartAutonomousRunRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("start autonomous run for lifecycle progression");
+    let started_run = started.run.expect("autonomous run should be returned");
+
+    wait_for_runtime_run(&app, &project_id, |runtime_run| {
+        runtime_run.run_id == started_run.run_id
+            && runtime_run.status == RuntimeRunStatusDto::Running
+            && runtime_run.transport.liveness == RuntimeRunTransportLivenessDto::Reachable
+    });
+
+    let progressed = wait_for_autonomous_run(&app, &project_id, |autonomous_state| {
+        let Some(unit) = autonomous_state.unit.as_ref() else {
+            return false;
+        };
+        let Some(attempt) = autonomous_state.attempt.as_ref() else {
+            return false;
+        };
+        let Some(linkage) = unit.workflow_linkage.as_ref() else {
+            return false;
+        };
+
+        unit.kind == cadence_desktop_lib::commands::AutonomousUnitKindDto::Planner
+            && linkage.workflow_node_id == "roadmap"
+            && attempt.workflow_linkage.as_ref() == Some(linkage)
+    });
+
+    let progressed_unit = progressed.unit.as_ref().expect("progressed unit should exist");
+    let progressed_attempt = progressed
+        .attempt
+        .as_ref()
+        .expect("progressed attempt should exist");
+    let progressed_linkage = progressed_unit
+        .workflow_linkage
+        .as_ref()
+        .expect("progressed unit should expose workflow linkage");
+
+    assert_eq!(progressed_unit.run_id, started_run.run_id);
+    assert_eq!(progressed_attempt.run_id, started_run.run_id);
+    assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 3);
+    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 2);
+
+    let events = project_store::load_recent_workflow_transition_events(&repo_root, &project_id, None)
+        .expect("load lifecycle transition events after autonomous progression");
+    let roadmap_transition = events
+        .iter()
+        .find(|event| event.to_node_id == "roadmap")
+        .expect("roadmap transition should exist after autonomous progression");
+    let roadmap_handoff = project_store::load_workflow_handoff_package(
+        &repo_root,
+        &project_id,
+        &roadmap_transition.transition_id,
+    )
+    .expect("load roadmap handoff package")
+    .expect("roadmap handoff package should exist");
+
+    assert_eq!(progressed_linkage.workflow_node_id, "roadmap");
+    assert_eq!(progressed_linkage.transition_id, roadmap_transition.transition_id);
+    assert_eq!(
+        progressed_linkage.causal_transition_id.as_deref(),
+        roadmap_transition.causal_transition_id.as_deref()
+    );
+    assert_eq!(
+        progressed_linkage.handoff_transition_id,
+        roadmap_handoff.handoff_transition_id
+    );
+    assert_eq!(
+        progressed_linkage.handoff_package_hash,
+        roadmap_handoff.package_hash
+    );
+
+    let replayed = get_autonomous_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetAutonomousRunRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("replayed autonomous refresh should succeed");
+    let replayed_linkage = replayed
+        .unit
+        .as_ref()
+        .and_then(|unit| unit.workflow_linkage.as_ref())
+        .expect("replayed autonomous state should keep workflow linkage");
+    assert_eq!(replayed_linkage, progressed_linkage);
+    assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 3);
+    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 2);
+
+    let cancelled = cancel_autonomous_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CancelAutonomousRunRequestDto {
+            project_id,
+            run_id: started_run.run_id,
+        },
+    )
+    .expect("cancel autonomous lifecycle progression run")
+    .run
+    .expect("cancelled autonomous run should exist");
+    assert_eq!(cancelled.status, AutonomousRunStatusDto::Cancelled);
+}
+
+#[test]
+fn get_autonomous_run_fails_closed_when_workflow_graph_has_no_active_node() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, repo_root) = seed_project(&root, &app);
+
+    seed_planning_lifecycle_workflow(&repo_root, &project_id, false);
+
+    let database_path = database_path_for_repo(&repo_root);
+    let connection = rusqlite::Connection::open(&database_path).expect("open workflow db");
+    connection
+        .execute(
+            "UPDATE workflow_graph_nodes SET status = 'pending' WHERE project_id = ?1 AND node_id = 'discussion'",
+            [&project_id],
+        )
+        .expect("clear the only active workflow node");
+
+    let launched = launch_scripted_runtime_run(
+        app.state::<DesktopState>().inner(),
+        &repo_root,
+        &project_id,
+        "run-no-active-node",
+        "session-1",
+        Some("flow-1"),
+        &runtime_shell::script_sleep(5),
+    );
+
+    let error = get_autonomous_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetAutonomousRunRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect_err("missing active workflow node should fail closed");
+    assert_eq!(error.code, "autonomous_workflow_active_node_missing");
+    assert_eq!(count_autonomous_run_rows(&repo_root), 0);
+    assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 0);
+
+    let stopped = stop_runtime_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StopRuntimeRunRequestDto {
+            project_id,
+            run_id: launched.run.run_id,
+        },
+    )
+    .expect("stop scripted runtime run after missing-active-node failure")
+    .expect("stopped runtime run should exist");
+    assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
+}
+
+#[test]
+fn get_autonomous_run_fails_closed_for_invalid_workflow_node_to_unit_mapping() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, repo_root) = seed_project(&root, &app);
+
+    project_store::upsert_workflow_graph(
+        &repo_root,
+        &project_id,
+        &project_store::WorkflowGraphUpsertRecord {
+            nodes: vec![project_store::WorkflowGraphNodeRecord {
+                node_id: "discovery".into(),
+                phase_id: 1,
+                sort_order: 1,
+                name: "Discovery".into(),
+                description: "Unknown autonomous stage mapping.".into(),
+                status: PhaseStatus::Active,
+                current_step: None,
+                task_count: 1,
+                completed_tasks: 0,
+                summary: None,
+            }],
+            edges: vec![],
+            gates: vec![],
+        },
+    )
+    .expect("seed invalid workflow mapping graph");
+
+    let launched = launch_scripted_runtime_run(
+        app.state::<DesktopState>().inner(),
+        &repo_root,
+        &project_id,
+        "run-invalid-unit-mapping",
+        "session-1",
+        Some("flow-1"),
+        &runtime_shell::script_sleep(5),
+    );
+
+    let error = get_autonomous_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetAutonomousRunRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect_err("invalid workflow mapping should fail closed");
+    assert_eq!(error.code, "autonomous_workflow_unit_mapping_invalid");
+    assert_eq!(count_autonomous_run_rows(&repo_root), 0);
+    assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 0);
+
+    let stopped = stop_runtime_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StopRuntimeRunRequestDto {
+            project_id,
+            run_id: launched.run.run_id,
+        },
+    )
+    .expect("stop scripted runtime run after invalid-mapping failure")
+    .expect("stopped runtime run should exist");
+    assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
+}
+
+#[test]
+fn get_autonomous_run_rejects_stale_workflow_linkage_after_active_stage_drift() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, repo_root) = seed_project(&root, &app);
+
+    seed_authenticated_runtime(&app, &auth_store_path, &project_id);
+    seed_planning_lifecycle_workflow(&repo_root, &project_id, false);
+
+    let started = start_autonomous_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StartAutonomousRunRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("start autonomous run before stage drift");
+    let started_run = started.run.expect("autonomous run should exist before drift");
+
+    wait_for_autonomous_run(&app, &project_id, |autonomous_state| {
+        autonomous_state
+            .unit
+            .as_ref()
+            .and_then(|unit| unit.workflow_linkage.as_ref())
+            .is_some_and(|linkage| linkage.workflow_node_id == "roadmap")
+    });
+
+    let database_path = database_path_for_repo(&repo_root);
+    let connection = rusqlite::Connection::open(&database_path).expect("open workflow db");
+    connection
+        .execute(
+            "UPDATE workflow_graph_nodes SET status = 'pending' WHERE project_id = ?1 AND node_id = 'roadmap'",
+            [&project_id],
+        )
+        .expect("demote roadmap stage");
+    connection
+        .execute(
+            "UPDATE workflow_graph_nodes SET status = 'active' WHERE project_id = ?1 AND node_id = 'requirements'",
+            [&project_id],
+        )
+        .expect("promote requirements stage to simulate drift");
+
+    let error = get_autonomous_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetAutonomousRunRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect_err("stale workflow linkage should fail closed when active stage drifts");
+    assert_eq!(error.code, "autonomous_workflow_linkage_stage_conflict");
+    assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 3);
+    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 2);
+
+    let cancelled = cancel_autonomous_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CancelAutonomousRunRequestDto {
+            project_id,
+            run_id: started_run.run_id,
+        },
+    )
+    .expect("cancel autonomous run after linkage drift failure")
+    .run
+    .expect("cancelled autonomous run after linkage drift should exist");
+    assert_eq!(cancelled.status, AutonomousRunStatusDto::Cancelled);
+}
+
+#[test]
 fn resume_operator_run_delivers_approved_terminal_input_without_auth_event_drift() {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);

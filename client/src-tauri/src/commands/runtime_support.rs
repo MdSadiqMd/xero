@@ -37,6 +37,7 @@ use crate::{
         autonomous_orchestrator::{
             reconcile_runtime_snapshot, AutonomousRuntimeReconcileIntent,
         },
+        autonomous_workflow_progression::reconcile_autonomous_workflow_progression,
         probe_runtime_run, RuntimeSupervisorProbeRequest,
     },
     state::DesktopState,
@@ -321,10 +322,16 @@ pub(crate) fn sync_autonomous_run_state(
     let existing = load_persisted_autonomous_run(repo_root, project_id)?;
 
     let persisted = match runtime_snapshot {
-        Some(snapshot) => project_store::upsert_autonomous_run(
-            repo_root,
-            &reconcile_autonomous_run_snapshot(existing.as_ref(), snapshot, intent),
-        )?,
+        Some(snapshot) => {
+            let reconciled = reconcile_autonomous_run_snapshot(existing.as_ref(), snapshot, intent);
+            let progressed = reconcile_autonomous_workflow_progression(
+                repo_root,
+                project_id,
+                existing.as_ref(),
+                reconciled,
+            )?;
+            project_store::upsert_autonomous_run(repo_root, &progressed)?
+        }
         None => {
             if let Some(existing) = existing {
                 existing
