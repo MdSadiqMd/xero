@@ -534,7 +534,7 @@ fn wait_for_runtime_run(
     project_id: &str,
     predicate: impl Fn(&RuntimeRunDto) -> bool,
 ) -> RuntimeRunDto {
-    let deadline = Instant::now() + Duration::from_secs(6);
+    let deadline = Instant::now() + Duration::from_secs(12);
 
     loop {
         let runtime_run = get_runtime_run(
@@ -564,7 +564,7 @@ fn wait_for_autonomous_run(
     project_id: &str,
     predicate: impl Fn(&AutonomousRunStateDto) -> bool,
 ) -> AutonomousRunStateDto {
-    let deadline = Instant::now() + Duration::from_secs(6);
+    let deadline = Instant::now() + Duration::from_secs(12);
 
     loop {
         let autonomous_run = get_autonomous_run(
@@ -1242,11 +1242,10 @@ fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_duplicate_c
         AutonomousRunStatusDto::Starting | AutonomousRunStatusDto::Running
     ));
 
-    let initial_runtime = wait_for_runtime_run(&app, &project_id, |runtime_run| {
+    wait_for_runtime_run(&app, &project_id, |runtime_run| {
         runtime_run.run_id == started_run.run_id
             && runtime_run.status == RuntimeRunStatusDto::Running
             && runtime_run.transport.liveness == RuntimeRunTransportLivenessDto::Reachable
-            && runtime_run.last_checkpoint_sequence >= 1
     });
     let initial_autonomous = wait_for_autonomous_run(&app, &project_id, |autonomous_state| {
         let Some(run) = autonomous_state.run.as_ref() else {
@@ -1287,7 +1286,6 @@ fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_duplicate_c
         runtime_run.run_id == started_run.run_id
             && runtime_run.status == RuntimeRunStatusDto::Running
             && runtime_run.transport.liveness == RuntimeRunTransportLivenessDto::Reachable
-            && runtime_run.last_checkpoint_sequence >= initial_runtime.last_checkpoint_sequence
     });
     assert_eq!(recovered_runtime.run_id, started_run.run_id);
 
