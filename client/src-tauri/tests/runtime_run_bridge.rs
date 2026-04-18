@@ -3187,11 +3187,26 @@ fn resume_operator_run_delivers_approved_terminal_input_without_auth_event_drift
 }
 
 #[test]
-fn resume_operator_run_persists_autonomous_boundary_and_resume_evidence_exactly_once() {
+fn submit_notification_reply_persists_autonomous_boundary_and_resume_evidence_exactly_once() {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
     let (project_id, repo_root) = seed_project(&root, &app);
+
+    project_store::upsert_notification_route(
+        &repo_root,
+        &project_store::NotificationRouteUpsertRecord {
+            project_id: project_id.clone(),
+            route_id: "route-telegram".into(),
+            route_kind: "telegram".into(),
+            route_target: "telegram:ops-room".into(),
+            enabled: true,
+            metadata_json: Some("{\"label\":\"ops\"}".into()),
+            updated_at: "2026-04-16T14:59:58Z".into(),
+        },
+    )
+    .expect("upsert telegram route for autonomous reply test");
+    upsert_notification_route(&repo_root, &project_id, "route-discord");
 
     let launched = launch_scripted_runtime_run(
         app.state::<DesktopState>().inner(),
@@ -3294,6 +3309,17 @@ fn resume_operator_run_persists_autonomous_boundary_and_resume_evidence_exactly_
         "expected runtime action id to encode the blocked boundary, got {action_id}"
     );
 
+    let dispatches = load_notification_dispatches_for_action(&repo_root, &project_id, &action_id);
+    assert_eq!(dispatches.len(), 2);
+    let telegram_dispatch = dispatches
+        .iter()
+        .find(|dispatch| dispatch.route_id == "route-telegram")
+        .expect("telegram dispatch row for autonomous reply test");
+    let discord_dispatch = dispatches
+        .iter()
+        .find(|dispatch| dispatch.route_id == "route-discord")
+        .expect("discord dispatch row for autonomous reply test");
+
     let blocked_durable = project_store::load_autonomous_run(&repo_root, &project_id)
         .expect("load durable autonomous run after boundary pause")
         .expect("durable autonomous run should exist after boundary pause");
@@ -3317,29 +3343,66 @@ fn resume_operator_run_persists_autonomous_boundary_and_resume_evidence_exactly_
             if payload.outcome == project_store::AutonomousVerificationOutcomeRecord::Blocked
     ));
 
-    resolve_operator_action(
+    let first = submit_notification_reply(
         app.handle().clone(),
-        app.state::<DesktopState>(),
-        ResolveOperatorActionRequestDto {
+        SubmitNotificationReplyRequestDto {
             project_id: project_id.clone(),
             action_id: action_id.clone(),
+            route_id: telegram_dispatch.route_id.clone(),
+            correlation_key: telegram_dispatch.correlation_key.clone(),
+            responder_id: Some("telegram-operator".into()),
+            reply_text: "approved".into(),
             decision: "approve".into(),
-            user_answer: Some("approved".into()),
+            received_at: "2026-04-16T20:41:05Z".into(),
         },
     )
-    .expect("approve autonomous runtime boundary");
+    .expect("first autonomous remote reply should claim, resolve, and resume");
+    assert_eq!(
+        first.claim.status,
+        NotificationReplyClaimStatusDto::Accepted
+    );
+    assert_eq!(
+        first.resolve_result.approval_request.status,
+        OperatorApprovalStatus::Approved
+    );
+    assert_eq!(
+        first
+            .resume_result
+            .as_ref()
+            .map(|resume| resume.resume_entry.status.clone()),
+        Some(ResumeHistoryStatus::Started)
+    );
 
-    let resumed = resume_operator_run(
+    let duplicate = submit_notification_reply(
         app.handle().clone(),
-        app.state::<DesktopState>(),
-        ResumeOperatorRunRequestDto {
+        SubmitNotificationReplyRequestDto {
             project_id: project_id.clone(),
             action_id: action_id.clone(),
-            user_answer: None,
+            route_id: discord_dispatch.route_id.clone(),
+            correlation_key: discord_dispatch.correlation_key.clone(),
+            responder_id: Some("discord-operator".into()),
+            reply_text: "duplicate after resume".into(),
+            decision: "approve".into(),
+            received_at: "2026-04-16T20:41:06Z".into(),
         },
     )
-    .expect("resume autonomous runtime boundary");
-    assert_eq!(resumed.resume_entry.status, ResumeHistoryStatus::Started);
+    .expect_err("duplicate autonomous remote reply should fail closed after the first winner");
+    assert_eq!(duplicate.code, "notification_reply_already_claimed");
+
+    let claims = project_store::load_notification_reply_claims(
+        &repo_root,
+        &project_id,
+        Some(&action_id),
+    )
+    .expect("load autonomous remote reply claims");
+    assert_eq!(claims.len(), 2);
+    assert!(claims
+        .iter()
+        .any(|claim| claim.status == project_store::NotificationReplyClaimStatus::Accepted));
+    assert!(claims.iter().any(|claim| {
+        claim.status == project_store::NotificationReplyClaimStatus::Rejected
+            && claim.rejection_code.as_deref() == Some("notification_reply_already_claimed")
+    }));
 
     let resumed_autonomous = get_autonomous_run(
         app.handle().clone(),
@@ -3414,6 +3477,24 @@ fn resume_operator_run_persists_autonomous_boundary_and_resume_evidence_exactly_
             })
             .count(),
         1
+    );
+
+    let resumed_snapshot = get_project_snapshot(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("load project snapshot after autonomous remote resume");
+    assert_eq!(resumed_snapshot.resume_history.len(), 1);
+    assert_eq!(
+        resumed_snapshot.resume_history[0].source_action_id.as_deref(),
+        Some(action_id.as_str())
+    );
+    assert_eq!(
+        resumed_snapshot.resume_history[0].status,
+        ResumeHistoryStatus::Started
     );
 
     let replayed = get_autonomous_run(

@@ -1391,6 +1391,238 @@ fn runtime_scoped_approval_rejects_malformed_runtime_identity_without_partial_wr
 }
 
 #[test]
+fn runtime_scoped_resume_rejects_already_resumed_autonomous_boundary_before_second_submit() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let project_id = "project-runtime-autonomous-replay-1";
+    let repo_root = seed_project(
+        &root,
+        &app,
+        project_id,
+        "repo-runtime-autonomous-replay-1",
+        "repo-runtime-autonomous-replay",
+    );
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: project_store::RuntimeRunRecord {
+                project_id: project_id.into(),
+                run_id: "run-autonomous-replay-1".into(),
+                runtime_kind: "openai_codex".into(),
+                supervisor_kind: "detached_pty".into(),
+                status: project_store::RuntimeRunStatus::Running,
+                transport: project_store::RuntimeRunTransportRecord {
+                    kind: "tcp".into(),
+                    endpoint: "127.0.0.1:9".into(),
+                    liveness: project_store::RuntimeRunTransportLiveness::Reachable,
+                },
+                started_at: "2026-04-15T21:30:00Z".into(),
+                last_heartbeat_at: Some("2026-04-15T21:30:05Z".into()),
+                stopped_at: None,
+                last_error: None,
+                updated_at: "2026-04-15T21:30:05Z".into(),
+            },
+            checkpoint: None,
+        },
+    )
+    .expect("persist runtime run for autonomous replay test");
+
+    let persisted = project_store::upsert_runtime_action_required(
+        &repo_root,
+        &project_store::RuntimeActionRequiredUpsertRecord {
+            project_id: project_id.into(),
+            run_id: "run-autonomous-replay-1".into(),
+            runtime_kind: "openai_codex".into(),
+            session_id: "session-1".into(),
+            flow_id: Some("flow-1".into()),
+            transport_endpoint: "127.0.0.1:9".into(),
+            started_at: "2026-04-15T21:30:00Z".into(),
+            last_heartbeat_at: Some("2026-04-15T21:30:05Z".into()),
+            last_error: None,
+            boundary_id: "boundary-1".into(),
+            action_type: "terminal_input_required".into(),
+            title: "Terminal input required".into(),
+            detail: "Detached runtime is blocked on terminal input. Approve and resume with a coarse operator answer to continue the same supervised run.".into(),
+            checkpoint_summary:
+                "Detached runtime blocked on terminal input and is awaiting operator approval."
+                    .into(),
+            created_at: "2026-04-15T21:30:06Z".into(),
+        },
+    )
+    .expect("persist runtime action-required approval");
+
+    let action_id = persisted.approval_request.action_id.clone();
+    resolve_operator_action(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ResolveOperatorActionRequestDto {
+            project_id: project_id.into(),
+            action_id: action_id.clone(),
+            decision: "approve".into(),
+            user_answer: Some("approved".into()),
+        },
+    )
+    .expect("approve runtime action before replay test");
+
+    let unit_id = "run-autonomous-replay-1:unit:1";
+    let attempt_id = "run-autonomous-replay-1:unit:1:attempt:1";
+    let boundary_id = "boundary-1";
+    let timestamp = "2026-04-15T21:30:07Z";
+    project_store::upsert_autonomous_run(
+        &repo_root,
+        &project_store::AutonomousRunUpsertRecord {
+            run: project_store::AutonomousRunRecord {
+                project_id: project_id.into(),
+                run_id: "run-autonomous-replay-1".into(),
+                runtime_kind: "openai_codex".into(),
+                supervisor_kind: "detached_pty".into(),
+                status: project_store::AutonomousRunStatus::Running,
+                active_unit_sequence: Some(1),
+                duplicate_start_detected: false,
+                duplicate_start_run_id: None,
+                duplicate_start_reason: None,
+                started_at: timestamp.into(),
+                last_heartbeat_at: Some(timestamp.into()),
+                last_checkpoint_at: Some(timestamp.into()),
+                paused_at: None,
+                cancelled_at: None,
+                completed_at: None,
+                crashed_at: None,
+                stopped_at: None,
+                pause_reason: None,
+                cancel_reason: None,
+                crash_reason: None,
+                last_error: None,
+                updated_at: timestamp.into(),
+            },
+            unit: Some(project_store::AutonomousUnitRecord {
+                project_id: project_id.into(),
+                run_id: "run-autonomous-replay-1".into(),
+                unit_id: unit_id.into(),
+                sequence: 1,
+                kind: project_store::AutonomousUnitKind::Researcher,
+                status: project_store::AutonomousUnitStatus::Active,
+                summary: "Autonomous attempt resumed after operator approval.".into(),
+                boundary_id: None,
+                workflow_linkage: None,
+                started_at: timestamp.into(),
+                finished_at: None,
+                updated_at: timestamp.into(),
+                last_error: None,
+            }),
+            attempt: Some(project_store::AutonomousUnitAttemptRecord {
+                project_id: project_id.into(),
+                run_id: "run-autonomous-replay-1".into(),
+                unit_id: unit_id.into(),
+                attempt_id: attempt_id.into(),
+                attempt_number: 1,
+                child_session_id: "child-session-1".into(),
+                status: project_store::AutonomousUnitStatus::Active,
+                boundary_id: None,
+                workflow_linkage: None,
+                started_at: timestamp.into(),
+                finished_at: None,
+                updated_at: timestamp.into(),
+                last_error: None,
+            }),
+            artifacts: vec![
+                project_store::AutonomousUnitArtifactRecord {
+                    project_id: project_id.into(),
+                    run_id: "run-autonomous-replay-1".into(),
+                    unit_id: unit_id.into(),
+                    attempt_id: attempt_id.into(),
+                    artifact_id: format!("{attempt_id}:boundary:{boundary_id}:blocked"),
+                    artifact_kind: "verification_evidence".into(),
+                    status: project_store::AutonomousUnitArtifactStatus::Recorded,
+                    summary: "Autonomous attempt blocked on `Terminal input required` and is waiting for operator action.".into(),
+                    content_hash: None,
+                    payload: Some(project_store::AutonomousArtifactPayloadRecord::VerificationEvidence(
+                        project_store::AutonomousVerificationEvidencePayloadRecord {
+                            project_id: project_id.into(),
+                            run_id: "run-autonomous-replay-1".into(),
+                            unit_id: unit_id.into(),
+                            attempt_id: attempt_id.into(),
+                            artifact_id: format!("{attempt_id}:boundary:{boundary_id}:blocked"),
+                            evidence_kind: "terminal_input_required".into(),
+                            label: "Terminal input required".into(),
+                            outcome: project_store::AutonomousVerificationOutcomeRecord::Blocked,
+                            command_result: None,
+                            action_id: Some(action_id.clone()),
+                            boundary_id: Some(boundary_id.into()),
+                        },
+                    )),
+                    created_at: timestamp.into(),
+                    updated_at: timestamp.into(),
+                },
+                project_store::AutonomousUnitArtifactRecord {
+                    project_id: project_id.into(),
+                    run_id: "run-autonomous-replay-1".into(),
+                    unit_id: unit_id.into(),
+                    attempt_id: attempt_id.into(),
+                    artifact_id: format!("{attempt_id}:boundary:{boundary_id}:resumed"),
+                    artifact_kind: "verification_evidence".into(),
+                    status: project_store::AutonomousUnitArtifactStatus::Recorded,
+                    summary: "Autonomous attempt resumed boundary `Terminal input required` after operator approval.".into(),
+                    content_hash: None,
+                    payload: Some(project_store::AutonomousArtifactPayloadRecord::VerificationEvidence(
+                        project_store::AutonomousVerificationEvidencePayloadRecord {
+                            project_id: project_id.into(),
+                            run_id: "run-autonomous-replay-1".into(),
+                            unit_id: unit_id.into(),
+                            attempt_id: attempt_id.into(),
+                            artifact_id: format!("{attempt_id}:boundary:{boundary_id}:resumed"),
+                            evidence_kind: "operator_resume".into(),
+                            label: "Terminal input required".into(),
+                            outcome: project_store::AutonomousVerificationOutcomeRecord::Passed,
+                            command_result: None,
+                            action_id: Some(action_id.clone()),
+                            boundary_id: Some(boundary_id.into()),
+                        },
+                    )),
+                    created_at: timestamp.into(),
+                    updated_at: timestamp.into(),
+                },
+            ],
+        },
+    )
+    .expect("persist autonomous blocked/resumed evidence for replay guard test");
+
+    let error = resume_operator_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ResumeOperatorRunRequestDto {
+            project_id: project_id.into(),
+            action_id: action_id.clone(),
+            user_answer: None,
+        },
+    )
+    .expect_err("already-resumed autonomous boundary should be rejected before a second submit");
+    assert_eq!(error.code, "autonomous_resume_already_completed");
+
+    let snapshot = get_project_snapshot(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.into(),
+        },
+    )
+    .expect("load project snapshot after autonomous replay guard failure");
+    assert_eq!(snapshot.resume_history.len(), 1);
+    assert_eq!(snapshot.resume_history[0].status, ResumeHistoryStatus::Failed);
+    assert_eq!(
+        snapshot.resume_history[0].source_action_id.as_deref(),
+        Some(action_id.as_str())
+    );
+
+    let runtime_run = project_store::load_runtime_run(&repo_root, project_id)
+        .expect("load runtime run after autonomous replay guard failure")
+        .expect("runtime run should still exist after autonomous replay guard failure");
+    assert_eq!(runtime_run.run.run_id, "run-autonomous-replay-1");
+}
+
+#[test]
 fn gate_linked_resume_applies_transition_and_records_causal_event() {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path) = create_state(&root);

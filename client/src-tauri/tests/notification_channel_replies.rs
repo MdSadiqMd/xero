@@ -495,10 +495,15 @@ fn inbound_reply_ingestion_preserves_cross_channel_first_wins_resume_invariants(
         .find(|approval| approval.action_id == action_id)
         .expect("approval request for action");
     assert_eq!(approval.status, OperatorApprovalStatus::Approved);
-    assert!(snapshot.resume_history.iter().any(|entry| {
-        entry.source_action_id.as_deref() == Some(action_id.as_str())
-            && entry.status == ResumeHistoryStatus::Started
-    }));
+    let started_resume_entries = snapshot
+        .resume_history
+        .iter()
+        .filter(|entry| {
+            entry.source_action_id.as_deref() == Some(action_id.as_str())
+                && entry.status == ResumeHistoryStatus::Started
+        })
+        .count();
+    assert_eq!(started_resume_entries, 1);
 
     assert_eq!(
         credential_store
