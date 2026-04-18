@@ -85,6 +85,9 @@ type PendingAction =
 
 type BadgeVariant = 'default' | 'secondary' | 'outline' | 'destructive'
 
+type RecentAutonomousUnitCard = NonNullable<AgentPaneView['recentAutonomousUnits']>['items'][number]
+type CheckpointControlLoopCard = NonNullable<AgentPaneView['checkpointControlLoop']>['items'][number]
+
 type OperatorIntentKind = 'approve' | 'reject' | 'resume'
 
 type PerActionResumeState = 'waiting' | 'running' | 'started' | 'failed'
@@ -443,7 +446,7 @@ function getAutonomousRunBadgeVariant(autonomousRun: AgentPaneView['autonomousRu
 }
 
 function getAutonomousRecoveryBadgeVariant(
-  recoveryState: AgentPaneView['autonomousRun'] extends { recoveryState: infer T } ? T : never,
+  recoveryState: NonNullable<AgentPaneView['autonomousRun']>['recoveryState'],
 ): BadgeVariant {
   switch (recoveryState) {
     case 'healthy':
@@ -454,6 +457,8 @@ function getAutonomousRecoveryBadgeVariant(
       return 'secondary'
     case 'failed':
       return 'destructive'
+    default:
+      return 'outline'
   }
 }
 
@@ -476,6 +481,212 @@ function getAutonomousAttemptBadgeVariant(
       return 'destructive'
     case 'pending':
       return 'secondary'
+    default:
+      return 'outline'
+  }
+}
+
+function getRecentAutonomousUnitBadgeVariant(status: RecentAutonomousUnitCard['status']): BadgeVariant {
+  switch (status) {
+    case 'active':
+      return 'default'
+    case 'blocked':
+    case 'paused':
+    case 'pending':
+      return 'secondary'
+    case 'failed':
+      return 'destructive'
+    case 'completed':
+    case 'cancelled':
+      return 'outline'
+  }
+}
+
+function getRecentAutonomousWorkflowBadgeVariant(
+  state: RecentAutonomousUnitCard['workflowState'],
+): BadgeVariant {
+  switch (state) {
+    case 'ready':
+      return 'default'
+    case 'awaiting_snapshot':
+      return 'secondary'
+    case 'awaiting_handoff':
+    case 'unlinked':
+      return 'outline'
+  }
+}
+
+function createEmptyRecentAutonomousUnits(): NonNullable<AgentPaneView['recentAutonomousUnits']> {
+  return {
+    items: [],
+    totalCount: 0,
+    visibleCount: 0,
+    hiddenCount: 0,
+    isTruncated: false,
+    windowLabel: 'No durable recent units are available yet.',
+    latestAttemptOnlyCopy: 'Only the latest durable attempt per unit is shown here.',
+    emptyTitle: 'No recent autonomous units recorded',
+    emptyBody: 'Cadence has not persisted a bounded autonomous unit history for this project yet.',
+  }
+}
+
+function createEmptyCheckpointControlLoop(): NonNullable<AgentPaneView['checkpointControlLoop']> {
+  return {
+    items: [],
+    totalCount: 0,
+    visibleCount: 0,
+    hiddenCount: 0,
+    isTruncated: false,
+    windowLabel: 'No checkpoint actions are visible in the bounded control-loop window.',
+    emptyTitle: 'No checkpoint control loops recorded',
+    emptyBody:
+      'Cadence has not observed a live or durable checkpoint boundary for this project yet. Waiting boundaries, resume outcomes, and broker fan-out will appear here once recorded.',
+    missingEvidenceCount: 0,
+    liveHintOnlyCount: 0,
+    durableOnlyCount: 0,
+    recoveredCount: 0,
+  }
+}
+
+function getRecentAutonomousUnitsAlertMeta(options: {
+  recentUnits: NonNullable<AgentPaneView['recentAutonomousUnits']>
+  runtimeStream: AgentPaneView['runtimeStream'] | null
+  messagesUnavailableReason: string
+}) {
+  if (options.recentUnits.items.length === 0) {
+    return null
+  }
+
+  if (!options.runtimeStream || options.runtimeStream.status === 'stale' || options.runtimeStream.status === 'error') {
+    return {
+      title: 'Recovered durable history remains visible',
+      body: options.messagesUnavailableReason,
+    }
+  }
+
+  if (options.runtimeStream.status === 'subscribing' || options.runtimeStream.status === 'replaying') {
+    return {
+      title: 'Showing durable history while the live feed catches up',
+      body: options.messagesUnavailableReason,
+    }
+  }
+
+  return null
+}
+
+function getCheckpointControlLoopTruthBadgeVariant(truthSource: CheckpointControlLoopCard['truthSource']): BadgeVariant {
+  switch (truthSource) {
+    case 'live_and_durable':
+      return 'default'
+    case 'live_hint_only':
+      return 'secondary'
+    case 'durable_only':
+    case 'recovered_durable':
+      return 'outline'
+  }
+}
+
+function getCheckpointControlLoopDurableBadgeVariant(card: CheckpointControlLoopCard): BadgeVariant {
+  if (card.approval) {
+    return getApprovalBadgeVariant(card.approval.status)
+  }
+
+  if (card.liveActionRequired) {
+    return 'secondary'
+  }
+
+  return 'outline'
+}
+
+function getCheckpointControlLoopBrokerBadgeVariant(card: CheckpointControlLoopCard): BadgeVariant {
+  if (card.brokerAction?.hasFailures) {
+    return 'destructive'
+  }
+
+  if (card.brokerAction?.hasPending) {
+    return 'secondary'
+  }
+
+  return card.brokerAction ? 'default' : 'outline'
+}
+
+function getCheckpointControlLoopEvidenceBadgeVariant(card: CheckpointControlLoopCard): BadgeVariant {
+  return card.evidenceCount > 0 ? 'outline' : 'secondary'
+}
+
+function getCheckpointControlLoopRecoveryAlertMeta(options: {
+  controlLoop: NonNullable<AgentPaneView['checkpointControlLoop']>
+  trustSnapshot: AgentTrustSnapshotView
+  autonomousRunErrorMessage: string | null | undefined
+  notificationSyncPollingActive: boolean
+  notificationSyncPollingActionId: string | null
+  notificationSyncPollingBoundaryId: string | null
+}) {
+  if (options.controlLoop.items.length === 0) {
+    return null
+  }
+
+  if (options.notificationSyncPollingActive && options.trustSnapshot.syncState === 'degraded') {
+    return {
+      title: 'Showing last truthful checkpoint loop',
+      body: `Cadence is still polling remote routes for blocked boundary ${displayValue(options.notificationSyncPollingBoundaryId, 'unknown')} and action ${displayValue(options.notificationSyncPollingActionId, 'unknown')} while preserving the last truthful sync summary. ${options.trustSnapshot.syncReason}`,
+      variant: 'destructive' as const,
+    }
+  }
+
+  if (options.trustSnapshot.syncState === 'degraded') {
+    return {
+      title: 'Showing last truthful checkpoint loop',
+      body: options.trustSnapshot.syncReason,
+      variant: 'destructive' as const,
+    }
+  }
+
+  if (options.autonomousRunErrorMessage) {
+    return {
+      title: 'Recovered checkpoint state remains visible',
+      body: options.autonomousRunErrorMessage,
+      variant: 'default' as const,
+    }
+  }
+
+  if (options.notificationSyncPollingActive) {
+    return {
+      title: 'Remote escalation is actively polling this checkpoint',
+      body: `Cadence is polling remote routes for blocked boundary ${displayValue(options.notificationSyncPollingBoundaryId, 'unknown')} and action ${displayValue(options.notificationSyncPollingActionId, 'unknown')} while durable approval, broker, and resume truth remain visible here.`,
+      variant: 'default' as const,
+    }
+  }
+
+  return null
+}
+
+function getCheckpointControlLoopCoverageAlertMeta(controlLoop: NonNullable<AgentPaneView['checkpointControlLoop']>) {
+  if (controlLoop.items.length === 0) {
+    return null
+  }
+
+  const coverageNotes: string[] = []
+  if (controlLoop.isTruncated) {
+    coverageNotes.push(`${controlLoop.hiddenCount} older checkpoint action${controlLoop.hiddenCount === 1 ? '' : 's'} are outside this bounded window.`)
+  }
+  if (controlLoop.liveHintOnlyCount > 0) {
+    coverageNotes.push(`${controlLoop.liveHintOnlyCount} card${controlLoop.liveHintOnlyCount === 1 ? '' : 's'} are still anchored to live hints while durable rows persist.`)
+  }
+  if (controlLoop.missingEvidenceCount > 0) {
+    coverageNotes.push(`${controlLoop.missingEvidenceCount} card${controlLoop.missingEvidenceCount === 1 ? '' : 's'} still lack durable evidence inside the bounded artifact window.`)
+  }
+  if (controlLoop.recoveredCount > 0) {
+    coverageNotes.push(`${controlLoop.recoveredCount} card${controlLoop.recoveredCount === 1 ? '' : 's'} are being shown from recovered durable history after the live row cleared.`)
+  }
+
+  if (coverageNotes.length === 0) {
+    return null
+  }
+
+  return {
+    title: 'Bounded checkpoint coverage',
+    body: coverageNotes.join(' '),
   }
 }
 
@@ -624,16 +835,17 @@ function getResumeBadgeVariant(status: ResumeHistoryEntryView['status']): BadgeV
 }
 
 function getPerActionResumeStateMeta(options: {
-  approval: OperatorApprovalView
-  latestResumeForAction: ResumeHistoryEntryView | null
+  card: CheckpointControlLoopCard
   operatorActionStatus: AgentPaneView['operatorActionStatus']
   pendingOperatorActionId: string | null
   pendingOperatorIntent: { actionId: string; kind: OperatorIntentKind } | null
 }): PerActionResumeStateMeta {
-  const { approval, latestResumeForAction, operatorActionStatus, pendingOperatorActionId, pendingOperatorIntent } = options
+  const { card, operatorActionStatus, pendingOperatorActionId, pendingOperatorIntent } = options
+  const approval = card.approval
+  const latestResumeForAction = card.latestResume
   const isActionInFlight =
-    (operatorActionStatus === 'running' && pendingOperatorActionId === approval.actionId) ||
-    pendingOperatorIntent?.actionId === approval.actionId
+    (operatorActionStatus === 'running' && pendingOperatorActionId === card.actionId) ||
+    pendingOperatorIntent?.actionId === card.actionId
 
   if (isActionInFlight) {
     return {
@@ -644,7 +856,7 @@ function getPerActionResumeStateMeta(options: {
           ? 'Resume request is in flight for this action. Cadence will refresh durable state before updating this card.'
           : 'Decision persistence is in flight for this action. Cadence keeps the last durable resume state visible until refresh completes.',
       badgeVariant: 'secondary',
-      timestamp: approval.updatedAt,
+      timestamp: approval?.updatedAt ?? card.resumeUpdatedAt,
     }
   }
 
@@ -668,7 +880,7 @@ function getPerActionResumeStateMeta(options: {
     }
   }
 
-  if (approval.isPending) {
+  if (approval?.isPending) {
     return {
       state: 'waiting',
       label: 'Waiting',
@@ -678,7 +890,7 @@ function getPerActionResumeStateMeta(options: {
     }
   }
 
-  if (approval.canResume) {
+  if (approval?.canResume) {
     return {
       state: 'waiting',
       label: 'Waiting',
@@ -690,10 +902,10 @@ function getPerActionResumeStateMeta(options: {
 
   return {
     state: 'waiting',
-    label: 'Waiting',
-    detail: 'No resume recorded yet for this action. Rejected decisions remain audit-only and cannot resume the run.',
+    label: card.resumeStateLabel,
+    detail: card.resumeDetail,
     badgeVariant: 'outline',
-    timestamp: approval.updatedAt,
+    timestamp: card.resumeUpdatedAt,
   }
 }
 
@@ -945,6 +1157,13 @@ export function AgentRuntime({
     () => sortByNewest(agent.autonomousRecentArtifacts ?? [], (artifact) => artifact.updatedAt || artifact.createdAt).slice(0, 5),
     [agent.autonomousRecentArtifacts],
   )
+  const recentAutonomousUnits = agent.recentAutonomousUnits ?? createEmptyRecentAutonomousUnits()
+  const checkpointControlLoop = agent.checkpointControlLoop ?? createEmptyCheckpointControlLoop()
+  const recentAutonomousUnitsAlert = getRecentAutonomousUnitsAlertMeta({
+    recentUnits: recentAutonomousUnits,
+    runtimeStream: agent.runtimeStream ?? null,
+    messagesUnavailableReason: agent.messagesUnavailableReason,
+  })
   const renderableRuntimeRun = hasUsableRuntimeRunId(runtimeRun) ? runtimeRun : null
   const hasIncompleteRuntimeRunPayload = Boolean(runtimeRun && !renderableRuntimeRun)
   const runtimeStream = agent.runtimeStream ?? null
@@ -1139,6 +1358,15 @@ export function AgentRuntime({
     runtimeSession?.isAuthenticated,
     runtimeStream,
   ])
+  const checkpointControlLoopRecoveryAlert = getCheckpointControlLoopRecoveryAlertMeta({
+    controlLoop: checkpointControlLoop,
+    trustSnapshot,
+    autonomousRunErrorMessage,
+    notificationSyncPollingActive,
+    notificationSyncPollingActionId,
+    notificationSyncPollingBoundaryId,
+  })
+  const checkpointControlLoopCoverageAlert = getCheckpointControlLoopCoverageAlertMeta(checkpointControlLoop)
   const [manualInput, setManualInput] = useState('')
   const [pendingAction, setPendingAction] = useState<PendingAction>(null)
   const [actionMessage, setActionMessage] = useState<string | null>(null)
@@ -1231,7 +1459,7 @@ export function AgentRuntime({
           retryable: false,
         }
       : null)
-  const hasDurableOperatorState = approvalRequests.length > 0 || resumeHistory.length > 0 || Boolean(agent.latestDecisionOutcome)
+  const hasCheckpointControlLoopSurface = Boolean(checkpointControlLoop.totalCount > 0 || operatorActionError)
   const hasAgentFeedSurface = Boolean(
     hasIncompleteRuntimeRunPayload ||
       renderableRuntimeRun ||
@@ -1245,31 +1473,11 @@ export function AgentRuntime({
       latestCompletion ||
       latestFailure,
   )
-  const hasOperatorStateSurface = Boolean(hasDurableOperatorState || operatorActionError)
-
   const sortedApprovals = useMemo(
     () => sortByNewest(approvalRequests, (approval) => approval.updatedAt ?? approval.createdAt).slice(0, 6),
     [approvalRequests],
   )
   const pendingApprovals = useMemo(() => sortedApprovals.filter((approval) => approval.isPending), [sortedApprovals])
-  const sortedResumeHistory = useMemo(
-    () => sortByNewest(resumeHistory, (entry) => entry.createdAt).slice(0, 6),
-    [resumeHistory],
-  )
-  const latestResumeByActionId = useMemo(() => {
-    const entriesByActionId = new Map<string, ResumeHistoryEntryView>()
-
-    for (const entry of sortedResumeHistory) {
-      const sourceActionId = entry.sourceActionId?.trim()
-      if (!sourceActionId || entriesByActionId.has(sourceActionId)) {
-        continue
-      }
-
-      entriesByActionId.set(sourceActionId, entry)
-    }
-
-    return entriesByActionId
-  }, [sortedResumeHistory])
   const runtimeRunStatusText = getRuntimeRunStatusText(renderableRuntimeRun)
   const primaryRuntimeRunActionLabel = getPrimaryRuntimeRunActionLabel(renderableRuntimeRun)
   const autonomousRunActionErrorTitle =
@@ -2298,6 +2506,106 @@ export function AgentRuntime({
                         )}
                       </div>
                     </div>
+
+                    <div className="space-y-3 rounded-xl border border-border/70 bg-card/70 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-base font-semibold text-foreground">Recent autonomous units</h3>
+                          <p className="mt-2 text-sm leading-6 text-muted-foreground">{recentAutonomousUnits.latestAttemptOnlyCopy}</p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="outline">{recentAutonomousUnits.windowLabel}</Badge>
+                          {recentAutonomousUnits.isTruncated ? (
+                            <Badge variant="secondary">+{recentAutonomousUnits.hiddenCount} older unit{recentAutonomousUnits.hiddenCount === 1 ? '' : 's'}</Badge>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {recentAutonomousUnitsAlert ? (
+                        <Alert>
+                          <AlertCircle className="h-4 w-4" />
+                          <AlertTitle>{recentAutonomousUnitsAlert.title}</AlertTitle>
+                          <AlertDescription>{recentAutonomousUnitsAlert.body}</AlertDescription>
+                        </Alert>
+                      ) : null}
+
+                      {recentAutonomousUnits.items.length > 0 ? (
+                        <div className="grid gap-3 xl:grid-cols-2">
+                          {recentAutonomousUnits.items.map((unit) => (
+                            <div
+                              key={unit.unitId}
+                              className="rounded-lg border border-border/70 bg-background/70 px-4 py-4 text-sm"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="outline">{unit.sequenceLabel}</Badge>
+                                <Badge variant={getRecentAutonomousUnitBadgeVariant(unit.status)}>{unit.statusLabel}</Badge>
+                                <Badge variant="outline">{unit.kindLabel}</Badge>
+                              </div>
+                              <p className="mt-3 font-medium text-foreground">{unit.summary}</p>
+                              <p className="mt-2 text-muted-foreground">
+                                Boundary {displayValue(unit.boundaryId, 'Unavailable')} · Updated {formatTimestamp(unit.updatedAt)}
+                              </p>
+
+                              <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                                <div className="rounded-lg border border-border/70 bg-card/70 px-3 py-3">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Latest attempt</p>
+                                    <Badge variant="outline">{unit.latestAttemptStatusLabel}</Badge>
+                                  </div>
+                                  <p className="mt-2 font-medium text-foreground">{unit.latestAttemptLabel}</p>
+                                  <p className="mt-2 text-muted-foreground">{unit.latestAttemptSummary}</p>
+                                  <p className="mt-2 text-[11px] text-muted-foreground">{unit.latestAttemptOnlyLabel}</p>
+                                  <p className="mt-2 text-[11px] text-muted-foreground">
+                                    Updated {formatTimestamp(unit.latestAttemptUpdatedAt)}
+                                  </p>
+                                </div>
+
+                                <div className="rounded-lg border border-border/70 bg-card/70 px-3 py-3">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Workflow</p>
+                                    <Badge variant={getRecentAutonomousWorkflowBadgeVariant(unit.workflowState)}>
+                                      {unit.workflowStateLabel}
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-2 font-medium text-foreground">{unit.workflowNodeLabel}</p>
+                                  <p className="mt-2 text-muted-foreground">{unit.workflowDetail}</p>
+                                  <p className="mt-2 text-[11px] text-muted-foreground">{unit.workflowLinkageLabel}</p>
+                                </div>
+
+                                <div className="rounded-lg border border-border/70 bg-card/70 px-3 py-3">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Evidence</p>
+                                    <Badge variant="outline">{unit.evidenceStateLabel}</Badge>
+                                  </div>
+                                  <p className="mt-2 text-muted-foreground">{unit.evidenceSummary}</p>
+                                  <p className="mt-2 text-[11px] text-muted-foreground">
+                                    Latest evidence {formatTimestamp(unit.latestEvidenceAt)}
+                                  </p>
+                                  {unit.evidencePreviews.length > 0 ? (
+                                    <ul className="mt-3 space-y-2">
+                                      {unit.evidencePreviews.map((artifact) => (
+                                        <li key={artifact.artifactId} className="rounded-md border border-border/70 px-2 py-2 text-[11px]">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <Badge variant="outline">{artifact.artifactKindLabel}</Badge>
+                                            <Badge variant="outline">{artifact.statusLabel}</Badge>
+                                          </div>
+                                          <p className="mt-2 text-foreground/85">{artifact.summary}</p>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <FeedEmptyState
+                          title={recentAutonomousUnits.emptyTitle}
+                          body={recentAutonomousUnits.emptyBody}
+                        />
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <FeedEmptyState
@@ -2682,166 +2990,300 @@ export function AgentRuntime({
               </section>
             ) : null}
 
-            {hasOperatorStateSurface ? (
+            {hasCheckpointControlLoopSurface ? (
               <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm">
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Operator state</p>
-                    <h2 className="mt-2 text-lg font-semibold text-foreground">Durable approvals and resume checkpoints</h2>
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                        Operator checkpoints
+                      </p>
+                      <h2 className="mt-2 text-lg font-semibold text-foreground">Checkpoint control loop</h2>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={pendingApprovals.length > 0 ? 'secondary' : 'outline'}>
+                        {pendingApprovals.length} pending
+                      </Badge>
+                      <Badge variant="outline">{checkpointControlLoop.windowLabel}</Badge>
+                      {checkpointControlLoop.isTruncated ? (
+                        <Badge variant="secondary">
+                          +{checkpointControlLoop.hiddenCount} older action{checkpointControlLoop.hiddenCount === 1 ? '' : 's'}
+                        </Badge>
+                      ) : null}
+                    </div>
                   </div>
-                  <Badge variant={pendingApprovals.length > 0 ? 'secondary' : 'outline'}>{pendingApprovals.length} pending</Badge>
-                </div>
 
-                {operatorActionError ? (
-                  <Alert variant="destructive">
-                    <AlertCircle className="h-4 w-4" />
-                    <AlertTitle>Operator action failed</AlertTitle>
-                    <AlertDescription>
-                      <p>{operatorActionError.message}</p>
-                      <p className="font-mono text-[11px] text-destructive/80">code: {operatorActionError.code}</p>
-                    </AlertDescription>
-                  </Alert>
-                ) : null}
+                  <p className="text-sm leading-6 text-muted-foreground">
+                    Cadence correlates live action-required hints with durable approvals, broker fan-out, resume history, and
+                    bounded evidence so the same action and boundary stay traceable from pause to recovery.
+                  </p>
 
-                {hasDurableOperatorState ? (
-                  <div className="space-y-3">
-                    {sortedApprovals.map((approval) => {
-                      const answerValue = operatorAnswers[approval.actionId] ?? ''
-                      const normalizedAnswer = normalizeAnswerInput(answerValue)
-                      const requiresAnswer = approval.requiresUserAnswer
-                      const showAnswerError = requiresAnswer && answerValue.length > 0 && normalizedAnswer.length === 0
-                      const actionPending = pendingOperatorIntent?.actionId === approval.actionId
-                      const resumeMeta = getPerActionResumeStateMeta({
-                        approval,
-                        latestResumeForAction: latestResumeByActionId.get(approval.actionId) ?? null,
-                        operatorActionStatus,
-                        pendingOperatorActionId,
-                        pendingOperatorIntent,
-                      })
-                      const gateLinkage = formatGateLinkage(approval)
+                  {operatorActionError ? (
+                    <Alert variant="destructive">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertTitle>Operator action failed</AlertTitle>
+                      <AlertDescription>
+                        <p>{operatorActionError.message}</p>
+                        <p className="font-mono text-[11px] text-destructive/80">code: {operatorActionError.code}</p>
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
 
-                      return (
-                        <div key={approval.actionId} className="rounded-xl border border-border/70 bg-card/70 p-4">
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-sm font-semibold text-foreground">{approval.title}</p>
-                                <Badge variant={getApprovalBadgeVariant(approval.status)}>{approval.statusLabel}</Badge>
-                                <Badge variant={resumeMeta.badgeVariant}>{resumeMeta.label}</Badge>
+                  {checkpointControlLoopRecoveryAlert ? (
+                    <Alert variant={checkpointControlLoopRecoveryAlert.variant}>
+                      {checkpointControlLoopRecoveryAlert.variant === 'destructive' ? (
+                        <AlertCircle className="h-4 w-4" />
+                      ) : (
+                        <ShieldCheck className="h-4 w-4" />
+                      )}
+                      <AlertTitle>{checkpointControlLoopRecoveryAlert.title}</AlertTitle>
+                      <AlertDescription>{checkpointControlLoopRecoveryAlert.body}</AlertDescription>
+                    </Alert>
+                  ) : null}
+
+                  {checkpointControlLoopCoverageAlert ? (
+                    <Alert>
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertTitle>{checkpointControlLoopCoverageAlert.title}</AlertTitle>
+                      <AlertDescription>{checkpointControlLoopCoverageAlert.body}</AlertDescription>
+                    </Alert>
+                  ) : null}
+
+                  {checkpointControlLoop.items.length > 0 ? (
+                    <div className="space-y-3">
+                      {checkpointControlLoop.items.map((card) => {
+                        const approval = card.approval
+                        const answerValue = operatorAnswers[card.actionId] ?? approval?.userAnswer ?? ''
+                        const normalizedAnswer = normalizeAnswerInput(answerValue)
+                        const requiresAnswer = approval?.requiresUserAnswer ?? false
+                        const showAnswerError =
+                          Boolean(approval) && requiresAnswer && answerValue.length > 0 && normalizedAnswer.length === 0
+                        const actionPending = pendingOperatorIntent?.actionId === card.actionId
+                        const resumeMeta = getPerActionResumeStateMeta({
+                          card,
+                          operatorActionStatus,
+                          pendingOperatorActionId,
+                          pendingOperatorIntent,
+                        })
+
+                        return (
+                          <div key={card.key} className="rounded-xl border border-border/70 bg-card/70 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-sm font-semibold text-foreground">{card.title}</p>
+                                  <Badge variant={getCheckpointControlLoopTruthBadgeVariant(card.truthSource)}>
+                                    {card.truthSourceLabel}
+                                  </Badge>
+                                  <Badge variant={getCheckpointControlLoopDurableBadgeVariant(card)}>
+                                    {card.durableStateLabel}
+                                  </Badge>
+                                  <Badge variant={resumeMeta.badgeVariant}>{resumeMeta.label}</Badge>
+                                </div>
+                                <p className="mt-2 text-sm leading-6 text-muted-foreground">{card.detail}</p>
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  Action {card.actionId} · Boundary {displayValue(card.boundaryId, 'Pending durable linkage')}
+                                </p>
+                                {card.gateLinkageLabel ? (
+                                  <p className="mt-2 text-[11px] text-muted-foreground">{card.gateLinkageLabel}</p>
+                                ) : null}
+                                <p className="mt-2 text-[11px] text-muted-foreground">{card.truthSourceDetail}</p>
                               </div>
-                              <p className="mt-2 text-sm leading-6 text-muted-foreground">{approval.detail}</p>
-                              {gateLinkage ? <p className="mt-2 text-[11px] text-muted-foreground">{gateLinkage}</p> : null}
                             </div>
-                          </div>
 
-                          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
-                            <div className="space-y-3">
+                            <div className="mt-4 grid gap-3 xl:grid-cols-4">
                               <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3">
-                                <p className="text-sm font-medium text-foreground">
-                                  {requiresAnswer ? 'Required answer contract' : 'Optional answer contract'}
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Live</p>
+                                  <Badge variant={card.liveActionRequired ? 'secondary' : 'outline'}>{card.liveStateLabel}</Badge>
+                                </div>
+                                <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{card.liveStateDetail}</p>
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  Updated {formatTimestamp(card.liveUpdatedAt)}
                                 </p>
-                                <p className="mt-2 text-[12px] text-muted-foreground">
-                                  <span className="font-medium text-foreground/80">Answer shape:</span> {approval.answerShapeLabel}
+                              </div>
+
+                              <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Resume</p>
+                                  <Badge variant={resumeMeta.badgeVariant}>{resumeMeta.label}</Badge>
+                                </div>
+                                <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{resumeMeta.detail}</p>
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  Updated {formatTimestamp(resumeMeta.timestamp)}
                                 </p>
-                                {approval.answerShapeHint ? (
-                                  <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{approval.answerShapeHint}</p>
+                              </div>
+
+                              <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Broker</p>
+                                  <Badge variant={getCheckpointControlLoopBrokerBadgeVariant(card)}>
+                                    {card.brokerStateLabel}
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{card.brokerStateDetail}</p>
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  Updated {formatTimestamp(card.brokerLatestUpdatedAt)}
+                                </p>
+                                {card.brokerRoutePreviews.length > 0 ? (
+                                  <ul className="mt-3 space-y-2">
+                                    {card.brokerRoutePreviews.map((route) => (
+                                      <li key={`${card.key}:${route.routeId}:${route.updatedAt}`} className="rounded-md border border-border/70 px-2 py-2 text-[11px]">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <Badge variant="outline">{route.routeId}</Badge>
+                                          <Badge variant="outline">{route.statusLabel}</Badge>
+                                        </div>
+                                        <p className="mt-2 text-muted-foreground">{route.detail}</p>
+                                      </li>
+                                    ))}
+                                  </ul>
                                 ) : null}
                               </div>
 
-                              {approval.isPending || approval.canResume ? (
-                                <label className="grid gap-2 text-[12px] text-muted-foreground">
-                                  <span>Operator answer</span>
-                                  <Textarea
-                                    aria-label={`Operator answer for ${approval.actionId}`}
-                                    className="min-h-24"
-                                    onChange={(event) =>
-                                      setOperatorAnswers((currentAnswers) => ({
-                                        ...currentAnswers,
-                                        [approval.actionId]: event.target.value,
-                                      }))
-                                    }
-                                    placeholder={approval.answerPlaceholder ?? 'Provide operator input for this action.'}
-                                    value={answerValue}
-                                  />
-                                  {showAnswerError ? (
-                                    <span className="text-destructive">
-                                      {approval.answerRequirementReason === 'runtime_resumable'
-                                        ? 'A non-empty user answer is required before approving this runtime-resumable request.'
-                                        : 'A non-empty user answer is required before approving this action.'}
-                                    </span>
+                              <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Evidence</p>
+                                  <Badge variant={getCheckpointControlLoopEvidenceBadgeVariant(card)}>
+                                    {card.evidenceStateLabel}
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{card.evidenceSummary}</p>
+                                <p className="mt-2 text-[11px] text-muted-foreground">
+                                  Latest evidence {formatTimestamp(card.latestEvidenceAt)}
+                                </p>
+                                {card.evidencePreviews.length > 0 ? (
+                                  <ul className="mt-3 space-y-2">
+                                    {card.evidencePreviews.map((artifact) => (
+                                      <li key={artifact.artifactId} className="rounded-md border border-border/70 px-2 py-2 text-[11px]">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <Badge variant="outline">{artifact.artifactKindLabel}</Badge>
+                                          <Badge variant="outline">{artifact.statusLabel}</Badge>
+                                        </div>
+                                        <p className="mt-2 text-foreground/85">{artifact.summary}</p>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            {approval ? (
+                              <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
+                                <div className="space-y-3">
+                                  <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3">
+                                    <p className="text-sm font-medium text-foreground">
+                                      {requiresAnswer ? 'Required answer contract' : 'Optional answer contract'}
+                                    </p>
+                                    <p className="mt-2 text-[12px] text-muted-foreground">
+                                      <span className="font-medium text-foreground/80">Answer shape:</span> {approval.answerShapeLabel}
+                                    </p>
+                                    {approval.answerShapeHint ? (
+                                      <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{approval.answerShapeHint}</p>
+                                    ) : null}
+                                  </div>
+
+                                  {approval.isPending || approval.canResume ? (
+                                    <label className="grid gap-2 text-[12px] text-muted-foreground">
+                                      <span>Operator answer</span>
+                                      <Textarea
+                                        aria-label={`Operator answer for ${card.actionId}`}
+                                        className="min-h-24"
+                                        onChange={(event) =>
+                                          setOperatorAnswers((currentAnswers) => ({
+                                            ...currentAnswers,
+                                            [card.actionId]: event.target.value,
+                                          }))
+                                        }
+                                        placeholder={approval.answerPlaceholder ?? 'Provide operator input for this action.'}
+                                        value={answerValue}
+                                      />
+                                      {showAnswerError ? (
+                                        <span className="text-destructive">
+                                          {approval.answerRequirementReason === 'runtime_resumable'
+                                            ? 'A non-empty user answer is required before approving this runtime-resumable request.'
+                                            : 'A non-empty user answer is required before approving this action.'}
+                                        </span>
+                                      ) : null}
+                                    </label>
                                   ) : null}
-                                </label>
-                              ) : null}
-                            </div>
+                                </div>
 
-                            <div className="space-y-3 rounded-lg border border-border/70 bg-background/70 px-3 py-3">
-                              <InfoRow label="Action ID" mono value={approval.actionId} />
-                              <InfoRow label="Updated" value={formatTimestamp(resumeMeta.timestamp)} />
-                              <p className="text-[12px] leading-5 text-muted-foreground">{resumeMeta.detail}</p>
+                                <div className="space-y-3 rounded-lg border border-border/70 bg-background/70 px-3 py-3">
+                                  <InfoRow label="Action ID" mono value={card.actionId} />
+                                  <InfoRow label="Boundary" mono value={displayValue(card.boundaryId, 'Pending durable linkage')} />
+                                  <InfoRow label="Updated" value={formatTimestamp(resumeMeta.timestamp)} />
+                                  <p className="text-[12px] leading-5 text-muted-foreground">{resumeMeta.detail}</p>
 
-                              <div className="flex flex-wrap gap-2">
-                                {approval.isPending ? (
-                                  <Button
-                                    disabled={actionPending || (requiresAnswer && normalizedAnswer.length === 0)}
-                                    onClick={() =>
-                                      void handleResolveOperatorAction(approval.actionId, 'approve', {
-                                        userAnswer: normalizedAnswer.length > 0 ? normalizedAnswer : null,
-                                      })
-                                    }
-                                    type="button"
-                                  >
-                                    {actionPending && pendingOperatorIntent?.kind === 'approve' ? (
-                                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                                  <div className="flex flex-wrap gap-2">
+                                    {approval.isPending ? (
+                                      <Button
+                                        disabled={actionPending || (requiresAnswer && normalizedAnswer.length === 0)}
+                                        onClick={() =>
+                                          void handleResolveOperatorAction(card.actionId, 'approve', {
+                                            userAnswer: normalizedAnswer.length > 0 ? normalizedAnswer : null,
+                                          })
+                                        }
+                                        type="button"
+                                      >
+                                        {actionPending && pendingOperatorIntent?.kind === 'approve' ? (
+                                          <LoaderCircle className="h-4 w-4 animate-spin" />
+                                        ) : null}
+                                        Approve
+                                      </Button>
                                     ) : null}
-                                    Approve
-                                  </Button>
-                                ) : null}
 
-                                {approval.isPending ? (
-                                  <Button
-                                    disabled={actionPending}
-                                    onClick={() =>
-                                      void handleResolveOperatorAction(approval.actionId, 'reject', {
-                                        userAnswer: normalizedAnswer.length > 0 ? normalizedAnswer : null,
-                                      })
-                                    }
-                                    type="button"
-                                    variant="outline"
-                                  >
-                                    Reject
-                                  </Button>
-                                ) : null}
-
-                                {approval.canResume ? (
-                                  <Button
-                                    disabled={actionPending}
-                                    onClick={() =>
-                                      void handleResumeOperatorRun(approval.actionId, {
-                                        userAnswer: normalizedAnswer.length > 0 ? normalizedAnswer : approval.userAnswer ?? null,
-                                      })
-                                    }
-                                    type="button"
-                                    variant="secondary"
-                                  >
-                                    {actionPending && pendingOperatorIntent?.kind === 'resume' ? (
-                                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                                    {approval.isPending ? (
+                                      <Button
+                                        disabled={actionPending}
+                                        onClick={() =>
+                                          void handleResolveOperatorAction(card.actionId, 'reject', {
+                                            userAnswer: normalizedAnswer.length > 0 ? normalizedAnswer : null,
+                                          })
+                                        }
+                                        type="button"
+                                        variant="outline"
+                                      >
+                                        Reject
+                                      </Button>
                                     ) : null}
-                                    Resume run
-                                  </Button>
-                                ) : null}
+
+                                    {approval.canResume ? (
+                                      <Button
+                                        disabled={actionPending}
+                                        onClick={() =>
+                                          void handleResumeOperatorRun(card.actionId, {
+                                            userAnswer: normalizedAnswer.length > 0 ? normalizedAnswer : approval.userAnswer ?? null,
+                                          })
+                                        }
+                                        type="button"
+                                        variant="secondary"
+                                      >
+                                        {actionPending && pendingOperatorIntent?.kind === 'resume' ? (
+                                          <LoaderCircle className="h-4 w-4 animate-spin" />
+                                        ) : null}
+                                        Resume run
+                                      </Button>
+                                    ) : null}
+                                  </div>
+                                </div>
                               </div>
-                            </div>
+                            ) : (
+                              <div className="mt-4 rounded-lg border border-border/70 bg-background/70 px-3 py-3">
+                                <p className="text-sm font-medium text-foreground">Durable approval row not available</p>
+                                <p className="mt-2 text-[12px] leading-5 text-muted-foreground">
+                                  Cadence is keeping the live, broker, resume, and evidence truth visible for this action even though there is no actionable durable approval row in the current snapshot.
+                                </p>
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : (
-                  <FeedEmptyState body="Cadence has not recorded any durable operator approvals or resume checkpoints for this project yet." title="No operator checkpoints yet" />
-                )}
-              </div>
-            </section>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <FeedEmptyState title={checkpointControlLoop.emptyTitle} body={checkpointControlLoop.emptyBody} />
+                  )}
+                </div>
+              </section>
             ) : null}
 
           </div>

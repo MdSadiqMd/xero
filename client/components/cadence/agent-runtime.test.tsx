@@ -332,6 +332,59 @@ function makeRuntimeStream(overrides: Partial<RuntimeStreamView> = {}): RuntimeS
   }
 }
 
+function makeRecentAutonomousUnits(
+  overrides: Partial<NonNullable<AgentPaneView['recentAutonomousUnits']>> = {},
+): NonNullable<AgentPaneView['recentAutonomousUnits']> {
+  return {
+    items: [
+      {
+        unitId: 'unit-history-2',
+        sequence: 2,
+        sequenceLabel: '#2',
+        kindLabel: 'State',
+        status: 'blocked',
+        statusLabel: 'Blocked',
+        summary: 'Blocked on operator boundary while durable history remains available.',
+        boundaryId: 'boundary-2',
+        updatedAt: '2026-04-16T20:05:00Z',
+        latestAttemptOnlyLabel: 'Only the latest attempt is shown for this unit.',
+        latestAttemptLabel: 'Attempt #2',
+        latestAttemptStatusLabel: 'Blocked',
+        latestAttemptUpdatedAt: '2026-04-16T20:05:00Z',
+        latestAttemptSummary: 'Latest durable attempt is blocked for child session child-2.',
+        workflowState: 'awaiting_snapshot',
+        workflowStateLabel: 'Snapshot lag',
+        workflowNodeLabel: 'Research',
+        workflowLinkageLabel: 'Attempt linkage',
+        workflowDetail:
+          'Cadence is keeping lifecycle progression anchored to snapshot truth while the linked node `Research` waits for the active lifecycle stage to catch up.',
+        evidenceCount: 1,
+        evidenceStateLabel: '1 recent evidence row',
+        evidenceSummary: 'Showing the latest durable evidence row linked to this unit.',
+        latestEvidenceAt: '2026-04-16T20:05:00Z',
+        evidencePreviews: [
+          {
+            artifactId: 'artifact-1',
+            artifactKindLabel: 'Tool result',
+            statusLabel: 'Recorded',
+            summary: 'Read README.md from the imported repository root.',
+            updatedAt: '2026-04-16T20:05:00Z',
+          },
+        ],
+      },
+    ],
+    totalCount: 1,
+    visibleCount: 1,
+    hiddenCount: 0,
+    isTruncated: false,
+    windowLabel: 'Showing 1 durable unit from the recent-history window.',
+    latestAttemptOnlyCopy: 'Only the latest durable attempt per unit is shown here.',
+    emptyTitle: 'No recent autonomous units recorded',
+    emptyBody: 'Cadence has not persisted a bounded autonomous unit history for this project yet.',
+    ...overrides,
+  }
+}
+
 function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
   const project = overrides.project ?? makeProject()
   const runtimeSession = overrides.runtimeSession ?? null
@@ -481,6 +534,60 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('Recent evidence')).toBeVisible()
     expect(screen.getByText('Read README.md from the imported repository root.')).toBeVisible()
     expect(screen.getByText('Blocked on operator approval before resuming the executor boundary.')).toBeVisible()
+  })
+
+  it('renders bounded recent autonomous units with recovery copy and truncation labels', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          autonomousRun: makeAutonomousRun(),
+          autonomousUnit: makeAutonomousUnit(),
+          recentAutonomousUnits: makeRecentAutonomousUnits({
+            totalCount: 3,
+            visibleCount: 1,
+            hiddenCount: 2,
+            isTruncated: true,
+            windowLabel: 'Showing 1 of 3 durable units in the bounded recent-history window.',
+          }),
+          runtimeStream: makeRuntimeStream({ status: 'replaying' }),
+          messagesUnavailableReason:
+            'Cadence is replaying recent run-scoped activity while the live runtime stream catches up for this selected project.',
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Recent autonomous units' })).toBeVisible()
+    expect(screen.getByText('Only the latest durable attempt per unit is shown here.')).toBeVisible()
+    expect(screen.getByText('Showing 1 of 3 durable units in the bounded recent-history window.')).toBeVisible()
+    expect(screen.getByText('+2 older units')).toBeVisible()
+    expect(screen.getByText('Showing durable history while the live feed catches up')).toBeVisible()
+    expect(screen.getByText('Snapshot lag')).toBeVisible()
+    expect(screen.getByText('Read README.md from the imported repository root.')).toBeVisible()
+  })
+
+  it('renders an explicit empty recent-unit state instead of hiding the section', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          autonomousRun: makeAutonomousRun(),
+          autonomousUnit: makeAutonomousUnit(),
+          recentAutonomousUnits: makeRecentAutonomousUnits({
+            items: [],
+            totalCount: 0,
+            visibleCount: 0,
+            hiddenCount: 0,
+            isTruncated: false,
+            windowLabel: 'No durable recent units are available yet.',
+          }),
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Recent autonomous units' })).toBeVisible()
+    expect(screen.getByText('No recent autonomous units recorded')).toBeVisible()
+    expect(screen.getByText('Cadence has not persisted a bounded autonomous unit history for this project yet.')).toBeVisible()
   })
 
   it('inspects and cancels the active autonomous run from pane controls', async () => {

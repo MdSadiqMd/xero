@@ -442,6 +442,99 @@ function makeRecoveredAutonomousRunState(projectId: string): AutonomousRunStateD
   return state
 }
 
+function makeAutonomousHistoryEntry(options: {
+  projectId: string
+  unitId: string
+  sequence: number
+  unitUpdatedAt: string
+  latestAttempt?: boolean
+  workflowNodeId?: string
+  handoffTransitionId?: string
+  handoffPackageHash?: string
+  artifactSummary?: string
+}) {
+  const runId = `auto-${options.projectId}`
+  const attemptId = `${options.unitId}:attempt:1`
+  const workflowLinkage = options.workflowNodeId
+    ? {
+        workflowNodeId: options.workflowNodeId,
+        transitionId: `${options.unitId}:transition:1`,
+        causalTransitionId: `${options.unitId}:causal:1`,
+        handoffTransitionId: options.handoffTransitionId ?? `${options.unitId}:handoff:1`,
+        handoffPackageHash: options.handoffPackageHash ?? `${options.unitId}:hash:1`,
+      }
+    : null
+
+  return {
+    unit: {
+      projectId: options.projectId,
+      runId,
+      unitId: options.unitId,
+      sequence: options.sequence,
+      kind: 'state',
+      status: 'completed',
+      summary: `Recovered durable unit ${options.sequence}.`,
+      boundaryId: `boundary:${options.sequence}`,
+      workflowLinkage,
+      startedAt: '2026-04-16T20:00:00Z',
+      finishedAt: options.unitUpdatedAt,
+      updatedAt: options.unitUpdatedAt,
+      lastErrorCode: null,
+      lastError: null,
+    },
+    latestAttempt:
+      options.latestAttempt === false
+        ? null
+        : {
+            projectId: options.projectId,
+            runId,
+            unitId: options.unitId,
+            attemptId,
+            attemptNumber: 1,
+            childSessionId: `child-${options.sequence}`,
+            status: 'completed',
+            boundaryId: `boundary:${options.sequence}`,
+            workflowLinkage,
+            startedAt: '2026-04-16T20:00:01Z',
+            finishedAt: options.unitUpdatedAt,
+            updatedAt: options.unitUpdatedAt,
+            lastErrorCode: null,
+            lastError: null,
+          },
+    artifacts: options.artifactSummary
+      ? [
+          {
+            projectId: options.projectId,
+            runId,
+            unitId: options.unitId,
+            attemptId,
+            artifactId: `${attemptId}:artifact:1`,
+            artifactKind: 'tool_result',
+            status: 'recorded',
+            summary: options.artifactSummary,
+            contentHash: 'hash',
+            payload: null,
+            createdAt: options.unitUpdatedAt,
+            updatedAt: options.unitUpdatedAt,
+            detail: 'Tool output recorded.',
+            commandResult: {
+              exitCode: 0,
+              timedOut: false,
+              summary: 'read completed',
+            },
+            toolName: 'read',
+            toolState: 'succeeded',
+            evidenceKind: null,
+            verificationOutcome: null,
+            diagnosticCode: null,
+            actionId: null,
+            boundaryId: null,
+          },
+        ]
+      : [],
+  }
+}
+
 function makeStreamResponse(
   projectId: string,
   overrides: Partial<SubscribeRuntimeStreamResponseDto> = {},
@@ -902,6 +995,15 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="autonomous-unit-id">{state.agentView?.autonomousUnit?.unitId ?? 'none'}</div>
       <div data-testid="autonomous-unit-status">{state.agentView?.autonomousUnit?.status ?? 'none'}</div>
       <div data-testid="autonomous-unit-summary">{state.agentView?.autonomousUnit?.summary ?? 'none'}</div>
+      <div data-testid="recent-unit-count">{String(state.agentView?.recentAutonomousUnits?.items.length ?? 0)}</div>
+      <div data-testid="recent-unit-window-label">{state.agentView?.recentAutonomousUnits?.windowLabel ?? 'none'}</div>
+      <div data-testid="recent-unit-first-id">{state.agentView?.recentAutonomousUnits?.items[0]?.unitId ?? 'none'}</div>
+      <div data-testid="recent-unit-first-workflow-state">
+        {state.agentView?.recentAutonomousUnits?.items[0]?.workflowStateLabel ?? 'none'}
+      </div>
+      <div data-testid="recent-unit-first-evidence-state">
+        {state.agentView?.recentAutonomousUnits?.items[0]?.evidenceStateLabel ?? 'none'}
+      </div>
       <div data-testid="messages-reason">{state.agentView?.messagesUnavailableReason ?? 'none'}</div>
       <div data-testid="stream-status">{state.agentView?.runtimeStreamStatus ?? 'idle'}</div>
       <div data-testid="stream-run-id">{state.agentView?.runtimeStream?.runId ?? 'none'}</div>
@@ -1203,6 +1305,89 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('messages-reason')).toHaveTextContent(
       'Cadence is reconnecting the live runtime stream while keeping durable checkpoints visible for this selected project.',
     )
+  })
+
+  it('projects bounded recent autonomous units from durable history while live runtime state recovers', async () => {
+    const recoveredState = makeRecoveredAutonomousRunState('project-1')
+    recoveredState.history = [
+      makeAutonomousHistoryEntry({
+        projectId: 'project-1',
+        unitId: 'unit-history-2',
+        sequence: 2,
+        workflowNodeId: 'workflow-research',
+        handoffTransitionId: 'handoff-history-2',
+        handoffPackageHash: 'hash-history-2',
+        unitUpdatedAt: '2026-04-16T20:05:00Z',
+        artifactSummary: 'Read README.md from the imported repository root.',
+      }),
+      makeAutonomousHistoryEntry({
+        projectId: 'project-1',
+        unitId: 'unit-history-1',
+        sequence: 1,
+        latestAttempt: false,
+        unitUpdatedAt: '2026-04-16T20:04:00Z',
+      }),
+    ]
+
+    const setup = createMockAdapter({
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1'),
+      },
+      autonomousStates: {
+        'project-1': recoveredState,
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('recent-unit-count')).toHaveTextContent('2'))
+    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
+    expect(screen.getByTestId('recent-unit-first-workflow-state')).toHaveTextContent('Snapshot lag')
+    expect(screen.getByTestId('recent-unit-first-evidence-state')).toHaveTextContent('1 recent evidence row')
+    expect(screen.getByTestId('recent-unit-window-label')).toHaveTextContent('Showing 2 durable units')
+  })
+
+  it('preserves the last truthful recent-unit projection when later autonomous refreshes fail', async () => {
+    const recoveredState = makeRecoveredAutonomousRunState('project-1')
+    recoveredState.history = [
+      makeAutonomousHistoryEntry({
+        projectId: 'project-1',
+        unitId: 'unit-history-2',
+        sequence: 2,
+        workflowNodeId: 'workflow-research',
+        handoffTransitionId: 'handoff-history-2',
+        handoffPackageHash: 'hash-history-2',
+        unitUpdatedAt: '2026-04-16T20:05:00Z',
+        artifactSummary: 'Read README.md from the imported repository root.',
+      }),
+    ]
+
+    const setup = createMockAdapter({
+      autonomousStates: {
+        'project-1': recoveredState,
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('recent-unit-count')).toHaveTextContent('1'))
+
+    setup.getAutonomousRun.mockRejectedValueOnce(new Error('autonomous refresh failed'))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry state' }))
+
+    await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('autonomous refresh failed'))
+    expect(screen.getByTestId('recent-unit-count')).toHaveTextContent('1')
+    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
   })
 
   it('resubscribes on runtime_run:updated when the active session receives a new run id', async () => {

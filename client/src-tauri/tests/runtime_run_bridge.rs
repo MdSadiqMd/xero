@@ -681,6 +681,32 @@ fn load_notification_dispatches_for_action(
         .expect("load notification dispatches for action")
 }
 
+fn wait_for_notification_dispatches_for_action(
+    repo_root: &Path,
+    project_id: &str,
+    action_id: &str,
+    expected_count: usize,
+) -> Vec<project_store::NotificationDispatchRecord> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+
+    loop {
+        let dispatches = load_notification_dispatches_for_action(repo_root, project_id, action_id);
+        if dispatches.len() == expected_count {
+            return dispatches;
+        }
+
+        let all_dispatches =
+            project_store::load_notification_dispatches(repo_root, project_id, None)
+                .expect("load all notification dispatches while waiting for action dispatches");
+        let approval_count = count_operator_approval_rows_for_action(repo_root, project_id, action_id);
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {expected_count} notification dispatch row(s) for action `{action_id}`, approval rows: {approval_count}, action rows: {dispatches:?}, all dispatches: {all_dispatches:?}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn seed_unreachable_runtime_run(repo_root: &Path, project_id: &str, run_id: &str) {
     project_store::upsert_runtime_run(
         repo_root,
@@ -3309,7 +3335,8 @@ fn submit_notification_reply_persists_autonomous_boundary_and_resume_evidence_ex
         "expected runtime action id to encode the blocked boundary, got {action_id}"
     );
 
-    let dispatches = load_notification_dispatches_for_action(&repo_root, &project_id, &action_id);
+    let dispatches =
+        wait_for_notification_dispatches_for_action(&repo_root, &project_id, &action_id, 2);
     assert_eq!(dispatches.len(), 2);
     let telegram_dispatch = dispatches
         .iter()

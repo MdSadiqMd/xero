@@ -6,6 +6,12 @@ import {
   type CadenceDesktopAdapter,
 } from '@/src/lib/cadence-desktop'
 import {
+  projectCheckpointControlLoops,
+  projectRecentAutonomousUnits,
+  type CheckpointControlLoopProjectionView,
+  type RecentAutonomousUnitsProjectionView,
+} from './agent-runtime-projections'
+import {
   applyRepositoryStatus,
   applyRuntimeRun,
   applyRuntimeSession,
@@ -208,6 +214,8 @@ export interface AgentPaneView {
   autonomousWorkflowContext?: AutonomousWorkflowContextView | null
   autonomousHistory: ProjectDetailView['autonomousHistory']
   autonomousRecentArtifacts: ProjectDetailView['autonomousRecentArtifacts']
+  recentAutonomousUnits?: RecentAutonomousUnitsProjectionView
+  checkpointControlLoop?: CheckpointControlLoopProjectionView
   runtimeErrorMessage?: string | null
   runtimeRunErrorMessage?: string | null
   autonomousRunErrorMessage?: string | null
@@ -3142,6 +3150,21 @@ export function useCadenceDesktopState(
       autonomousUnit: activeAutonomousUnit,
       autonomousAttempt: activeAutonomousAttempt,
     })
+    const recentAutonomousUnits = projectRecentAutonomousUnits({
+      autonomousHistory: activeAutonomousHistory,
+      autonomousRecentArtifacts: activeAutonomousRecentArtifacts,
+      lifecycle: activeProject.lifecycle,
+      handoffPackages: activeProject.handoffPackages,
+      approvalRequests: activeProject.approvalRequests,
+    })
+    const checkpointControlLoop = projectCheckpointControlLoops({
+      actionRequiredItems: activeRuntimeStream?.actionRequired ?? [],
+      approvalRequests: activeProject.approvalRequests,
+      resumeHistory: activeProject.resumeHistory,
+      notificationBroker: activeProject.notificationBroker,
+      autonomousHistory: activeAutonomousHistory,
+      autonomousRecentArtifacts: activeAutonomousRecentArtifacts,
+    })
 
     return {
       project: activeProject,
@@ -3159,6 +3182,8 @@ export function useCadenceDesktopState(
       autonomousWorkflowContext,
       autonomousHistory: activeAutonomousHistory,
       autonomousRecentArtifacts: activeAutonomousRecentArtifacts,
+      recentAutonomousUnits,
+      checkpointControlLoop,
       runtimeErrorMessage: activeRuntimeErrorMessage,
       runtimeRunErrorMessage: activeRuntimeRunErrorMessage,
       autonomousRunErrorMessage: activeAutonomousRunErrorMessage,
