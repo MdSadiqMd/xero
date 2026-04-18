@@ -1485,6 +1485,9 @@ export function AgentRuntime({
       latestCompletion ||
       latestFailure,
   )
+  // The Agent tab no longer renders these debug-oriented panels.
+  const showAutonomousLedgerPanel = false
+  const showRemoteEscalationPanel = false
   const sortedApprovals = useMemo(
     () => sortByNewest(approvalRequests, (approval) => approval.updatedAt ?? approval.createdAt).slice(0, 6),
     [approvalRequests],
@@ -2153,7 +2156,8 @@ export function AgentRuntime({
 
         <div className="flex-1 overflow-y-auto scrollbar-thin px-4 py-4">
           <div className="mx-auto flex max-w-4xl flex-col gap-4">
-            <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm">
+            {showAutonomousLedgerPanel ? (
+              <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm">
               <div className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -2631,6 +2635,7 @@ export function AgentRuntime({
                 )}
               </div>
             </section>
+            ) : null}
 
             {hasIncompleteRuntimeRunPayload || renderableRuntimeRun ? (
               <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm">
@@ -2870,7 +2875,7 @@ export function AgentRuntime({
             </section>
             ) : null}
 
-            {hasNotificationTrustSurface ? (
+            {showRemoteEscalationPanel && hasNotificationTrustSurface ? (
               <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm">
                 <div className="flex flex-col gap-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">

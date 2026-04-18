@@ -577,25 +577,25 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
 }
 
 describe('AgentRuntime current UI', () => {
-  it('renders an authenticated autonomous empty state and starts a run from the ledger control', async () => {
-    const onStartAutonomousRun = vi.fn(async () => null)
-
+  it('hides the autonomous ledger and remote-escalation debug panels', () => {
     render(
       <AgentRuntime
         agent={makeAgent({ runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }) })}
-        onStartAutonomousRun={onStartAutonomousRun}
+        onStartAutonomousRun={vi.fn(async () => null)}
+        onInspectAutonomousRun={vi.fn(async () => undefined)}
+        onCancelAutonomousRun={vi.fn(async () => undefined)}
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Autonomous run truth' })).toBeVisible()
-    expect(screen.getByText('No autonomous run recorded')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Start autonomous run' })).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Start autonomous run' }))
-    await waitFor(() => expect(onStartAutonomousRun).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('heading', { name: 'Autonomous run truth' })).not.toBeInTheDocument()
+    expect(screen.queryByText('No autonomous run recorded')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start autonomous run' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Inspect truth' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Cancel autonomous run' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Remote escalation trust' })).not.toBeInTheDocument()
   })
 
-  it('renders autonomous recovery truth with current unit and lifecycle reason copy', () => {
+  it('keeps the recovered runtime snapshot visible without rendering removed debug panels', () => {
     render(
       <AgentRuntime
         agent={makeAgent({
@@ -610,130 +610,11 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Autonomous run truth' })).toBeVisible()
-    expect(screen.getByText('Current autonomous boundary')).toBeVisible()
-    expect(screen.getByText('Recovered the current autonomous unit boundary.')).toBeVisible()
-    expect(screen.getByText('Last pause reason')).toBeVisible()
-    expect(screen.getByText('Operator paused the autonomous run for review.')).toBeVisible()
-    expect(screen.getByText('Duplicate start prevented')).toBeVisible()
     expect(screen.getAllByRole('heading', { name: 'Recovered run snapshot' }).length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('renders the current autonomous attempt and recent evidence summaries', () => {
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          autonomousRun: makeAutonomousRun(),
-          autonomousUnit: makeAutonomousUnit(),
-          autonomousAttempt: makeAutonomousAttempt(),
-          autonomousRecentArtifacts: [
-            makeAutonomousArtifact(),
-            makeAutonomousArtifact({
-              artifactId: 'auto-run-1:checkpoint:2:attempt:1:verify:block',
-              artifactKind: 'verification_evidence',
-              artifactKindLabel: 'Verification evidence',
-              summary: 'Blocked on operator approval before resuming the executor boundary.',
-              detail: 'Operator approval is required before the executor can continue.',
-              commandResult: null,
-              toolName: null,
-              toolState: null,
-              toolStateLabel: null,
-              evidenceKind: 'operator_approval',
-              verificationOutcome: 'blocked',
-              verificationOutcomeLabel: 'Blocked',
-              actionId: 'action-1',
-              boundaryId: 'boundary-1',
-              isToolResult: false,
-              isVerificationEvidence: true,
-            }),
-          ],
-        })}
-      />,
-    )
-
-    expect(screen.getByText('Current attempt')).toBeVisible()
-    expect(screen.getByText('child-session-1')).toBeVisible()
-    expect(screen.getByText('Recent evidence')).toBeVisible()
-    expect(screen.getByText('Read README.md from the imported repository root.')).toBeVisible()
-    expect(screen.getByText('Blocked on operator approval before resuming the executor boundary.')).toBeVisible()
-  })
-
-  it('renders bounded recent autonomous units with recovery copy and truncation labels', () => {
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          autonomousRun: makeAutonomousRun(),
-          autonomousUnit: makeAutonomousUnit(),
-          recentAutonomousUnits: makeRecentAutonomousUnits({
-            totalCount: 3,
-            visibleCount: 1,
-            hiddenCount: 2,
-            isTruncated: true,
-            windowLabel: 'Showing 1 of 3 durable units in the bounded recent-history window.',
-          }),
-          runtimeStream: makeRuntimeStream({ status: 'replaying' }),
-          messagesUnavailableReason:
-            'Cadence is replaying recent run-scoped activity while the live runtime stream catches up for this selected project.',
-        })}
-      />,
-    )
-
-    expect(screen.getByRole('heading', { name: 'Recent autonomous units' })).toBeVisible()
-    expect(screen.getByText('Only the latest durable attempt per unit is shown here.')).toBeVisible()
-    expect(screen.getByText('Showing 1 of 3 durable units in the bounded recent-history window.')).toBeVisible()
-    expect(screen.getByText('+2 older units')).toBeVisible()
-    expect(screen.getByText('Showing durable history while the live feed catches up')).toBeVisible()
-    expect(screen.getByText('Snapshot lag')).toBeVisible()
-    expect(screen.getByText('Read README.md from the imported repository root.')).toBeVisible()
-  })
-
-  it('renders an explicit empty recent-unit state instead of hiding the section', () => {
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          autonomousRun: makeAutonomousRun(),
-          autonomousUnit: makeAutonomousUnit(),
-          recentAutonomousUnits: makeRecentAutonomousUnits({
-            items: [],
-            totalCount: 0,
-            visibleCount: 0,
-            hiddenCount: 0,
-            isTruncated: false,
-            windowLabel: 'No durable recent units are available yet.',
-          }),
-        })}
-      />,
-    )
-
-    expect(screen.getByRole('heading', { name: 'Recent autonomous units' })).toBeVisible()
-    expect(screen.getByText('No recent autonomous units recorded')).toBeVisible()
-    expect(screen.getByText('Cadence has not persisted a bounded autonomous unit history for this project yet.')).toBeVisible()
-  })
-
-  it('inspects and cancels the active autonomous run from pane controls', async () => {
-    const onInspectAutonomousRun = vi.fn(async () => undefined)
-    const onCancelAutonomousRun = vi.fn(async () => undefined)
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          autonomousRun: makeAutonomousRun(),
-          autonomousUnit: makeAutonomousUnit(),
-        })}
-        onInspectAutonomousRun={onInspectAutonomousRun}
-        onCancelAutonomousRun={onCancelAutonomousRun}
-      />,
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Inspect truth' }))
-    await waitFor(() => expect(onInspectAutonomousRun).toHaveBeenCalledTimes(1))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel autonomous run' }))
-    await waitFor(() => expect(onCancelAutonomousRun).toHaveBeenCalledWith('auto-run-1'))
+    expect(screen.queryByRole('heading', { name: 'Autonomous run truth' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Recovered the current autonomous unit boundary.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Duplicate start prevented')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Remote escalation trust' })).not.toBeInTheDocument()
   })
 
   it('renders checkpoint control-loop cards with resume actions bound to the same action and boundary', async () => {

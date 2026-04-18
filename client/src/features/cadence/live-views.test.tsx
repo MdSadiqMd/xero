@@ -694,7 +694,7 @@ describe('live views', () => {
     await waitFor(() => expect(onStartRuntimeRun).toHaveBeenCalledTimes(1))
   })
 
-  it('renders the recovered autonomous ledger as a first-class desktop truth surface', () => {
+  it('renders recovered runtime without the removed autonomous and remote debug panels', () => {
     const autonomousRun = makeAutonomousRun({
       duplicateStartDetected: true,
       duplicateStartRunId: 'auto-run-1',
@@ -775,19 +775,15 @@ describe('live views', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Autonomous run truth' })).toBeVisible()
-    expect(
-      screen.getByText(
-        'Cadence is projecting the durable autonomous run and active unit boundary separately from the live runtime/session feed.',
-      ),
-    ).toBeVisible()
-    expect(screen.getByText('Current autonomous boundary')).toBeVisible()
-    expect(
-      screen.getByText('Recovered the current autonomous unit boundary after reload without launching a duplicate continuation.'),
-    ).toBeVisible()
-    expect(screen.getByText('Duplicate start prevented')).toBeVisible()
-    expect(screen.getByText('run: auto-run-1')).toBeVisible()
     expect(screen.getAllByRole('heading', { name: 'Recovered run snapshot' }).length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('heading', { name: 'Autonomous run truth' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Current autonomous boundary')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Recovered the current autonomous unit boundary after reload without launching a duplicate continuation.'),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Duplicate start prevented')).not.toBeInTheDocument()
+    expect(screen.queryByText('run: auto-run-1')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Remote escalation trust' })).not.toBeInTheDocument()
   })
 
   it('renders recovered runtime and checkpoint control-loop actions with the current headings', async () => {

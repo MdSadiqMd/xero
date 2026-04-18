@@ -495,8 +495,8 @@ describe('CadenceApp current UI', () => {
     expect(screen.getByText('No milestone assigned')).toBeVisible()
   })
 
-  it('switches to Agent and starts an autonomous run from the current shell controls', async () => {
-    const { adapter, startAutonomousRun } = createAdapter({ runtimeRun: null, autonomousState: null })
+  it('switches to Agent without rendering the removed debug panels', async () => {
+    const { adapter } = createAdapter({ runtimeRun: null, autonomousState: null })
 
     render(<CadenceApp adapter={adapter} />)
 
@@ -505,14 +505,15 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'Autonomous run truth' })).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start autonomous run' }))
-
-    await waitFor(() => expect(startAutonomousRun).toHaveBeenCalledTimes(1))
+    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Start run' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Autonomous run truth' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Remote escalation trust' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start autonomous run' })).not.toBeInTheDocument()
   })
 
-  it('rehydrates recovered autonomous ledger truth after reload without offering a duplicate start', async () => {
+  it('rehydrates the recovered runtime snapshot after reload without rendering the removed debug panels', async () => {
     const recoveredAutonomousState = makeAutonomousRunState('project-1', 'auto-run-1')
     recoveredAutonomousState.run = {
       ...recoveredAutonomousState.run!,
@@ -590,14 +591,15 @@ describe('CadenceApp current UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
 
-    expect(await screen.findByRole('heading', { name: 'Autonomous run truth' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'Recovered run snapshot' })).toBeVisible()
     expect(
-      screen.getByText('Recovered the current autonomous unit boundary after reload without launching a duplicate continuation.'),
-    ).toBeVisible()
-    expect(screen.getByText('Duplicate start prevented')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Start autonomous run' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Inspect truth' })).toBeVisible()
-    expect(screen.getAllByRole('heading', { name: 'Recovered run snapshot' }).length).toBeGreaterThanOrEqual(1)
+      screen.queryByText('Recovered the current autonomous unit boundary after reload without launching a duplicate continuation.'),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Duplicate start prevented')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start autonomous run' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Inspect truth' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Autonomous run truth' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Remote escalation trust' })).not.toBeInTheDocument()
   })
 
   it('opens Settings and runs the current provider and notification flows', async () => {
