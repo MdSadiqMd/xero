@@ -1,3 +1,4 @@
+pub mod autonomous_orchestrator;
 pub mod autonomous_tool_runtime;
 pub mod platform_adapter;
 pub mod protocol;
