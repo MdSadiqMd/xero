@@ -27,6 +27,9 @@ const MAX_VERIFICATION_RECORD_ROWS: i64 = 100;
 const MAX_RESUME_HISTORY_ROWS: i64 = 100;
 const MAX_RUNTIME_RUN_CHECKPOINT_ROWS: i64 = 32;
 const MAX_RUNTIME_RUN_CHECKPOINT_SUMMARY_CHARS: usize = 280;
+const MAX_AUTONOMOUS_HISTORY_UNIT_ROWS: i64 = 16;
+const MAX_AUTONOMOUS_HISTORY_ATTEMPT_ROWS: i64 = 32;
+const MAX_AUTONOMOUS_HISTORY_ARTIFACT_ROWS: i64 = 64;
 const MAX_WORKFLOW_TRANSITION_EVENT_ROWS: i64 = 200;
 const MAX_WORKFLOW_HANDOFF_PACKAGE_ROWS: i64 = 200;
 const MAX_LIFECYCLE_TRANSITION_EVENT_ROWS: i64 = 64;
@@ -302,6 +305,33 @@ pub enum AutonomousRunStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutonomousUnitKind {
+    Researcher,
+    Planner,
+    Executor,
+    Verifier,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutonomousUnitStatus {
+    Pending,
+    Active,
+    Blocked,
+    Paused,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutonomousUnitArtifactStatus {
+    Pending,
+    Recorded,
+    Rejected,
+    Redacted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutonomousRunRecord {
     pub project_id: String,
     pub run_id: String,
@@ -328,9 +358,73 @@ pub struct AutonomousRunRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousUnitRecord {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub sequence: u32,
+    pub kind: AutonomousUnitKind,
+    pub status: AutonomousUnitStatus,
+    pub summary: String,
+    pub boundary_id: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub updated_at: String,
+    pub last_error: Option<RuntimeRunDiagnosticRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousUnitAttemptRecord {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub attempt_number: u32,
+    pub child_session_id: String,
+    pub status: AutonomousUnitStatus,
+    pub boundary_id: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub updated_at: String,
+    pub last_error: Option<RuntimeRunDiagnosticRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousUnitArtifactRecord {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub artifact_kind: String,
+    pub status: AutonomousUnitArtifactStatus,
+    pub summary: String,
+    pub content_hash: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousUnitHistoryRecord {
+    pub unit: AutonomousUnitRecord,
+    pub latest_attempt: Option<AutonomousUnitAttemptRecord>,
+    pub artifacts: Vec<AutonomousUnitArtifactRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousRunUpsertRecord {
+    pub run: AutonomousRunRecord,
+    pub unit: Option<AutonomousUnitRecord>,
+    pub attempt: Option<AutonomousUnitAttemptRecord>,
+    pub artifacts: Vec<AutonomousUnitArtifactRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutonomousRunSnapshotRecord {
     pub run: AutonomousRunRecord,
-    pub unit_checkpoint: Option<RuntimeRunCheckpointRecord>,
+    pub unit: Option<AutonomousUnitRecord>,
+    pub attempt: Option<AutonomousUnitAttemptRecord>,
+    pub history: Vec<AutonomousUnitHistoryRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -768,6 +862,55 @@ struct RawAutonomousRunRow {
     crash_reason_message: Option<String>,
     last_error_code: Option<String>,
     last_error_message: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug)]
+struct RawAutonomousUnitRow {
+    project_id: String,
+    run_id: String,
+    unit_id: String,
+    sequence: i64,
+    kind: String,
+    status: String,
+    summary: String,
+    boundary_id: Option<String>,
+    started_at: String,
+    finished_at: Option<String>,
+    last_error_code: Option<String>,
+    last_error_message: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug)]
+struct RawAutonomousUnitAttemptRow {
+    project_id: String,
+    run_id: String,
+    unit_id: String,
+    attempt_id: String,
+    attempt_number: i64,
+    child_session_id: String,
+    status: String,
+    boundary_id: Option<String>,
+    started_at: String,
+    finished_at: Option<String>,
+    last_error_code: Option<String>,
+    last_error_message: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug)]
+struct RawAutonomousUnitArtifactRow {
+    project_id: String,
+    run_id: String,
+    unit_id: String,
+    attempt_id: String,
+    artifact_id: String,
+    artifact_kind: String,
+    status: String,
+    summary: String,
+    content_hash: Option<String>,
+    created_at: String,
     updated_at: String,
 }
 
@@ -1508,13 +1651,13 @@ pub fn load_autonomous_run(
 
 pub fn upsert_autonomous_run(
     repo_root: &Path,
-    payload: &AutonomousRunRecord,
+    payload: &AutonomousRunUpsertRecord,
 ) -> Result<AutonomousRunSnapshotRecord, CommandError> {
-    validate_autonomous_run_payload(payload)?;
+    validate_autonomous_run_upsert_payload(payload)?;
 
     let database_path = database_path_for_repo(repo_root);
     let connection = open_runtime_database(repo_root, &database_path)?;
-    read_project_row(&connection, &database_path, repo_root, &payload.project_id)?;
+    read_project_row(&connection, &database_path, repo_root, &payload.run.project_id)?;
 
     let transaction = connection.unchecked_transaction().map_err(|error| {
         map_runtime_run_transaction_error(
@@ -1525,7 +1668,7 @@ pub fn upsert_autonomous_run(
         )
     })?;
 
-    let runtime_row = read_runtime_run_row(&transaction, &database_path, &payload.project_id)?
+    let runtime_row = read_runtime_run_row(&transaction, &database_path, &payload.run.project_id)?
         .ok_or_else(|| {
             CommandError::retryable(
                 "autonomous_run_missing_runtime_row",
@@ -1536,26 +1679,26 @@ pub fn upsert_autonomous_run(
             )
         })?;
 
-    if runtime_row.run_id != payload.run_id {
+    if runtime_row.run_id != payload.run.run_id {
         return Err(CommandError::retryable(
             "autonomous_run_mismatch",
             format!(
                 "Cadence refused to persist autonomous-run metadata for run `{}` because the durable runtime-run row currently points at `{}`.",
-                payload.run_id, runtime_row.run_id
+                payload.run.run_id, runtime_row.run_id
             ),
         ));
     }
 
-    let active_unit_sequence = payload.active_unit_sequence.map(i64::from);
-    let duplicate_start_detected = if payload.duplicate_start_detected { 1 } else { 0 };
-    let pause_reason_code = payload.pause_reason.as_ref().map(|reason| reason.code.as_str());
-    let pause_reason_message = payload.pause_reason.as_ref().map(|reason| reason.message.as_str());
-    let cancel_reason_code = payload.cancel_reason.as_ref().map(|reason| reason.code.as_str());
-    let cancel_reason_message = payload.cancel_reason.as_ref().map(|reason| reason.message.as_str());
-    let crash_reason_code = payload.crash_reason.as_ref().map(|reason| reason.code.as_str());
-    let crash_reason_message = payload.crash_reason.as_ref().map(|reason| reason.message.as_str());
-    let last_error_code = payload.last_error.as_ref().map(|reason| reason.code.as_str());
-    let last_error_message = payload.last_error.as_ref().map(|reason| reason.message.as_str());
+    let active_unit_sequence = payload.run.active_unit_sequence.map(i64::from);
+    let duplicate_start_detected = if payload.run.duplicate_start_detected { 1 } else { 0 };
+    let pause_reason_code = payload.run.pause_reason.as_ref().map(|reason| reason.code.as_str());
+    let pause_reason_message = payload.run.pause_reason.as_ref().map(|reason| reason.message.as_str());
+    let cancel_reason_code = payload.run.cancel_reason.as_ref().map(|reason| reason.code.as_str());
+    let cancel_reason_message = payload.run.cancel_reason.as_ref().map(|reason| reason.message.as_str());
+    let crash_reason_code = payload.run.crash_reason.as_ref().map(|reason| reason.code.as_str());
+    let crash_reason_message = payload.run.crash_reason.as_ref().map(|reason| reason.message.as_str());
+    let last_error_code = payload.run.last_error.as_ref().map(|reason| reason.code.as_str());
+    let last_error_message = payload.run.last_error.as_ref().map(|reason| reason.message.as_str());
 
     transaction
         .execute(
@@ -1617,23 +1760,23 @@ pub fn upsert_autonomous_run(
                 updated_at = excluded.updated_at
             "#,
             params![
-                payload.project_id.as_str(),
-                payload.run_id.as_str(),
-                payload.runtime_kind.as_str(),
-                payload.supervisor_kind.as_str(),
-                autonomous_run_status_sql_value(&payload.status),
+                payload.run.project_id.as_str(),
+                payload.run.run_id.as_str(),
+                payload.run.runtime_kind.as_str(),
+                payload.run.supervisor_kind.as_str(),
+                autonomous_run_status_sql_value(&payload.run.status),
                 active_unit_sequence,
                 duplicate_start_detected,
-                payload.duplicate_start_run_id.as_deref(),
-                payload.duplicate_start_reason.as_deref(),
-                payload.started_at.as_str(),
-                payload.last_heartbeat_at.as_deref(),
-                payload.last_checkpoint_at.as_deref(),
-                payload.paused_at.as_deref(),
-                payload.cancelled_at.as_deref(),
-                payload.completed_at.as_deref(),
-                payload.crashed_at.as_deref(),
-                payload.stopped_at.as_deref(),
+                payload.run.duplicate_start_run_id.as_deref(),
+                payload.run.duplicate_start_reason.as_deref(),
+                payload.run.started_at.as_str(),
+                payload.run.last_heartbeat_at.as_deref(),
+                payload.run.last_checkpoint_at.as_deref(),
+                payload.run.paused_at.as_deref(),
+                payload.run.cancelled_at.as_deref(),
+                payload.run.completed_at.as_deref(),
+                payload.run.crashed_at.as_deref(),
+                payload.run.stopped_at.as_deref(),
                 pause_reason_code,
                 pause_reason_message,
                 cancel_reason_code,
@@ -1642,7 +1785,7 @@ pub fn upsert_autonomous_run(
                 crash_reason_message,
                 last_error_code,
                 last_error_message,
-                payload.updated_at.as_str(),
+                payload.run.updated_at.as_str(),
             ],
         )
         .map_err(|error| {
@@ -1654,6 +1797,18 @@ pub fn upsert_autonomous_run(
             )
         })?;
 
+    if let Some(unit) = payload.unit.as_ref() {
+        persist_autonomous_unit(&transaction, &database_path, unit)?;
+    }
+
+    if let Some(attempt) = payload.attempt.as_ref() {
+        persist_autonomous_unit_attempt(&transaction, &database_path, attempt)?;
+    }
+
+    for artifact in &payload.artifacts {
+        persist_autonomous_unit_artifact(&transaction, &database_path, artifact)?;
+    }
+
     transaction.commit().map_err(|error| {
         map_runtime_run_commit_error(
             "autonomous_run_commit_failed",
@@ -1663,7 +1818,7 @@ pub fn upsert_autonomous_run(
         )
     })?;
 
-    read_autonomous_run_snapshot(&connection, &database_path, &payload.project_id)?.ok_or_else(|| {
+    read_autonomous_run_snapshot(&connection, &database_path, &payload.run.project_id)?.ok_or_else(|| {
         CommandError::system_fault(
             "autonomous_run_missing_after_persist",
             format!(
@@ -1672,6 +1827,324 @@ pub fn upsert_autonomous_run(
             ),
         )
     })
+}
+
+fn persist_autonomous_unit(
+    transaction: &Transaction<'_>,
+    database_path: &Path,
+    unit: &AutonomousUnitRecord,
+) -> Result<(), CommandError> {
+    let (last_error_code, last_error_message) = unit
+        .last_error
+        .as_ref()
+        .map(|error| (Some(error.code.as_str()), Some(error.message.as_str())))
+        .unwrap_or((None, None));
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO autonomous_units (
+                unit_id,
+                project_id,
+                run_id,
+                sequence,
+                kind,
+                status,
+                summary,
+                boundary_id,
+                started_at,
+                finished_at,
+                last_error_code,
+                last_error_message,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(unit_id) DO UPDATE SET
+                sequence = excluded.sequence,
+                kind = excluded.kind,
+                status = excluded.status,
+                summary = excluded.summary,
+                boundary_id = excluded.boundary_id,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                last_error_code = excluded.last_error_code,
+                last_error_message = excluded.last_error_message,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                unit.unit_id.as_str(),
+                unit.project_id.as_str(),
+                unit.run_id.as_str(),
+                i64::from(unit.sequence),
+                autonomous_unit_kind_sql_value(&unit.kind),
+                autonomous_unit_status_sql_value(&unit.status),
+                unit.summary.as_str(),
+                unit.boundary_id.as_deref(),
+                unit.started_at.as_str(),
+                unit.finished_at.as_deref(),
+                last_error_code,
+                last_error_message,
+                unit.updated_at.as_str(),
+            ],
+        )
+        .map_err(|error| {
+            if matches!(error, SqlError::SqliteFailure(_, _)) {
+                return CommandError::system_fault(
+                    "autonomous_unit_conflict",
+                    format!(
+                        "Cadence refused to persist autonomous unit `{}` because it would violate the one-active-unit invariant in {}: {error}",
+                        unit.unit_id,
+                        database_path.display()
+                    ),
+                );
+            }
+
+            map_runtime_run_write_error(
+                "autonomous_unit_persist_failed",
+                database_path,
+                error,
+                "Cadence could not persist the durable autonomous-unit row.",
+            )
+        })?;
+
+    Ok(())
+}
+
+fn persist_autonomous_unit_attempt(
+    transaction: &Transaction<'_>,
+    database_path: &Path,
+    attempt: &AutonomousUnitAttemptRecord,
+) -> Result<(), CommandError> {
+    let existing = read_autonomous_unit_attempt_by_id(
+        transaction,
+        database_path,
+        &attempt.project_id,
+        &attempt.run_id,
+        &attempt.attempt_id,
+    )?;
+    if let Some(existing) = existing.as_ref() {
+        if existing == attempt {
+            return Ok(());
+        }
+
+        if matches!(
+            existing.status,
+            AutonomousUnitStatus::Completed
+                | AutonomousUnitStatus::Cancelled
+                | AutonomousUnitStatus::Failed
+        ) {
+            return Err(CommandError::system_fault(
+                "autonomous_unit_attempt_immutable",
+                format!(
+                    "Cadence refused to mutate completed autonomous attempt `{}` in {}.",
+                    attempt.attempt_id,
+                    database_path.display()
+                ),
+            ));
+        }
+    }
+
+    let (last_error_code, last_error_message) = attempt
+        .last_error
+        .as_ref()
+        .map(|error| (Some(error.code.as_str()), Some(error.message.as_str())))
+        .unwrap_or((None, None));
+
+    transaction
+        .execute(
+            r#"
+            INSERT INTO autonomous_unit_attempts (
+                attempt_id,
+                project_id,
+                run_id,
+                unit_id,
+                attempt_number,
+                child_session_id,
+                status,
+                boundary_id,
+                started_at,
+                finished_at,
+                last_error_code,
+                last_error_message,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(attempt_id) DO UPDATE SET
+                attempt_number = excluded.attempt_number,
+                child_session_id = excluded.child_session_id,
+                status = excluded.status,
+                boundary_id = excluded.boundary_id,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                last_error_code = excluded.last_error_code,
+                last_error_message = excluded.last_error_message,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                attempt.attempt_id.as_str(),
+                attempt.project_id.as_str(),
+                attempt.run_id.as_str(),
+                attempt.unit_id.as_str(),
+                i64::from(attempt.attempt_number),
+                attempt.child_session_id.as_str(),
+                autonomous_unit_status_sql_value(&attempt.status),
+                attempt.boundary_id.as_deref(),
+                attempt.started_at.as_str(),
+                attempt.finished_at.as_deref(),
+                last_error_code,
+                last_error_message,
+                attempt.updated_at.as_str(),
+            ],
+        )
+        .map_err(|error| {
+            if matches!(error, SqlError::SqliteFailure(_, _)) {
+                return CommandError::system_fault(
+                    "autonomous_unit_attempt_conflict",
+                    format!(
+                        "Cadence refused to persist autonomous attempt `{}` because it would violate the active-attempt or parent-link invariants in {}: {error}",
+                        attempt.attempt_id,
+                        database_path.display()
+                    ),
+                );
+            }
+
+            map_runtime_run_write_error(
+                "autonomous_unit_attempt_persist_failed",
+                database_path,
+                error,
+                "Cadence could not persist the durable autonomous attempt row.",
+            )
+        })?;
+
+    Ok(())
+}
+
+fn persist_autonomous_unit_artifact(
+    transaction: &Transaction<'_>,
+    database_path: &Path,
+    artifact: &AutonomousUnitArtifactRecord,
+) -> Result<(), CommandError> {
+    transaction
+        .execute(
+            r#"
+            INSERT INTO autonomous_unit_artifacts (
+                artifact_id,
+                project_id,
+                run_id,
+                unit_id,
+                attempt_id,
+                artifact_kind,
+                status,
+                summary,
+                content_hash,
+                created_at,
+                updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ON CONFLICT(artifact_id) DO UPDATE SET
+                artifact_kind = excluded.artifact_kind,
+                status = excluded.status,
+                summary = excluded.summary,
+                content_hash = excluded.content_hash,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                artifact.artifact_id.as_str(),
+                artifact.project_id.as_str(),
+                artifact.run_id.as_str(),
+                artifact.unit_id.as_str(),
+                artifact.attempt_id.as_str(),
+                artifact.artifact_kind.as_str(),
+                autonomous_unit_artifact_status_sql_value(&artifact.status),
+                artifact.summary.as_str(),
+                artifact.content_hash.as_deref(),
+                artifact.created_at.as_str(),
+                artifact.updated_at.as_str(),
+            ],
+        )
+        .map_err(|error| {
+            if matches!(error, SqlError::SqliteFailure(_, _)) {
+                return CommandError::system_fault(
+                    "autonomous_unit_artifact_conflict",
+                    format!(
+                        "Cadence refused to persist autonomous artifact `{}` because its parent linkage is invalid in {}: {error}",
+                        artifact.artifact_id,
+                        database_path.display()
+                    ),
+                );
+            }
+
+            map_runtime_run_write_error(
+                "autonomous_unit_artifact_persist_failed",
+                database_path,
+                error,
+                "Cadence could not persist the durable autonomous artifact row.",
+            )
+        })?;
+
+    Ok(())
+}
+
+fn read_autonomous_unit_attempt_by_id(
+    connection: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    run_id: &str,
+    attempt_id: &str,
+) -> Result<Option<AutonomousUnitAttemptRecord>, CommandError> {
+    let row = connection.query_row(
+        r#"
+        SELECT
+            project_id,
+            run_id,
+            unit_id,
+            attempt_id,
+            attempt_number,
+            child_session_id,
+            status,
+            boundary_id,
+            started_at,
+            finished_at,
+            last_error_code,
+            last_error_message,
+            updated_at
+        FROM autonomous_unit_attempts
+        WHERE project_id = ?1
+          AND run_id = ?2
+          AND attempt_id = ?3
+        "#,
+        params![project_id, run_id, attempt_id],
+        |row| {
+            Ok(RawAutonomousUnitAttemptRow {
+                project_id: row.get(0)?,
+                run_id: row.get(1)?,
+                unit_id: row.get(2)?,
+                attempt_id: row.get(3)?,
+                attempt_number: row.get(4)?,
+                child_session_id: row.get(5)?,
+                status: row.get(6)?,
+                boundary_id: row.get(7)?,
+                started_at: row.get(8)?,
+                finished_at: row.get(9)?,
+                last_error_code: row.get(10)?,
+                last_error_message: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        },
+    );
+
+    match row {
+        Ok(row) => Ok(Some(decode_autonomous_unit_attempt_row(row, database_path)?)),
+        Err(SqlError::QueryReturnedNoRows) => Ok(None),
+        Err(other) => Err(CommandError::system_fault(
+            "autonomous_unit_attempt_query_failed",
+            format!(
+                "Cadence could not read autonomous attempt `{attempt_id}` from {}: {other}",
+                database_path.display()
+            ),
+        )),
+    }
 }
 
 pub fn upsert_runtime_action_required(
@@ -8347,36 +8820,458 @@ fn read_autonomous_run_snapshot(
     };
 
     let run = decode_autonomous_run_row(raw_row, database_path)?;
-    let unit_checkpoint = match run.active_unit_sequence {
-        Some(sequence) => {
-            let checkpoints = read_runtime_run_checkpoints(
-                connection,
-                database_path,
-                expected_project_id,
-                &run.run_id,
-            )?;
-            Some(
-                checkpoints
-                    .into_iter()
-                    .find(|checkpoint| checkpoint.sequence == sequence)
-                    .ok_or_else(|| {
-                        map_runtime_run_decode_error(
-                            database_path,
-                            format!(
-                                "Autonomous run points at checkpoint sequence {} for run `{}` but no durable checkpoint row exists.",
-                                sequence, run.run_id
-                            ),
-                        )
-                    })?,
+    let units = read_autonomous_units(connection, database_path, expected_project_id, &run.run_id)?;
+    let attempts =
+        read_autonomous_unit_attempts(connection, database_path, expected_project_id, &run.run_id)?;
+    let artifacts =
+        read_autonomous_unit_artifacts(connection, database_path, expected_project_id, &run.run_id)?;
+    let history = build_autonomous_unit_history(
+        database_path,
+        &run,
+        units,
+        attempts,
+        artifacts,
+    )?;
+
+    let unit = history
+        .iter()
+        .find(|entry| {
+            matches!(
+                entry.unit.status,
+                AutonomousUnitStatus::Active
+                    | AutonomousUnitStatus::Blocked
+                    | AutonomousUnitStatus::Paused
             )
+        })
+        .or_else(|| history.first())
+        .map(|entry| entry.unit.clone());
+    let attempt = unit.as_ref().and_then(|unit| {
+        history
+            .iter()
+            .find(|entry| entry.unit.unit_id == unit.unit_id)
+            .and_then(|entry| entry.latest_attempt.clone())
+    });
+
+    if let (Some(active_unit_sequence), Some(unit)) = (run.active_unit_sequence, unit.as_ref()) {
+        if active_unit_sequence != unit.sequence {
+            return Err(map_runtime_run_decode_error(
+                database_path,
+                format!(
+                    "Autonomous run active_unit_sequence {} does not match durable unit `{}` sequence {}.",
+                    active_unit_sequence, unit.unit_id, unit.sequence
+                ),
+            ));
         }
-        None => None,
-    };
+    }
 
     Ok(Some(AutonomousRunSnapshotRecord {
         run,
-        unit_checkpoint,
+        unit,
+        attempt,
+        history,
     }))
+}
+
+fn read_autonomous_units(
+    connection: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Vec<AutonomousUnitRecord>, CommandError> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT
+                project_id,
+                run_id,
+                unit_id,
+                sequence,
+                kind,
+                status,
+                summary,
+                boundary_id,
+                started_at,
+                finished_at,
+                last_error_code,
+                last_error_message,
+                updated_at
+            FROM autonomous_units
+            WHERE project_id = ?1
+              AND run_id = ?2
+            ORDER BY sequence DESC, updated_at DESC, unit_id ASC
+            LIMIT ?3
+            "#,
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_unit_query_failed",
+                format!(
+                    "Cadence could not prepare the durable autonomous-unit query against {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    let rows = statement
+        .query_map(params![project_id, run_id, MAX_AUTONOMOUS_HISTORY_UNIT_ROWS], |row| {
+            Ok(RawAutonomousUnitRow {
+                project_id: row.get(0)?,
+                run_id: row.get(1)?,
+                unit_id: row.get(2)?,
+                sequence: row.get(3)?,
+                kind: row.get(4)?,
+                status: row.get(5)?,
+                summary: row.get(6)?,
+                boundary_id: row.get(7)?,
+                started_at: row.get(8)?,
+                finished_at: row.get(9)?,
+                last_error_code: row.get(10)?,
+                last_error_message: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        })
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_unit_query_failed",
+                format!(
+                    "Cadence could not query durable autonomous-unit rows from {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    let mut units = Vec::new();
+    let mut last_sequence = u32::MAX;
+    for row in rows {
+        let unit = decode_autonomous_unit_row(
+            row.map_err(|error| {
+                CommandError::system_fault(
+                    "autonomous_unit_query_failed",
+                    format!(
+                        "Cadence could not read a durable autonomous-unit row from {}: {error}",
+                        database_path.display()
+                    ),
+                )
+            })?,
+            database_path,
+        )?;
+
+        if !units.is_empty() && unit.sequence >= last_sequence {
+            return Err(map_runtime_run_decode_error(
+                database_path,
+                format!(
+                    "Autonomous unit sequences must decrease strictly in bounded history order, but sequence {} followed {}.",
+                    unit.sequence, last_sequence
+                ),
+            ));
+        }
+
+        last_sequence = unit.sequence;
+        units.push(unit);
+    }
+
+    Ok(units)
+}
+
+fn read_autonomous_unit_attempts(
+    connection: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Vec<AutonomousUnitAttemptRecord>, CommandError> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT
+                project_id,
+                run_id,
+                unit_id,
+                attempt_id,
+                attempt_number,
+                child_session_id,
+                status,
+                boundary_id,
+                started_at,
+                finished_at,
+                last_error_code,
+                last_error_message,
+                updated_at
+            FROM autonomous_unit_attempts
+            WHERE project_id = ?1
+              AND run_id = ?2
+            ORDER BY attempt_number DESC, updated_at DESC, attempt_id ASC
+            LIMIT ?3
+            "#,
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_unit_attempt_query_failed",
+                format!(
+                    "Cadence could not prepare the durable autonomous attempt query against {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    let rows = statement
+        .query_map(
+            params![project_id, run_id, MAX_AUTONOMOUS_HISTORY_ATTEMPT_ROWS],
+            |row| {
+                Ok(RawAutonomousUnitAttemptRow {
+                    project_id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    unit_id: row.get(2)?,
+                    attempt_id: row.get(3)?,
+                    attempt_number: row.get(4)?,
+                    child_session_id: row.get(5)?,
+                    status: row.get(6)?,
+                    boundary_id: row.get(7)?,
+                    started_at: row.get(8)?,
+                    finished_at: row.get(9)?,
+                    last_error_code: row.get(10)?,
+                    last_error_message: row.get(11)?,
+                    updated_at: row.get(12)?,
+                })
+            },
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_unit_attempt_query_failed",
+                format!(
+                    "Cadence could not query durable autonomous attempts from {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    let mut attempts = Vec::new();
+    for row in rows {
+        attempts.push(decode_autonomous_unit_attempt_row(
+            row.map_err(|error| {
+                CommandError::system_fault(
+                    "autonomous_unit_attempt_query_failed",
+                    format!(
+                        "Cadence could not read a durable autonomous-attempt row from {}: {error}",
+                        database_path.display()
+                    ),
+                )
+            })?,
+            database_path,
+        )?);
+    }
+
+    Ok(attempts)
+}
+
+fn read_autonomous_unit_artifacts(
+    connection: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Vec<AutonomousUnitArtifactRecord>, CommandError> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT
+                project_id,
+                run_id,
+                unit_id,
+                attempt_id,
+                artifact_id,
+                artifact_kind,
+                status,
+                summary,
+                content_hash,
+                created_at,
+                updated_at
+            FROM autonomous_unit_artifacts
+            WHERE project_id = ?1
+              AND run_id = ?2
+            ORDER BY created_at DESC, artifact_id ASC
+            LIMIT ?3
+            "#,
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_unit_artifact_query_failed",
+                format!(
+                    "Cadence could not prepare the durable autonomous artifact query against {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    let rows = statement
+        .query_map(
+            params![project_id, run_id, MAX_AUTONOMOUS_HISTORY_ARTIFACT_ROWS],
+            |row| {
+                Ok(RawAutonomousUnitArtifactRow {
+                    project_id: row.get(0)?,
+                    run_id: row.get(1)?,
+                    unit_id: row.get(2)?,
+                    attempt_id: row.get(3)?,
+                    artifact_id: row.get(4)?,
+                    artifact_kind: row.get(5)?,
+                    status: row.get(6)?,
+                    summary: row.get(7)?,
+                    content_hash: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            },
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_unit_artifact_query_failed",
+                format!(
+                    "Cadence could not query durable autonomous artifacts from {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    let mut artifacts = Vec::new();
+    for row in rows {
+        artifacts.push(decode_autonomous_unit_artifact_row(
+            row.map_err(|error| {
+                CommandError::system_fault(
+                    "autonomous_unit_artifact_query_failed",
+                    format!(
+                        "Cadence could not read a durable autonomous-artifact row from {}: {error}",
+                        database_path.display()
+                    ),
+                )
+            })?,
+            database_path,
+        )?);
+    }
+
+    Ok(artifacts)
+}
+
+fn build_autonomous_unit_history(
+    database_path: &Path,
+    run: &AutonomousRunRecord,
+    units: Vec<AutonomousUnitRecord>,
+    attempts: Vec<AutonomousUnitAttemptRecord>,
+    artifacts: Vec<AutonomousUnitArtifactRecord>,
+) -> Result<Vec<AutonomousUnitHistoryRecord>, CommandError> {
+    if units.is_empty() {
+        return Err(map_runtime_run_decode_error(
+            database_path,
+            format!(
+                "Autonomous run `{}` has no durable unit ledger rows.",
+                run.run_id
+            ),
+        ));
+    }
+
+    let active_unit_count = units
+        .iter()
+        .filter(|unit| unit.status == AutonomousUnitStatus::Active)
+        .count();
+    if active_unit_count > 1 {
+        return Err(map_runtime_run_decode_error(
+            database_path,
+            format!(
+                "Autonomous run `{}` has {} active unit rows; expected at most one.",
+                run.run_id, active_unit_count
+            ),
+        ));
+    }
+
+    let active_attempt_count = attempts
+        .iter()
+        .filter(|attempt| attempt.status == AutonomousUnitStatus::Active)
+        .count();
+    if active_attempt_count > 1 {
+        return Err(map_runtime_run_decode_error(
+            database_path,
+            format!(
+                "Autonomous run `{}` has {} active attempt rows; expected at most one.",
+                run.run_id, active_attempt_count
+            ),
+        ));
+    }
+
+    let mut attempts_by_unit: HashMap<String, Vec<AutonomousUnitAttemptRecord>> = HashMap::new();
+    for attempt in attempts {
+        if !units.iter().any(|unit| unit.unit_id == attempt.unit_id) {
+            return Err(map_runtime_run_decode_error(
+                database_path,
+                format!(
+                    "Autonomous attempt `{}` points at missing durable unit `{}` for run `{}`.",
+                    attempt.attempt_id, attempt.unit_id, run.run_id
+                ),
+            ));
+        }
+        attempts_by_unit
+            .entry(attempt.unit_id.clone())
+            .or_default()
+            .push(attempt);
+    }
+
+    let mut artifacts_by_attempt: HashMap<String, Vec<AutonomousUnitArtifactRecord>> = HashMap::new();
+    for artifact in artifacts {
+        if !units.iter().any(|unit| unit.unit_id == artifact.unit_id) {
+            return Err(map_runtime_run_decode_error(
+                database_path,
+                format!(
+                    "Autonomous artifact `{}` points at missing durable unit `{}` for run `{}`.",
+                    artifact.artifact_id, artifact.unit_id, run.run_id
+                ),
+            ));
+        }
+
+        let attempt_known = attempts_by_unit
+            .get(&artifact.unit_id)
+            .map(|attempts| attempts.iter().any(|attempt| attempt.attempt_id == artifact.attempt_id))
+            .unwrap_or(false);
+        if !attempt_known {
+            return Err(map_runtime_run_decode_error(
+                database_path,
+                format!(
+                    "Autonomous artifact `{}` points at missing durable attempt `{}` for unit `{}`.",
+                    artifact.artifact_id, artifact.attempt_id, artifact.unit_id
+                ),
+            ));
+        }
+
+        artifacts_by_attempt
+            .entry(artifact.attempt_id.clone())
+            .or_default()
+            .push(artifact);
+    }
+
+    let mut history = Vec::new();
+    for unit in units {
+        let latest_attempt = attempts_by_unit
+            .remove(&unit.unit_id)
+            .map(|mut unit_attempts| {
+                unit_attempts.sort_by(|left, right| {
+                    right
+                        .attempt_number
+                        .cmp(&left.attempt_number)
+                        .then_with(|| right.updated_at.cmp(&left.updated_at))
+                        .then_with(|| right.attempt_id.cmp(&left.attempt_id))
+                });
+                unit_attempts.into_iter().next()
+            })
+            .flatten();
+
+        let unit_artifacts = latest_attempt
+            .as_ref()
+            .and_then(|attempt| artifacts_by_attempt.remove(&attempt.attempt_id))
+            .unwrap_or_default();
+
+        history.push(AutonomousUnitHistoryRecord {
+            unit,
+            latest_attempt,
+            artifacts: unit_artifacts,
+        });
+    }
+
+    Ok(history)
 }
 
 fn read_runtime_run_checkpoints(
@@ -8704,6 +9599,175 @@ fn decode_autonomous_run_row(
         crash_reason,
         last_error,
         updated_at,
+    })
+}
+
+fn decode_autonomous_unit_row(
+    raw_row: RawAutonomousUnitRow,
+    database_path: &Path,
+) -> Result<AutonomousUnitRecord, CommandError> {
+    Ok(AutonomousUnitRecord {
+        project_id: require_runtime_run_non_empty_owned(
+            raw_row.project_id,
+            "project_id",
+            database_path,
+        )?,
+        run_id: require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?,
+        unit_id: require_runtime_run_non_empty_owned(raw_row.unit_id, "unit_id", database_path)?,
+        sequence: decode_runtime_run_checkpoint_sequence(raw_row.sequence, "sequence", database_path)?,
+        kind: parse_autonomous_unit_kind(&raw_row.kind).map_err(|details| {
+            map_runtime_run_decode_error(database_path, format!("Field `kind` {details}"))
+        })?,
+        status: parse_autonomous_unit_status(&raw_row.status).map_err(|details| {
+            map_runtime_run_decode_error(database_path, format!("Field `status` {details}"))
+        })?,
+        summary: require_runtime_run_non_empty_owned(raw_row.summary, "summary", database_path)?,
+        boundary_id: decode_runtime_run_optional_non_empty_text(
+            raw_row.boundary_id,
+            "boundary_id",
+            database_path,
+        )?,
+        started_at: require_runtime_run_non_empty_owned(
+            raw_row.started_at,
+            "started_at",
+            database_path,
+        )?,
+        finished_at: decode_runtime_run_optional_non_empty_text(
+            raw_row.finished_at,
+            "finished_at",
+            database_path,
+        )?,
+        updated_at: require_runtime_run_non_empty_owned(
+            raw_row.updated_at,
+            "updated_at",
+            database_path,
+        )?,
+        last_error: decode_runtime_run_reason(
+            raw_row.last_error_code,
+            raw_row.last_error_message,
+            "last_error",
+            database_path,
+        )?,
+    })
+}
+
+fn decode_autonomous_unit_attempt_row(
+    raw_row: RawAutonomousUnitAttemptRow,
+    database_path: &Path,
+) -> Result<AutonomousUnitAttemptRecord, CommandError> {
+    Ok(AutonomousUnitAttemptRecord {
+        project_id: require_runtime_run_non_empty_owned(
+            raw_row.project_id,
+            "project_id",
+            database_path,
+        )?,
+        run_id: require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?,
+        unit_id: require_runtime_run_non_empty_owned(raw_row.unit_id, "unit_id", database_path)?,
+        attempt_id: require_runtime_run_non_empty_owned(
+            raw_row.attempt_id,
+            "attempt_id",
+            database_path,
+        )?,
+        attempt_number: decode_runtime_run_checkpoint_sequence(
+            raw_row.attempt_number,
+            "attempt_number",
+            database_path,
+        )?,
+        child_session_id: require_runtime_run_non_empty_owned(
+            raw_row.child_session_id,
+            "child_session_id",
+            database_path,
+        )?,
+        status: parse_autonomous_unit_status(&raw_row.status).map_err(|details| {
+            map_runtime_run_decode_error(database_path, format!("Field `status` {details}"))
+        })?,
+        boundary_id: decode_runtime_run_optional_non_empty_text(
+            raw_row.boundary_id,
+            "boundary_id",
+            database_path,
+        )?,
+        started_at: require_runtime_run_non_empty_owned(
+            raw_row.started_at,
+            "started_at",
+            database_path,
+        )?,
+        finished_at: decode_runtime_run_optional_non_empty_text(
+            raw_row.finished_at,
+            "finished_at",
+            database_path,
+        )?,
+        updated_at: require_runtime_run_non_empty_owned(
+            raw_row.updated_at,
+            "updated_at",
+            database_path,
+        )?,
+        last_error: decode_runtime_run_reason(
+            raw_row.last_error_code,
+            raw_row.last_error_message,
+            "last_error",
+            database_path,
+        )?,
+    })
+}
+
+fn decode_autonomous_unit_artifact_row(
+    raw_row: RawAutonomousUnitArtifactRow,
+    database_path: &Path,
+) -> Result<AutonomousUnitArtifactRecord, CommandError> {
+    let content_hash = decode_runtime_run_optional_non_empty_text(
+        raw_row.content_hash,
+        "content_hash",
+        database_path,
+    )?;
+    if let Some(content_hash) = content_hash.as_deref() {
+        if content_hash.len() != 64 || content_hash.chars().any(|ch| !ch.is_ascii_hexdigit() || ch.is_ascii_uppercase()) {
+            return Err(map_runtime_run_decode_error(
+                database_path,
+                format!(
+                    "Field `content_hash` must be a lowercase 64-character hex digest, found `{content_hash}`."
+                ),
+            ));
+        }
+    }
+
+    Ok(AutonomousUnitArtifactRecord {
+        project_id: require_runtime_run_non_empty_owned(
+            raw_row.project_id,
+            "project_id",
+            database_path,
+        )?,
+        run_id: require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?,
+        unit_id: require_runtime_run_non_empty_owned(raw_row.unit_id, "unit_id", database_path)?,
+        attempt_id: require_runtime_run_non_empty_owned(
+            raw_row.attempt_id,
+            "attempt_id",
+            database_path,
+        )?,
+        artifact_id: require_runtime_run_non_empty_owned(
+            raw_row.artifact_id,
+            "artifact_id",
+            database_path,
+        )?,
+        artifact_kind: require_runtime_run_non_empty_owned(
+            raw_row.artifact_kind,
+            "artifact_kind",
+            database_path,
+        )?,
+        status: parse_autonomous_unit_artifact_status(&raw_row.status).map_err(|details| {
+            map_runtime_run_decode_error(database_path, format!("Field `status` {details}"))
+        })?,
+        summary: require_runtime_run_non_empty_owned(raw_row.summary, "summary", database_path)?,
+        content_hash,
+        created_at: require_runtime_run_non_empty_owned(
+            raw_row.created_at,
+            "created_at",
+            database_path,
+        )?,
+        updated_at: require_runtime_run_non_empty_owned(
+            raw_row.updated_at,
+            "updated_at",
+            database_path,
+        )?,
     })
 }
 
@@ -10777,25 +11841,182 @@ fn validate_autonomous_run_payload(payload: &AutonomousRunRecord) -> Result<(), 
                 return Err(CommandError::user_fixable(
                     "autonomous_run_request_invalid",
                     format!(
-                        "Autonomous-run diagnostics must not include {secret_hint}. Remove secret-bearing content before retrying."
+                        "Autonomous run {label} must not include {secret_hint}. Remove secret-bearing content before retrying."
                     ),
                 ));
             }
         }
     }
 
-    if payload.duplicate_start_detected {
-        if payload.duplicate_start_run_id.is_none() || payload.duplicate_start_reason.is_none() {
+    Ok(())
+}
+
+fn validate_autonomous_run_upsert_payload(
+    payload: &AutonomousRunUpsertRecord,
+) -> Result<(), CommandError> {
+    validate_autonomous_run_payload(&payload.run)?;
+
+    let Some(unit) = payload.unit.as_ref() else {
+        if payload.attempt.is_some() || !payload.artifacts.is_empty() {
             return Err(CommandError::system_fault(
                 "autonomous_run_request_invalid",
-                "Cadence requires duplicate-start metadata when duplicate_start_detected is true.",
+                "Cadence requires a durable autonomous unit row before attempts or artifacts can be persisted.",
             ));
         }
-    } else if payload.duplicate_start_run_id.is_some() || payload.duplicate_start_reason.is_some() {
+        return Ok(());
+    };
+
+    validate_non_empty_text(&unit.unit_id, "unit_id", "autonomous_run_request_invalid")?;
+    validate_non_empty_text(&unit.summary, "summary", "autonomous_run_request_invalid")?;
+    validate_non_empty_text(&unit.started_at, "started_at", "autonomous_run_request_invalid")?;
+    validate_non_empty_text(&unit.updated_at, "updated_at", "autonomous_run_request_invalid")?;
+    if unit.sequence == 0 {
         return Err(CommandError::system_fault(
             "autonomous_run_request_invalid",
-            "Cadence requires duplicate-start metadata to be empty when duplicate_start_detected is false.",
+            "Cadence requires autonomous unit sequences to start at 1.",
         ));
+    }
+    if unit.project_id != payload.run.project_id || unit.run_id != payload.run.run_id {
+        return Err(CommandError::system_fault(
+            "autonomous_run_request_invalid",
+            "Cadence requires autonomous unit rows to share the parent run project_id and run_id.",
+        ));
+    }
+    if let Some(boundary_id) = unit.boundary_id.as_deref() {
+        validate_non_empty_text(boundary_id, "boundary_id", "autonomous_run_request_invalid")?;
+    }
+    if let Some(secret_hint) = find_prohibited_runtime_persistence_content(&unit.summary) {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            format!(
+                "Autonomous unit summaries must not include {secret_hint}. Remove secret-bearing content before retrying."
+            ),
+        ));
+    }
+
+    if let Some(attempt) = payload.attempt.as_ref() {
+        validate_non_empty_text(
+            &attempt.attempt_id,
+            "attempt_id",
+            "autonomous_run_request_invalid",
+        )?;
+        validate_non_empty_text(
+            &attempt.child_session_id,
+            "child_session_id",
+            "autonomous_run_request_invalid",
+        )?;
+        validate_non_empty_text(
+            &attempt.started_at,
+            "attempt_started_at",
+            "autonomous_run_request_invalid",
+        )?;
+        validate_non_empty_text(
+            &attempt.updated_at,
+            "attempt_updated_at",
+            "autonomous_run_request_invalid",
+        )?;
+        if attempt.attempt_number == 0 {
+            return Err(CommandError::system_fault(
+                "autonomous_run_request_invalid",
+                "Cadence requires autonomous attempt numbers to start at 1.",
+            ));
+        }
+        if attempt.project_id != payload.run.project_id
+            || attempt.run_id != payload.run.run_id
+            || attempt.unit_id != unit.unit_id
+        {
+            return Err(CommandError::system_fault(
+                "autonomous_run_request_invalid",
+                "Cadence requires autonomous attempts to share the parent run and unit linkage.",
+            ));
+        }
+        if let Some(boundary_id) = attempt.boundary_id.as_deref() {
+            validate_non_empty_text(boundary_id, "attempt_boundary_id", "autonomous_run_request_invalid")?;
+        }
+        if let Some(reason) = attempt.last_error.as_ref() {
+            validate_non_empty_text(
+                &reason.code,
+                "attempt_last_error_code",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_non_empty_text(
+                &reason.message,
+                "attempt_last_error_message",
+                "autonomous_run_request_invalid",
+            )?;
+        }
+    }
+
+    for artifact in &payload.artifacts {
+        validate_non_empty_text(
+            &artifact.artifact_id,
+            "artifact_id",
+            "autonomous_run_request_invalid",
+        )?;
+        validate_non_empty_text(
+            &artifact.artifact_kind,
+            "artifact_kind",
+            "autonomous_run_request_invalid",
+        )?;
+        validate_non_empty_text(
+            &artifact.summary,
+            "artifact_summary",
+            "autonomous_run_request_invalid",
+        )?;
+        validate_non_empty_text(
+            &artifact.created_at,
+            "artifact_created_at",
+            "autonomous_run_request_invalid",
+        )?;
+        validate_non_empty_text(
+            &artifact.updated_at,
+            "artifact_updated_at",
+            "autonomous_run_request_invalid",
+        )?;
+        if artifact.project_id != payload.run.project_id
+            || artifact.run_id != payload.run.run_id
+            || artifact.unit_id != unit.unit_id
+        {
+            return Err(CommandError::system_fault(
+                "autonomous_run_request_invalid",
+                "Cadence requires autonomous artifacts to share the parent run and unit linkage.",
+            ));
+        }
+        if payload
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| artifact.attempt_id != attempt.attempt_id)
+        {
+            return Err(CommandError::system_fault(
+                "autonomous_run_request_invalid",
+                "Cadence requires autonomous artifacts to link to the persisted attempt id.",
+            ));
+        }
+        if let Some(secret_hint) = find_prohibited_runtime_persistence_content(&artifact.summary) {
+            return Err(CommandError::user_fixable(
+                "autonomous_run_request_invalid",
+                format!(
+                    "Autonomous artifact summaries must not include {secret_hint}. Remove secret-bearing content before retrying."
+                ),
+            ));
+        }
+        if let Some(content_hash) = artifact.content_hash.as_deref() {
+            validate_non_empty_text(
+                content_hash,
+                "artifact_content_hash",
+                "autonomous_run_request_invalid",
+            )?;
+            if content_hash.len() != 64
+                || content_hash
+                    .chars()
+                    .any(|ch| !ch.is_ascii_hexdigit() || ch.is_ascii_uppercase())
+            {
+                return Err(CommandError::user_fixable(
+                    "autonomous_run_request_invalid",
+                    "Cadence requires autonomous artifact content hashes to be lowercase 64-character hex digests.",
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -13545,6 +14766,79 @@ fn autonomous_run_status_sql_value(value: &AutonomousRunStatus) -> &'static str 
         AutonomousRunStatus::Stopped => "stopped",
         AutonomousRunStatus::Crashed => "crashed",
         AutonomousRunStatus::Completed => "completed",
+    }
+}
+
+fn parse_autonomous_unit_kind(value: &str) -> Result<AutonomousUnitKind, String> {
+    match value {
+        "researcher" => Ok(AutonomousUnitKind::Researcher),
+        "planner" => Ok(AutonomousUnitKind::Planner),
+        "executor" => Ok(AutonomousUnitKind::Executor),
+        "verifier" => Ok(AutonomousUnitKind::Verifier),
+        other => Err(format!(
+            "must be a known autonomous-unit kind, found `{other}`."
+        )),
+    }
+}
+
+fn autonomous_unit_kind_sql_value(value: &AutonomousUnitKind) -> &'static str {
+    match value {
+        AutonomousUnitKind::Researcher => "researcher",
+        AutonomousUnitKind::Planner => "planner",
+        AutonomousUnitKind::Executor => "executor",
+        AutonomousUnitKind::Verifier => "verifier",
+    }
+}
+
+fn parse_autonomous_unit_status(value: &str) -> Result<AutonomousUnitStatus, String> {
+    match value {
+        "pending" => Ok(AutonomousUnitStatus::Pending),
+        "active" => Ok(AutonomousUnitStatus::Active),
+        "blocked" => Ok(AutonomousUnitStatus::Blocked),
+        "paused" => Ok(AutonomousUnitStatus::Paused),
+        "completed" => Ok(AutonomousUnitStatus::Completed),
+        "cancelled" => Ok(AutonomousUnitStatus::Cancelled),
+        "failed" => Ok(AutonomousUnitStatus::Failed),
+        other => Err(format!(
+            "must be a known autonomous-unit status, found `{other}`."
+        )),
+    }
+}
+
+fn autonomous_unit_status_sql_value(value: &AutonomousUnitStatus) -> &'static str {
+    match value {
+        AutonomousUnitStatus::Pending => "pending",
+        AutonomousUnitStatus::Active => "active",
+        AutonomousUnitStatus::Blocked => "blocked",
+        AutonomousUnitStatus::Paused => "paused",
+        AutonomousUnitStatus::Completed => "completed",
+        AutonomousUnitStatus::Cancelled => "cancelled",
+        AutonomousUnitStatus::Failed => "failed",
+    }
+}
+
+fn parse_autonomous_unit_artifact_status(
+    value: &str,
+) -> Result<AutonomousUnitArtifactStatus, String> {
+    match value {
+        "pending" => Ok(AutonomousUnitArtifactStatus::Pending),
+        "recorded" => Ok(AutonomousUnitArtifactStatus::Recorded),
+        "rejected" => Ok(AutonomousUnitArtifactStatus::Rejected),
+        "redacted" => Ok(AutonomousUnitArtifactStatus::Redacted),
+        other => Err(format!(
+            "must be a known autonomous-artifact status, found `{other}`."
+        )),
+    }
+}
+
+fn autonomous_unit_artifact_status_sql_value(
+    value: &AutonomousUnitArtifactStatus,
+) -> &'static str {
+    match value {
+        AutonomousUnitArtifactStatus::Pending => "pending",
+        AutonomousUnitArtifactStatus::Recorded => "recorded",
+        AutonomousUnitArtifactStatus::Rejected => "rejected",
+        AutonomousUnitArtifactStatus::Redacted => "redacted",
     }
 }
 

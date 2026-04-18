@@ -545,6 +545,108 @@ pub fn migrations() -> &'static Migrations<'static> {
                     ON autonomous_runs(project_id, status, updated_at DESC);
                 "#,
             ),
+            M::up(
+                r#"
+                CREATE TABLE IF NOT EXISTS autonomous_units (
+                    unit_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK (sequence > 0),
+                    kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    boundary_id TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    last_error_code TEXT,
+                    last_error_message TEXT,
+                    updated_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    CHECK (unit_id <> ''),
+                    CHECK (kind IN ('researcher', 'planner', 'executor', 'verifier')),
+                    CHECK (status IN ('pending', 'active', 'blocked', 'paused', 'completed', 'cancelled', 'failed')),
+                    CHECK (summary <> ''),
+                    CHECK (boundary_id IS NULL OR boundary_id <> ''),
+                    CHECK (
+                        (last_error_code IS NULL AND last_error_message IS NULL)
+                        OR (last_error_code IS NOT NULL AND last_error_message IS NOT NULL)
+                    ),
+                    UNIQUE (project_id, run_id, sequence),
+                    UNIQUE (project_id, run_id, unit_id),
+                    FOREIGN KEY (project_id, run_id)
+                        REFERENCES autonomous_runs(project_id, run_id) ON DELETE CASCADE
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_autonomous_units_one_active_per_run
+                    ON autonomous_units(project_id, run_id)
+                    WHERE status = 'active';
+                CREATE INDEX IF NOT EXISTS idx_autonomous_units_project_run_sequence
+                    ON autonomous_units(project_id, run_id, sequence DESC, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS autonomous_unit_attempts (
+                    attempt_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    unit_id TEXT NOT NULL,
+                    attempt_number INTEGER NOT NULL CHECK (attempt_number > 0),
+                    child_session_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    boundary_id TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    last_error_code TEXT,
+                    last_error_message TEXT,
+                    updated_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    CHECK (attempt_id <> ''),
+                    CHECK (child_session_id <> ''),
+                    CHECK (status IN ('pending', 'active', 'blocked', 'paused', 'completed', 'cancelled', 'failed')),
+                    CHECK (boundary_id IS NULL OR boundary_id <> ''),
+                    CHECK (
+                        (last_error_code IS NULL AND last_error_message IS NULL)
+                        OR (last_error_code IS NOT NULL AND last_error_message IS NOT NULL)
+                    ),
+                    UNIQUE (project_id, run_id, unit_id, attempt_number),
+                    UNIQUE (project_id, run_id, child_session_id),
+                    UNIQUE (project_id, run_id, attempt_id),
+                    FOREIGN KEY (project_id, run_id, unit_id)
+                        REFERENCES autonomous_units(project_id, run_id, unit_id) ON DELETE CASCADE
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_autonomous_unit_attempts_one_active_per_run
+                    ON autonomous_unit_attempts(project_id, run_id)
+                    WHERE status = 'active';
+                CREATE INDEX IF NOT EXISTS idx_autonomous_unit_attempts_project_run_unit_attempt
+                    ON autonomous_unit_attempts(project_id, run_id, unit_id, attempt_number DESC, updated_at DESC);
+
+                CREATE TABLE IF NOT EXISTS autonomous_unit_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    unit_id TEXT NOT NULL,
+                    attempt_id TEXT NOT NULL,
+                    artifact_kind TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    content_hash TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CHECK (artifact_id <> ''),
+                    CHECK (artifact_kind <> ''),
+                    CHECK (status IN ('pending', 'recorded', 'rejected', 'redacted')),
+                    CHECK (summary <> ''),
+                    CHECK (content_hash IS NULL OR (length(content_hash) = 64 AND content_hash NOT GLOB '*[^0-9a-f]*')),
+                    UNIQUE (project_id, run_id, artifact_id),
+                    FOREIGN KEY (project_id, run_id, unit_id)
+                        REFERENCES autonomous_units(project_id, run_id, unit_id) ON DELETE CASCADE,
+                    FOREIGN KEY (project_id, run_id, attempt_id)
+                        REFERENCES autonomous_unit_attempts(project_id, run_id, attempt_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_autonomous_unit_artifacts_project_run_attempt
+                    ON autonomous_unit_artifacts(project_id, run_id, attempt_id, created_at DESC, artifact_id ASC);
+                "#,
+            ),
         ])
     });
 

@@ -10,20 +10,23 @@ use crate::{
     auth::{AuthDiagnostic, AuthFlowError, OPENAI_CODEX_PROVIDER_ID},
     commands::{
         AutonomousLifecycleReasonDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
-        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousUnitDto,
-        AutonomousUnitKindDto, AutonomousUnitStatusDto, CommandError, CommandErrorClass,
-        CommandResult, ProjectUpdateReason, ProjectUpdatedPayloadDto, RuntimeDiagnosticDto,
-        RuntimeRunCheckpointDto, RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto,
-        RuntimeRunDto, RuntimeRunStatusDto, RuntimeRunTransportDto,
-        RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto, RuntimeSessionDto,
-        RuntimeUpdatedPayloadDto, PROJECT_UPDATED_EVENT, RUNTIME_RUN_UPDATED_EVENT,
-        RUNTIME_UPDATED_EVENT,
+        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousUnitArtifactDto,
+        AutonomousUnitArtifactStatusDto, AutonomousUnitAttemptDto, AutonomousUnitDto,
+        AutonomousUnitHistoryEntryDto, AutonomousUnitKindDto, AutonomousUnitStatusDto,
+        CommandError, CommandErrorClass, CommandResult, ProjectUpdateReason,
+        ProjectUpdatedPayloadDto, RuntimeDiagnosticDto, RuntimeRunCheckpointDto,
+        RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto, RuntimeRunDto,
+        RuntimeRunStatusDto, RuntimeRunTransportDto, RuntimeRunTransportLivenessDto,
+        RuntimeRunUpdatedPayloadDto, RuntimeSessionDto, RuntimeUpdatedPayloadDto,
+        PROJECT_UPDATED_EVENT, RUNTIME_RUN_UPDATED_EVENT, RUNTIME_UPDATED_EVENT,
     },
     db::project_store::{
         self, AutonomousRunRecord, AutonomousRunSnapshotRecord, AutonomousRunStatus,
-        RuntimeRunCheckpointKind, RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord,
-        RuntimeRunStatus, RuntimeRunTransportLiveness, RuntimeSessionDiagnosticRecord,
-        RuntimeSessionRecord,
+        AutonomousRunUpsertRecord, AutonomousUnitArtifactRecord, AutonomousUnitArtifactStatus,
+        AutonomousUnitAttemptRecord, AutonomousUnitHistoryRecord, AutonomousUnitKind,
+        AutonomousUnitRecord, AutonomousUnitStatus, RuntimeRunCheckpointKind,
+        RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord, RuntimeRunStatus,
+        RuntimeRunTransportLiveness, RuntimeSessionDiagnosticRecord, RuntimeSessionRecord,
     },
     registry::{self, RegistryProjectRecord},
     runtime::{probe_runtime_run, RuntimeSupervisorProbeRequest},
@@ -355,28 +358,23 @@ pub(crate) fn sync_autonomous_run_state(
     intent: AutonomousSyncIntent,
 ) -> CommandResult<AutonomousRunStateDto> {
     let existing = load_persisted_autonomous_run(repo_root, project_id)?;
-    let next = match runtime_snapshot {
-        Some(snapshot) => Some(reconcile_autonomous_run_snapshot(
-            existing.as_ref(),
-            snapshot,
-            intent,
-        )),
-        None => existing.clone(),
-    };
 
-    let persisted = match next {
-        Some(snapshot) => {
-            if existing.as_ref() == Some(&snapshot) {
-                snapshot
-            } else {
-                project_store::upsert_autonomous_run(repo_root, &snapshot.run)?
-            }
-        }
+    let persisted = match runtime_snapshot {
+        Some(snapshot) => project_store::upsert_autonomous_run(
+            repo_root,
+            &reconcile_autonomous_run_snapshot(existing.as_ref(), snapshot, intent),
+        )?,
         None => {
-            return Ok(AutonomousRunStateDto {
-                run: None,
-                unit: None,
-            })
+            if let Some(existing) = existing {
+                existing
+            } else {
+                return Ok(AutonomousRunStateDto {
+                    run: None,
+                    unit: None,
+                    attempt: None,
+                    history: Vec::new(),
+                });
+            }
         }
     };
 
@@ -389,6 +387,10 @@ pub(crate) fn autonomous_run_state_from_snapshot(
     AutonomousRunStateDto {
         run: snapshot.map(autonomous_run_dto_from_snapshot),
         unit: snapshot.and_then(autonomous_unit_dto_from_snapshot),
+        attempt: snapshot.and_then(autonomous_attempt_dto_from_snapshot),
+        history: snapshot
+            .map(autonomous_history_dto_from_snapshot)
+            .unwrap_or_default(),
     }
 }
 
@@ -453,13 +455,12 @@ fn reconcile_autonomous_run_snapshot(
     existing: Option<&AutonomousRunSnapshotRecord>,
     runtime_snapshot: &RuntimeRunSnapshotRecord,
     intent: AutonomousSyncIntent,
-) -> AutonomousRunSnapshotRecord {
+) -> AutonomousRunUpsertRecord {
     let is_same_run = existing
         .is_some_and(|existing| existing.run.run_id == runtime_snapshot.run.run_id);
     let existing_run = is_same_run.then(|| existing.expect("checked same-run autonomous snapshot"));
-    let active_unit_sequence = (runtime_snapshot.last_checkpoint_sequence > 0)
-        .then_some(runtime_snapshot.last_checkpoint_sequence)
-        .or_else(|| existing_run.and_then(|snapshot| snapshot.run.active_unit_sequence));
+    let existing_unit = existing_run.and_then(|snapshot| snapshot.unit.as_ref());
+    let existing_attempt = existing_run.and_then(|snapshot| snapshot.attempt.as_ref());
 
     let duplicate_start_detected = matches!(intent, AutonomousSyncIntent::DuplicateStart)
         || existing_run
@@ -492,7 +493,12 @@ fn reconcile_autonomous_run_snapshot(
         RuntimeRunStatus::Stopped => (
             existing_run
                 .map(|snapshot| snapshot.run.status.clone())
-                .filter(|status| matches!(status, AutonomousRunStatus::Cancelled | AutonomousRunStatus::Completed))
+                .filter(|status| {
+                    matches!(
+                        status,
+                        AutonomousRunStatus::Cancelled | AutonomousRunStatus::Completed
+                    )
+                })
                 .unwrap_or(AutonomousRunStatus::Stopped),
             existing_run.and_then(|snapshot| snapshot.run.cancelled_at.clone()),
             existing_run.and_then(|snapshot| snapshot.run.cancel_reason.clone()),
@@ -523,14 +529,79 @@ fn reconcile_autonomous_run_snapshot(
         .and_then(|snapshot| snapshot.run.pause_reason.clone())
         .filter(|_| matches!(status, AutonomousRunStatus::Paused));
 
-    AutonomousRunSnapshotRecord {
+    let sequence = existing_unit.map(|unit| unit.sequence).unwrap_or(1);
+    let unit_id = existing_unit
+        .map(|unit| unit.unit_id.clone())
+        .unwrap_or_else(|| format!("{}:unit:{}", runtime_snapshot.run.run_id, sequence));
+    let attempt_number = existing_attempt
+        .map(|attempt| attempt.attempt_number)
+        .unwrap_or(1);
+    let attempt_id = existing_attempt
+        .map(|attempt| attempt.attempt_id.clone())
+        .unwrap_or_else(|| format!("{unit_id}:attempt:{attempt_number}"));
+    let child_session_id = existing_attempt
+        .map(|attempt| attempt.child_session_id.clone())
+        .unwrap_or_else(generate_autonomous_child_session_id);
+    let unit_summary = existing_unit
+        .map(|unit| unit.summary.clone())
+        .or_else(|| {
+            runtime_snapshot
+                .checkpoints
+                .last()
+                .map(|checkpoint| checkpoint.summary.clone())
+        })
+        .unwrap_or_else(|| "Researcher child session launched.".to_string());
+
+    let unit_status = autonomous_unit_status_for_run(&status);
+    let finished_at = match unit_status {
+        AutonomousUnitStatus::Completed
+        | AutonomousUnitStatus::Cancelled
+        | AutonomousUnitStatus::Failed => Some(base_updated_at.clone()),
+        _ => None,
+    };
+
+    let boundary_id = existing_attempt.and_then(|attempt| attempt.boundary_id.clone());
+    let unit = AutonomousUnitRecord {
+        project_id: runtime_snapshot.run.project_id.clone(),
+        run_id: runtime_snapshot.run.run_id.clone(),
+        unit_id: unit_id.clone(),
+        sequence,
+        kind: AutonomousUnitKind::Researcher,
+        status: unit_status.clone(),
+        summary: unit_summary,
+        boundary_id: boundary_id.clone(),
+        started_at: existing_unit
+            .map(|unit| unit.started_at.clone())
+            .unwrap_or_else(|| runtime_snapshot.run.started_at.clone()),
+        finished_at: finished_at.clone(),
+        updated_at: base_updated_at.clone(),
+        last_error: last_error.clone(),
+    };
+    let attempt = AutonomousUnitAttemptRecord {
+        project_id: runtime_snapshot.run.project_id.clone(),
+        run_id: runtime_snapshot.run.run_id.clone(),
+        unit_id: unit_id.clone(),
+        attempt_id: attempt_id.clone(),
+        attempt_number,
+        child_session_id,
+        status: unit_status,
+        boundary_id,
+        started_at: existing_attempt
+            .map(|attempt| attempt.started_at.clone())
+            .unwrap_or_else(|| runtime_snapshot.run.started_at.clone()),
+        finished_at,
+        updated_at: base_updated_at.clone(),
+        last_error: last_error.clone(),
+    };
+
+    AutonomousRunUpsertRecord {
         run: AutonomousRunRecord {
             project_id: runtime_snapshot.run.project_id.clone(),
             run_id: runtime_snapshot.run.run_id.clone(),
             runtime_kind: runtime_snapshot.run.runtime_kind.clone(),
             supervisor_kind: runtime_snapshot.run.supervisor_kind.clone(),
             status,
-            active_unit_sequence,
+            active_unit_sequence: Some(sequence),
             duplicate_start_detected,
             duplicate_start_run_id,
             duplicate_start_reason,
@@ -548,20 +619,21 @@ fn reconcile_autonomous_run_snapshot(
             last_error,
             updated_at: base_updated_at,
         },
-        unit_checkpoint: runtime_snapshot
-            .checkpoints
-            .last()
-            .cloned()
-            .or_else(|| existing_run.and_then(|snapshot| snapshot.unit_checkpoint.clone())),
+        unit: Some(unit),
+        attempt: Some(attempt),
+        artifacts: existing_run
+            .map(|snapshot| {
+                snapshot
+                    .history
+                    .iter()
+                    .flat_map(|entry| entry.artifacts.clone())
+                    .collect::<Vec<AutonomousUnitArtifactRecord>>()
+            })
+            .unwrap_or_default(),
     }
 }
 
 fn autonomous_run_dto_from_snapshot(snapshot: &AutonomousRunSnapshotRecord) -> AutonomousRunDto {
-    let active_unit_id = snapshot
-        .run
-        .active_unit_sequence
-        .map(|sequence| format!("{}:checkpoint:{}", snapshot.run.run_id, sequence));
-
     AutonomousRunDto {
         project_id: snapshot.run.project_id.clone(),
         run_id: snapshot.run.run_id.clone(),
@@ -569,7 +641,8 @@ fn autonomous_run_dto_from_snapshot(snapshot: &AutonomousRunSnapshotRecord) -> A
         supervisor_kind: snapshot.run.supervisor_kind.clone(),
         status: autonomous_run_status_dto(&snapshot.run.status),
         recovery_state: autonomous_run_recovery_state_dto(&snapshot.run.status),
-        active_unit_id,
+        active_unit_id: snapshot.unit.as_ref().map(|unit| unit.unit_id.clone()),
+        active_attempt_id: snapshot.attempt.as_ref().map(|attempt| attempt.attempt_id.clone()),
         duplicate_start_detected: snapshot.run.duplicate_start_detected,
         duplicate_start_run_id: snapshot.run.duplicate_start_run_id.clone(),
         duplicate_start_reason: snapshot.run.duplicate_start_reason.clone(),
@@ -593,32 +666,100 @@ fn autonomous_run_dto_from_snapshot(snapshot: &AutonomousRunSnapshotRecord) -> A
 fn autonomous_unit_dto_from_snapshot(
     snapshot: &AutonomousRunSnapshotRecord,
 ) -> Option<AutonomousUnitDto> {
-    let checkpoint = snapshot.unit_checkpoint.as_ref()?;
-    let unit_id = format!("{}:checkpoint:{}", snapshot.run.run_id, checkpoint.sequence);
-    let finished_at = match snapshot.run.status {
-        AutonomousRunStatus::Stopped
-        | AutonomousRunStatus::Cancelled
-        | AutonomousRunStatus::Completed
-        | AutonomousRunStatus::Failed
-        | AutonomousRunStatus::Crashed => Some(snapshot.run.updated_at.clone()),
-        _ => None,
-    };
+    snapshot.unit.as_ref().map(autonomous_unit_dto_from_record)
+}
 
-    Some(AutonomousUnitDto {
-        project_id: snapshot.run.project_id.clone(),
-        run_id: snapshot.run.run_id.clone(),
-        unit_id,
-        sequence: checkpoint.sequence,
-        kind: autonomous_unit_kind_dto(&checkpoint.kind),
-        status: autonomous_unit_status_dto(&snapshot.run.status),
-        summary: checkpoint.summary.clone(),
-        boundary_id: None,
-        started_at: checkpoint.created_at.clone(),
-        finished_at,
-        updated_at: snapshot.run.updated_at.clone(),
-        last_error_code: snapshot.run.last_error.as_ref().map(|error| error.code.clone()),
-        last_error: snapshot.run.last_error.as_ref().map(runtime_run_diagnostic_dto),
-    })
+fn autonomous_attempt_dto_from_snapshot(
+    snapshot: &AutonomousRunSnapshotRecord,
+) -> Option<AutonomousUnitAttemptDto> {
+    snapshot
+        .attempt
+        .as_ref()
+        .map(autonomous_attempt_dto_from_record)
+}
+
+fn autonomous_history_dto_from_snapshot(
+    snapshot: &AutonomousRunSnapshotRecord,
+) -> Vec<AutonomousUnitHistoryEntryDto> {
+    snapshot
+        .history
+        .iter()
+        .cloned()
+        .map(autonomous_history_entry_dto_from_record)
+        .collect()
+}
+
+fn autonomous_unit_dto_from_record(unit: &AutonomousUnitRecord) -> AutonomousUnitDto {
+    AutonomousUnitDto {
+        project_id: unit.project_id.clone(),
+        run_id: unit.run_id.clone(),
+        unit_id: unit.unit_id.clone(),
+        sequence: unit.sequence,
+        kind: autonomous_unit_kind_dto(&unit.kind),
+        status: autonomous_unit_status_dto(&unit.status),
+        summary: unit.summary.clone(),
+        boundary_id: unit.boundary_id.clone(),
+        started_at: unit.started_at.clone(),
+        finished_at: unit.finished_at.clone(),
+        updated_at: unit.updated_at.clone(),
+        last_error_code: unit.last_error.as_ref().map(|error| error.code.clone()),
+        last_error: unit.last_error.as_ref().map(runtime_run_diagnostic_dto),
+    }
+}
+
+fn autonomous_attempt_dto_from_record(
+    attempt: &AutonomousUnitAttemptRecord,
+) -> AutonomousUnitAttemptDto {
+    AutonomousUnitAttemptDto {
+        project_id: attempt.project_id.clone(),
+        run_id: attempt.run_id.clone(),
+        unit_id: attempt.unit_id.clone(),
+        attempt_id: attempt.attempt_id.clone(),
+        attempt_number: attempt.attempt_number,
+        child_session_id: attempt.child_session_id.clone(),
+        status: autonomous_unit_status_dto(&attempt.status),
+        boundary_id: attempt.boundary_id.clone(),
+        started_at: attempt.started_at.clone(),
+        finished_at: attempt.finished_at.clone(),
+        updated_at: attempt.updated_at.clone(),
+        last_error_code: attempt.last_error.as_ref().map(|error| error.code.clone()),
+        last_error: attempt.last_error.as_ref().map(runtime_run_diagnostic_dto),
+    }
+}
+
+fn autonomous_artifact_dto_from_record(
+    artifact: &AutonomousUnitArtifactRecord,
+) -> AutonomousUnitArtifactDto {
+    AutonomousUnitArtifactDto {
+        project_id: artifact.project_id.clone(),
+        run_id: artifact.run_id.clone(),
+        unit_id: artifact.unit_id.clone(),
+        attempt_id: artifact.attempt_id.clone(),
+        artifact_id: artifact.artifact_id.clone(),
+        artifact_kind: artifact.artifact_kind.clone(),
+        status: autonomous_artifact_status_dto(&artifact.status),
+        summary: artifact.summary.clone(),
+        content_hash: artifact.content_hash.clone(),
+        created_at: artifact.created_at.clone(),
+        updated_at: artifact.updated_at.clone(),
+    }
+}
+
+fn autonomous_history_entry_dto_from_record(
+    history: AutonomousUnitHistoryRecord,
+) -> AutonomousUnitHistoryEntryDto {
+    AutonomousUnitHistoryEntryDto {
+        unit: autonomous_unit_dto_from_record(&history.unit),
+        latest_attempt: history
+            .latest_attempt
+            .as_ref()
+            .map(autonomous_attempt_dto_from_record),
+        artifacts: history
+            .artifacts
+            .iter()
+            .map(autonomous_artifact_dto_from_record)
+            .collect(),
+    }
 }
 
 pub(crate) fn generate_runtime_run_id() -> String {
@@ -697,29 +838,63 @@ fn autonomous_run_recovery_state_dto(
     }
 }
 
-fn autonomous_unit_kind_dto(kind: &RuntimeRunCheckpointKind) -> AutonomousUnitKindDto {
+fn autonomous_unit_kind_dto(kind: &AutonomousUnitKind) -> AutonomousUnitKindDto {
     match kind {
-        RuntimeRunCheckpointKind::Bootstrap => AutonomousUnitKindDto::Bootstrap,
-        RuntimeRunCheckpointKind::State => AutonomousUnitKindDto::State,
-        RuntimeRunCheckpointKind::Tool => AutonomousUnitKindDto::Tool,
-        RuntimeRunCheckpointKind::ActionRequired => AutonomousUnitKindDto::ActionRequired,
-        RuntimeRunCheckpointKind::Diagnostic => AutonomousUnitKindDto::Diagnostic,
+        AutonomousUnitKind::Researcher => AutonomousUnitKindDto::Researcher,
+        AutonomousUnitKind::Planner => AutonomousUnitKindDto::Planner,
+        AutonomousUnitKind::Executor => AutonomousUnitKindDto::Executor,
+        AutonomousUnitKind::Verifier => AutonomousUnitKindDto::Verifier,
     }
 }
 
-fn autonomous_unit_status_dto(status: &AutonomousRunStatus) -> AutonomousUnitStatusDto {
+fn autonomous_unit_status_dto(status: &AutonomousUnitStatus) -> AutonomousUnitStatusDto {
+    match status {
+        AutonomousUnitStatus::Pending => AutonomousUnitStatusDto::Pending,
+        AutonomousUnitStatus::Active => AutonomousUnitStatusDto::Active,
+        AutonomousUnitStatus::Blocked => AutonomousUnitStatusDto::Blocked,
+        AutonomousUnitStatus::Paused => AutonomousUnitStatusDto::Paused,
+        AutonomousUnitStatus::Completed => AutonomousUnitStatusDto::Completed,
+        AutonomousUnitStatus::Cancelled => AutonomousUnitStatusDto::Cancelled,
+        AutonomousUnitStatus::Failed => AutonomousUnitStatusDto::Failed,
+    }
+}
+
+fn autonomous_artifact_status_dto(
+    status: &AutonomousUnitArtifactStatus,
+) -> AutonomousUnitArtifactStatusDto {
+    match status {
+        AutonomousUnitArtifactStatus::Pending => AutonomousUnitArtifactStatusDto::Pending,
+        AutonomousUnitArtifactStatus::Recorded => AutonomousUnitArtifactStatusDto::Recorded,
+        AutonomousUnitArtifactStatus::Rejected => AutonomousUnitArtifactStatusDto::Rejected,
+        AutonomousUnitArtifactStatus::Redacted => AutonomousUnitArtifactStatusDto::Redacted,
+    }
+}
+
+fn autonomous_unit_status_for_run(status: &AutonomousRunStatus) -> AutonomousUnitStatus {
     match status {
         AutonomousRunStatus::Starting
         | AutonomousRunStatus::Running
         | AutonomousRunStatus::Stale
-        | AutonomousRunStatus::Cancelling => AutonomousUnitStatusDto::Active,
-        AutonomousRunStatus::Paused => AutonomousUnitStatusDto::Paused,
-        AutonomousRunStatus::Cancelled => AutonomousUnitStatusDto::Cancelled,
+        | AutonomousRunStatus::Cancelling => AutonomousUnitStatus::Active,
+        AutonomousRunStatus::Paused => AutonomousUnitStatus::Paused,
+        AutonomousRunStatus::Cancelled => AutonomousUnitStatus::Cancelled,
         AutonomousRunStatus::Stopped | AutonomousRunStatus::Completed => {
-            AutonomousUnitStatusDto::Completed
+            AutonomousUnitStatus::Completed
         }
-        AutonomousRunStatus::Failed | AutonomousRunStatus::Crashed => AutonomousUnitStatusDto::Failed,
+        AutonomousRunStatus::Failed | AutonomousRunStatus::Crashed => AutonomousUnitStatus::Failed,
     }
+}
+
+fn generate_autonomous_child_session_id() -> String {
+    let mut bytes = [0_u8; 8];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    format!(
+        "child-{}",
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 fn runtime_reason_dto(reason: &RuntimeRunDiagnosticRecord) -> AutonomousLifecycleReasonDto {

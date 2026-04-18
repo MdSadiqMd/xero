@@ -1450,11 +1450,10 @@ pub enum AutonomousRunRecoveryStateDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomousUnitKindDto {
-    Bootstrap,
-    State,
-    Tool,
-    ActionRequired,
-    Diagnostic,
+    Researcher,
+    Planner,
+    Executor,
+    Verifier,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1462,10 +1461,20 @@ pub enum AutonomousUnitKindDto {
 pub enum AutonomousUnitStatusDto {
     Pending,
     Active,
+    Blocked,
     Paused,
     Completed,
     Cancelled,
     Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousUnitArtifactStatusDto {
+    Pending,
+    Recorded,
+    Rejected,
+    Redacted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1485,6 +1494,7 @@ pub struct AutonomousRunDto {
     pub status: AutonomousRunStatusDto,
     pub recovery_state: AutonomousRunRecoveryStateDto,
     pub active_unit_id: Option<String>,
+    pub active_attempt_id: Option<String>,
     pub duplicate_start_detected: bool,
     pub duplicate_start_run_id: Option<String>,
     pub duplicate_start_reason: Option<String>,
@@ -1524,9 +1534,55 @@ pub struct AutonomousUnitDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousUnitAttemptDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub attempt_number: u32,
+    pub child_session_id: String,
+    pub status: AutonomousUnitStatusDto,
+    pub boundary_id: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub updated_at: String,
+    pub last_error_code: Option<String>,
+    pub last_error: Option<RuntimeRunDiagnosticDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousUnitArtifactDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub artifact_kind: String,
+    pub status: AutonomousUnitArtifactStatusDto,
+    pub summary: String,
+    pub content_hash: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousUnitHistoryEntryDto {
+    pub unit: AutonomousUnitDto,
+    pub latest_attempt: Option<AutonomousUnitAttemptDto>,
+    #[serde(default)]
+    pub artifacts: Vec<AutonomousUnitArtifactDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousRunStateDto {
     pub run: Option<AutonomousRunDto>,
     pub unit: Option<AutonomousUnitDto>,
+    pub attempt: Option<AutonomousUnitAttemptDto>,
+    #[serde(default)]
+    pub history: Vec<AutonomousUnitHistoryEntryDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
