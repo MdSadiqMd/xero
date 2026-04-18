@@ -2654,7 +2654,14 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
             routeTarget: '@ops-room',
             enabled: true,
           }),
-          credentialReadiness: null,
+          credentialReadiness: {
+            hasBotToken: true,
+            hasChatId: true,
+            hasWebhookUrl: false,
+            ready: false,
+            status: 'ready',
+            diagnostic: null,
+          } as never,
         },
         makeNotificationRoute({
           projectId: 'project-1',

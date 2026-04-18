@@ -1944,7 +1944,43 @@ pub fn upsert_autonomous_run(
             )
         })?;
 
+    let open_unit = read_open_autonomous_unit(
+        &transaction,
+        &database_path,
+        &payload.run.project_id,
+        &payload.run.run_id,
+    )?;
+    let open_attempt = read_open_autonomous_unit_attempt(
+        &transaction,
+        &database_path,
+        &payload.run.project_id,
+        &payload.run.run_id,
+    )?;
+    let rollover_timestamp = payload
+        .attempt
+        .as_ref()
+        .map(|attempt| attempt.started_at.as_str())
+        .or_else(|| payload.unit.as_ref().map(|unit| unit.started_at.as_str()))
+        .unwrap_or(payload.run.updated_at.as_str());
+
     if let Some(unit) = payload.unit.as_ref() {
+        close_superseded_autonomous_unit_attempt(
+            &transaction,
+            &database_path,
+            open_attempt.as_ref(),
+            payload.attempt.as_ref(),
+            &payload.run.status,
+            rollover_timestamp,
+        )?;
+        close_superseded_autonomous_unit(
+            &transaction,
+            &database_path,
+            open_unit.as_ref(),
+            unit,
+            &payload.run.status,
+            rollover_timestamp,
+        )?;
+
         persist_autonomous_unit(&transaction, &database_path, unit)?;
         if let Some(linkage) = unit.workflow_linkage.as_ref() {
             validate_autonomous_workflow_linkage_record(
@@ -1996,6 +2032,194 @@ pub fn upsert_autonomous_run(
             ),
         )
     })
+}
+
+fn read_open_autonomous_unit(
+    connection: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Option<AutonomousUnitRecord>, CommandError> {
+    let mut open_units = read_autonomous_units(connection, database_path, project_id, run_id)?
+        .into_iter()
+        .filter(|unit| autonomous_unit_status_is_open(&unit.status))
+        .collect::<Vec<_>>();
+
+    if open_units.len() > 1 {
+        return Err(CommandError::system_fault(
+            "autonomous_unit_conflict",
+            format!(
+                "Cadence refused to persist autonomous unit rollover because run `{run_id}` already has {} open durable unit rows in {}.",
+                open_units.len(),
+                database_path.display()
+            ),
+        ));
+    }
+
+    Ok(open_units.pop())
+}
+
+fn read_open_autonomous_unit_attempt(
+    connection: &Connection,
+    database_path: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Option<AutonomousUnitAttemptRecord>, CommandError> {
+    let mut open_attempts =
+        read_autonomous_unit_attempts(connection, database_path, project_id, run_id)?
+            .into_iter()
+            .filter(|attempt| autonomous_unit_status_is_open(&attempt.status))
+            .collect::<Vec<_>>();
+
+    if open_attempts.len() > 1 {
+        return Err(CommandError::system_fault(
+            "autonomous_unit_attempt_conflict",
+            format!(
+                "Cadence refused to persist autonomous attempt rollover because run `{run_id}` already has {} open durable attempt rows in {}.",
+                open_attempts.len(),
+                database_path.display()
+            ),
+        ));
+    }
+
+    Ok(open_attempts.pop())
+}
+
+fn close_superseded_autonomous_unit(
+    transaction: &Transaction<'_>,
+    database_path: &Path,
+    existing: Option<&AutonomousUnitRecord>,
+    incoming: &AutonomousUnitRecord,
+    run_status: &AutonomousRunStatus,
+    closed_at: &str,
+) -> Result<(), CommandError> {
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    if existing.unit_id == incoming.unit_id {
+        return Ok(());
+    }
+    if existing.boundary_id.is_some() {
+        return Err(CommandError::user_fixable(
+            "autonomous_unit_boundary_drift",
+            format!(
+                "Cadence refused to roll durable autonomous unit `{}` to `{}` because the existing unit is still attached to boundary `{}`.",
+                existing.unit_id,
+                incoming.unit_id,
+                existing.boundary_id.as_deref().unwrap_or_default()
+            ),
+        ));
+    }
+
+    transaction
+        .execute(
+            r#"
+            UPDATE autonomous_units
+            SET status = ?1,
+                finished_at = COALESCE(finished_at, ?2),
+                updated_at = ?3
+            WHERE project_id = ?4
+              AND run_id = ?5
+              AND unit_id = ?6
+            "#,
+            params![
+                autonomous_unit_status_sql_value(&rollover_autonomous_unit_status(run_status)),
+                closed_at,
+                closed_at,
+                existing.project_id.as_str(),
+                existing.run_id.as_str(),
+                existing.unit_id.as_str(),
+            ],
+        )
+        .map_err(|error| {
+            map_runtime_run_write_error(
+                "autonomous_unit_persist_failed",
+                database_path,
+                error,
+                "Cadence could not close the superseded durable autonomous-unit row.",
+            )
+        })?;
+
+    Ok(())
+}
+
+fn close_superseded_autonomous_unit_attempt(
+    transaction: &Transaction<'_>,
+    database_path: &Path,
+    existing: Option<&AutonomousUnitAttemptRecord>,
+    incoming: Option<&AutonomousUnitAttemptRecord>,
+    run_status: &AutonomousRunStatus,
+    closed_at: &str,
+) -> Result<(), CommandError> {
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    let Some(incoming) = incoming else {
+        return Ok(());
+    };
+    if existing.attempt_id == incoming.attempt_id {
+        return Ok(());
+    }
+    if existing.boundary_id.is_some() {
+        return Err(CommandError::user_fixable(
+            "autonomous_unit_attempt_boundary_drift",
+            format!(
+                "Cadence refused to roll durable autonomous attempt `{}` to `{}` because the existing attempt is still attached to boundary `{}`.",
+                existing.attempt_id,
+                incoming.attempt_id,
+                existing.boundary_id.as_deref().unwrap_or_default()
+            ),
+        ));
+    }
+
+    transaction
+        .execute(
+            r#"
+            UPDATE autonomous_unit_attempts
+            SET status = ?1,
+                finished_at = COALESCE(finished_at, ?2),
+                updated_at = ?3
+            WHERE project_id = ?4
+              AND run_id = ?5
+              AND attempt_id = ?6
+            "#,
+            params![
+                autonomous_unit_status_sql_value(&rollover_autonomous_unit_status(run_status)),
+                closed_at,
+                closed_at,
+                existing.project_id.as_str(),
+                existing.run_id.as_str(),
+                existing.attempt_id.as_str(),
+            ],
+        )
+        .map_err(|error| {
+            map_runtime_run_write_error(
+                "autonomous_unit_attempt_persist_failed",
+                database_path,
+                error,
+                "Cadence could not close the superseded durable autonomous-attempt row.",
+            )
+        })?;
+
+    Ok(())
+}
+
+fn autonomous_unit_status_is_open(status: &AutonomousUnitStatus) -> bool {
+    matches!(
+        status,
+        AutonomousUnitStatus::Pending
+            | AutonomousUnitStatus::Active
+            | AutonomousUnitStatus::Blocked
+            | AutonomousUnitStatus::Paused
+    )
+}
+
+fn rollover_autonomous_unit_status(run_status: &AutonomousRunStatus) -> AutonomousUnitStatus {
+    match run_status {
+        AutonomousRunStatus::Cancelled => AutonomousUnitStatus::Cancelled,
+        AutonomousRunStatus::Failed | AutonomousRunStatus::Crashed => AutonomousUnitStatus::Failed,
+        _ => AutonomousUnitStatus::Completed,
+    }
 }
 
 fn persist_autonomous_unit(
@@ -9513,6 +9737,20 @@ fn build_autonomous_unit_history(
         ));
     }
 
+    let open_unit_count = units
+        .iter()
+        .filter(|unit| autonomous_unit_status_is_open(&unit.status))
+        .count();
+    if open_unit_count > 1 {
+        return Err(map_runtime_run_decode_error(
+            database_path,
+            format!(
+                "Autonomous run `{}` has {} open unit rows; expected at most one active, blocked, paused, or pending row.",
+                run.run_id, open_unit_count
+            ),
+        ));
+    }
+
     let active_attempt_count = attempts
         .iter()
         .filter(|attempt| attempt.status == AutonomousUnitStatus::Active)
@@ -9523,6 +9761,20 @@ fn build_autonomous_unit_history(
             format!(
                 "Autonomous run `{}` has {} active attempt rows; expected at most one.",
                 run.run_id, active_attempt_count
+            ),
+        ));
+    }
+
+    let open_attempt_count = attempts
+        .iter()
+        .filter(|attempt| autonomous_unit_status_is_open(&attempt.status))
+        .count();
+    if open_attempt_count > 1 {
+        return Err(map_runtime_run_decode_error(
+            database_path,
+            format!(
+                "Autonomous run `{}` has {} open attempt rows; expected at most one active, blocked, paused, or pending row.",
+                run.run_id, open_attempt_count
             ),
         ));
     }

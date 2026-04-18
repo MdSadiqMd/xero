@@ -55,20 +55,7 @@ const rows: Row[] = [
       "A critic agent that actually fails PRs",
     ],
     visual: <WorkflowVisual />,
-  },
-  {
-    tag: "Throughput & safety",
-    icon: <Gauge className="h-3.5 w-3.5" />,
-    title: "Fast enough to finish while you're on a coffee break.",
-    description:
-      "Native parallelism plus a local seatbelt sandbox. Agents get filesystem and network scopes per project, secrets stay in your OS keychain, and every change lands as a git commit you can revert.",
-    bullets: [
-      "10× the parallelism of browser-based tools",
-      "OS keychain for secrets · per-project sandbox policies",
-      "Git-native: branches, commits, PRs on your behalf",
-    ],
-    visual: <ThroughputVisual />,
-  },
+  }
 ]
 
 export function Features() {

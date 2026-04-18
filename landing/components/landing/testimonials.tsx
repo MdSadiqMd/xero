@@ -88,24 +88,6 @@ export function Testimonials() {
             <TestimonialCard key={t.name} t={t} i={i} />
           ))}
         </div>
-
-        <div className="mt-14 grid grid-cols-2 gap-4 border-t border-border/60 pt-10 sm:grid-cols-4">
-          {[
-            { k: "12,400+", v: "projects shipped" },
-            { k: "4.9 / 5", v: "average review" },
-            { k: "2 min", v: "median setup" },
-            { k: "3m 12s", v: "to first preview" },
-          ].map((s) => (
-            <div key={s.v} className="text-center">
-              <div className="font-sans text-2xl font-medium tracking-tight text-foreground sm:text-3xl">
-                {s.k}
-              </div>
-              <div className="mt-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-                {s.v}
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     </section>
   )

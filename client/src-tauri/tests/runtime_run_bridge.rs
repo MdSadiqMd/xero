@@ -604,6 +604,30 @@ fn count_autonomous_run_rows(repo_root: &Path) -> i64 {
         .expect("count autonomous runs")
 }
 
+fn count_autonomous_unit_rows(repo_root: &Path, project_id: &str, run_id: &str) -> i64 {
+    let database_path = database_path_for_repo(repo_root);
+    let connection = rusqlite::Connection::open(&database_path).expect("open runtime db");
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM autonomous_units WHERE project_id = ?1 AND run_id = ?2",
+            [project_id, run_id],
+            |row| row.get(0),
+        )
+        .expect("count autonomous unit rows")
+}
+
+fn count_autonomous_attempt_rows(repo_root: &Path, project_id: &str, run_id: &str) -> i64 {
+    let database_path = database_path_for_repo(repo_root);
+    let connection = rusqlite::Connection::open(&database_path).expect("open runtime db");
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM autonomous_unit_attempts WHERE project_id = ?1 AND run_id = ?2",
+            [project_id, run_id],
+            |row| row.get(0),
+        )
+        .expect("count autonomous unit attempt rows")
+}
+
 fn count_workflow_transition_rows(repo_root: &Path, project_id: &str) -> i64 {
     let database_path = database_path_for_repo(repo_root);
     let connection = rusqlite::Connection::open(&database_path).expect("open runtime db");
@@ -698,7 +722,8 @@ fn wait_for_notification_dispatches_for_action(
         let all_dispatches =
             project_store::load_notification_dispatches(repo_root, project_id, None)
                 .expect("load all notification dispatches while waiting for action dispatches");
-        let approval_count = count_operator_approval_rows_for_action(repo_root, project_id, action_id);
+        let approval_count =
+            count_operator_approval_rows_for_action(repo_root, project_id, action_id);
         assert!(
             Instant::now() < deadline,
             "timed out waiting for {expected_count} notification dispatch row(s) for action `{action_id}`, approval rows: {approval_count}, action rows: {dispatches:?}, all dispatches: {all_dispatches:?}"
@@ -2723,7 +2748,7 @@ fn planning_lifecycle_gate_pause_branch_requires_explicit_resume_without_duplica
 }
 
 #[test]
-fn start_autonomous_run_progresses_lifecycle_graph_and_reuses_handoff_linkage_on_replay() {
+fn start_autonomous_run_mints_fresh_child_unit_and_attempt_identity_per_stage() {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -2749,6 +2774,9 @@ fn start_autonomous_run_progresses_lifecycle_graph_and_reuses_handoff_linkage_on
     });
 
     let progressed = wait_for_autonomous_run(&app, &project_id, |autonomous_state| {
+        let Some(run) = autonomous_state.run.as_ref() else {
+            return false;
+        };
         let Some(unit) = autonomous_state.unit.as_ref() else {
             return false;
         };
@@ -2759,11 +2787,19 @@ fn start_autonomous_run_progresses_lifecycle_graph_and_reuses_handoff_linkage_on
             return false;
         };
 
-        unit.kind == cadence_desktop_lib::commands::AutonomousUnitKindDto::Planner
+        run.run_id == started_run.run_id
+            && autonomous_state.history.len() == 3
+            && unit.sequence == 3
+            && attempt.attempt_number == 3
+            && unit.kind == cadence_desktop_lib::commands::AutonomousUnitKindDto::Planner
             && linkage.workflow_node_id == "roadmap"
             && attempt.workflow_linkage.as_ref() == Some(linkage)
     });
 
+    let progressed_run = progressed
+        .run
+        .as_ref()
+        .expect("progressed run should exist");
     let progressed_unit = progressed
         .unit
         .as_ref()
@@ -2779,8 +2815,145 @@ fn start_autonomous_run_progresses_lifecycle_graph_and_reuses_handoff_linkage_on
 
     assert_eq!(progressed_unit.run_id, started_run.run_id);
     assert_eq!(progressed_attempt.run_id, started_run.run_id);
+    assert_eq!(
+        progressed_run.active_unit_id.as_deref(),
+        Some(progressed_unit.unit_id.as_str())
+    );
+    assert_eq!(
+        progressed_run.active_attempt_id.as_deref(),
+        Some(progressed_attempt.attempt_id.as_str())
+    );
+    assert_eq!(
+        count_autonomous_unit_rows(&repo_root, &project_id, &started_run.run_id),
+        3
+    );
+    assert_eq!(
+        count_autonomous_attempt_rows(&repo_root, &project_id, &started_run.run_id),
+        3
+    );
     assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 3);
-    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 2);
+    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 3);
+
+    let history_sequences = progressed
+        .history
+        .iter()
+        .map(|entry| entry.unit.sequence)
+        .collect::<Vec<_>>();
+    assert_eq!(history_sequences, vec![3, 2, 1]);
+
+    let history_attempt_numbers = progressed
+        .history
+        .iter()
+        .map(|entry| {
+            entry
+                .latest_attempt
+                .as_ref()
+                .expect("each seeded stage should persist a latest attempt")
+                .attempt_number
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(history_attempt_numbers, vec![3, 2, 1]);
+
+    let history_stage_ids = progressed
+        .history
+        .iter()
+        .map(|entry| {
+            entry
+                .unit
+                .workflow_linkage
+                .as_ref()
+                .expect("each seeded stage should persist workflow linkage")
+                .workflow_node_id
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        history_stage_ids,
+        vec!["roadmap", "requirements", "research"]
+    );
+
+    let history_unit_statuses = progressed
+        .history
+        .iter()
+        .map(|entry| entry.unit.status.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        history_unit_statuses,
+        vec![
+            AutonomousUnitStatusDto::Active,
+            AutonomousUnitStatusDto::Completed,
+            AutonomousUnitStatusDto::Completed,
+        ]
+    );
+
+    let history_attempt_statuses = progressed
+        .history
+        .iter()
+        .map(|entry| {
+            entry
+                .latest_attempt
+                .as_ref()
+                .expect("each seeded stage should persist a latest attempt")
+                .status
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        history_attempt_statuses,
+        vec![
+            AutonomousUnitStatusDto::Active,
+            AutonomousUnitStatusDto::Completed,
+            AutonomousUnitStatusDto::Completed,
+        ]
+    );
+
+    assert!(progressed.history[0].unit.finished_at.is_none());
+    assert!(progressed.history[1].unit.finished_at.is_some());
+    assert!(progressed.history[2].unit.finished_at.is_some());
+
+    let unit_ids = progressed
+        .history
+        .iter()
+        .map(|entry| entry.unit.unit_id.clone())
+        .collect::<Vec<_>>();
+    let mut unique_unit_ids = unit_ids.clone();
+    unique_unit_ids.sort();
+    unique_unit_ids.dedup();
+    assert_eq!(unique_unit_ids.len(), unit_ids.len());
+
+    let attempt_ids = progressed
+        .history
+        .iter()
+        .map(|entry| {
+            entry
+                .latest_attempt
+                .as_ref()
+                .expect("each seeded stage should persist a latest attempt")
+                .attempt_id
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let mut unique_attempt_ids = attempt_ids.clone();
+    unique_attempt_ids.sort();
+    unique_attempt_ids.dedup();
+    assert_eq!(unique_attempt_ids.len(), attempt_ids.len());
+
+    let child_session_ids = progressed
+        .history
+        .iter()
+        .map(|entry| {
+            entry
+                .latest_attempt
+                .as_ref()
+                .expect("each seeded stage should persist a latest attempt")
+                .child_session_id
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    let mut unique_child_session_ids = child_session_ids.clone();
+    unique_child_session_ids.sort();
+    unique_child_session_ids.dedup();
+    assert_eq!(unique_child_session_ids.len(), child_session_ids.len());
 
     let events =
         project_store::load_recent_workflow_transition_events(&repo_root, &project_id, None)
@@ -2815,6 +2988,34 @@ fn start_autonomous_run_progresses_lifecycle_graph_and_reuses_handoff_linkage_on
         roadmap_handoff.package_hash
     );
 
+    let progressed_identity = progressed
+        .history
+        .iter()
+        .map(|entry| {
+            let attempt = entry
+                .latest_attempt
+                .as_ref()
+                .expect("each seeded stage should persist a latest attempt");
+            let linkage = entry
+                .unit
+                .workflow_linkage
+                .as_ref()
+                .expect("each seeded stage should persist workflow linkage");
+            (
+                entry.unit.sequence,
+                entry.unit.unit_id.clone(),
+                attempt.attempt_number,
+                attempt.attempt_id.clone(),
+                attempt.child_session_id.clone(),
+                linkage.workflow_node_id.clone(),
+                linkage.transition_id.clone(),
+                linkage.handoff_package_hash.clone(),
+                entry.unit.status.clone(),
+                attempt.status.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
     let replayed = get_autonomous_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
@@ -2823,14 +3024,63 @@ fn start_autonomous_run_progresses_lifecycle_graph_and_reuses_handoff_linkage_on
         },
     )
     .expect("replayed autonomous refresh should succeed");
+    let replayed_run = replayed
+        .run
+        .as_ref()
+        .expect("replayed autonomous run should exist");
     let replayed_linkage = replayed
         .unit
         .as_ref()
         .and_then(|unit| unit.workflow_linkage.as_ref())
         .expect("replayed autonomous state should keep workflow linkage");
+    let replayed_identity = replayed
+        .history
+        .iter()
+        .map(|entry| {
+            let attempt = entry
+                .latest_attempt
+                .as_ref()
+                .expect("each replayed stage should keep a latest attempt");
+            let linkage = entry
+                .unit
+                .workflow_linkage
+                .as_ref()
+                .expect("each replayed stage should keep workflow linkage");
+            (
+                entry.unit.sequence,
+                entry.unit.unit_id.clone(),
+                attempt.attempt_number,
+                attempt.attempt_id.clone(),
+                attempt.child_session_id.clone(),
+                linkage.workflow_node_id.clone(),
+                linkage.transition_id.clone(),
+                linkage.handoff_package_hash.clone(),
+                entry.unit.status.clone(),
+                attempt.status.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        replayed_run.active_unit_id.as_deref(),
+        progressed_run.active_unit_id.as_deref()
+    );
+    assert_eq!(
+        replayed_run.active_attempt_id.as_deref(),
+        progressed_run.active_attempt_id.as_deref()
+    );
     assert_eq!(replayed_linkage, progressed_linkage);
+    assert_eq!(replayed_identity, progressed_identity);
+    assert_eq!(
+        count_autonomous_unit_rows(&repo_root, &project_id, &started_run.run_id),
+        3
+    );
+    assert_eq!(
+        count_autonomous_attempt_rows(&repo_root, &project_id, &started_run.run_id),
+        3
+    );
     assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 3);
-    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 2);
+    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 3);
 
     let cancelled = cancel_autonomous_run(
         app.handle().clone(),
@@ -3018,7 +3268,7 @@ fn get_autonomous_run_rejects_stale_workflow_linkage_after_active_stage_drift() 
     .expect_err("stale workflow linkage should fail closed when active stage drifts");
     assert_eq!(error.code, "autonomous_workflow_linkage_stage_conflict");
     assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 3);
-    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 2);
+    assert_eq!(count_workflow_handoff_rows(&repo_root, &project_id), 3);
 
     let cancelled = cancel_autonomous_run(
         app.handle().clone(),
@@ -3416,12 +3666,9 @@ fn submit_notification_reply_persists_autonomous_boundary_and_resume_evidence_ex
     .expect_err("duplicate autonomous remote reply should fail closed after the first winner");
     assert_eq!(duplicate.code, "notification_reply_already_claimed");
 
-    let claims = project_store::load_notification_reply_claims(
-        &repo_root,
-        &project_id,
-        Some(&action_id),
-    )
-    .expect("load autonomous remote reply claims");
+    let claims =
+        project_store::load_notification_reply_claims(&repo_root, &project_id, Some(&action_id))
+            .expect("load autonomous remote reply claims");
     assert_eq!(claims.len(), 2);
     assert!(claims
         .iter()
@@ -3516,7 +3763,9 @@ fn submit_notification_reply_persists_autonomous_boundary_and_resume_evidence_ex
     .expect("load project snapshot after autonomous remote resume");
     assert_eq!(resumed_snapshot.resume_history.len(), 1);
     assert_eq!(
-        resumed_snapshot.resume_history[0].source_action_id.as_deref(),
+        resumed_snapshot.resume_history[0]
+            .source_action_id
+            .as_deref(),
         Some(action_id.as_str())
     );
     assert_eq!(

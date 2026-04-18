@@ -1,9 +1,14 @@
-import { KeyRound, Sparkles } from "lucide-react"
+import { Github, KeyRound, Route, Sparkles, Webhook } from "lucide-react"
+import {
+  AnthropicIcon,
+  GoogleIcon,
+  OpenAIIcon,
+} from "@/components/landing/brand-icons"
 
 type Provider = {
   name: string
   plan: string
-  mark: string // short monogram for the badge
+  icon: React.ReactNode
   badgeClass: string
 }
 
@@ -11,38 +16,38 @@ const providers: Provider[] = [
   {
     name: "ChatGPT / Codex",
     plan: "Plus · Pro · Team plans",
-    mark: "AI",
+    icon: <OpenAIIcon className="h-4 w-4" />,
     badgeClass: "bg-[#10a37f] text-white",
   },
   {
     name: "Claude",
     plan: "Pro · Max · Team plans",
-    mark: "Cl",
+    icon: <AnthropicIcon className="h-4 w-4" />,
     badgeClass: "bg-[#cc785c] text-white",
   },
   {
     name: "GitHub Copilot",
     plan: "Individual · Business",
-    mark: "GH",
+    icon: <Github className="h-4 w-4" />,
     badgeClass: "bg-foreground text-background",
   },
   {
     name: "OpenRouter",
     plan: "Unified billing across 200+ models",
-    mark: "OR",
-    badgeClass: "bg-secondary text-foreground border border-border",
+    icon: <Route className="h-4 w-4" />,
+    badgeClass: "border border-border bg-secondary text-foreground",
   },
   {
     name: "Google Gemini",
     plan: "AI Pro · Ultra subscriptions",
-    mark: "Gm",
+    icon: <GoogleIcon className="h-4 w-4" />,
     badgeClass: "bg-[#4285f4] text-white",
   },
   {
     name: "Any OpenAI-compatible API",
     plan: "Ollama · Groq · xAI · Together · vLLM",
-    mark: "···",
-    badgeClass: "bg-primary/15 text-primary border border-primary/30",
+    icon: <Webhook className="h-4 w-4" />,
+    badgeClass: "border border-primary/30 bg-primary/15 text-primary",
   },
 ]
 
@@ -102,10 +107,10 @@ export function Models() {
                   className="group flex items-center gap-3 rounded-xl border border-border/70 bg-card p-4 transition-colors hover:border-border"
                 >
                   <span
-                    className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg font-mono text-sm font-semibold ${p.badgeClass}`}
+                    className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${p.badgeClass}`}
                     aria-hidden
                   >
-                    {p.mark}
+                    {p.icon}
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{p.name}</p>

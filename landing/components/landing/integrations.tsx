@@ -1,4 +1,8 @@
 import { Bell, CheckCheck, Send } from "lucide-react"
+import {
+  DiscordIcon,
+  TelegramIcon,
+} from "@/components/landing/brand-icons"
 
 export function Integrations() {
   return (
@@ -58,6 +62,8 @@ export function Integrations() {
           <div className="grid w-full max-w-md gap-4">
             <ChatMock
               platform="Discord"
+              platformIcon={<DiscordIcon className="h-3 w-3 text-white" />}
+              channelLabel="#cadence-alerts"
               accent="#5865F2"
               username="cadence-bot"
               tag="APP"
@@ -100,6 +106,8 @@ export function Integrations() {
 
             <ChatMock
               platform="Telegram"
+              platformIcon={<TelegramIcon className="h-3 w-3 text-white" />}
+              channelLabel="direct chat"
               accent="#26A5E4"
               username="Cadence"
               tag="BOT"
@@ -138,12 +146,16 @@ type Message = {
 
 function ChatMock({
   platform,
+  platformIcon,
+  channelLabel,
   accent,
   username,
   tag,
   messages,
 }: {
   platform: string
+  platformIcon: React.ReactNode
+  channelLabel: string
   accent: string
   username: string
   tag: string
@@ -154,14 +166,14 @@ function ChatMock({
       <div className="flex items-center justify-between border-b border-border/60 bg-secondary/40 px-3 py-2">
         <div className="flex items-center gap-2">
           <span
-            className="inline-flex h-5 w-5 items-center justify-center rounded-md text-[11px] font-bold text-white"
+            className="inline-flex h-5 w-5 items-center justify-center rounded-md text-white"
             style={{ backgroundColor: accent }}
             aria-hidden
           >
-            {platform[0]}
+            {platformIcon}
           </span>
           <span className="text-xs font-medium">{platform}</span>
-          <span className="text-[11px] text-muted-foreground">#cadence-alerts</span>
+          <span className="text-[11px] text-muted-foreground">{channelLabel}</span>
         </div>
         <Send className="h-3.5 w-3.5 text-muted-foreground" />
       </div>

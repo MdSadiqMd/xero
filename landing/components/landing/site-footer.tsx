@@ -1,6 +1,10 @@
 import Link from "next/link"
 import Image from "next/image"
-import { Github, Twitter, MessageCircle } from "lucide-react"
+import { Github } from "lucide-react"
+import {
+  DiscordIcon,
+  XBrandIcon,
+} from "@/components/landing/brand-icons"
 
 const cols = [
   {
@@ -44,8 +48,8 @@ export function SiteFooter() {
             <div className="mt-5 flex items-center gap-2">
               {[
                 { icon: Github, label: "GitHub" },
-                { icon: Twitter, label: "X" },
-                { icon: MessageCircle, label: "Discord" },
+                { icon: XBrandIcon, label: "X" },
+                { icon: DiscordIcon, label: "Discord" },
               ].map(({ icon: Icon, label }) => (
                 <Link
                   key={label}
@@ -53,7 +57,9 @@ export function SiteFooter() {
                   aria-label={label}
                   className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border/60 bg-card text-muted-foreground transition-colors hover:border-border hover:text-foreground"
                 >
-                  <Icon className="h-4 w-4" />
+                  <span aria-hidden>
+                    <Icon className="h-4 w-4" />
+                  </span>
                 </Link>
               ))}
             </div>

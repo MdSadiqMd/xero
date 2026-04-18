@@ -1,6 +1,7 @@
 import Link from "next/link"
-import { Apple, Download, Terminal } from "lucide-react"
+import { Terminal } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AppleIcon, WindowsIcon } from "@/components/landing/brand-icons"
 
 export function CTA() {
   return (
@@ -31,7 +32,7 @@ export function CTA() {
             className="h-11 gap-2 bg-primary px-5 text-primary-foreground hover:bg-primary/90"
           >
             <Link href="#">
-              <Apple className="h-4 w-4" />
+              <AppleIcon className="h-4 w-4" />
               Download for macOS · Universal
             </Link>
           </Button>
@@ -42,15 +43,10 @@ export function CTA() {
             className="h-11 gap-2 border-border/80 bg-secondary/40 px-5 text-foreground hover:bg-secondary"
           >
             <Link href="#">
-              <Download className="h-4 w-4" />
+              <WindowsIcon className="h-4 w-4" aria-hidden />
               Windows · Linux (.deb / .rpm)
             </Link>
           </Button>
-        </div>
-
-        <div className="mt-6 inline-flex items-center gap-2 rounded-md border border-border/60 bg-card/60 px-3 py-1.5 font-mono text-xs text-muted-foreground">
-          <Terminal className="h-3.5 w-3.5 text-primary" />
-          <span>curl -sSf cadence.app/install | sh</span>
         </div>
       </div>
     </section>

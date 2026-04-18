@@ -1,7 +1,8 @@
 import Link from "next/link"
-import { ArrowRight, Apple, Download, Terminal } from "lucide-react"
+import { ArrowRight, Terminal } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AppWindowMock } from "@/components/landing/app-window-mock"
+import { AppleIcon, WindowsIcon } from "@/components/landing/brand-icons"
 
 export function Hero() {
   return (
@@ -48,7 +49,7 @@ export function Hero() {
               className="h-11 gap-2 bg-primary px-5 text-primary-foreground hover:bg-primary/90"
             >
               <Link href="#download">
-                <Apple className="h-4 w-4" />
+                <AppleIcon className="h-4 w-4" />
                 Download for macOS
               </Link>
             </Button>
@@ -59,17 +60,10 @@ export function Hero() {
               className="h-11 gap-2 border-border/80 bg-secondary/40 px-5 text-foreground hover:bg-secondary"
             >
               <Link href="#download">
-                <Download className="h-4 w-4" />
+                <WindowsIcon className="h-4 w-4" aria-hidden />
                 Windows &amp; Linux
               </Link>
             </Button>
-          </div>
-
-          <div className="mt-5 flex items-center justify-center gap-2 font-mono text-xs text-muted-foreground">
-            <Terminal className="h-3.5 w-3.5" />
-            <span>
-              or <span className="text-foreground">curl -sSf cadence.app/install | sh</span>
-            </span>
           </div>
         </div>
 

@@ -1,6 +1,5 @@
 import { SiteHeader } from "@/components/landing/site-header"
 import { Hero } from "@/components/landing/hero"
-import { LogoCloud } from "@/components/landing/logo-cloud"
 import { Features } from "@/components/landing/features"
 import { Models } from "@/components/landing/models"
 import { Integrations } from "@/components/landing/integrations"
@@ -16,7 +15,7 @@ export default function Page() {
       <SiteHeader />
       <main>
         <Hero />
-        <LogoCloud />
+        <div aria-hidden className="border-t border-border/60" />
         <Features />
         <Models />
         <Integrations />

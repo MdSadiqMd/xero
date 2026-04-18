@@ -1610,7 +1610,10 @@ fn runtime_scoped_resume_rejects_already_resumed_autonomous_boundary_before_seco
     )
     .expect("load project snapshot after autonomous replay guard failure");
     assert_eq!(snapshot.resume_history.len(), 1);
-    assert_eq!(snapshot.resume_history[0].status, ResumeHistoryStatus::Failed);
+    assert_eq!(
+        snapshot.resume_history[0].status,
+        ResumeHistoryStatus::Failed
+    );
     assert_eq!(
         snapshot.resume_history[0].source_action_id.as_deref(),
         Some(action_id.as_str())
