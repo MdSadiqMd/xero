@@ -14,6 +14,7 @@ import {
   createEmptyPlanningLifecycle,
   createRuntimeStreamFromSubscription,
   createRuntimeStreamView,
+  deriveAutonomousWorkflowContext,
   getRuntimeStreamStatusLabel,
   mapProjectSnapshot,
   mapProjectSummary,
@@ -28,6 +29,7 @@ import {
   type AutonomousUnitAttemptView,
   type AutonomousUnitArtifactView,
   type AutonomousUnitHistoryEntryView,
+  type AutonomousWorkflowContextView,
   type NotificationDispatchDto,
   type NotificationDispatchView,
   type NotificationRouteCredentialReadinessDto,
@@ -203,6 +205,7 @@ export interface AgentPaneView {
   autonomousRun?: ProjectDetailView['autonomousRun']
   autonomousUnit?: ProjectDetailView['autonomousUnit']
   autonomousAttempt?: ProjectDetailView['autonomousAttempt']
+  autonomousWorkflowContext?: AutonomousWorkflowContextView | null
   autonomousHistory: ProjectDetailView['autonomousHistory']
   autonomousRecentArtifacts: ProjectDetailView['autonomousRecentArtifacts']
   runtimeErrorMessage?: string | null
@@ -2943,6 +2946,14 @@ export function useCadenceDesktopState(
       trustSnapshotRef.current[activeProject.id] = trustSnapshot
     }
 
+    const autonomousWorkflowContext = deriveAutonomousWorkflowContext({
+      lifecycle: activeProject.lifecycle,
+      handoffPackages: activeProject.handoffPackages,
+      approvalRequests: activeProject.approvalRequests,
+      autonomousUnit: activeAutonomousUnit,
+      autonomousAttempt: activeAutonomousAttempt,
+    })
+
     return {
       project: activeProject,
       activePhase,
@@ -2956,6 +2967,7 @@ export function useCadenceDesktopState(
       autonomousRun: activeAutonomousRun,
       autonomousUnit: activeAutonomousUnit,
       autonomousAttempt: activeAutonomousAttempt,
+      autonomousWorkflowContext,
       autonomousHistory: activeAutonomousHistory,
       autonomousRecentArtifacts: activeAutonomousRecentArtifacts,
       runtimeErrorMessage: activeRuntimeErrorMessage,

@@ -479,6 +479,19 @@ function getAutonomousAttemptBadgeVariant(
   }
 }
 
+function getAutonomousWorkflowContextBadgeVariant(
+  state: NonNullable<AgentPaneView['autonomousWorkflowContext']>['state'],
+): BadgeVariant {
+  switch (state) {
+    case 'ready':
+      return 'default'
+    case 'awaiting_snapshot':
+      return 'secondary'
+    case 'awaiting_handoff':
+      return 'outline'
+  }
+}
+
 function getAutonomousArtifactBadgeVariant(
   artifact: AgentPaneView['autonomousRecentArtifacts'][number],
 ): BadgeVariant {
@@ -927,6 +940,7 @@ export function AgentRuntime({
   const autonomousRun = agent.autonomousRun ?? null
   const autonomousUnit = agent.autonomousUnit ?? null
   const autonomousAttempt = agent.autonomousAttempt ?? null
+  const autonomousWorkflowContext = agent.autonomousWorkflowContext ?? null
   const autonomousRecentArtifacts = useMemo(
     () => sortByNewest(agent.autonomousRecentArtifacts ?? [], (artifact) => artifact.updatedAt || artifact.createdAt).slice(0, 5),
     [agent.autonomousRecentArtifacts],
@@ -2018,16 +2032,109 @@ export function AgentRuntime({
                           <CountCard label="Unit status" value={autonomousUnit?.statusLabel ?? 'Unavailable'} />
                         </div>
                         {autonomousUnit ? (
-                          <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3 text-sm">
-                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                              <span>{formatSequence(autonomousUnit.sequence)}</span>
-                              <span>{autonomousUnit.unitId}</span>
+                          <>
+                            <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3 text-sm">
+                              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                                <span>{formatSequence(autonomousUnit.sequence)}</span>
+                                <span>{autonomousUnit.unitId}</span>
+                              </div>
+                              <p className="mt-2 font-medium text-foreground">{autonomousUnit.summary}</p>
+                              <p className="mt-2 text-muted-foreground">
+                                Boundary {displayValue(autonomousUnit.boundaryId, 'unavailable')} · Updated {formatTimestamp(autonomousUnit.updatedAt)}
+                              </p>
                             </div>
-                            <p className="mt-2 font-medium text-foreground">{autonomousUnit.summary}</p>
-                            <p className="mt-2 text-muted-foreground">
-                              Boundary {displayValue(autonomousUnit.boundaryId, 'unavailable')} · Updated {formatTimestamp(autonomousUnit.updatedAt)}
-                            </p>
-                          </div>
+
+                            {autonomousWorkflowContext ? (
+                              <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-3 text-sm">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-medium text-foreground">Linked workflow context</p>
+                                  <Badge variant={getAutonomousWorkflowContextBadgeVariant(autonomousWorkflowContext.state)}>
+                                    {autonomousWorkflowContext.stateLabel}
+                                  </Badge>
+                                  <Badge variant="outline">
+                                    {autonomousWorkflowContext.linkageSource === 'attempt' ? 'Attempt linkage' : 'Unit linkage'}
+                                  </Badge>
+                                  {autonomousWorkflowContext.pendingApproval ? (
+                                    <Badge variant="secondary">Pending approval</Badge>
+                                  ) : null}
+                                </div>
+                                <p className="mt-2 text-muted-foreground">{autonomousWorkflowContext.detail}</p>
+                                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                  <CountCard
+                                    label="Workflow node"
+                                    value={autonomousWorkflowContext.linkedStage?.stageLabel ?? autonomousWorkflowContext.linkedNodeLabel}
+                                  />
+                                  <CountCard
+                                    label="Stage status"
+                                    value={autonomousWorkflowContext.linkedStage?.statusLabel ?? 'Unavailable'}
+                                  />
+                                  <CountCard
+                                    label="Handoff"
+                                    value={displayValue(autonomousWorkflowContext.handoff?.handoffTransitionId, 'Pending')}
+                                  />
+                                  <CountCard
+                                    label="Approval"
+                                    value={autonomousWorkflowContext.pendingApproval?.statusLabel ?? 'None'}
+                                  />
+                                </div>
+                                <div className="mt-3 space-y-1 text-[11px] text-muted-foreground">
+                                  <InfoRow label="Linked node ID" mono value={autonomousWorkflowContext.linkage.workflowNodeId} />
+                                  <InfoRow label="Transition ID" mono value={autonomousWorkflowContext.linkage.transitionId} />
+                                  {autonomousWorkflowContext.linkage.causalTransitionId ? (
+                                    <InfoRow
+                                      label="Causal transition"
+                                      mono
+                                      value={autonomousWorkflowContext.linkage.causalTransitionId}
+                                    />
+                                  ) : null}
+                                  <InfoRow
+                                    label="Handoff transition"
+                                    mono
+                                    value={autonomousWorkflowContext.linkage.handoffTransitionId}
+                                  />
+                                  <InfoRow
+                                    label="Handoff hash"
+                                    mono
+                                    value={autonomousWorkflowContext.linkage.handoffPackageHash}
+                                  />
+                                  {autonomousWorkflowContext.activeLifecycleStage ? (
+                                    <InfoRow
+                                      label="Snapshot active stage"
+                                      value={autonomousWorkflowContext.activeLifecycleStage.stageLabel}
+                                    />
+                                  ) : null}
+                                  {autonomousWorkflowContext.handoff ? (
+                                    <>
+                                      <InfoRow
+                                        label="Persisted handoff"
+                                        value={formatTimestamp(autonomousWorkflowContext.handoff.createdAt)}
+                                      />
+                                      <InfoRow
+                                        label="From → to"
+                                        mono
+                                        value={`${autonomousWorkflowContext.handoff.fromNodeId} → ${autonomousWorkflowContext.handoff.toNodeId}`}
+                                      />
+                                      <InfoRow
+                                        label="Transition kind"
+                                        value={autonomousWorkflowContext.handoff.transitionKindLabel}
+                                      />
+                                    </>
+                                  ) : null}
+                                  {autonomousWorkflowContext.pendingApproval ? (
+                                    <InfoRow
+                                      label="Pending approval"
+                                      value={autonomousWorkflowContext.pendingApproval.title}
+                                    />
+                                  ) : null}
+                                </div>
+                              </div>
+                            ) : (
+                              <FeedEmptyState
+                                title="Workflow linkage pending"
+                                body="Cadence has not persisted workflow-node and handoff linkage for this autonomous boundary yet."
+                              />
+                            )}
+                          </>
                         ) : (
                           <FeedEmptyState
                             body="Cadence has not rehydrated an active autonomous unit boundary for this project yet."

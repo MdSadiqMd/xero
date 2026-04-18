@@ -2651,6 +2651,33 @@ export interface AutonomousWorkflowLinkageView {
   handoffPackageHash: string
 }
 
+export interface AutonomousWorkflowHandoffView {
+  handoffTransitionId: string
+  causalTransitionId: string | null
+  fromNodeId: string
+  toNodeId: string
+  transitionKind: string
+  transitionKindLabel: string
+  packageHash: string
+  createdAt: string
+}
+
+export type AutonomousWorkflowLinkageSource = 'unit' | 'attempt'
+export type AutonomousWorkflowContextState = 'ready' | 'awaiting_snapshot' | 'awaiting_handoff'
+
+export interface AutonomousWorkflowContextView {
+  linkage: AutonomousWorkflowLinkageView
+  linkageSource: AutonomousWorkflowLinkageSource
+  linkedNodeLabel: string
+  linkedStage: PlanningLifecycleStageView | null
+  activeLifecycleStage: PlanningLifecycleStageView | null
+  handoff: AutonomousWorkflowHandoffView | null
+  pendingApproval: OperatorApprovalView | null
+  state: AutonomousWorkflowContextState
+  stateLabel: string
+  detail: string
+}
+
 export interface AutonomousUnitView {
   projectId: string
   runId: string
@@ -2983,6 +3010,103 @@ export function mapPlanningLifecycle(projection: PlanningLifecycleProjectionDto)
     blockedCount,
     completedCount,
     percentComplete: safePercent(completedCount, stages.length),
+  }
+}
+
+function getAutonomousWorkflowContextStateLabel(state: AutonomousWorkflowContextState): string {
+  switch (state) {
+    case 'ready':
+      return 'In sync'
+    case 'awaiting_snapshot':
+      return 'Snapshot lag'
+    case 'awaiting_handoff':
+      return 'Handoff pending'
+  }
+}
+
+function mapAutonomousWorkflowHandoff(pkg: WorkflowHandoffPackageView): AutonomousWorkflowHandoffView {
+  return {
+    handoffTransitionId: pkg.handoffTransitionId,
+    causalTransitionId: pkg.causalTransitionId,
+    fromNodeId: pkg.fromNodeId,
+    toNodeId: pkg.toNodeId,
+    transitionKind: pkg.transitionKind,
+    transitionKindLabel: humanizeRuntimeKind(pkg.transitionKind),
+    packageHash: pkg.packageHash,
+    createdAt: pkg.createdAt,
+  }
+}
+
+export function deriveAutonomousWorkflowContext(options: {
+  lifecycle: PlanningLifecycleView
+  handoffPackages: WorkflowHandoffPackageView[]
+  approvalRequests: OperatorApprovalView[]
+  autonomousUnit: AutonomousUnitView | null
+  autonomousAttempt?: AutonomousUnitAttemptView | null
+}): AutonomousWorkflowContextView | null {
+  const attemptLinkage = options.autonomousAttempt?.workflowLinkage ?? null
+  const unitLinkage = options.autonomousUnit?.workflowLinkage ?? null
+  const linkage = attemptLinkage ?? unitLinkage
+  if (!linkage) {
+    return null
+  }
+
+  const linkageSource: AutonomousWorkflowLinkageSource = attemptLinkage ? 'attempt' : 'unit'
+  const linkedStage = options.lifecycle.stages.find((stage) => stage.nodeId === linkage.workflowNodeId) ?? null
+  const activeLifecycleStage = options.lifecycle.activeStage
+  const linkedNodeLabel = linkedStage?.nodeLabel ?? humanizeNodeId(linkage.workflowNodeId)
+  const matchingHandoffPackage = sortByNewest(
+    options.handoffPackages.filter((pkg) => pkg.handoffTransitionId === linkage.handoffTransitionId),
+    (pkg) => pkg.createdAt,
+  )[0] ?? null
+  const handoff = matchingHandoffPackage ? mapAutonomousWorkflowHandoff(matchingHandoffPackage) : null
+  const pendingApproval =
+    options.approvalRequests.find(
+      (approval) => approval.isPending && approval.gateNodeId === linkage.workflowNodeId,
+    ) ?? null
+
+  const activeStageMismatch = Boolean(activeLifecycleStage && activeLifecycleStage.nodeId !== linkage.workflowNodeId)
+  const handoffHashMismatch = Boolean(handoff && handoff.packageHash !== linkage.handoffPackageHash)
+
+  let state: AutonomousWorkflowContextState
+  let detail: string
+
+  if (!linkedStage) {
+    state = 'awaiting_snapshot'
+    detail =
+      'Cadence has persisted autonomous workflow linkage for this boundary, but the selected project snapshot has not exposed the linked lifecycle node yet.'
+  } else if (activeStageMismatch) {
+    state = 'awaiting_snapshot'
+    detail = `Cadence is keeping lifecycle progression anchored to snapshot truth while the linked node \`${linkedStage.stageLabel}\` waits for the active lifecycle stage to catch up.`
+  } else if (handoffHashMismatch) {
+    state = 'awaiting_snapshot'
+    detail =
+      'Cadence found the linked handoff transition in the selected project snapshot, but the persisted handoff hash has not caught up to the autonomous linkage yet.'
+  } else if (!handoff) {
+    state = 'awaiting_handoff'
+    detail =
+      'Cadence has persisted autonomous workflow linkage for this boundary, but the linked handoff package is not visible in the selected project snapshot yet.'
+  } else {
+    state = 'ready'
+    detail =
+      'Lifecycle stage, autonomous linkage, and handoff package all agree on backend truth for this boundary.'
+  }
+
+  if (pendingApproval) {
+    detail = `${detail} Pending approval \`${pendingApproval.title}\` is still blocking continuation at this linked node.`
+  }
+
+  return {
+    linkage,
+    linkageSource,
+    linkedNodeLabel,
+    linkedStage,
+    activeLifecycleStage,
+    handoff,
+    pendingApproval,
+    state,
+    stateLabel: getAutonomousWorkflowContextStateLabel(state),
+    detail,
   }
 }
 

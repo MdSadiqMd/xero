@@ -8,9 +8,11 @@ import {
   composeNotificationRouteTarget,
   createRuntimeStreamFromSubscription,
   decomposeNotificationRouteTarget,
+  deriveAutonomousWorkflowContext,
   getRuntimeStreamStatusLabel,
   listNotificationDispatchesResponseSchema,
   listNotificationRoutesResponseSchema,
+  mapAutonomousUnit,
   mapProjectSnapshot,
   mapProjectSummary,
   mapRepositoryStatus,
@@ -29,6 +31,9 @@ import {
   syncNotificationAdaptersRequestSchema,
   syncNotificationAdaptersResponseSchema,
   subscribeRuntimeStreamResponseSchema,
+  autonomousRunStateSchema,
+  autonomousUnitAttemptSchema,
+  autonomousUnitSchema,
   upsertNotificationRouteCredentialsRequestSchema,
   upsertNotificationRouteCredentialsResponseSchema,
   upsertNotificationRouteRequestSchema,
@@ -402,6 +407,208 @@ describe('cadence-model', () => {
     expect(project.phases[1].summary).toBeUndefined()
     expect(project.phases[1].stepStatuses.execute).toBe('active')
     expect(project.phases[1].stepStatuses.verify).toBe('pending')
+  })
+
+  it('derives linked workflow context from autonomous linkage, lifecycle projection, and handoff truth', () => {
+    const project = mapProjectSnapshot(
+      makeSnapshot({
+        lifecycle: {
+          stages: [
+            {
+              stage: 'discussion',
+              nodeId: 'workflow-discussion',
+              status: 'complete',
+              actionRequired: false,
+              lastTransitionAt: '2026-04-16T13:59:00Z',
+            },
+            {
+              stage: 'research',
+              nodeId: 'workflow-research',
+              status: 'active',
+              actionRequired: true,
+              lastTransitionAt: '2026-04-16T14:00:00Z',
+            },
+          ],
+        },
+        approvalRequests: [
+          {
+            actionId: 'scope:auto-dispatch:workflow-research:requires_user_input',
+            sessionId: 'session-1',
+            flowId: 'flow-1',
+            actionType: 'review_worktree',
+            title: 'Review worktree changes',
+            detail: 'Inspect the pending repository diff before continuing.',
+            gateNodeId: 'workflow-research',
+            gateKey: 'requires_user_input',
+            transitionFromNodeId: 'workflow-discussion',
+            transitionToNodeId: 'workflow-research',
+            transitionKind: 'advance',
+            userAnswer: null,
+            status: 'pending',
+            decisionNote: null,
+            createdAt: '2026-04-16T14:00:00Z',
+            updatedAt: '2026-04-16T14:00:00Z',
+            resolvedAt: null,
+          },
+        ],
+        handoffPackages: [makeHandoffPackage('project-1', 'auto:txn-001')],
+      }),
+    )
+
+    const context = deriveAutonomousWorkflowContext({
+      lifecycle: project.lifecycle,
+      handoffPackages: project.handoffPackages,
+      approvalRequests: project.approvalRequests,
+      autonomousUnit: mapAutonomousUnit(
+        autonomousUnitSchema.parse({
+          ...makeAutonomousUnit(),
+          workflowLinkage: {
+            workflowNodeId: 'workflow-research',
+            transitionId: 'auto:txn-001',
+            causalTransitionId: 'txn-000',
+            handoffTransitionId: 'auto:txn-001',
+            handoffPackageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
+          },
+        }),
+      ),
+      autonomousAttempt: null,
+    })
+
+    expect(context).toMatchObject({
+      linkageSource: 'unit',
+      state: 'ready',
+      stateLabel: 'In sync',
+      linkedNodeLabel: 'Workflow Research',
+      linkedStage: {
+        stage: 'research',
+        status: 'active',
+      },
+      handoff: {
+        handoffTransitionId: 'auto:txn-001',
+        packageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
+      },
+      pendingApproval: {
+        actionId: 'scope:auto-dispatch:workflow-research:requires_user_input',
+      },
+    })
+    expect(context?.detail).toContain('Pending approval')
+  })
+
+  it('flags linked workflow snapshot lag instead of fabricating lifecycle advancement when linkage outruns the active stage', () => {
+    const project = mapProjectSnapshot(
+      makeSnapshot({
+        lifecycle: {
+          stages: [
+            {
+              stage: 'discussion',
+              nodeId: 'workflow-discussion',
+              status: 'active',
+              actionRequired: false,
+              lastTransitionAt: '2026-04-16T13:59:00Z',
+            },
+            {
+              stage: 'research',
+              nodeId: 'workflow-research',
+              status: 'pending',
+              actionRequired: true,
+              lastTransitionAt: null,
+            },
+          ],
+        },
+      }),
+    )
+
+    const context = deriveAutonomousWorkflowContext({
+      lifecycle: project.lifecycle,
+      handoffPackages: project.handoffPackages,
+      approvalRequests: project.approvalRequests,
+      autonomousUnit: mapAutonomousUnit(
+        autonomousUnitSchema.parse({
+          ...makeAutonomousUnit(),
+          workflowLinkage: {
+            workflowNodeId: 'workflow-research',
+            transitionId: 'auto:txn-002',
+            causalTransitionId: 'txn-001',
+            handoffTransitionId: 'auto:txn-002',
+            handoffPackageHash: '1111111111111111111111111111111111111111111111111111111111111111',
+          },
+        }),
+      ),
+      autonomousAttempt: null,
+    })
+
+    expect(project.lifecycle.activeStage?.stage).toBe('discussion')
+    expect(context).toMatchObject({
+      state: 'awaiting_snapshot',
+      stateLabel: 'Snapshot lag',
+      linkedStage: {
+        stage: 'research',
+        status: 'pending',
+      },
+      activeLifecycleStage: {
+        stage: 'discussion',
+      },
+      handoff: null,
+    })
+    expect(context?.detail).toContain('keeping lifecycle progression anchored to snapshot truth')
+  })
+
+  it('rejects malformed autonomous workflow linkage payloads at the adapter boundary', () => {
+    expect(() =>
+      autonomousUnitSchema.parse({
+        ...makeAutonomousUnit(),
+        workflowLinkage: {
+          workflowNodeId: '   ',
+          transitionId: 'auto:txn-001',
+          causalTransitionId: 'txn-000',
+          handoffTransitionId: 'auto:txn-001',
+          handoffPackageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
+        },
+      }),
+    ).toThrow()
+
+    expect(() =>
+      autonomousUnitAttemptSchema.parse({
+        projectId: 'project-1',
+        runId: 'run-1',
+        unitId: 'run-1:checkpoint:2',
+        attemptId: 'attempt-1',
+        attemptNumber: 1,
+        childSessionId: 'child-session-1',
+        status: 'active',
+        boundaryId: 'checkpoint:2',
+        workflowLinkage: {
+          workflowNodeId: 'workflow-research',
+          transitionId: 'auto:txn-001',
+          causalTransitionId: 'txn-000',
+          handoffTransitionId: '   ',
+          handoffPackageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
+        },
+        startedAt: '2026-04-16T14:00:00Z',
+        finishedAt: null,
+        updatedAt: '2026-04-16T14:00:01Z',
+        lastErrorCode: null,
+        lastError: null,
+      }),
+    ).toThrow()
+
+    expect(() =>
+      autonomousRunStateSchema.parse({
+        run: makeAutonomousRun(),
+        unit: {
+          ...makeAutonomousUnit({ projectId: 'project-2' }),
+          workflowLinkage: {
+            workflowNodeId: 'workflow-research',
+            transitionId: 'auto:txn-001',
+            causalTransitionId: 'txn-000',
+            handoffTransitionId: 'auto:txn-001',
+            handoffPackageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
+          },
+        },
+        attempt: null,
+        history: [],
+      }),
+    ).toThrow(/Autonomous unit project id must match the autonomous run project id/)
   })
 
   it('maps additive handoff packages while filtering cross-project rows', () => {
