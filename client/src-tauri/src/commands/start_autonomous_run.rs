@@ -19,7 +19,7 @@ use super::{
         load_persisted_runtime_run, load_runtime_run_status, load_runtime_session_status,
         resolve_project_root, runtime_run_dto_from_snapshot, sync_autonomous_run_state,
         AutonomousSyncIntent, DEFAULT_RUNTIME_RUN_CONTROL_TIMEOUT,
-        DEFAULT_RUNTIME_RUN_STARTUP_TIMEOUT, OPENAI_RUNTIME_KIND,
+        DEFAULT_RUNTIME_RUN_STARTUP_TIMEOUT,
     },
     start_runtime_run::{ensure_runtime_run_auth_ready, is_reconnectable_runtime_run},
 };
@@ -59,6 +59,7 @@ pub fn start_autonomous_run<R: Runtime>(
         )
     })?;
     let flow_id = runtime.flow_id.clone();
+    let runtime_kind = runtime.runtime_kind.clone();
 
     let shell = resolve_runtime_shell_selection();
     let launch_repo_root = repo_root.clone();
@@ -68,7 +69,7 @@ pub fn start_autonomous_run<R: Runtime>(
         RuntimeSupervisorLaunchRequest {
             project_id: request.project_id,
             repo_root: launch_repo_root,
-            runtime_kind: OPENAI_RUNTIME_KIND.into(),
+            runtime_kind,
             run_id: generate_runtime_run_id(),
             session_id,
             flow_id,

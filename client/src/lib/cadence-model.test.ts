@@ -16,11 +16,13 @@ import {
   mapProjectSnapshot,
   mapProjectSummary,
   mapRepositoryStatus,
+  mapRuntimeRun,
   mapRuntimeSession,
   mergeRuntimeStreamEvent,
   mergeRuntimeUpdated,
   projectSnapshotResponseSchema,
   resolveOperatorActionRequestSchema,
+  runtimeRunSchema,
   runtimeSessionSchema,
   runtimeStreamItemSchema,
   runtimeUpdatedPayloadSchema,
@@ -1844,7 +1846,8 @@ describe('cadence-model', () => {
 
     expect(runtimeRun.providerId).toBe('azure_openai')
     expect(runtimeRun.runtimeKind).toBe('openai_codex')
-    expect(runtimeRun.runtimeLabel).toBe('Openai Codex · Running')
+    expect(runtimeRun.statusLabel).toBe('Supervisor running')
+    expect(runtimeRun.runtimeLabel).toBe('Openai Codex · Supervisor running')
   })
 
   it('maps repository status counts and applies branch metadata onto the active project', () => {

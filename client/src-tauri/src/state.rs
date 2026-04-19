@@ -13,6 +13,8 @@ use crate::{
 };
 
 pub const REGISTRY_FILE_NAME: &str = "project-registry.json";
+pub const RUNTIME_SETTINGS_FILE_NAME: &str = "runtime-settings.json";
+pub const OPENROUTER_CREDENTIAL_FILE_NAME: &str = "openrouter-credentials.json";
 
 #[derive(Debug, Clone, Default)]
 pub struct ImportFailpoints {
@@ -33,6 +35,8 @@ pub struct DesktopState {
     registry_file_override: Option<PathBuf>,
     auth_store_file_override: Option<PathBuf>,
     notification_credential_store_file_override: Option<PathBuf>,
+    runtime_settings_file_override: Option<PathBuf>,
+    openrouter_credential_file_override: Option<PathBuf>,
     runtime_supervisor_binary_override: Option<PathBuf>,
     openai_auth_config_override: Option<OpenAiCodexAuthConfig>,
     import_failpoints: ImportFailpoints,
@@ -55,6 +59,16 @@ impl DesktopState {
 
     pub fn with_notification_credential_store_file_override(mut self, path: PathBuf) -> Self {
         self.notification_credential_store_file_override = Some(path);
+        self
+    }
+
+    pub fn with_runtime_settings_file_override(mut self, path: PathBuf) -> Self {
+        self.runtime_settings_file_override = Some(path);
+        self
+    }
+
+    pub fn with_openrouter_credential_file_override(mut self, path: PathBuf) -> Self {
+        self.openrouter_credential_file_override = Some(path);
         self
     }
 
@@ -139,6 +153,42 @@ impl DesktopState {
         })?;
 
         Ok(app_data_dir.join(NOTIFICATION_CREDENTIAL_STORE_FILE_NAME))
+    }
+
+    pub fn runtime_settings_file<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> Result<PathBuf, CommandError> {
+        if let Some(path) = &self.runtime_settings_file_override {
+            return Ok(path.clone());
+        }
+
+        let app_data_dir = app.path().app_data_dir().map_err(|error| {
+            CommandError::system_fault(
+                "app_data_dir_unavailable",
+                format!("Cadence could not resolve the app-data directory: {error}"),
+            )
+        })?;
+
+        Ok(app_data_dir.join(RUNTIME_SETTINGS_FILE_NAME))
+    }
+
+    pub fn openrouter_credential_file<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> Result<PathBuf, CommandError> {
+        if let Some(path) = &self.openrouter_credential_file_override {
+            return Ok(path.clone());
+        }
+
+        let app_data_dir = app.path().app_data_dir().map_err(|error| {
+            CommandError::system_fault(
+                "app_data_dir_unavailable",
+                format!("Cadence could not resolve the app-data directory: {error}"),
+            )
+        })?;
+
+        Ok(app_data_dir.join(OPENROUTER_CREDENTIAL_FILE_NAME))
     }
 
     pub fn auth_store_file_for_provider<R: Runtime>(

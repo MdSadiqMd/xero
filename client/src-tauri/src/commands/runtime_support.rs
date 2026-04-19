@@ -7,7 +7,7 @@ use rand::RngCore;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
-    auth::{AuthDiagnostic, AuthFlowError, OPENAI_CODEX_PROVIDER_ID},
+    auth::{AuthDiagnostic, AuthFlowError},
     commands::{
         AutonomousArtifactPayloadDto, AutonomousCommandResultDto, AutonomousLifecycleReasonDto,
         AutonomousPolicyDeniedPayloadDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
@@ -36,12 +36,12 @@ use crate::{
     runtime::{
         autonomous_orchestrator::{reconcile_runtime_snapshot, AutonomousRuntimeReconcileIntent},
         autonomous_workflow_progression::persist_autonomous_workflow_progression,
-        default_runtime_provider, probe_runtime_run, RuntimeSupervisorProbeRequest,
+        default_runtime_provider, probe_runtime_run, resolve_runtime_provider_identity,
+        RuntimeSupervisorProbeRequest,
     },
     state::DesktopState,
 };
 
-pub(crate) const OPENAI_RUNTIME_KIND: &str = OPENAI_CODEX_PROVIDER_ID;
 pub(crate) const DEFAULT_RUNTIME_RUN_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const DEFAULT_RUNTIME_RUN_CONTROL_TIMEOUT: Duration = Duration::from_millis(750);
 pub(crate) const DEFAULT_RUNTIME_RUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(4);
@@ -192,6 +192,7 @@ pub(crate) fn emit_runtime_updated<R: Runtime>(
         RuntimeUpdatedPayloadDto {
             project_id: runtime.project_id.clone(),
             runtime_kind: runtime.runtime_kind.clone(),
+            provider_id: runtime.provider_id.clone(),
             flow_id: runtime.flow_id.clone(),
             session_id: runtime.session_id.clone(),
             account_id: runtime.account_id.clone(),
@@ -255,11 +256,18 @@ pub(crate) fn load_runtime_run_status(
     )
 }
 
+fn provider_id_from_runtime_kind(runtime_kind: &str) -> String {
+    resolve_runtime_provider_identity(Some(runtime_kind), Some(runtime_kind))
+        .map(|provider| provider.provider_id.to_string())
+        .unwrap_or_else(|_| runtime_kind.trim().to_string())
+}
+
 pub(crate) fn runtime_run_dto_from_snapshot(snapshot: &RuntimeRunSnapshotRecord) -> RuntimeRunDto {
     RuntimeRunDto {
         project_id: snapshot.run.project_id.clone(),
         run_id: snapshot.run.run_id.clone(),
         runtime_kind: snapshot.run.runtime_kind.clone(),
+        provider_id: provider_id_from_runtime_kind(&snapshot.run.runtime_kind),
         supervisor_kind: snapshot.run.supervisor_kind.clone(),
         status: runtime_run_status_dto(snapshot.run.status.clone()),
         transport: RuntimeRunTransportDto {
@@ -440,6 +448,7 @@ fn autonomous_run_dto_from_snapshot(snapshot: &AutonomousRunSnapshotRecord) -> A
         project_id: snapshot.run.project_id.clone(),
         run_id: snapshot.run.run_id.clone(),
         runtime_kind: snapshot.run.runtime_kind.clone(),
+        provider_id: provider_id_from_runtime_kind(&snapshot.run.runtime_kind),
         supervisor_kind: snapshot.run.supervisor_kind.clone(),
         status: autonomous_run_status_dto(&snapshot.run.status),
         recovery_state: autonomous_run_recovery_state_dto(&snapshot.run.status),

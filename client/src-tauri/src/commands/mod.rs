@@ -6,6 +6,7 @@ pub mod get_repository_diff;
 pub mod get_repository_status;
 pub mod get_runtime_run;
 pub mod get_runtime_session;
+pub mod get_runtime_settings;
 pub mod import_repository;
 pub mod list_notification_dispatches;
 pub mod list_notification_routes;
@@ -27,6 +28,7 @@ pub mod subscribe_runtime_stream;
 pub mod sync_notification_adapters;
 pub mod upsert_notification_route;
 pub mod upsert_notification_route_credentials;
+pub mod upsert_runtime_settings;
 pub mod upsert_workflow_graph;
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +44,7 @@ pub use get_repository_diff::get_repository_diff;
 pub use get_repository_status::get_repository_status;
 pub use get_runtime_run::get_runtime_run;
 pub use get_runtime_session::get_runtime_session;
+pub use get_runtime_settings::get_runtime_settings;
 pub use import_repository::import_repository;
 pub use list_notification_dispatches::list_notification_dispatches;
 pub use list_notification_routes::list_notification_routes;
@@ -62,6 +65,7 @@ pub use subscribe_runtime_stream::subscribe_runtime_stream;
 pub use sync_notification_adapters::sync_notification_adapters;
 pub use upsert_notification_route::upsert_notification_route;
 pub use upsert_notification_route_credentials::upsert_notification_route_credentials;
+pub use upsert_runtime_settings::upsert_runtime_settings;
 pub use upsert_workflow_graph::upsert_workflow_graph;
 
 pub const IMPORT_REPOSITORY_COMMAND: &str = "import_repository";
@@ -73,6 +77,7 @@ pub const GET_REPOSITORY_STATUS_COMMAND: &str = "get_repository_status";
 pub const GET_REPOSITORY_DIFF_COMMAND: &str = "get_repository_diff";
 pub const GET_RUNTIME_RUN_COMMAND: &str = "get_runtime_run";
 pub const GET_RUNTIME_SESSION_COMMAND: &str = "get_runtime_session";
+pub const GET_RUNTIME_SETTINGS_COMMAND: &str = "get_runtime_settings";
 pub const START_AUTONOMOUS_RUN_COMMAND: &str = "start_autonomous_run";
 pub const START_OPENAI_LOGIN_COMMAND: &str = "start_openai_login";
 pub const SUBMIT_OPENAI_CALLBACK_COMMAND: &str = "submit_openai_callback";
@@ -93,6 +98,7 @@ pub const RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND: &str =
     "record_notification_dispatch_outcome";
 pub const SUBMIT_NOTIFICATION_REPLY_COMMAND: &str = "submit_notification_reply";
 pub const SYNC_NOTIFICATION_ADAPTERS_COMMAND: &str = "sync_notification_adapters";
+pub const UPSERT_RUNTIME_SETTINGS_COMMAND: &str = "upsert_runtime_settings";
 pub const UPSERT_WORKFLOW_GRAPH_COMMAND: &str = "upsert_workflow_graph";
 pub const APPLY_WORKFLOW_TRANSITION_COMMAND: &str = "apply_workflow_transition";
 
@@ -106,6 +112,7 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     GET_REPOSITORY_DIFF_COMMAND,
     GET_RUNTIME_RUN_COMMAND,
     GET_RUNTIME_SESSION_COMMAND,
+    GET_RUNTIME_SETTINGS_COMMAND,
     START_AUTONOMOUS_RUN_COMMAND,
     START_OPENAI_LOGIN_COMMAND,
     SUBMIT_OPENAI_CALLBACK_COMMAND,
@@ -124,6 +131,7 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND,
     SUBMIT_NOTIFICATION_REPLY_COMMAND,
     SYNC_NOTIFICATION_ADAPTERS_COMMAND,
+    UPSERT_RUNTIME_SETTINGS_COMMAND,
     UPSERT_WORKFLOW_GRAPH_COMMAND,
     APPLY_WORKFLOW_TRANSITION_COMMAND,
 ];
@@ -1381,6 +1389,7 @@ pub struct RuntimeRunDto {
     pub project_id: String,
     pub run_id: String,
     pub runtime_kind: String,
+    pub provider_id: String,
     pub supervisor_kind: String,
     pub status: RuntimeRunStatusDto,
     pub transport: RuntimeRunTransportDto,
@@ -1413,6 +1422,14 @@ pub struct RuntimeSessionDto {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeSettingsDto {
+    pub provider_id: String,
+    pub model_id: String,
+    pub openrouter_api_key_configured: bool,
+}
+
 pub type RuntimeAuthStatusDto = RuntimeSessionDto;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1420,6 +1437,7 @@ pub type RuntimeAuthStatusDto = RuntimeSessionDto;
 pub struct RuntimeUpdatedPayloadDto {
     pub project_id: String,
     pub runtime_kind: String,
+    pub provider_id: String,
     pub flow_id: Option<String>,
     pub session_id: Option<String>,
     pub account_id: Option<String>,
@@ -1583,6 +1601,7 @@ pub struct AutonomousRunDto {
     pub project_id: String,
     pub run_id: String,
     pub runtime_kind: String,
+    pub provider_id: String,
     pub supervisor_kind: String,
     pub status: AutonomousRunStatusDto,
     pub recovery_state: AutonomousRunRecoveryStateDto,
@@ -1732,6 +1751,15 @@ pub struct SubmitOpenAiCallbackRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GetRuntimeRunRequestDto {
     pub project_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpsertRuntimeSettingsRequestDto {
+    pub provider_id: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub openrouter_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

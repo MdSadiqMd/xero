@@ -189,6 +189,7 @@ fn sample_autonomous_run(duplicate_start_detected: bool) -> AutonomousRunDto {
         project_id: "project-1".into(),
         run_id: "run-1".into(),
         runtime_kind: "openai_codex".into(),
+        provider_id: "openai_codex".into(),
         supervisor_kind: "detached_pty".into(),
         status: AutonomousRunStatusDto::Stale,
         recovery_state: AutonomousRunRecoveryStateDto::RecoveryRequired,
@@ -1136,6 +1137,7 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
                 "projectId": "project-1",
                 "runId": "run-1",
                 "runtimeKind": "openai_codex",
+                "providerId": "openai_codex",
                 "supervisorKind": "detached_pty",
                 "status": "stale",
                 "recoveryState": "recovery_required",
@@ -1393,6 +1395,7 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
     let runtime_updated = serde_json::to_value(RuntimeUpdatedPayloadDto {
         project_id: "project-1".into(),
         runtime_kind: "openai_codex".into(),
+        provider_id: "openai_codex".into(),
         flow_id: Some("flow-1".into()),
         session_id: Some("session-1".into()),
         account_id: Some("acct-1".into()),
@@ -1407,6 +1410,7 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
         json!({
             "projectId": "project-1",
             "runtimeKind": "openai_codex",
+            "providerId": "openai_codex",
             "flowId": "flow-1",
             "sessionId": "session-1",
             "accountId": "acct-1",
@@ -1421,6 +1425,7 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
         project_id: "project-1".into(),
         run_id: "run-1".into(),
         runtime_kind: "openai_codex".into(),
+        provider_id: "openai_codex".into(),
         supervisor_kind: "detached_pty".into(),
         status: RuntimeRunStatusDto::Stale,
         transport: RuntimeRunTransportDto {
@@ -1454,6 +1459,7 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
             "projectId": "project-1",
             "runId": "run-1",
             "runtimeKind": "openai_codex",
+            "providerId": "openai_codex",
             "supervisorKind": "detached_pty",
             "status": "stale",
             "transport": {
@@ -1489,6 +1495,7 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
             project_id: "project-1".into(),
             run_id: "run-1".into(),
             runtime_kind: "openai_codex".into(),
+            provider_id: "openai_codex".into(),
             supervisor_kind: "detached_pty".into(),
             status: RuntimeRunStatusDto::Running,
             transport: RuntimeRunTransportDto {
@@ -1516,6 +1523,7 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
                 "projectId": "project-1",
                 "runId": "run-1",
                 "runtimeKind": "openai_codex",
+                "providerId": "openai_codex",
                 "supervisorKind": "detached_pty",
                 "status": "running",
                 "transport": {
@@ -1550,6 +1558,7 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
                 "projectId": "project-1",
                 "runId": "run-1",
                 "runtimeKind": "openai_codex",
+                "providerId": "openai_codex",
                 "supervisorKind": "detached_pty",
                 "status": "stale",
                 "recoveryState": "recovery_required",
