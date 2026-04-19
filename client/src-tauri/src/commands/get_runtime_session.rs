@@ -1,12 +1,15 @@
-use std::{path::Path, time::SystemTime};
+use std::path::Path;
 
 use tauri::{AppHandle, Runtime, State};
 
 use crate::{
-    auth::load_openai_codex_session,
     commands::{
         validate_non_empty, CommandResult, ProjectIdRequestDto, RuntimeAuthPhase,
         RuntimeDiagnosticDto, RuntimeSessionDto,
+    },
+    runtime::{
+        reconcile_provider_runtime_session, resolve_runtime_provider_identity,
+        RuntimeProviderReconcileOutcome,
     },
     state::DesktopState,
 };
@@ -49,9 +52,10 @@ pub(crate) fn reconcile_runtime_session<R: Runtime>(
             last_error_code: Some("auth_flow_unavailable".into()),
             last_error: Some(RuntimeDiagnosticDto {
                 code: "auth_flow_unavailable".into(),
-                message:
-                    "Cadence no longer has the in-memory OpenAI login flow for this project. Start login again."
-                        .into(),
+                message: format!(
+                    "Cadence no longer has the in-memory {} login flow for this project. Start login again.",
+                    runtime_provider_label(&runtime)
+                ),
                 retryable: false,
             }),
             updated_at: crate::auth::now_timestamp(),
@@ -66,67 +70,50 @@ pub(crate) fn reconcile_runtime_session<R: Runtime>(
         return Ok(runtime);
     }
 
-    let Some(account_id) = runtime.account_id.clone() else {
-        let updated = signed_out_runtime(
-            runtime,
-            "runtime_account_missing",
-            "Cadence could not reconcile the runtime session because the stored account id was missing.",
-            false,
-        );
-        let persisted = persist_runtime_session(repo_root, &updated)?;
-        emit_runtime_updated(app, &persisted)?;
-        return Ok(persisted);
-    };
-
-    let auth_store_path = match state.auth_store_file(app) {
-        Ok(path) => path,
-        Err(error) => {
-            let updated = signed_out_runtime(runtime, &error.code, &error.message, error.retryable);
+    let provider = match resolve_runtime_provider_identity(
+        Some(runtime.provider_id.as_str()),
+        Some(runtime.runtime_kind.as_str()),
+    ) {
+        Ok(provider) => provider,
+        Err(diagnostic) => {
+            let updated = signed_out_runtime(
+                runtime,
+                &diagnostic.code,
+                &diagnostic.message,
+                diagnostic.retryable,
+            );
             let persisted = persist_runtime_session(repo_root, &updated)?;
             emit_runtime_updated(app, &persisted)?;
             return Ok(persisted);
         }
     };
 
-    let stored_auth = match load_openai_codex_session(&auth_store_path, &account_id) {
-        Ok(session) => session,
+    match reconcile_provider_runtime_session(
+        app,
+        state,
+        provider,
+        runtime.account_id.as_deref(),
+        runtime.session_id.as_deref(),
+    ) {
+        Ok(RuntimeProviderReconcileOutcome::Authenticated(_binding)) => Ok(runtime),
+        Ok(RuntimeProviderReconcileOutcome::SignedOut(diagnostic)) => {
+            let updated = signed_out_runtime(
+                runtime,
+                &diagnostic.code,
+                &diagnostic.message,
+                diagnostic.retryable,
+            );
+            let persisted = persist_runtime_session(repo_root, &updated)?;
+            emit_runtime_updated(app, &persisted)?;
+            Ok(persisted)
+        }
         Err(error) => {
             let updated = signed_out_runtime(runtime, &error.code, &error.message, error.retryable);
             let persisted = persist_runtime_session(repo_root, &updated)?;
             emit_runtime_updated(app, &persisted)?;
-            return Ok(persisted);
+            Ok(persisted)
         }
-    };
-
-    let Some(stored_auth) = stored_auth else {
-        let updated = signed_out_runtime(
-            runtime,
-            "auth_session_not_found",
-            &format!(
-                "Cadence does not have an app-local OpenAI auth session for account `{account_id}`."
-            ),
-            false,
-        );
-        let persisted = persist_runtime_session(repo_root, &updated)?;
-        emit_runtime_updated(app, &persisted)?;
-        return Ok(persisted);
-    };
-
-    if stored_auth.expires_at <= current_unix_timestamp() {
-        let updated = signed_out_runtime(
-            runtime,
-            "auth_session_expired",
-            &format!(
-                "The app-local OpenAI auth session for account `{account_id}` has expired. Sign in again or refresh the runtime session."
-            ),
-            false,
-        );
-        let persisted = persist_runtime_session(repo_root, &updated)?;
-        emit_runtime_updated(app, &persisted)?;
-        return Ok(persisted);
     }
-
-    Ok(runtime)
 }
 
 fn signed_out_runtime(
@@ -164,9 +151,23 @@ fn is_transient_phase(phase: &RuntimeAuthPhase) -> bool {
     )
 }
 
-fn current_unix_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
-        .as_secs() as i64
+fn runtime_provider_label(runtime: &RuntimeSessionDto) -> String {
+    resolve_runtime_provider_identity(
+        Some(runtime.provider_id.as_str()),
+        Some(runtime.runtime_kind.as_str()),
+    )
+    .map(|provider| provider.provider_id.into())
+    .unwrap_or_else(|_| {
+        let provider_id = runtime.provider_id.trim();
+        if provider_id.is_empty() {
+            let runtime_kind = runtime.runtime_kind.trim();
+            if runtime_kind.is_empty() {
+                "runtime".into()
+            } else {
+                runtime_kind.into()
+            }
+        } else {
+            provider_id.into()
+        }
+    })
 }

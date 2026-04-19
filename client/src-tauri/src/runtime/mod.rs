@@ -24,7 +24,10 @@ pub use platform_adapter::{
     RuntimeShellSelection, RuntimeShellSource, RuntimeSupervisorBinaryResolution,
 };
 pub use provider::{
-    openai_codex_provider, ResolvedRuntimeProvider, RuntimeProvider,
+    bind_provider_runtime_session, default_runtime_provider, logout_provider_runtime_session,
+    openai_codex_provider, reconcile_provider_runtime_session, refresh_provider_runtime_session,
+    resolve_runtime_provider_identity, ResolvedRuntimeProvider, RuntimeProvider,
+    RuntimeProviderBindOutcome, RuntimeProviderReconcileOutcome, RuntimeProviderSessionBinding,
     OPENAI_CODEX_AUTH_STORE_FILE_NAME, OPENAI_CODEX_PROVIDER_ID,
 };
 pub use stream::{start_runtime_stream, RuntimeStreamController, RuntimeStreamRequest};

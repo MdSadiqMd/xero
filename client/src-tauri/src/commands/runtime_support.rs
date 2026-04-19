@@ -36,7 +36,7 @@ use crate::{
     runtime::{
         autonomous_orchestrator::{reconcile_runtime_snapshot, AutonomousRuntimeReconcileIntent},
         autonomous_workflow_progression::persist_autonomous_workflow_progression,
-        probe_runtime_run, RuntimeSupervisorProbeRequest,
+        default_runtime_provider, probe_runtime_run, RuntimeSupervisorProbeRequest,
     },
     state::DesktopState,
 };
@@ -55,10 +55,12 @@ pub(crate) fn resolve_project_root<R: Runtime>(
 }
 
 pub(crate) fn default_runtime_session(project_id: &str) -> RuntimeSessionDto {
+    let provider = default_runtime_provider();
+
     RuntimeSessionDto {
         project_id: project_id.into(),
-        runtime_kind: OPENAI_RUNTIME_KIND.into(),
-        provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+        runtime_kind: provider.runtime_kind.into(),
+        provider_id: provider.provider_id.into(),
         flow_id: None,
         session_id: None,
         account_id: None,
