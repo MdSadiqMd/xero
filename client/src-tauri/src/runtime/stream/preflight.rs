@@ -15,9 +15,10 @@ use crate::{
 };
 
 use super::{
-    controller::RuntimeStreamRequest, parse_runtime_boundary_id_for_run, require_non_empty,
-    runtime_auth_lost_error, PendingActionRequired, StreamExit, StreamFailure, StreamResult,
-    TERMINAL_SNAPSHOT_RETRY_ATTEMPTS, TERMINAL_SNAPSHOT_RETRY_INTERVAL,
+    controller::RuntimeStreamRequest,
+    items::{parse_runtime_boundary_id_for_run, require_non_empty, PendingActionRequired},
+    StreamExit, StreamFailure, StreamResult, TERMINAL_SNAPSHOT_RETRY_ATTEMPTS,
+    TERMINAL_SNAPSHOT_RETRY_INTERVAL,
 };
 
 pub(super) fn ensure_stream_identity<R: Runtime>(
@@ -341,5 +342,40 @@ pub(super) fn ensure_attachable_runtime_run(
                 }),
             ))
         }
+    }
+}
+
+fn runtime_auth_lost_error(phase: &RuntimeAuthPhase) -> CommandError {
+    let (code, retryable, message) = match phase {
+        RuntimeAuthPhase::Starting
+        | RuntimeAuthPhase::AwaitingBrowserCallback
+        | RuntimeAuthPhase::AwaitingManualInput
+        | RuntimeAuthPhase::ExchangingCode
+        | RuntimeAuthPhase::Refreshing => (
+            "runtime_stream_auth_transition",
+            true,
+            "Cadence paused the runtime stream because the selected project's auth session is transitioning.",
+        ),
+        RuntimeAuthPhase::Idle => (
+            "runtime_stream_auth_required",
+            false,
+            "Cadence closed the runtime stream because the selected project is signed out.",
+        ),
+        RuntimeAuthPhase::Cancelled | RuntimeAuthPhase::Failed => (
+            "runtime_stream_unavailable",
+            false,
+            "Cadence closed the runtime stream because the selected project's runtime session is unavailable.",
+        ),
+        RuntimeAuthPhase::Authenticated => (
+            "runtime_stream_session_missing",
+            true,
+            "Cadence could not keep the runtime stream attached because the authenticated session became incomplete.",
+        ),
+    };
+
+    if retryable {
+        CommandError::retryable(code, message)
+    } else {
+        CommandError::user_fixable(code, message)
     }
 }

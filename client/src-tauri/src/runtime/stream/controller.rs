@@ -120,7 +120,7 @@ pub fn start_runtime_stream<R: Runtime + 'static>(
         let outcome = super::emit_runtime_stream(&app, &state, &request, &lease, &channel);
 
         if let Err(super::StreamExit::Failed(failure)) = outcome {
-            let _ = super::emit_failure_item(
+            let _ = super::items::emit_failure_item(
                 &channel,
                 &request,
                 failure.last_sequence.saturating_add(1),
