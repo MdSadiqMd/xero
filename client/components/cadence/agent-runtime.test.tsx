@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openUrlMock } = vi.hoisted(() => ({
@@ -690,12 +690,17 @@ describe('AgentRuntime current UI', () => {
     )
 
     expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible()
-    expect(screen.getByText('Review worktree changes')).toBeVisible()
-    expect(screen.getByText('Durable only')).toBeVisible()
-    expect(screen.getAllByText('Latest resume started: Operator resumed the selected project runtime session.').length).toBeGreaterThan(0)
-    expect(screen.getByText('Captured resume verification evidence for this action.')).toBeVisible()
+    const checkpointSection = screen.getByRole('heading', { name: 'Checkpoint control loop' }).closest('section')
+    expect(checkpointSection).not.toBeNull()
+    const checkpointQueries = within(checkpointSection as HTMLElement)
+    expect(checkpointQueries.getByText('Review worktree changes')).toBeVisible()
+    expect(checkpointQueries.getByText('Durable only')).toBeVisible()
+    expect(
+      checkpointQueries.getAllByText('Latest resume started: Operator resumed the selected project runtime session.').length,
+    ).toBeGreaterThan(0)
+    expect(checkpointQueries.getByText('Captured resume verification evidence for this action.')).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume run' }))
+    fireEvent.click(checkpointQueries.getByRole('button', { name: 'Resume run' }))
     await waitFor(() =>
       expect(onResumeOperatorRun).toHaveBeenCalledWith('action-1', {
         userAnswer: 'Looks good to resume.',
@@ -804,6 +809,9 @@ describe('AgentRuntime current UI', () => {
     )
 
     expect(screen.getByRole('heading', { name: 'OpenRouter is selected in Settings' })).toBeVisible()
+    const runtimeSetupSection = screen.getByRole('heading', { name: 'OpenRouter is selected in Settings' }).closest('section')
+    expect(runtimeSetupSection).not.toBeNull()
+    const runtimeSetupQueries = within(runtimeSetupSection as HTMLElement)
     expect(screen.getByText('Provider mismatch')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Start OpenAI login' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Manual callback fallback' })).not.toBeInTheDocument()
@@ -812,7 +820,7 @@ describe('AgentRuntime current UI', () => {
       'Rebind OpenRouter before trusting new live activity.',
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rebind OpenRouter runtime' }))
+    fireEvent.click(runtimeSetupQueries.getByRole('button', { name: 'Rebind OpenRouter runtime' }))
     await waitFor(() => expect(onStartRuntimeSession).toHaveBeenCalledTimes(1))
   })
 

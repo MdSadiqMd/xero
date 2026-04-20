@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openUrlMock } = vi.hoisted(() => ({
@@ -1007,15 +1007,20 @@ describe('live views', () => {
     expect(screen.getAllByRole('heading', { name: 'Recovered run snapshot' }).length).toBeGreaterThanOrEqual(1)
     expect(screen.getByRole('heading', { name: 'Waiting for the first run-scoped event' })).toBeVisible()
     expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible()
+    const checkpointSection = screen.getByRole('heading', { name: 'Checkpoint control loop' }).closest('section')
+    expect(checkpointSection).not.toBeNull()
+    const checkpointQueries = within(checkpointSection as HTMLElement)
     expect(screen.getByText('Supervisor boot recorded.')).toBeVisible()
-    expect(screen.getByText('Review worktree changes')).toBeVisible()
-    expect(screen.getByText('Resume after plan review')).toBeVisible()
-    expect(screen.getAllByText('Latest resume started: Operator resumed the selected project runtime session.').length).toBeGreaterThan(0)
+    expect(checkpointQueries.getByText('Review worktree changes')).toBeVisible()
+    expect(checkpointQueries.getByText('Resume after plan review')).toBeVisible()
+    expect(
+      checkpointQueries.getAllByText('Latest resume started: Operator resumed the selected project runtime session.').length,
+    ).toBeGreaterThan(0)
 
-    fireEvent.change(screen.getByLabelText('Operator answer for action-pending'), {
+    fireEvent.change(checkpointQueries.getByLabelText('Operator answer for action-pending'), {
       target: { value: 'Proceed after validating repo changes.' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    fireEvent.click(checkpointQueries.getByRole('button', { name: 'Approve' }))
 
     await waitFor(() =>
       expect(resolveOperatorAction).toHaveBeenCalledWith('action-pending', 'approve', {
@@ -1023,7 +1028,7 @@ describe('live views', () => {
       }),
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume run' }))
+    fireEvent.click(checkpointQueries.getByRole('button', { name: 'Resume run' }))
     await waitFor(() =>
       expect(resumeOperatorRun).toHaveBeenCalledWith('action-approved', {
         userAnswer: 'Looks good to resume.',
