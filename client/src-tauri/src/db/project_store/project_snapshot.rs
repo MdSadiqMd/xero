@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, Error as SqlError};
 
@@ -19,8 +19,14 @@ use super::{
         read_workflow_graph_nodes, read_workflow_handoff_packages, WorkflowGateState,
         WorkflowGraphNodeRecord, MAX_LIFECYCLE_TRANSITION_EVENT_ROWS,
     },
-    ProjectSnapshotRecord, ProjectSummaryRow,
+    ProjectSummaryRow,
 };
+
+#[derive(Debug, Clone)]
+pub struct ProjectSnapshotRecord {
+    pub snapshot: ProjectSnapshotResponseDto,
+    pub database_path: PathBuf,
+}
 
 #[derive(Debug)]
 struct ProjectProjection {
