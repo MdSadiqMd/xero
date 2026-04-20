@@ -29,6 +29,7 @@ import type {
   AutonomousRunStateDto,
   RuntimeRunUpdatedPayloadDto,
   RuntimeSessionDto,
+  RuntimeSettingsDto,
   RuntimeStreamEventDto,
   RuntimeUpdatedPayloadDto,
   SubscribeRuntimeStreamResponseDto,
@@ -131,6 +132,15 @@ function makeRuntimeSession(projectId = 'project-1', overrides: Partial<RuntimeS
   }
 }
 
+function makeRuntimeSettings(overrides: Partial<RuntimeSettingsDto> = {}): RuntimeSettingsDto {
+  return {
+    providerId: 'openai_codex',
+    modelId: 'openai_codex',
+    openrouterApiKeyConfigured: false,
+    ...overrides,
+  }
+}
+
 function makeRuntimeRun(projectId = 'project-1', overrides: Partial<RuntimeRunDto> = {}): RuntimeRunDto {
   return {
     projectId,
@@ -215,6 +225,7 @@ function createAdapter(options?: {
   status?: RepositoryStatusResponseDto
   diff?: RepositoryDiffResponseDto
   runtimeSession?: RuntimeSessionDto
+  runtimeSettings?: RuntimeSettingsDto
   runtimeRun?: RuntimeRunDto | null
   autonomousState?: AutonomousRunStateDto
   notificationRoutes?: ListNotificationRoutesResponseDto['routes']
@@ -223,6 +234,7 @@ function createAdapter(options?: {
   let currentStatus = options?.status ?? makeStatus()
   let currentDiff = options?.diff ?? makeDiff()
   let currentRuntimeSession = options?.runtimeSession ?? makeRuntimeSession()
+  let currentRuntimeSettings = options?.runtimeSettings ?? makeRuntimeSettings()
   let currentRuntimeRun = options?.runtimeRun ?? null
   let currentAutonomousState = options?.autonomousState ?? null
   let currentNotificationRoutes = options?.notificationRoutes ?? []
@@ -276,6 +288,7 @@ function createAdapter(options?: {
     getRepositoryDiff: async (_projectId, scope) => ({ ...currentDiff, scope }),
     getAutonomousRun: async () => currentAutonomousState ?? { run: null, unit: null },
     getRuntimeRun: async () => currentRuntimeRun,
+    getRuntimeSettings: async () => currentRuntimeSettings,
     getRuntimeSession: async () => currentRuntimeSession,
     startOpenAiLogin: async () => {
       currentRuntimeSession = makeRuntimeSession('project-1', {
@@ -290,6 +303,21 @@ function createAdapter(options?: {
     },
     startAutonomousRun,
     startRuntimeRun,
+    upsertRuntimeSettings: async (request) => {
+      currentRuntimeSettings = {
+        providerId: request.providerId,
+        modelId: request.modelId,
+        openrouterApiKeyConfigured:
+          request.providerId === 'openrouter'
+            ? request.openrouterApiKey === ''
+              ? false
+              : request.openrouterApiKey !== undefined
+                ? request.openrouterApiKey.trim().length > 0
+                : currentRuntimeSettings.openrouterApiKeyConfigured
+            : false,
+      }
+      return currentRuntimeSettings
+    },
     startRuntimeSession: async () => {
       currentRuntimeSession = makeRuntimeSession('project-1')
       return currentRuntimeSession
