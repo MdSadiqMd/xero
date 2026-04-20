@@ -1,4 +1,7 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use git2::{Repository, Status, StatusOptions};
 use sha2::{Digest, Sha256};
@@ -55,76 +58,73 @@ impl CanonicalRepository {
     }
 }
 
+pub struct RepositoryHandle {
+    pub repository: Repository,
+    pub root_path: PathBuf,
+    pub root_path_string: String,
+    pub common_git_dir: PathBuf,
+    pub display_name: String,
+    pub branch_name: Option<String>,
+    pub head_sha: Option<String>,
+    pub branch: Option<BranchSummaryDto>,
+}
+
+impl RepositoryHandle {
+    pub fn project_id(&self) -> String {
+        format!("project_{}", stable_digest(&self.root_path_string))
+    }
+
+    pub fn repository_id(&self) -> String {
+        format!("repo_{}", stable_digest(&self.root_path_string))
+    }
+
+    pub fn repository_summary(&self) -> RepositorySummaryDto {
+        RepositorySummaryDto {
+            id: self.repository_id(),
+            project_id: self.project_id(),
+            root_path: self.root_path_string.clone(),
+            display_name: self.display_name.clone(),
+            branch: self.branch_name.clone(),
+            head_sha: self.head_sha.clone(),
+            is_git_repo: true,
+        }
+    }
+
+    pub fn canonical_repository(&self) -> Result<CanonicalRepository, CommandError> {
+        let status_entries = read_status_entries(&self.repository)?;
+        let has_staged_changes = status_entries.iter().any(|entry| entry.staged.is_some());
+        let has_unstaged_changes = status_entries.iter().any(|entry| entry.unstaged.is_some());
+        let has_untracked_changes = status_entries.iter().any(|entry| entry.untracked);
+
+        Ok(CanonicalRepository {
+            project_id: self.project_id(),
+            repository_id: self.repository_id(),
+            root_path: self.root_path.clone(),
+            root_path_string: self.root_path_string.clone(),
+            common_git_dir: self.common_git_dir.clone(),
+            display_name: self.display_name.clone(),
+            branch_name: self.branch_name.clone(),
+            head_sha: self.head_sha.clone(),
+            branch: self.branch.clone(),
+            status_entries,
+            has_staged_changes,
+            has_unstaged_changes,
+            has_untracked_changes,
+        })
+    }
+}
+
 pub fn resolve_repository(selected_path: &str) -> CommandResult<CanonicalRepository> {
-    let trimmed_path = selected_path.trim();
-    let canonical_selected_path =
-        fs::canonicalize(trimmed_path).map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => CommandError::user_fixable(
-                "repository_path_not_found",
-                format!("Repository path `{trimmed_path}` does not exist."),
-            ),
-            _ => CommandError::user_fixable(
-                "repository_path_invalid",
-                format!("Cadence could not read repository path `{trimmed_path}`: {error}"),
-            ),
-        })?;
+    open_repository(selected_path)?.canonical_repository()
+}
 
-    let repository = Repository::discover(&canonical_selected_path).map_err(|_| {
-        CommandError::user_fixable(
-            "git_repository_not_found",
-            "Selected path is not inside a Git repository.",
-        )
-    })?;
+pub fn open_repository(selected_path: &str) -> CommandResult<RepositoryHandle> {
+    open_repository_internal(selected_path.trim())
+}
 
-    let workdir = repository.workdir().ok_or_else(|| {
-        CommandError::user_fixable(
-            "git_worktree_required",
-            "Cadence can only import repositories with a working tree.",
-        )
-    })?;
-
-    let canonical_root_path = fs::canonicalize(workdir).map_err(|error| {
-        CommandError::system_fault(
-            "repository_root_canonicalize_failed",
-            format!(
-                "Cadence could not canonicalize the repository root at {}: {error}",
-                workdir.display()
-            ),
-        )
-    })?;
-
-    let common_git_dir = fs::canonicalize(repository.commondir())
-        .unwrap_or_else(|_| repository.commondir().to_path_buf());
-    let root_path_string = canonical_root_path.to_string_lossy().into_owned();
-    let display_name = canonical_root_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map(ToOwned::to_owned)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| root_path_string.clone());
-
-    let digest = stable_digest(&root_path_string);
-    let (branch, branch_name, head_sha) = read_branch(&repository);
-    let status_entries = read_status_entries(&repository)?;
-    let has_staged_changes = status_entries.iter().any(|entry| entry.staged.is_some());
-    let has_unstaged_changes = status_entries.iter().any(|entry| entry.unstaged.is_some());
-    let has_untracked_changes = status_entries.iter().any(|entry| entry.untracked);
-
-    Ok(CanonicalRepository {
-        project_id: format!("project_{digest}"),
-        repository_id: format!("repo_{digest}"),
-        root_path: canonical_root_path,
-        root_path_string,
-        common_git_dir,
-        display_name,
-        branch_name,
-        head_sha,
-        branch,
-        status_entries,
-        has_staged_changes,
-        has_unstaged_changes,
-        has_untracked_changes,
-    })
+pub fn open_repository_root(root_path: &Path) -> CommandResult<RepositoryHandle> {
+    let root_path = root_path.to_string_lossy();
+    open_repository_internal(root_path.as_ref())
 }
 
 pub fn ensure_cadence_excluded(
@@ -174,6 +174,66 @@ pub fn ensure_cadence_excluded(
                 repository.root_path.display()
             ),
         )
+    })
+}
+
+fn open_repository_internal(selected_path: &str) -> CommandResult<RepositoryHandle> {
+    let canonical_selected_path = fs::canonicalize(selected_path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => CommandError::user_fixable(
+            "repository_path_not_found",
+            format!("Repository path `{selected_path}` does not exist."),
+        ),
+        _ => CommandError::user_fixable(
+            "repository_path_invalid",
+            format!("Cadence could not read repository path `{selected_path}`: {error}"),
+        ),
+    })?;
+
+    let repository = Repository::discover(&canonical_selected_path).map_err(|_| {
+        CommandError::user_fixable(
+            "git_repository_not_found",
+            "Selected path is not inside a Git repository.",
+        )
+    })?;
+
+    let workdir = repository.workdir().ok_or_else(|| {
+        CommandError::user_fixable(
+            "git_worktree_required",
+            "Cadence can only import repositories with a working tree.",
+        )
+    })?;
+
+    let canonical_root_path = fs::canonicalize(workdir).map_err(|error| {
+        CommandError::system_fault(
+            "repository_root_canonicalize_failed",
+            format!(
+                "Cadence could not canonicalize the repository root at {}: {error}",
+                workdir.display()
+            ),
+        )
+    })?;
+
+    let common_git_dir = fs::canonicalize(repository.commondir())
+        .unwrap_or_else(|_| repository.commondir().to_path_buf());
+    let root_path_string = canonical_root_path.to_string_lossy().into_owned();
+    let display_name = canonical_root_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| root_path_string.clone());
+
+    let (branch, branch_name, head_sha) = read_branch(&repository);
+
+    Ok(RepositoryHandle {
+        repository,
+        root_path: canonical_root_path,
+        root_path_string,
+        common_git_dir,
+        display_name,
+        branch_name,
+        head_sha,
+        branch,
     })
 }
 

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::{
     commands::{CommandError, CommandResult, RepositoryStatusResponseDto},
-    git::repository::{resolve_repository, CanonicalRepository},
+    git::repository::{self, CanonicalRepository},
     registry::{self, RegistryProjectRecord},
 };
 
@@ -12,6 +12,11 @@ pub fn load_repository_status(
 ) -> CommandResult<RepositoryStatusResponseDto> {
     let repository = resolve_project_repository(expected_project_id, registry_path)?;
     Ok(repository.repository_status())
+}
+
+pub fn load_repository_status_from_root(root_path: &Path) -> CommandResult<RepositoryStatusResponseDto> {
+    let repository = repository::open_repository_root(root_path)?;
+    Ok(repository.canonical_repository()?.repository_status())
 }
 
 pub fn resolve_project_repository(
@@ -27,10 +32,9 @@ pub fn resolve_project_repository(
         root_path,
     } in candidates
     {
-        match resolve_repository(&root_path) {
+        match repository::open_repository_root(Path::new(&root_path)) {
             Ok(repository) => {
-                if repository.project_id != project_id || repository.repository_id != repository_id
-                {
+                if repository.project_id() != project_id || repository.repository_id() != repository_id {
                     return Err(CommandError::system_fault(
                         "project_registry_mismatch",
                         format!(
@@ -39,7 +43,7 @@ pub fn resolve_project_repository(
                     ));
                 }
 
-                return Ok(repository);
+                return repository.canonical_repository();
             }
             Err(error) => {
                 if first_error.is_none() {

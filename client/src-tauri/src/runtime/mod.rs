@@ -9,11 +9,14 @@ pub mod supervisor;
 
 pub use autonomous_tool_runtime::{
     resolve_imported_repo_root, resolve_imported_repo_root_from_registry, AutonomousCommandOutput,
-    AutonomousCommandRequest, AutonomousEditOutput, AutonomousEditRequest, AutonomousReadOutput,
-    AutonomousReadRequest, AutonomousSearchMatch, AutonomousSearchOutput, AutonomousSearchRequest,
+    AutonomousCommandRequest, AutonomousEditOutput, AutonomousEditRequest,
+    AutonomousGitDiffOutput, AutonomousGitDiffRequest, AutonomousGitStatusOutput,
+    AutonomousGitStatusRequest, AutonomousReadOutput, AutonomousReadRequest,
+    AutonomousSearchMatch, AutonomousSearchOutput, AutonomousSearchRequest,
     AutonomousToolCommandResult, AutonomousToolOutput, AutonomousToolRequest, AutonomousToolResult,
     AutonomousToolRuntime, AutonomousToolRuntimeLimits, AutonomousWriteOutput,
-    AutonomousWriteRequest, AUTONOMOUS_TOOL_COMMAND, AUTONOMOUS_TOOL_EDIT, AUTONOMOUS_TOOL_READ,
+    AutonomousWriteRequest, AUTONOMOUS_TOOL_COMMAND, AUTONOMOUS_TOOL_EDIT,
+    AUTONOMOUS_TOOL_GIT_DIFF, AUTONOMOUS_TOOL_GIT_STATUS, AUTONOMOUS_TOOL_READ,
     AUTONOMOUS_TOOL_SEARCH, AUTONOMOUS_TOOL_WRITE,
 };
 pub use platform_adapter::{

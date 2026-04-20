@@ -343,13 +343,78 @@ function formatGateLinkage(approval: OperatorApprovalView): string | null {
     : `${approval.gateNodeId} · ${approval.gateKey}`
 }
 
+function getSelectedProviderId(agent: AgentPaneView, runtimeSession: RuntimeSessionView | null): string {
+  return agent.selectedProviderId ?? runtimeSession?.providerId ?? 'openai_codex'
+}
+
+function getSelectedProviderLabel(agent: AgentPaneView, runtimeSession: RuntimeSessionView | null): string {
+  return agent.selectedProviderLabel ?? (getSelectedProviderId(agent, runtimeSession) === 'openrouter' ? 'OpenRouter' : 'OpenAI Codex')
+}
+
 function getStatusMeta(runtimeSession: RuntimeSessionView | null, agent: AgentPaneView) {
+  const selectedProviderId = getSelectedProviderId(agent, runtimeSession)
+  const selectedProviderLabel = getSelectedProviderLabel(agent, runtimeSession)
+  const providerMismatch = agent.providerMismatch ?? false
+  const openrouterApiKeyConfigured = agent.openrouterApiKeyConfigured ?? false
+
   if (!runtimeSession) {
     return {
       eyebrow: 'Runtime setup',
-      title: 'Sign in to OpenAI for this project',
+      title:
+        selectedProviderId === 'openrouter'
+          ? openrouterApiKeyConfigured
+            ? 'Bind OpenRouter for this project'
+            : 'Configure OpenRouter in Settings'
+          : 'Sign in to OpenAI for this project',
       body: agent.sessionUnavailableReason,
       badgeVariant: 'outline' as const,
+    }
+  }
+
+  if (providerMismatch) {
+    return {
+      eyebrow: 'Needs rebind',
+      title: `${selectedProviderLabel} is selected in Settings`,
+      body: agent.sessionUnavailableReason,
+      badgeVariant: 'destructive' as const,
+    }
+  }
+
+  if (selectedProviderId === 'openrouter') {
+    switch (runtimeSession.phase) {
+      case 'authenticated':
+        return {
+          eyebrow: 'Runtime ready',
+          title: 'OpenRouter runtime bound',
+          body: agent.sessionUnavailableReason,
+          badgeVariant: 'default' as const,
+        }
+      case 'starting':
+      case 'refreshing':
+      case 'exchanging_code':
+        return {
+          eyebrow: 'Bind in progress',
+          title: 'Binding the saved OpenRouter runtime',
+          body: agent.sessionUnavailableReason,
+          badgeVariant: 'secondary' as const,
+        }
+      case 'awaiting_browser_callback':
+      case 'awaiting_manual_input':
+      case 'failed':
+      case 'cancelled':
+        return {
+          eyebrow: 'Needs attention',
+          title: 'OpenRouter runtime needs attention',
+          body: agent.sessionUnavailableReason,
+          badgeVariant: 'destructive' as const,
+        }
+      case 'idle':
+        return {
+          eyebrow: 'Runtime setup',
+          title: openrouterApiKeyConfigured ? 'Bind OpenRouter for this project' : 'Configure OpenRouter in Settings',
+          body: agent.sessionUnavailableReason,
+          badgeVariant: 'outline' as const,
+        }
     }
   }
 
@@ -942,15 +1007,34 @@ function getComposerPlaceholder(
   runtimeSession: RuntimeSessionView | null,
   streamStatus: RuntimeStreamStatus,
   runtimeRun: RuntimeRunView | null,
-  streamRunId?: string,
+  streamRunId: string | undefined,
+  options: { selectedProviderId: string; openrouterApiKeyConfigured: boolean; providerMismatch: boolean },
 ): string {
   if (!runtimeSession) {
+    if (options.selectedProviderId === 'openrouter') {
+      return options.openrouterApiKeyConfigured
+        ? 'Bind OpenRouter from the Agent tab to start.'
+        : 'Configure an OpenRouter API key in Settings to start.'
+    }
+
     return 'Sign in with OpenAI to start.'
   }
 
+  if (options.providerMismatch) {
+    return `Rebind ${options.selectedProviderId === 'openrouter' ? 'OpenRouter' : 'the selected provider'} before trusting new live activity.`
+  }
+
   if (!runtimeSession.isAuthenticated) {
-    return runtimeSession.isLoginInProgress
-      ? 'Finish the login flow to continue.'
+    if (runtimeSession.isLoginInProgress) {
+      return options.selectedProviderId === 'openrouter'
+        ? 'Finish the OpenRouter bind to continue.'
+        : 'Finish the login flow to continue.'
+    }
+
+    return options.selectedProviderId === 'openrouter'
+      ? options.openrouterApiKeyConfigured
+        ? 'Bind OpenRouter from the Agent tab to start.'
+        : 'Configure an OpenRouter API key in Settings to start.'
       : 'Sign in with OpenAI to start.'
   }
 
@@ -1401,6 +1485,13 @@ export function AgentRuntime({
   const lastSeenProjectIdRef = useRef(agent.project.id)
   const lastSeenRuntimeRunIdRef = useRef<string | null>(renderableRuntimeRun?.runId ?? null)
 
+  const selectedProviderId = getSelectedProviderId(agent, runtimeSession)
+  const selectedProviderLabel = getSelectedProviderLabel(agent, runtimeSession)
+  const selectedModelId = displayValue(agent.selectedModelId, selectedProviderId === 'openrouter' ? 'Model not configured' : 'openai_codex')
+  const isOpenRouterSelected = selectedProviderId === 'openrouter'
+  const isOpenAiSelected = selectedProviderId === 'openai_codex'
+  const openrouterApiKeyConfigured = agent.openrouterApiKeyConfigured ?? false
+  const providerMismatch = agent.providerMismatch ?? false
   const statusMeta = useMemo(() => getStatusMeta(runtimeSession, agent), [agent, runtimeSession])
   const streamStatusMeta = useMemo(() => getStreamStatusMeta(agent, runtimeSession), [agent, runtimeSession])
   const repositoryPath = displayValue(agent.repositoryPath, 'No repository path available')
@@ -1413,7 +1504,7 @@ export function AgentRuntime({
   const hasAttachedRun = Boolean(renderableRuntimeRun)
   const showNoRunStreamBanner = Boolean(runtimeSession?.isAuthenticated && !hasAttachedRun)
   const hasRepositoryBinding = Boolean(agent.repositoryPath?.trim())
-  const canStartLogin = hasRepositoryBinding && typeof onStartLogin === 'function'
+  const canStartLogin = hasRepositoryBinding && isOpenAiSelected && typeof onStartLogin === 'function'
   const canStartAutonomousRun = Boolean(
     hasRepositoryBinding && typeof onStartAutonomousRun === 'function' && runtimeSession?.isAuthenticated && runtimeSession.sessionId,
   )
@@ -1424,8 +1515,9 @@ export function AgentRuntime({
   const canStartRuntimeRun = Boolean(
     hasRepositoryBinding && typeof onStartRuntimeRun === 'function' && (runtimeSession?.isAuthenticated || renderableRuntimeRun),
   )
-  const canResumeRuntimeSession = hasRepositoryBinding && typeof onStartRuntimeSession === 'function'
-  const canSubmitManualInput = hasRepositoryBinding && typeof onSubmitManualCallback === 'function'
+  const canResumeRuntimeSession =
+    hasRepositoryBinding && typeof onStartRuntimeSession === 'function' && (!isOpenRouterSelected || openrouterApiKeyConfigured)
+  const canSubmitManualInput = hasRepositoryBinding && isOpenAiSelected && typeof onSubmitManualCallback === 'function'
   const canStopRuntimeRun = Boolean(
     hasRepositoryBinding && renderableRuntimeRun && !renderableRuntimeRun.isTerminal && typeof onStopRuntimeRun === 'function',
   )
@@ -1438,11 +1530,20 @@ export function AgentRuntime({
   const hasAuthorizationUrl = Boolean(runtimeSession?.authorizationUrl)
   const hasActiveFlow = Boolean(runtimeSession?.flowId)
   const showManualFallback = Boolean(
-    runtimeSession?.isLoginInProgress || hasAuthorizationUrl || browserMessage || runtimeSession?.needsManualInput,
+    isOpenAiSelected && (runtimeSession?.isLoginInProgress || hasAuthorizationUrl || browserMessage || runtimeSession?.needsManualInput),
   )
-  const showReuseButton = !runtimeSession || runtimeSession.isSignedOut || runtimeSession.isFailed
+  const showReuseButton = !runtimeSession || runtimeSession.isSignedOut || runtimeSession.isFailed || providerMismatch
   const showLogoutButton = Boolean(runtimeSession && !runtimeSession.isLoginInProgress && !runtimeSession.isSignedOut)
-  const composerPlaceholder = getComposerPlaceholder(runtimeSession, streamStatus, renderableRuntimeRun, streamRunId)
+  const runtimeSessionActionLabel = isOpenRouterSelected
+    ? providerMismatch || runtimeSession?.isAuthenticated
+      ? 'Rebind OpenRouter runtime'
+      : 'Bind OpenRouter runtime'
+    : 'Reuse app-local runtime session'
+  const composerPlaceholder = getComposerPlaceholder(runtimeSession, streamStatus, renderableRuntimeRun, streamRunId, {
+    selectedProviderId,
+    openrouterApiKeyConfigured,
+    providerMismatch,
+  })
   const liveFeedCount = runtimeStreamItems.length
   const latestCompletion = runtimeStream?.completion ?? null
   const latestFailure = runtimeStream?.failure ?? null
@@ -1562,8 +1663,14 @@ export function AgentRuntime({
     const nextActions: string[] = []
 
     if (trustSnapshot.runtimeState !== 'healthy') {
-      if (!runtimeSession?.isAuthenticated) {
-        nextActions.push('Sign in with OpenAI from Settings before trusting autonomous execution.')
+      if (isOpenRouterSelected) {
+        if (!openrouterApiKeyConfigured) {
+          nextActions.push('Configure the OpenRouter API key in Settings before trusting autonomous execution.')
+        } else if (!runtimeSession?.isAuthenticated || providerMismatch) {
+          nextActions.push('Bind or rebind OpenRouter so provider identity and diagnostics reflect the selected Settings provider.')
+        }
+      } else if (!runtimeSession?.isAuthenticated) {
+        nextActions.push('Sign in with OpenAI before trusting autonomous execution.')
       }
 
       if (!renderableRuntimeRun || renderableRuntimeRun.isStale || renderableRuntimeRun.isFailed) {
@@ -1592,7 +1699,16 @@ export function AgentRuntime({
     }
 
     return Array.from(new Set(nextActions))
-  }, [renderableRuntimeRun, runtimeSession?.isAuthenticated, streamStatus, trustPrimaryErrorCode, trustSnapshot])
+  }, [
+    isOpenRouterSelected,
+    openrouterApiKeyConfigured,
+    providerMismatch,
+    renderableRuntimeRun,
+    runtimeSession?.isAuthenticated,
+    streamStatus,
+    trustPrimaryErrorCode,
+    trustSnapshot,
+  ])
   const hasTrustRecoveryActions = trustRecoveryActions.length > 0
   const hasNotificationTrustSurface =
     notificationSyncPollingActive ||
@@ -1801,7 +1917,14 @@ export function AgentRuntime({
     try {
       await onStartRuntimeSession()
     } catch (error) {
-      setActionMessage(getErrorMessage(error, 'Cadence could not reuse the app-local runtime session for this project.'))
+      setActionMessage(
+        getErrorMessage(
+          error,
+          isOpenRouterSelected
+            ? 'Cadence could not bind or rebind the OpenRouter runtime for this project.'
+            : 'Cadence could not reuse the app-local runtime session for this project.',
+        ),
+      )
     } finally {
       setPendingAction(null)
     }
@@ -1929,7 +2052,14 @@ export function AgentRuntime({
     try {
       await onLogout()
     } catch (error) {
-      setActionMessage(getErrorMessage(error, 'Cadence could not remove the OpenAI runtime session for this project.'))
+      setActionMessage(
+        getErrorMessage(
+          error,
+          isOpenRouterSelected
+            ? 'Cadence could not clear the OpenRouter runtime binding for this project.'
+            : 'Cadence could not remove the OpenAI runtime session for this project.',
+        ),
+      )
     } finally {
       setPendingAction(null)
     }
@@ -2156,6 +2286,130 @@ export function AgentRuntime({
 
         <div className="flex-1 overflow-y-auto scrollbar-thin px-4 py-4">
           <div className="mx-auto flex max-w-4xl flex-col gap-4">
+            <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm">
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">{statusMeta.eyebrow}</p>
+                    <h2 className="mt-2 text-lg font-semibold text-foreground">{statusMeta.title}</h2>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{statusMeta.body}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={statusMeta.badgeVariant}>{selectedProviderLabel}</Badge>
+                    <Badge variant="outline">Model · {selectedModelId}</Badge>
+                    {isOpenRouterSelected ? (
+                      <Badge variant={openrouterApiKeyConfigured ? 'default' : 'secondary'}>
+                        {openrouterApiKeyConfigured ? 'App-local key configured' : 'Key required in Settings'}
+                      </Badge>
+                    ) : null}
+                    {providerMismatch ? <Badge variant="destructive">Provider mismatch</Badge> : null}
+                    {runtimeSession ? <Badge variant="outline">{runtimeSession.phaseLabel}</Badge> : null}
+                  </div>
+                </div>
+
+                {actionMessage ? (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Runtime action failed</AlertTitle>
+                    <AlertDescription>{actionMessage}</AlertDescription>
+                  </Alert>
+                ) : null}
+
+                {browserMessage ? (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Browser handoff needs attention</AlertTitle>
+                    <AlertDescription>{browserMessage}</AlertDescription>
+                  </Alert>
+                ) : null}
+
+                {runtimeSession?.lastErrorCode ? (
+                  <div className="rounded-xl border border-border/70 bg-background/70 px-3 py-3 text-[11px] text-muted-foreground">
+                    <span className="font-medium text-foreground">Typed diagnostic</span>
+                    <span className="ml-2 font-mono">{runtimeSession.lastErrorCode}</span>
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap gap-2">
+                  {canStartLogin ? (
+                    <Button
+                      disabled={pendingAction === 'login'}
+                      onClick={() => void handleStartLogin()}
+                      type="button"
+                    >
+                      {pendingAction === 'login' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
+                      Start OpenAI login
+                    </Button>
+                  ) : null}
+
+                  {canResumeRuntimeSession && (isOpenRouterSelected || showReuseButton) ? (
+                    <Button
+                      disabled={pendingAction === 'reuse'}
+                      onClick={() => void handleResumeRuntimeSession()}
+                      type="button"
+                      variant={isOpenRouterSelected ? 'default' : 'secondary'}
+                    >
+                      {pendingAction === 'reuse' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
+                      {runtimeSessionActionLabel}
+                    </Button>
+                  ) : null}
+
+                  {isOpenAiSelected && hasAuthorizationUrl ? (
+                    <Button
+                      disabled={pendingAction === 'browser'}
+                      onClick={() => void handleOpenBrowserAgain()}
+                      type="button"
+                      variant="outline"
+                    >
+                      {pendingAction === 'browser' ? (
+                        <LoaderCircle className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ExternalLink className="h-4 w-4" />
+                      )}
+                      Open browser again
+                    </Button>
+                  ) : null}
+
+                  {showLogoutButton ? (
+                    <Button
+                      disabled={pendingAction === 'logout'}
+                      onClick={() => void handleLogout()}
+                      type="button"
+                      variant="outline"
+                    >
+                      {pendingAction === 'logout' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
+                      {isOpenRouterSelected ? 'Clear runtime binding' : 'Sign out runtime'}
+                    </Button>
+                  ) : null}
+                </div>
+
+                {showManualFallback ? (
+                  <div className="space-y-3 rounded-xl border border-border/70 bg-background/70 p-4">
+                    <div className="space-y-1">
+                      <h3 className="text-sm font-semibold text-foreground">Manual callback fallback</h3>
+                      <p className="text-sm leading-6 text-muted-foreground">
+                        Use this only for the OpenAI browser-login path when the system opener or callback listener does not complete automatically.
+                      </p>
+                    </div>
+                    <Textarea
+                      onChange={(event) => setManualInput(event.currentTarget.value)}
+                      placeholder="Paste the full OpenAI redirect URL"
+                      value={manualInput}
+                    />
+                    <Button
+                      disabled={pendingAction === 'manual' || !hasActiveFlow}
+                      onClick={() => void handleSubmitManualCallback()}
+                      type="button"
+                      variant="secondary"
+                    >
+                      {pendingAction === 'manual' ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                      Submit manual callback
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
             {showAutonomousLedgerPanel ? (
               <section className="rounded-2xl border border-border/70 bg-card/80 p-5 shadow-sm">
               <div className="flex flex-col gap-4">

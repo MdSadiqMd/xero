@@ -12,16 +12,17 @@ use cadence_desktop_lib::{
         get_runtime_run::get_runtime_run, start_autonomous_run::start_autonomous_run,
         start_runtime_session::start_runtime_session, AutonomousRunRecoveryStateDto,
         AutonomousRunStateDto, AutonomousRunStatusDto, CancelAutonomousRunRequestDto,
-        GetAutonomousRunRequestDto, GetRuntimeRunRequestDto, ProjectIdRequestDto, RuntimeAuthPhase,
-        RuntimeRunDto, RuntimeRunStatusDto, RuntimeRunTransportLivenessDto,
-        StartAutonomousRunRequestDto,
+        GetAutonomousRunRequestDto, GetRuntimeRunRequestDto, ProjectIdRequestDto,
+        RepositoryDiffScope, RuntimeAuthPhase, RuntimeRunDto, RuntimeRunStatusDto,
+        RuntimeRunTransportLivenessDto, StartAutonomousRunRequestDto,
     },
     configure_builder_with_state, db,
     git::repository::{ensure_cadence_excluded, CanonicalRepository},
     registry::{self, RegistryProjectRecord},
     runtime::{
-        AutonomousCommandRequest, AutonomousEditRequest, AutonomousReadRequest,
-        AutonomousToolOutput, AutonomousToolRuntime, AutonomousWriteRequest,
+        AutonomousCommandRequest, AutonomousEditRequest, AutonomousGitDiffRequest,
+        AutonomousGitStatusRequest, AutonomousReadRequest, AutonomousToolOutput,
+        AutonomousToolRuntime, AutonomousWriteRequest,
     },
     state::DesktopState,
 };
@@ -262,6 +263,37 @@ fn load_git_statuses(repo_root: &Path) -> Vec<(String, Status)> {
         .collect()
 }
 
+fn stage_path(repo_root: &Path, relative_path: &str) {
+    let repository = Repository::open(repo_root).expect("open imported git repo");
+    let mut index = repository.index().expect("open imported git index");
+    index
+        .add_path(Path::new(relative_path))
+        .expect("stage imported repo path");
+    index.write().expect("write imported git index");
+}
+
+fn current_branch_name(repo_root: &Path) -> Option<String> {
+    Repository::open(repo_root)
+        .ok()
+        .and_then(|repository| {
+            repository
+                .head()
+                .ok()
+                .and_then(|head| head.shorthand().map(ToOwned::to_owned))
+        })
+}
+
+fn current_head_sha(repo_root: &Path) -> Option<String> {
+    Repository::open(repo_root)
+        .ok()
+        .and_then(|repository| {
+            repository
+                .head()
+                .ok()
+                .and_then(|head| head.target().map(|oid| oid.to_string()))
+        })
+}
+
 #[test]
 fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_changes() {
     let root = tempfile::tempdir().expect("temp dir");
@@ -305,6 +337,7 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
         }
         other => panic!("unexpected write output: {other:?}"),
     }
+    stage_path(&repo_root, "notes/proof.txt");
 
     let edited = runtime
         .edit(AutonomousEditRequest {
@@ -322,6 +355,80 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
             assert_eq!(output.end_line, 2);
         }
         other => panic!("unexpected edit output: {other:?}"),
+    }
+
+    let git_status = runtime
+        .git_status(AutonomousGitStatusRequest::default())
+        .expect("imported repo git status succeeds");
+    match git_status.output {
+        AutonomousToolOutput::GitStatus(output) => {
+            assert_eq!(output.changed_files, 2);
+            assert_eq!(
+                output.branch.as_ref().map(|branch| branch.name.clone()),
+                current_branch_name(&repo_root)
+            );
+            assert!(output.has_staged_changes);
+            assert!(output.has_unstaged_changes);
+            assert!(!output.has_untracked_changes);
+            assert!(output.entries.iter().any(|entry| {
+                entry.path == "README.md"
+                    && entry.unstaged
+                        == Some(cadence_desktop_lib::commands::ChangeKind::Modified)
+            }));
+            assert!(output.entries.iter().any(|entry| {
+                entry.path == "notes/proof.txt"
+                    && entry.staged == Some(cadence_desktop_lib::commands::ChangeKind::Added)
+            }));
+        }
+        other => panic!("unexpected git status output: {other:?}"),
+    }
+
+    let staged_diff = runtime
+        .git_diff(AutonomousGitDiffRequest {
+            scope: RepositoryDiffScope::Staged,
+        })
+        .expect("imported repo staged diff succeeds");
+    match staged_diff.output {
+        AutonomousToolOutput::GitDiff(output) => {
+            assert_eq!(output.scope, RepositoryDiffScope::Staged);
+            assert_eq!(output.changed_files, 1);
+            assert_eq!(output.base_revision, current_head_sha(&repo_root));
+            assert!(output.patch.contains("notes/proof.txt"));
+            assert!(!output.patch.contains("README.md"));
+        }
+        other => panic!("unexpected staged git diff output: {other:?}"),
+    }
+
+    let unstaged_diff = runtime
+        .git_diff(AutonomousGitDiffRequest {
+            scope: RepositoryDiffScope::Unstaged,
+        })
+        .expect("imported repo unstaged diff succeeds");
+    match unstaged_diff.output {
+        AutonomousToolOutput::GitDiff(output) => {
+            assert_eq!(output.scope, RepositoryDiffScope::Unstaged);
+            assert_eq!(output.changed_files, 1);
+            assert_eq!(output.base_revision, None);
+            assert!(output.patch.contains("README.md"));
+            assert!(!output.patch.contains("notes/proof.txt"));
+        }
+        other => panic!("unexpected unstaged git diff output: {other:?}"),
+    }
+
+    let worktree_diff = runtime
+        .git_diff(AutonomousGitDiffRequest {
+            scope: RepositoryDiffScope::Worktree,
+        })
+        .expect("imported repo worktree diff succeeds");
+    match worktree_diff.output {
+        AutonomousToolOutput::GitDiff(output) => {
+            assert_eq!(output.scope, RepositoryDiffScope::Worktree);
+            assert_eq!(output.changed_files, 2);
+            assert_eq!(output.base_revision, current_head_sha(&repo_root));
+            assert!(output.patch.contains("README.md"));
+            assert!(output.patch.contains("notes/proof.txt"));
+        }
+        other => panic!("unexpected worktree git diff output: {other:?}"),
     }
 
     let command = runtime

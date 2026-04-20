@@ -775,6 +775,72 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('Durable approval pending refresh')).toBeVisible()
   })
 
+  it('renders OpenRouter-first runtime setup without OpenAI login affordances', async () => {
+    const onStartRuntimeSession = vi.fn(async () => null)
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          selectedProviderId: 'openrouter',
+          selectedProviderLabel: 'OpenRouter',
+          selectedModelId: 'openai/gpt-4.1-mini',
+          openrouterApiKeyConfigured: true,
+          providerMismatch: true,
+          sessionUnavailableReason:
+            'Selected provider is OpenRouter, but the persisted runtime session still reflects OpenAI Codex. Rebind the selected provider so durable runtime truth matches Settings.',
+          messagesUnavailableReason:
+            'Live runtime streaming is paused because Settings now select OpenRouter, but the recovered runtime session still reflects OpenAI Codex. Rebind the selected provider before trusting new stream activity.',
+          runtimeSession: makeRuntimeSession({
+            providerId: 'openai_codex',
+            runtimeKind: 'openai_codex',
+            phase: 'authenticated',
+          }),
+        })}
+        onStartLogin={vi.fn(async () => null)}
+        onStartRuntimeSession={onStartRuntimeSession}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'OpenRouter is selected in Settings' })).toBeVisible()
+    expect(screen.getByText('Provider mismatch')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Start OpenAI login' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Manual callback fallback' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
+      'placeholder',
+      'Rebind OpenRouter before trusting new live activity.',
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rebind OpenRouter runtime' }))
+    await waitFor(() => expect(onStartRuntimeSession).toHaveBeenCalledTimes(1))
+  })
+
+  it('shows Settings guidance when OpenRouter is selected without a saved key', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          selectedProviderId: 'openrouter',
+          selectedProviderLabel: 'OpenRouter',
+          selectedModelId: 'openai/gpt-4.1-mini',
+          openrouterApiKeyConfigured: false,
+          runtimeSession: null,
+          sessionUnavailableReason:
+            'Configure an OpenRouter API key in Settings before Cadence can bind a project runtime session.',
+          messagesUnavailableReason:
+            'Configure an OpenRouter API key in Settings before Cadence can establish a runtime session for this imported project.',
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Configure OpenRouter in Settings' })).toBeVisible()
+    expect(screen.getByText('Key required in Settings')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Bind OpenRouter runtime' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start OpenAI login' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
+      'placeholder',
+      'Configure an OpenRouter API key in Settings to start.',
+    )
+  })
+
   it('keeps the signed-out shell minimal and truthful', () => {
     render(<AgentRuntime agent={makeAgent()} />)
 

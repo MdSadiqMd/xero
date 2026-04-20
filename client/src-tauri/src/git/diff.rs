@@ -1,55 +1,102 @@
 use std::path::Path;
 
-use git2::{DiffFormat, DiffOptions, Repository};
+use git2::{DiffFormat, DiffOptions};
 
 use crate::{
-    commands::{CommandError, CommandResult, RepositoryDiffResponseDto, RepositoryDiffScope},
-    git::status,
+    commands::{
+        BranchSummaryDto, CommandError, CommandResult, RepositoryDiffResponseDto,
+        RepositoryDiffScope,
+    },
+    git::{repository, status},
+    registry::RegistryProjectRecord,
 };
 
 pub const MAX_PATCH_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryDiffProjection {
+    pub branch: Option<BranchSummaryDto>,
+    pub changed_files: usize,
+    pub response: RepositoryDiffResponseDto,
+}
 
 pub fn load_repository_diff(
     expected_project_id: &str,
     scope: RepositoryDiffScope,
     registry_path: &Path,
 ) -> CommandResult<RepositoryDiffResponseDto> {
-    let canonical_repository =
-        status::resolve_project_repository(expected_project_id, registry_path)?;
-    let repository = Repository::discover(&canonical_repository.root_path).map_err(|error| {
-        CommandError::retryable(
-            "git_repository_open_failed",
-            format!(
-                "Cadence could not reopen the imported repository at {}: {error}",
-                canonical_repository.root_path.display()
-            ),
-        )
-    })?;
+    let candidates = status::lookup_registry_candidates(expected_project_id, registry_path)?;
+    let mut first_error: Option<CommandError> = None;
 
-    let rendered = render_patch(&repository, scope)?;
+    for RegistryProjectRecord {
+        project_id,
+        repository_id,
+        root_path,
+    } in candidates
+    {
+        match repository::open_repository_root(Path::new(&root_path)) {
+            Ok(repository) => {
+                if repository.project_id() != project_id || repository.repository_id() != repository_id {
+                    return Err(CommandError::system_fault(
+                        "project_registry_mismatch",
+                        format!(
+                            "Registry entry for project `{project_id}` no longer matches the repository discovered at {root_path}."
+                        ),
+                    ));
+                }
+
+                return Ok(load_repository_diff_from_handle(&repository, scope)?.response);
+            }
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+
+    Err(first_error.unwrap_or_else(CommandError::project_not_found))
+}
+
+pub fn load_repository_diff_from_root(
+    root_path: &Path,
+    scope: RepositoryDiffScope,
+) -> CommandResult<RepositoryDiffProjection> {
+    let repository = repository::open_repository_root(root_path)?;
+    load_repository_diff_from_handle(&repository, scope)
+}
+
+fn load_repository_diff_from_handle(
+    repository: &repository::RepositoryHandle,
+    scope: RepositoryDiffScope,
+) -> CommandResult<RepositoryDiffProjection> {
+    let rendered = render_patch(&repository.repository, scope)?;
     let base_revision = match scope {
         RepositoryDiffScope::Unstaged => None,
-        RepositoryDiffScope::Staged | RepositoryDiffScope::Worktree => {
-            canonical_repository.head_sha.clone()
-        }
+        RepositoryDiffScope::Staged | RepositoryDiffScope::Worktree => repository.head_sha.clone(),
     };
 
-    Ok(RepositoryDiffResponseDto {
-        repository: canonical_repository.repository_summary(),
-        scope,
-        patch: rendered.patch,
-        truncated: rendered.truncated,
-        base_revision,
+    Ok(RepositoryDiffProjection {
+        branch: repository.branch.clone(),
+        changed_files: rendered.changed_files,
+        response: RepositoryDiffResponseDto {
+            repository: repository.repository_summary(),
+            scope,
+            patch: rendered.patch,
+            truncated: rendered.truncated,
+            base_revision,
+        },
     })
 }
 
 struct RenderedPatch {
     patch: String,
     truncated: bool,
+    changed_files: usize,
 }
 
 fn render_patch(
-    repository: &Repository,
+    repository: &git2::Repository,
     scope: RepositoryDiffScope,
 ) -> CommandResult<RenderedPatch> {
     let mut diff_options = DiffOptions::new();
@@ -73,9 +120,8 @@ fn render_patch(
     })?;
 
     let diff = match scope {
-        RepositoryDiffScope::Staged => {
-            repository.diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut diff_options))
-        }
+        RepositoryDiffScope::Staged => repository
+            .diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut diff_options)),
         RepositoryDiffScope::Unstaged => {
             repository.diff_index_to_workdir(Some(&index), Some(&mut diff_options))
         }
@@ -93,6 +139,7 @@ fn render_patch(
         )
     })?;
 
+    let changed_files = diff.deltas().count();
     let mut patch = String::new();
     let mut truncated = false;
     let mut bytes_written = 0usize;
@@ -135,7 +182,11 @@ fn render_patch(
         }
     }
 
-    Ok(RenderedPatch { patch, truncated })
+    Ok(RenderedPatch {
+        patch,
+        truncated,
+        changed_files,
+    })
 }
 
 fn scope_label(scope: RepositoryDiffScope) -> &'static str {

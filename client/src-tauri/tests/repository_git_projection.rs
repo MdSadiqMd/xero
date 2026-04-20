@@ -7,10 +7,14 @@ use cadence_desktop_lib::{
     commands::{
         get_repository_diff, get_repository_status, import_repository, CommandError,
         CommandErrorClass, ImportRepositoryRequestDto, ProjectIdRequestDto,
-        RepositoryDiffRequestDto, RepositoryDiffScope,
+        RepositoryDiffRequestDto, RepositoryDiffResponseDto, RepositoryDiffScope,
+        RepositoryStatusResponseDto,
     },
     configure_builder_with_state,
-    git::diff::MAX_PATCH_BYTES,
+    git::{
+        diff::{load_repository_diff_from_root, MAX_PATCH_BYTES},
+        status::load_repository_status_from_root,
+    },
     state::DesktopState,
 };
 use git2::{IndexAddOption, Repository, Signature};
@@ -116,9 +120,7 @@ fn commit_all(repository: &Repository, message: &str) {
 
 fn stage_path(repository: &Repository, relative_path: &str) {
     let mut index = repository.index().expect("repo index");
-    index
-        .add_path(Path::new(relative_path))
-        .expect("stage path");
+    index.add_path(Path::new(relative_path)).expect("stage path");
     index.write().expect("write index");
 }
 
@@ -134,6 +136,25 @@ fn current_head_sha(repository: &Repository) -> Option<String> {
         .head()
         .ok()
         .and_then(|head| head.target().map(|oid| oid.to_string()))
+}
+
+fn assert_status_matches_root(
+    repository_root: &Path,
+    status: &RepositoryStatusResponseDto,
+) {
+    let root_status =
+        load_repository_status_from_root(repository_root).expect("load root git status projection");
+    assert_eq!(status, &root_status);
+}
+
+fn assert_diff_matches_root(
+    repository_root: &Path,
+    diff: &RepositoryDiffResponseDto,
+    scope: RepositoryDiffScope,
+) {
+    let root_diff = load_repository_diff_from_root(repository_root, scope)
+        .expect("load root git diff projection");
+    assert_eq!(diff, &root_diff.response);
 }
 
 #[test]
@@ -163,6 +184,7 @@ fn clean_repo_status_and_empty_diffs_are_truthful() {
     assert!(!status.has_staged_changes);
     assert!(!status.has_unstaged_changes);
     assert!(!status.has_untracked_changes);
+    assert_status_matches_root(repository_root.path(), &status);
 
     let staged_diff = get_diff_with_app(&app, &imported.project.id, RepositoryDiffScope::Staged)
         .expect("staged diff succeeds");
@@ -182,6 +204,17 @@ fn clean_repo_status_and_empty_diffs_are_truthful() {
     assert_eq!(worktree_diff.patch, "");
     assert!(!worktree_diff.truncated);
     assert_eq!(worktree_diff.base_revision, current_head_sha(&repository));
+    assert_diff_matches_root(repository_root.path(), &staged_diff, RepositoryDiffScope::Staged);
+    assert_diff_matches_root(
+        repository_root.path(),
+        &unstaged_diff,
+        RepositoryDiffScope::Unstaged,
+    );
+    assert_diff_matches_root(
+        repository_root.path(),
+        &worktree_diff,
+        RepositoryDiffScope::Worktree,
+    );
 }
 
 #[test]
@@ -223,6 +256,7 @@ fn repository_status_and_diffs_surface_real_staged_unstaged_and_untracked_truth(
         .entries
         .iter()
         .any(|entry| entry.path == "untracked.txt" && entry.untracked));
+    assert_status_matches_root(repository_root.path(), &status);
 
     let staged_diff = get_diff_with_app(&app, &imported.project.id, RepositoryDiffScope::Staged)
         .expect("staged diff succeeds");
@@ -240,6 +274,17 @@ fn repository_status_and_diffs_surface_real_staged_unstaged_and_untracked_truth(
             .expect("worktree diff succeeds");
     assert!(worktree_diff.patch.contains("README.md"));
     assert!(worktree_diff.patch.contains("staged.txt"));
+    assert_diff_matches_root(repository_root.path(), &staged_diff, RepositoryDiffScope::Staged);
+    assert_diff_matches_root(
+        repository_root.path(),
+        &unstaged_diff,
+        RepositoryDiffScope::Unstaged,
+    );
+    assert_diff_matches_root(
+        repository_root.path(),
+        &worktree_diff,
+        RepositoryDiffScope::Worktree,
+    );
 }
 
 #[test]
@@ -258,10 +303,12 @@ fn detached_head_status_stays_truthful() {
     let imported = import_with_app(&app, repository_root.path()).expect("import succeeds");
     let status = get_status_with_app(&app, &imported.project.id).expect("status succeeds");
 
-    let branch = status.branch.expect("detached head summary");
+    let branch = status.branch.as_ref().expect("detached head summary");
+    let head_sha = head_oid.to_string();
     assert!(branch.detached);
     assert_eq!(branch.name, "HEAD");
-    assert_eq!(branch.head_sha, Some(head_oid.to_string()));
+    assert_eq!(branch.head_sha.as_deref(), Some(head_sha.as_str()));
+    assert_status_matches_root(repository_root.path(), &status);
 }
 
 #[test]
@@ -317,4 +364,5 @@ fn oversized_diffs_are_truncated_honestly() {
     assert!(diff.truncated);
     assert!(diff.patch.len() <= MAX_PATCH_BYTES);
     assert!(diff.patch.contains("large.txt"));
+    assert_diff_matches_root(repository_root.path(), &diff, RepositoryDiffScope::Staged);
 }

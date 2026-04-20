@@ -1,24 +1,25 @@
 # Experience-First Agentic Delivery Pipeline
-## Rolling Milestone Planning, Brownfield, Smart Model Routing, and Fault-Containment Update
+## Rolling Milestone Planning, Distributed Experience Assembly, Brownfield, Smart Model Routing, and Fault-Containment Update
 
 ## Purpose
 
 This design describes a structured, fresh-agent software delivery system inspired by GSD-style orchestration, but optimized for **outside-in experience design followed by rolling inside-out delivery**: the team gets to a believable experience early, then turns that approved experience into one bounded implementation milestone at a time instead of pretending an LLM can responsibly micro-plan an entire project in one pass.
 
-This revision expands the earlier design in six important ways:
+This revision expands the earlier design in seven important ways:
 
 1. It adds an **optional brownfield reconnaissance stage** that can scan an existing repository, ingest project documents, map constraints, and seed reusable knowledge before planning starts.
 2. It adds a **first-class milestone model** so the system can keep extending a product after the first delivery cycle instead of treating the project as one monolithic plan.
-3. It replaces **whole-project upfront planning** with **rolling-horizon milestone partitioning**. After the early mock or experience simulation is reviewed, the system sizes scope, creates however many milestones are warranted, and deeply plans only the active milestone.
-4. It adds **smart model routing**, where different kinds of work can be assigned to different model capability profiles such as research, UX, architecture, coding, repair, and verification.
-5. It adds **defensive output hardening** so malformed or corrupt model output cannot directly corrupt project memory, repository state, or downstream orchestration.
-6. It tightens the design with **phase-skipping rules, preservation contracts, milestone-shell carry-forward, and explicit planning-depth rules** so the system is cheaper to run and less likely to over-plan.
+3. It replaces **whole-project upfront planning** with **rolling-horizon milestone partitioning**. After the early experience artifact is reviewed, the system sizes scope, creates however many milestones are warranted, and deeply plans only the active milestone.
+4. It replaces **monolithic mock generation** with **distributed experience-envelope assembly**. The system can create a global shell, an experience spine, bounded surface clusters, and state packs through multiple fresh agents instead of expecting one agent to mock a large product in one context window.
+5. It adds **smart model routing**, where different kinds of work can be assigned to different model capability profiles such as research, UX, architecture, mock assembly, coding, repair, and verification.
+6. It adds **defensive output hardening** so malformed or corrupt model output cannot directly corrupt project memory, repository state, stitched mock artifacts, or downstream orchestration.
+7. It tightens the design with **phase-skipping rules, selective fidelity, preservation contracts, milestone-shell carry-forward, and explicit planning-depth rules** so the system is cheaper to run and less likely to over-plan.
 
 The design stays theoretical and implementation-oriented in the architectural sense: it focuses on operating model, data flow, trust boundaries, and orchestration behavior rather than code examples.
 
 A useful practical influence here is GSD’s emphasis on codebase mapping, milestone continuation, seeds, and per-agent model profiles, but this document adapts those ideas to a SQLite-native, experience-first pipeline rather than copying GSD’s file-oriented workflow.
 
-The result is a flow that can still give the user an early mock, but no longer assumes that the same model or the same planning pass should decompose the entire product roadmap upfront.
+The result is a flow that can still give the user an early mock, but no longer assumes that the same model, the same context window, or the same planning pass should decompose the entire roadmap or author the entire early UI upfront.
 
 ---
 
@@ -72,6 +73,9 @@ In existing systems, not every milestone changes the whole product. The system n
 ### 1.16 Secrets are not normal project records
 API keys, tokens, passwords, and similar secrets should not be stored as plaintext in generic project memory. SQLite stores metadata, readiness status, secure references, and validation timestamps only.
 
+### 1.17 Experience assembly is distributed and fidelity is selective
+The early visual artifact should be assembled from multiple bounded work units such as shell, shared primitives, surface clusters, state packs, stitching, and coherence verification. The program-level experience artifact should be rich enough to validate direction and size milestones, but it does not need full-detail coverage for every future surface before partitioning.
+
 ---
 
 ## 2. High-level operating model
@@ -91,24 +95,27 @@ The system has a **thin orchestrator** whose job is not to solve the project its
 
 The orchestrator should stay operationally simple. It should not become a giant reasoning agent. Meaningful work is pushed into specialized agents.
 
-### 2.1 Three nested scopes and one rolling planning horizon
+### 2.1 Three nested scopes, one experience envelope, and one rolling planning horizon
 
 #### Program
-The long-lived product memory. It stores the program core, the approved outer experience, stable constraints, and a coarse milestone horizon. It should not store exhaustive slice plans for the whole future product.
+The long-lived product memory. It stores the program core, the approved outer experience envelope, stable constraints, and a coarse milestone horizon. It should not store exhaustive slice plans or full-detail mock coverage for the whole future product.
 
 #### Active milestone
-The one bounded delivery increment currently promoted for detailed planning and execution. It has its own scope, contracts, blockers, readiness state, and definition of done.
+The one bounded delivery increment currently promoted for detailed planning and execution. It has its own scope, contracts, blockers, readiness state, and definition of done. It may also have a deeper active-surface pack if the program-level experience envelope is too coarse for safe implementation.
 
 #### Work unit
-The smallest routable piece of work such as a research task, screen specification, milestone partitioning pass, technical contract, slice, repair step, verifier pass, or refactor candidate.
+The smallest routable piece of work such as a research task, screen specification, mock shard, stitch pass, milestone partitioning pass, technical contract, slice, repair step, verifier pass, or refactor candidate.
+
+#### Program experience envelope
+A coarse but navigable representation of the product promise: global frame, primary path, shared interaction rules, and shell-level coverage of major capabilities. It is detailed enough to let the user react and to support milestone sizing, but not detailed enough to require a full-program mock.
 
 A useful planning-depth rule is:
 
-- **program** = coarse,
-- **active milestone** = medium to deep,
+- **program** = coarse core plus approved experience envelope,
+- **active milestone** = concrete contract plus deepened active-surface detail only when needed,
 - **current work unit** = precise.
 
-Future milestones should remain coarse shells until activated.
+Future milestones should remain coarse shells until activated, and later capabilities should often remain shell-level in the program envelope until they are actually promoted.
 
 ### 2.2 Entry modes
 
@@ -127,16 +134,17 @@ The default loop is:
 
 1. Read current program state, active milestone state, milestone horizon, locks, blockers, readiness, routing policy, and open work.
 2. Refresh only the brownfield or repository digests that are relevant to the current decision.
-3. If no active milestone exists, or if the last approved experience invalidated the current horizon, run milestone sizing and partitioning.
-4. Keep future milestones as shells unless and until they are promoted active.
-5. Infer missing prerequisites from the chosen direction and existing constraints.
-6. If a work unit is blocked, pick another meaningful eligible unit when possible.
-7. Batch related missing user inputs instead of asking one question at a time.
-8. Assemble a minimal context packet.
-9. Route the task to an appropriate model profile.
-10. Stage, validate, and accept only conforming output.
-11. Recompute what is now unblocked and whether the active milestone is still the right boundary.
-12. Continue automatically until no meaningful unblocked work remains.
+3. If no approved experience envelope exists, or if the current envelope is too coarse for the next decision, run or deepen only the necessary experience-assembly work.
+4. If no active milestone exists, or if the last approved experience invalidated the current horizon, run milestone sizing and partitioning.
+5. Keep future milestones as shells unless and until they are promoted active.
+6. Infer missing prerequisites from the chosen direction and existing constraints.
+7. If a work unit is blocked, pick another meaningful eligible unit when possible.
+8. Batch related missing user inputs instead of asking one question at a time.
+9. Assemble a minimal context packet.
+10. Route the task to an appropriate model profile.
+11. Stage, validate, and accept only conforming output.
+12. Recompute what is now unblocked and whether the active milestone is still the right boundary.
+13. Continue automatically until no meaningful unblocked work remains.
 
 ### 2.4 Stop conditions
 
@@ -162,26 +170,34 @@ The program flow moves through these major phases:
 - **Phase 2**: Program framing and horizon setup
 - **Phase 3**: Experience discovery
 - **Phase 4**: Targeted experience research
-- **Phase 5**: Interaction architecture and impact mapping
-- **Phase 6**: Mock-first prototype or experience simulation
+- **Phase 5**: Interaction architecture, impact mapping, and mock decomposition planning
+- **Phase 6**: Distributed experience-envelope assembly
 - **Phase 7**: UX review and lock
 - **Phase 8**: Scope sizing, milestone partitioning, and active-milestone activation
-- **Phase 9**: Milestone-scoped technical derivation and delta impact analysis
+- **Phase 9**: Milestone-scoped technical derivation, targeted mock deepening, and delta impact analysis
 - **Phase 10**: Active-milestone slice planning and rolling schedule
 - **Phase 11**: Autonomous slice execution loop
 - **Phase 12**: Milestone hardening, release readiness, and continuation planning
 
-Not every program or milestone must execute every phase in full. The entry router and skip rules decide the minimum safe path. The key rule is that deep planning happens only after the outer experience is concrete enough to partition responsibly.
+Not every program or milestone must execute every phase in full. The entry router and skip rules decide the minimum safe path. The key rule is that deep planning happens only after the outer experience is concrete enough to partition responsibly, and that outer experience itself should be assembled through bounded work units rather than one giant mock-building pass.
 
 ## 3. Entry routing and milestone lifecycle
 
 ### 3.1 Milestone 1 is the first committed subset, not the whole program
 The first successful delivery cycle is still called **Milestone 1**. What changes is the meaning: Milestone 1 should be the first operational subset that makes the product promise real, not an attempt to exhaustively plan or finish the whole product.
 
-### 3.2 The early mock comes before deep milestone partitioning
-For greenfield work, the system should first shape the outer experience, prototype or simulate it, and lock the intended user-facing contract. Only then should it decide whether the program needs one milestone or many. The mock shows the destination. Milestone partitioning decides what to build first.
+### 3.2 The early experience artifact comes before deep milestone partitioning, but it should be an envelope
+For greenfield work, the system should first shape the outer experience, assemble a distributed experience envelope, and lock the intended user-facing contract. That envelope should usually contain:
 
-Brownfield and later-milestone work can sometimes enter with a clearer increment already in hand, but the same principle still applies: do not decompose deeply until the experience or behavior change is concrete enough to reason about.
+- a global shell or navigation frame,
+- the first-run and primary happy path,
+- shared design and interaction primitives,
+- shell-level representation of major later capabilities,
+- and deeper state coverage only where early milestone boundaries are likely to depend on it.
+
+The point is not to fully mock the whole program. The point is to make the product concrete enough that milestone boundaries stop being abstract guesses.
+
+Brownfield and later-milestone work can often start with a narrower delta envelope, but the same principle still applies: do not decompose deeply until the changed experience or behavior is concrete enough to reason about.
 
 ### 3.3 Milestone count is discovered, not predeclared
 The system should decide whether the work fits in one milestone or multiple based on:
@@ -196,23 +212,32 @@ The system should decide whether the work fits in one milestone or multiple base
 
 Small, low-risk scopes may collapse into a single milestone. Larger or riskier scopes should expand into a sequence of milestone shells.
 
-### 3.4 Rolling planning depth
+### 3.4 Rolling planning depth and mock depth
 A useful operating rule is:
 
-- **Program horizon**: coarse map of capabilities, ordering hypotheses, and known risks.
-- **Active milestone**: concrete contract, technical derivation, slice plan, and definition of done.
-- **Current work unit**: exact task with precise acceptance criteria.
+- **program horizon**: coarse map of capabilities, ordering hypotheses, and known risks.
+- **program experience envelope**: global shell, primary journey, major surface shells, and fidelity tags.
+- **active milestone**: concrete contract, optional active-surface mock deepening, technical derivation, and slice plan.
+- **current work unit**: exact task with precise acceptance criteria.
 
-Future milestones should contain only enough detail to preserve intent, ordering, major dependencies, and promotion conditions. They should not receive full slice planning or exhaustive technical contracts until promoted.
+Future milestones should contain only enough detail to preserve intent, ordering, main dependencies, and promotion conditions. They should not receive full slice planning or fully detailed mock surfaces until promoted.
 
 ```mermaid
 flowchart LR
-    V[Program direction + approved<br/>experience envelope] --> P[Milestone partitioner]
+    V[Program direction + interaction architecture] --> D[Experience decomposition planner]
+    D --> E1[Global shell + nav scaffold]
+    D --> E2[Experience spine<br/>happy path]
+    D --> E3[Later-capability shells<br/>kept coarse]
+    E1 --> S[Stitched experience envelope]
+    E2 --> S
+    E3 --> S
+    S --> P[Milestone partitioner]
     P --> A[Active milestone<br/>planned deeply]
     P --> F1[Future milestone shell 2<br/>kept coarse]
     P --> F2[Future milestone shell 3<br/>kept coarse]
-    A --> S[Detailed slices<br/>and work units]
-    S --> L[Milestone learnings]
+    A --> M[Optional active-milestone<br/>mock deepening]
+    M --> W[Detailed slices<br/>and work units]
+    W --> L[Milestone learnings]
     L --> P
 ```
 
@@ -223,7 +248,7 @@ flowchart LR
 - **Run narrowly** for brownfield onboarding when the next increment still needs scope shaping.
 - **Skip or nearly skip** for later milestones when the request is already concrete.
 
-#### Prototype or experience simulation
+#### Experience-envelope assembly or simulation
 - **Required** when the requested change affects user flows, visible behavior, or product meaning.
 - **Targeted** when the change touches only a narrow area.
 - **Skippable** only when the behavior is already fully specified and a simulation would add no decision value.
@@ -580,13 +605,20 @@ Research agents get a sharply scoped brief for the exact question they are answe
 ### Gate
 The program should exit this phase with a coherent set of recommended patterns, clear edge-case coverage, and enough confidence to build the early experience artifact without pretending every future capability has already been researched.
 
-## Phase 5: Interaction architecture and impact mapping
+## Phase 5: Interaction architecture, impact mapping, and mock decomposition planning
 
 ### Objective
-Translate the approved direction into a screen system, interaction model, and explicit impact map that are rich enough to build a credible early experience artifact and later partition the work into milestones.
+Translate the approved direction into a screen system, interaction model, impact map, and experience build graph that are rich enough to assemble an early experience artifact without asking one agent to build the whole mock.
 
-### Why impact mapping matters
-In brownfield systems and later milestones, design is not only about the new thing. It is also about what the new thing touches. The system needs an explicit record of affected screens, behaviors, APIs, and states before milestone activation becomes concrete.
+### Why mock decomposition planning matters
+Large products rarely fit into one prototype-building context window. Before Phase 6 starts, the system should explicitly decide:
+
+- which surfaces belong to the global shell,
+- which journeys form the experience spine,
+- which screens can be grouped into bounded surface clusters,
+- which states should be injected as reusable state packs,
+- which capabilities only need shell-level representation for now,
+- and which surfaces are likely Milestone 1 candidates that deserve deeper fidelity before partitioning.
 
 ### Agents
 - **Route or flow architect**
@@ -595,6 +627,9 @@ In brownfield systems and later milestones, design is not only about the new thi
 - **State coverage agent**
 - **Impact mapper**
 - **Compatibility guard agent**
+- **Experience decomposition planner**
+- **Surface clustering agent**
+- **Fidelity-tier planner**
 
 ### Outputs
 - `route_map`
@@ -604,10 +639,14 @@ In brownfield systems and later milestones, design is not only about the new thi
 - `interaction_rule`
 - `impact_map`
 - `compatibility_guard`
+- `experience_build_graph`
+- `surface_cluster`
+- `fidelity_tier`
+- `shared_ui_contract_outline`
 - `permission_visibility_rule`
 
 ### Minimal context
-These agents need the program core, provisional milestone core, journeys, UX recommendations, accessibility requirements, preservation constraints, scope boundary, and readiness summary.
+These agents need the program core, provisional milestone core, journeys, UX recommendations, accessibility requirements, preservation constraints, scope boundary, readiness summary, and any brownfield surface map that constrains what can change.
 
 ### Gate
 Every important changed screen or behavior should have:
@@ -619,65 +658,109 @@ Every important changed screen or behavior should have:
 - loading, empty, and error states,
 - setup or disconnected states where relevant,
 - preservation expectations,
-- and a clear impact map into existing surfaces.
+- a clear impact map into existing surfaces,
+- an assigned cluster or shell classification,
+- and a fidelity target.
 
-The result should be detailed enough to prototype but not yet a full implementation plan for the whole program.
+The result should be detailed enough to support distributed mock assembly, but not yet a full implementation plan for the whole program.
 
-## Phase 6: Mock-first prototype or experience simulation
+## Phase 6: Distributed experience-envelope assembly
 
 ### Objective
-Create the earliest faithful representation of the intended experience before milestone partitioning and deep implementation planning harden.
+Assemble an early believable experience through multiple bounded agentic steps rather than a single prototype-building run.
 
-### Important refinement
-Not every effort needs a screen-heavy mock. The correct artifact is the earliest useful **experience representation** for the type of change:
+### Core rule
+For large products, the correct output of this phase is usually a **program-level experience envelope**, not a fully detailed mock of every future screen. The envelope should be good enough for user feedback and milestone sizing. Detailed mock expansion beyond the likely early milestone should usually wait.
 
-- a navigable UI prototype for UI-heavy work,
-- a workflow simulation for operator-facing changes,
-- a state or behavior simulator for invisible but user-affecting system changes.
+### Recommended substeps
+
+#### 6.1 Build-graph confirmation
+Validate or refine the experience build graph from Phase 5. Confirm:
+
+- global shell surfaces,
+- shared primitives,
+- experience-spine journeys,
+- surface clusters,
+- shell-only future capabilities,
+- state-pack obligations,
+- and fidelity tiers.
+
+#### 6.2 Shell and navigation scaffold
+One agent creates the global frame, navigation skeleton, route placeholders, and cross-cutting layout patterns. This becomes the substrate that later mock shards attach to.
+
+#### 6.3 Shared UI contract and fixture or state-contract pass
+Separate agents define the shared component expectations, token usage, naming conventions, fixture shapes, and common state representations so later shard builders do not improvise incompatible conventions.
+
+#### 6.4 Experience-spine assembly
+A small number of agents build the critical first-run flow and the primary happy path end to end. This is the minimum artifact that must feel real early.
+
+#### 6.5 Surface-cluster mock shards
+Instead of one agent building the entire UI, each agent receives one bounded surface cluster or route cluster and produces a mock shard for that area only.
+
+#### 6.6 State-pack injection
+Specialized agents add loading, empty, error, permission, disconnected, degraded, and preservation-sensitive states to the relevant clusters. This separates “screen shape” work from “state coverage” work and keeps context packets smaller.
+
+#### 6.7 Stitching and coherence verification
+A stitcher agent integrates the shell, spine, and mock shards into one navigable experience envelope. A separate coherence verifier checks route integrity, naming consistency, interaction continuity, shared-component drift, and missing-state coverage.
+
+#### 6.8 Selective deepening before partitioning
+Only the surfaces needed to validate the product promise or to distinguish Milestone 1 from later milestones should get deeper fidelity now. Later capabilities can remain shell-level, annotated, or simulated until they are promoted.
 
 ### Agents
-- **Prototype builder**
-- **Experience simulator**
-- **Fixture scenario builder**
+- **Experience build-graph planner**
+- **Shell or navigation scaffold builder**
+- **Shared UI contract builder**
+- **Fixture and state-contract builder**
+- **Experience-spine builder**
+- **Surface-cluster mock builder**
+- **State-pack builder**
+- **Stitcher**
+- **Coherence verifier**
 - **UX critic or reviewer**
 
-### Required behavior
-The artifact should still cover key states such as:
-
-- happy path,
-- loading or in-progress behavior,
-- empty state,
-- error state,
-- permission-affected state,
-- disconnected or degraded state where integrations matter,
-- and preservation-sensitive states when existing behavior must not regress.
-
 ### Outputs
-- `prototype_build`
-- `experience_simulation`
-- `fixture_scenario`
-- `ux_delta`
-- `design_gap`
+- `experience_envelope`
+- `experience_build_graph`
+- `surface_cluster`
+- `fidelity_tier`
+- `shared_ui_contract`
+- `mock_shard`
+- `state_pack`
+- `mock_stitch_result`
+- `coherence_report`
+- `mock_gap`
+- `shell_surface`
 
 ### Minimal context
-The builder needs route maps, screen specs, view models, fixture scenarios, locked UX decisions, relevant technology preferences, and preservation constraints.
+This phase should not use one giant context packet. The build-graph planner may see the broad UX structure, but shell builders, surface-cluster builders, and state-pack builders should receive only their assigned surface, the shared UI contract, relevant view models, relevant fixtures, and the surrounding navigation or compatibility rules they must honor.
 
 ### Gate
-The program or milestone should now have a tangible experience artifact appropriate to its scope. For greenfield work, this artifact is a key input to milestone partitioning because it makes the outer product shape concrete before the system chooses what to build first.
+The phase exits when:
+
+- the user can navigate a coherent early experience artifact,
+- the core value loop is believable,
+- major capabilities are represented at least as shells,
+- likely early-milestone surfaces have enough detail to support later partitioning,
+- coherence checks pass or remaining gaps are explicitly recorded,
+- and anything not yet deeply mocked is intentionally tagged as shell-level or deferred rather than silently missing.
 
 ## Phase 7: UX review and lock
 
 ### Objective
-Convert prototype or simulation feedback into durable experience contracts that later milestone partitioning and implementation work must derive from.
+Convert feedback on the stitched experience envelope into durable contracts while distinguishing what is locked as shell-level direction from what is locked as high-fidelity behavior.
 
 ### Brownfield-specific requirement
 The system should explicitly lock both the new experience and the preservation boundaries around adjacent unchanged behavior.
+
+### Review rule
+Approval can cover mixed fidelity. Some surfaces may be locked as detailed behavior, while others are locked only as shell-level direction. The reviewer should explicitly mark which surfaces need active-milestone deepening later and which are already specified well enough.
 
 ### Agents
 - **Review orchestrator**
 - **Feedback synthesizer**
 - **Decision locker**
 - **Preservation checker**
+- **Gap triage agent**
 
 ### Outputs
 - `ux_feedback`
@@ -686,20 +769,23 @@ The system should explicitly lock both the new experience and the preservation b
 - `preservation_contract`
 - `locked_decision`
 - `change_request`
+- `active_surface_priority`
 
 ### Minimal context
-These agents need the prototype or simulation result, screen specs, view models, fixture scenarios, feedback, and preservation constraints.
+These agents need the experience envelope, build graph, mock shards, stitch result, coherence report, fixture scenarios, feedback, and preservation constraints.
 
 ### Gate
-Once approved, the relevant experience contract becomes binding. For greenfield work, it becomes the source document for milestone sizing and partitioning. For later or brownfield work, it becomes the contract for the active increment unless Phase 8 decides the request should be split further.
+Once approved, the relevant experience contract becomes binding at the stated fidelity. For greenfield work, it becomes the source document for milestone sizing and partitioning. For later or brownfield work, it becomes the contract for the active increment unless Phase 8 decides the request should be split further.
 
 ## Phase 8: Scope sizing, milestone partitioning, and active-milestone activation
 
 ### Objective
-Use the approved experience contract and current constraints to determine whether the work fits in one milestone or several, create an ordered milestone horizon, and activate only the next milestone for deep planning.
+Use the approved experience envelope and current constraints to determine whether the work fits in one milestone or several, create an ordered milestone horizon, activate only the next milestone for deep planning, and identify which surfaces need deeper treatment now versus later.
 
-### Why this phase belongs after the mock or experience simulation
-Before the user has seen the intended outer experience, milestone boundaries are often speculative. After the experience is concrete, the system can partition around real journeys, states, dependencies, and learning points rather than abstract guesses.
+### Why this phase belongs after the experience envelope
+Before the user has seen the intended outer experience, milestone boundaries are often speculative. After the experience envelope is concrete, the system can partition around real journeys, surface clusters, state density, dependency cliffs, and learning points rather than abstract guesses.
+
+This does **not** require every future surface to be fully mocked. Shell-level representation is enough for later capabilities as long as the outer promise and likely early-milestone boundaries are visible.
 
 ### Partitioning criteria
 Partition around:
@@ -710,6 +796,7 @@ Partition around:
 - preservation risk,
 - irreversible schema or contract changes,
 - testability and release safety,
+- surface-count and cross-cluster coherence cost,
 - and where feedback from the real build is still likely to change later decisions.
 
 ### Agents
@@ -718,6 +805,7 @@ Partition around:
 - **Risk-ordered scheduler**
 - **Promotion-condition writer**
 - **Active-milestone selector**
+- **Surface-promotion planner**
 
 ### Outputs
 - `scope_assessment`
@@ -728,9 +816,11 @@ Partition around:
 - `promotion_condition`
 - `deferred_capability`
 - `milestone_dependency`
+- `active_surface_set`
+- `deferred_surface_shell`
 
 ### Minimal context
-This phase needs the approved program or milestone experience contract, capability map, readiness summary, risk register, brownfield findings, constraints, and current product state.
+This phase needs the approved program or milestone experience contract, capability map, build graph, active-surface priorities, readiness summary, risk register, brownfield findings, constraints, and current product state.
 
 ### Gate
 The phase exits only when:
@@ -739,17 +829,27 @@ The phase exits only when:
 - the active milestone has a crisp contract,
 - future milestones exist only as coarse shells,
 - anything deferred is intentionally recorded rather than forgotten,
+- the active surface set is explicit,
+- any required active-milestone mock deepening is scheduled,
 - and the active milestone is ready to receive deep technical derivation.
 
-## Phase 9: Milestone-scoped technical derivation and delta impact analysis
+## Phase 9: Milestone-scoped technical derivation, targeted mock deepening, and delta impact analysis
 
 ### Objective
-Derive the technical shape only for the active milestone from the approved experience and the existing system reality, not from abstract architecture preferences alone.
+Derive the technical shape only for the active milestone from the approved experience and the existing system reality, and deepen only the active milestone surfaces if the program-level envelope is still too coarse for safe implementation.
 
 ### Why this phase changes in a rolling milestone system
 The question is not “what should the whole system be?” The real question is “what must change now, what can stay, what must migrate now versus later, and how do we preserve the future milestone horizon without over-specifying it?”
 
 Future milestones may receive boundary notes or dependency warnings, but they should not receive full technical contracts yet.
+
+### Optional targeted mock deepening
+If the active milestone still contains shell-level or lightly specified surfaces that are too abstract for safe derivation, run a milestone-scoped mock deepening pass now. That pass should:
+
+- reuse the shared UI contract and existing mock shards,
+- expand only the active surface set,
+- enrich only the active state packs and fixtures,
+- and avoid program-wide re-mocking.
 
 ### Agents
 - **Feasibility analyst**
@@ -762,6 +862,8 @@ Future milestones may receive boundary notes or dependency warnings, but they sh
 - **Migration planner**
 - **Rollback planner**
 - **Future-boundary note writer**
+- **Milestone mock elaborator**
+- **State-pack refiner**
 
 ### Outputs
 - `technical_shape`
@@ -776,10 +878,12 @@ Future milestones may receive boundary notes or dependency warnings, but they sh
 - `migration_plan`
 - `rollback_plan`
 - `future_boundary_note`
+- `active_surface_contract`
+- `milestone_mock_delta`
 - `latency_budget`
 
 ### Minimal context
-These agents need the active milestone experience contract, view models, interaction rules, preservation contracts, risk register, technology preferences, readiness summary, brownfield findings, and current technical assumptions.
+These agents need the active milestone experience contract, active surface set, relevant mock shards, shared UI contract, view models, interaction rules, preservation contracts, risk register, technology preferences, readiness summary, brownfield findings, and current technical assumptions.
 
 ### Gate
 The phase exits when the system understands:
@@ -789,7 +893,8 @@ The phase exits when the system understands:
 - what live integrations are real versus fixture-backed for now,
 - what migration or compatibility boundaries exist,
 - what rollback or protection strategy is needed if risky areas change,
-- and what boundary notes should be carried forward without fully planning future milestones.
+- what boundary notes should be carried forward without fully planning future milestones,
+- and, if mock deepening was required, that the active milestone surfaces are now specific enough to support slice planning safely.
 
 ## Phase 10: Active-milestone slice planning and rolling schedule
 
@@ -1151,6 +1256,17 @@ These make smart model switching durable and auditable.
 - `escalation_events`
 - `routing_outcomes`
 
+### Experience assembly tables
+These let the system build a large mock without a monolithic agent run.
+
+- `experience_surfaces`
+- `experience_build_graphs`
+- `surface_clusters`
+- `mock_shards`
+- `state_packs`
+- `stitch_runs`
+- `coherence_reports`
+
 ### Validation and quarantine tables
 These keep malformed output from corrupting durable state.
 
@@ -1186,6 +1302,17 @@ Examples now include:
 
 - `program_brief`
 - `program_core`
+- `experience_envelope`
+- `experience_build_graph`
+- `surface_cluster`
+- `fidelity_tier`
+- `shared_ui_contract`
+- `mock_shard`
+- `state_pack`
+- `mock_stitch_result`
+- `coherence_report`
+- `mock_gap`
+- `shell_surface`
 - `milestone_core`
 - `capability_map`
 - `brownfield_snapshot`
@@ -1197,6 +1324,9 @@ Examples now include:
 - `milestone_activation`
 - `promotion_condition`
 - `scope_assessment`
+- `active_surface_set`
+- `active_surface_contract`
+- `milestone_mock_delta`
 - `deferred_capability`
 - `delta_scope_boundary`
 - `preservation_contract`
@@ -1299,6 +1429,7 @@ The goal is to make every fresh agent smart enough for its task without flooding
 A tiny always-on layer available to most agents:
 
 - program core,
+- program-level experience envelope summary,
 - milestone horizon summary,
 - glossary,
 - locked high-level decisions,
@@ -1306,19 +1437,19 @@ A tiny always-on layer available to most agents:
 - and durable readiness summaries.
 
 ### Layer B: Milestone core
-The current active milestone’s objective, scope, success metrics, preserved behaviors, and key blockers. Future milestones should appear only as short shell summaries, not as full plans.
+The current active milestone’s objective, scope, success metrics, preserved behaviors, key blockers, and active-surface set if one exists. Future milestones should appear only as short shell summaries, not as full plans.
 
 ### Layer C: Phase contract
 The contract for the current phase:
 
 - brownfield findings for brownfield agents,
 - shaping records for milestone-shaping agents,
-- experience records for UX agents,
+- experience records and build graphs for UX or mock agents,
 - technical contracts for implementation agents,
 - or verification criteria for verifier agents.
 
 ### Layer D: Current work unit
-The exact slice, screen, investigation, migration unit, or validation unit being worked on.
+The exact slice, screen, mock shard, investigation, migration unit, or validation unit being worked on.
 
 ### Layer E: Relevant history digests
 Short digests selected by relevance, dependency relation, and recency, not raw full history.
@@ -1395,7 +1526,7 @@ Needs program core, current user request, active seeds or backlog options, const
 Does not need wide repository context unless the milestone directly depends on it.
 
 ### Milestone partitioner
-Needs the approved experience contract, capability map, scope signals, risk register, major dependencies, and current product state.  
+Needs the approved experience envelope, capability map, scope signals, risk register, major dependencies, active-surface priorities, and current product state.  
 Does not need full slice plans for every future milestone, because creating those too early is specifically what it is trying to avoid.
 
 ### Research agent
@@ -1403,15 +1534,30 @@ Needs milestone core, selected journey or question, user type, and scope constra
 Does not need broad codebase details.
 
 ### Screen spec or interaction agent
-Needs approved journeys, UX recommendations, accessibility requirements, preservation constraints, and the impacted surfaces.  
+Needs approved journeys, UX recommendations, accessibility requirements, preservation constraints, impacted surfaces, and any relevant shell or cluster boundaries.  
 Does not need the whole technical plan.
 
-### Prototype or simulator builder
-Needs route map, screen specs, view models, fixture scenarios, styling or behavior rules, and locked UX decisions.  
-Does not need unrelated modules or the whole architecture.
+### Experience build-graph planner
+Needs route map, screen specs, view models, impact map, fidelity goals, and the current notion of likely early surfaces.  
+Does not need the whole repository or later technical contracts.
+
+### Shell or shared-primitives builder
+Needs global navigation structure, shared UI contract outline, design tokens, and the small set of routes in the shell.  
+Does not need the full product mock.
+
+### Surface-cluster builder
+Needs only the assigned cluster, relevant view models, shared UI contract, cluster-specific fixtures or state packs, and local preservation notes.  
+Does not need the entire product experience envelope.
+
+### Stitcher or coherence verifier
+Needs shell contract, cluster outputs, navigation graph, cross-cluster interaction rules, and fidelity tags.  
+Does not need raw research history or full code architecture.
+
+### Experience simulator
+For non-screen-heavy work, needs state or behavior contracts and fixtures rather than broad UI context.
 
 ### Contract writer
-Needs approved milestone experience contract, view models, domain assumptions, preservation contracts, integration requirements, and technology preferences.  
+Needs approved milestone experience contract, active surface set, view models, domain assumptions, preservation contracts, integration requirements, and technology preferences.  
 Does not need raw UX research notes once synthesized.
 
 ### Slice implementer
@@ -1454,13 +1600,11 @@ A typical high-quality context packet should contain:
 A useful default:
 
 - brownfield, intake, and shaping agents: small budgets,
-- research and screen agents: small-to-medium budgets,
-- prototype, architecture, and implementation agents: medium budgets,
-- refactor and verification agents: medium but narrow budgets.
+- research, screen, build-graph, and shell agents: small-to-medium budgets,
+- surface-cluster builders, architecture, and implementation agents: medium budgets,
+- stitch, refactor, and verification agents: medium but narrow budgets.
 
 The guiding rule is relevance density, not raw token count.
-
----
 
 ## 7. Smart model routing
 
@@ -1491,8 +1635,11 @@ Use a fast model with strong structured-output behavior and low cost.
 ### Research and synthesis work
 Use a model that is strong at broad recall, comparison, and long-context summarization.
 
-### UX, interaction, and experience critique
-Use a model that is particularly good at interface reasoning, state coverage, and user-facing clarity.
+### UX architecture and mock-decomposition planning
+Use a model that is particularly good at interface reasoning, state coverage, clustering related surfaces, and user-facing clarity.
+
+### Mock shard building and UI stitching
+Use a UI-strong model for shell and shard creation, then a separate consistency-focused or verifier profile for stitching and coherence checks. Do not let one model both author every shard and certify the integrated experience envelope.
 
 ### Architecture and contract derivation
 Use a model strong in multi-step reasoning, systems thinking, and consistency across constraints.
@@ -1657,9 +1804,15 @@ The orchestrator should track at least:
 - repeated schema drift,
 - common repair reasons,
 - preservation-contract violations,
+- shard compatibility failures during experience assembly,
 - and which phases are most expensive or failure-prone.
 
 This data will become essential once the system starts tuning model policy and skip rules.
+
+## 8.11 Distributed mock compatibility
+When the experience artifact is assembled from shell, shard, and state-pack outputs, the stitcher should treat each piece like an untrusted module. Every mock shard should declare the routes it owns, the shared components it depends on, the fixture or state contracts it expects, and the global shell version it targets.
+
+The stitch pass should reject incompatible shards, missing state obligations, broken route links, or shared-component drift instead of letting one bad shard invalidate the whole experience envelope. This is the mock-stage equivalent of repository mutation safety: bad UI output should fail at integration boundaries, not after it is already presented as coherent.
 
 ---
 
@@ -1686,7 +1839,7 @@ Examples include:
 In automated testing and prototype work, these boundaries are satisfied by fixtures, fakes, stubs, or deterministic local adapters.
 
 ## 9.2 Missing-credential rule
-Missing live credentials should not block prototype work, slice implementation, or automated tests when a fixture-backed boundary exists.
+Missing live credentials should not block experience-envelope work, slice implementation, or automated tests when a fixture-backed boundary exists.
 
 Credentials become blockers only for work that genuinely requires live access, such as:
 
@@ -1796,7 +1949,7 @@ A good flow would be:
 2. The entry router decides not to run full product ideation because the product already exists. Instead it runs narrow shaping around the requested improvement.
 3. Experience discovery and research focus on the affected dashboard journey and preserved reporting flows.
 4. Interaction architecture produces changed states and a preservation contract around the existing export flow and permission model.
-5. The prototype step builds only the affected dashboard surfaces, not the whole application.
+5. The distributed experience-assembly step builds only the affected dashboard surfaces, not the whole application.
 6. After UX lock, scope sizing decides that the request is too large for one safe increment. It creates:
    - **Milestone 1:** summary cards plus loading, empty, error, and degraded states,
    - **Milestone 2:** benchmark drill-down and comparison workflows,
@@ -1829,8 +1982,33 @@ A good continuation flow would be:
 
 This is the intended mental model for Milestone 2 and beyond: the system keeps the product continuous while staying delta-scoped and horizon-limited.
 
----
+## 11.3 Large greenfield program mock-assembly example
 
+Imagine a new multi-surface product where the outer experience includes onboarding, a dashboard, collaboration, reporting, and admin controls.
+
+A good flow would be:
+
+1. Experience discovery and interaction architecture define the journeys, major surfaces, and state obligations.
+2. Mock decomposition planning creates:
+   - a **global shell** for navigation and layout,
+   - an **experience spine** for onboarding to first value,
+   - a **dashboard cluster**,
+   - a **collaboration shell**,
+   - a **reporting shell**,
+   - and an **admin shell**.
+3. Shared UI-contract and state-contract agents lock common navigation, component rules, and fixture shapes before cluster builders start.
+4. Separate cluster builders create only their assigned shards. One agent handles onboarding, another handles dashboard states, and later-capability areas stay shell-level.
+5. A stitcher assembles those pieces into one coherent experience envelope and flags any route or component drift.
+6. The user reviews that envelope and can react to the product meaning without the system having mocked every later surface in full detail.
+7. Phase 8 then decides that:
+   - **Milestone 1:** onboarding, dashboard, and the minimum collaboration handoff,
+   - **Milestone 2:** deeper collaboration flows,
+   - **Milestone 3:** reporting and admin depth.
+8. Only the surfaces in Milestone 1 receive mock deepening and technical derivation. Reporting and admin stay shell-level until their milestone is promoted.
+
+This is the intended answer to context-window pressure in the mock stage: keep the early artifact early, but assemble it from bounded surface and state work rather than one all-knowing prototyper.
+
+---
 ## 12. Practical optimizations before implementation
 
 These are the highest-leverage improvements I would bake in before starting implementation.
@@ -1839,49 +2017,60 @@ These are the highest-leverage improvements I would bake in before starting impl
 Do not bury milestone sizing inside ad hoc prompts. Build an explicit milestone partitioner that can create, reorder, merge, or split milestone shells as scope becomes clearer.
 
 ### 12.2 Put milestone partitioning after experience lock for greenfield work
-This is the design change with the biggest leverage. Let the system shape and mock the product promise first, then decide what belongs in Milestone 1 versus later milestones.
+Let the system shape and review the outer product promise first, then decide what belongs in Milestone 1 versus later milestones.
 
-### 12.3 Build one engine with three entry modes
+### 12.3 Separate the program-level experience envelope from active-milestone deep mock detail
+This is the change that makes large-product mocking feasible. The program needs a coherent outer envelope; the active milestone needs deeper surface specificity only when it is promoted.
+
+### 12.4 Replace monolithic prototype generation with explicit experience build graphs
+Do not make “build the mock” one giant prompt. Create a build graph with shell, spine, clusters, state packs, and stitch passes so the orchestrator can route and retry those parts independently.
+
+### 12.5 Make shell, shard, state-pack, and stitch passes first-class work types
+If these remain implicit, the system will drift back toward one-agent mock generation. Name them as real work units in the scheduler and data model.
+
+### 12.6 Cache shared UI contracts and design primitives early
+A stable shared contract reduces drift across independently generated shards and lowers the cost of later milestone mock deepening.
+
+### 12.7 Build one engine with three entry modes
 Do not build separate pipelines for greenfield, brownfield, and continuation. Build one engine with an entry router, skip rules, and the same milestone-horizon semantics in every mode.
 
-### 12.4 Separate stable program memory, active milestone memory, and future milestone shells from day one
+### 12.8 Separate stable program memory, active milestone memory, and future milestone shells from day one
 This reduces context size, simplifies continuation, and prevents accidental whole-project replanning.
 
-### 12.5 Add brownfield digests and incremental refresh early
+### 12.9 Add brownfield digests and incremental refresh early
 A full codebase map on every milestone will become expensive and noisy. Cache brownfield findings and refresh only impacted areas.
 
-### 12.6 Make preservation contracts explicit
+### 12.10 Make preservation contracts explicit
 Brownfield safety gets dramatically better when the system can say not only what it intends to change, but also what must stay stable.
 
-### 12.7 Treat model routing as a policy layer, not a hardcoded switch
+### 12.11 Treat model routing as a policy layer, not a hardcoded switch
 The routing abstraction should be capability-based and configurable so it survives provider churn and real-world cost tuning.
 
-### 12.8 Build staged acceptance and quarantine before building many agents
+### 12.12 Build staged acceptance and quarantine before building many agents
 Validator-first architecture will save substantial cleanup later. If you postpone it, every later agent will assume it can write directly to durable state.
 
-### 12.9 Budget research to the next real decision
+### 12.13 Budget research to the next real decision
 Do not let research sprawl across the whole roadmap. Each research unit should justify the next experience, partitioning, or implementation decision.
 
-### 12.10 Make prototype optional but principled
-Do not force a full mock for every backend-only milestone. Use an experience simulation rule so the flow stays experience-first without becoming ceremonial.
+### 12.14 Use fidelity tiers so later surfaces can stay intentionally coarse
+Do not over-invest in detailed mock work for probable Milestone 3 surfaces before Milestone 1 is even validated.
 
-### 12.11 Add risk-tiered verification
+### 12.15 Add risk-tiered verification
 Not every slice needs the same verification intensity. High-risk, brownfield, migration, or user-facing slices should get heavier verification than low-risk internal cleanup.
 
-### 12.12 Promote future milestone shells, seeds, and refactor candidates to first-class outputs
+### 12.16 Promote future milestone shells, seeds, and refactor candidates to first-class outputs
 This makes continuation much smoother and prevents valuable follow-on ideas from being lost in summaries.
 
-### 12.13 Tune the scheduler for “work around blockers”
+### 12.17 Tune the scheduler for “work around blockers”
 The biggest quality-of-life win in autonomous systems is not asking fewer questions once; it is staying productive when one path is blocked.
 
 ---
-
 ## 13. Practical implementation order
 
 If I were building this system now, I would implement it in this order:
 
-### Step 1: Milestone-aware SQLite schema, horizon state, and acceptance journal
-Build program state, milestone state, milestone-horizon tables, generic record store, staged-output tables, validation journals, locks, blockers, and trace links.
+### Step 1: Milestone-aware SQLite schema, horizon state, experience-assembly tables, and acceptance journal
+Build program state, milestone state, milestone-horizon tables, generic record store, experience-assembly tables, staged-output tables, validation journals, locks, blockers, and trace links.
 
 ### Step 2: Brownfield mapper and knowledge seeding
 Build repository mapping, doc ingest, dependency inventory, hotspot detection, and trust-scored knowledge seeding.
@@ -1892,17 +2081,17 @@ Build the logic that distinguishes greenfield starts, brownfield starts, and con
 ### Step 4: Readiness capture, credential tracking, scope signals, and model policy capture
 Build structured intake, credential forecasting, user-input batching, milestone-sizing signals, and model-routing policy records.
 
-### Step 5: Program core, milestone shell model, and context packer
+### Step 5: Program core, experience envelope, build-graph model, and context packer
 Build the compact memory structures and the query layer that assembles narrow context packets from SQLite.
 
-### Step 6: Experience-side agents
-Implement shaping, journey mapping, targeted research, interaction architecture, and prototype or simulation generation.
+### Step 6: Experience-side agents and distributed mock assembly
+Implement shaping, journey mapping, targeted research, interaction architecture, clustering, shell building, shard building, state-pack generation, stitching, and coherence verification.
 
 ### Step 7: Milestone partitioner and activation logic
-Build the service that converts approved experience into an active milestone plus future milestone shells.
+Build the service that converts the approved experience envelope into an active milestone plus future milestone shells.
 
-### Step 8: Active-milestone technical derivation and preservation contracts
-Derive technical contracts from the approved active milestone and existing system reality, with delta impact and rollback planning.
+### Step 8: Active-milestone mock deepening, technical derivation, and preservation contracts
+Derive technical contracts from the approved active milestone and existing system reality, with active-surface deepening, delta impact, and rollback planning.
 
 ### Step 9: Active-milestone slice planner, scheduler, and model router
 Add thin-slice planning, blocker-aware prioritization, routing classes, and model assignment for the active milestone only.
@@ -1914,32 +2103,33 @@ Implement test design, implementation, output staging, validation, repair, refac
 Add wave-level audits, release readiness, future-seed generation, horizon updates, backlog carry-forward, and next-milestone preparation.
 
 ---
-
 ## 14. Final operating rules
 
 1. **Every agent is fresh.** Memory lives in SQLite, not in the session.
 2. **Every handoff is structured.** Prefer typed records and structured payloads to narrative sprawl.
 3. **If a meaningful codebase already exists, map it first.**
-4. **The user sees an outer experience early.** Show the mock or equivalent simulation before deep implementation planning hardens.
-5. **Milestone count is discovered from scope, not assumed.**
-6. **For greenfield work, deep milestone partitioning happens after UX lock.**
-7. **Only the active milestone gets deep planning.**
-8. **Future milestones stay as coarse shells until activated.**
-9. **Program core, active milestone core, and milestone horizon state stay separate.**
-10. **Brownfield work uses preservation contracts, not just change requests.**
-11. **Model selection is explicit, stored, and revisable.**
-12. **Model output is untrusted until validated and accepted atomically.**
-13. **The system continues autonomously while meaningful unblocked work exists.**
-14. **Missing user input is batched and requested early.**
-15. **Credential and access needs are inferred and tracked explicitly.**
-16. **Secrets are stored as secure references, not plaintext memory.**
-17. **Every active milestone is broken into thin slices.**
-18. **Every slice is tested with fixtures, not live dependencies.**
-19. **Every slice is refactored after it works.**
-20. **Every important decision is versioned and traceable.**
-21. **Approved experience and preservation contracts are binding.**
-22. **Corrupt output is repaired or quarantined, not forced into state.**
-23. **Milestone close-out refreshes the continuation surface and may recut the future horizon.**
+4. **The user sees an early experience envelope.** Show a coherent shell, spine, or equivalent simulation before deep implementation planning hardens.
+5. **Mock creation is distributed.** Build shell, surface, state, and stitch work through bounded work units rather than one monolithic prototype run.
+6. **Milestone count is discovered from scope, not assumed.**
+7. **For greenfield work, deep milestone partitioning happens after UX lock.**
+8. **Only the active milestone gets deep planning.**
+9. **Future milestones stay as coarse shells until activated.**
+10. **Program core, experience envelope, active milestone core, and milestone horizon state stay separate.**
+11. **Brownfield work uses preservation contracts, not just change requests.**
+12. **Model selection is explicit, stored, and revisable.**
+13. **Model output is untrusted until validated and accepted atomically.**
+14. **The system continues autonomously while meaningful unblocked work exists.**
+15. **Missing user input is batched and requested early.**
+16. **Credential and access needs are inferred and tracked explicitly.**
+17. **Secrets are stored as secure references, not plaintext memory.**
+18. **Active-milestone mock deepening should touch only the active surface set.**
+19. **Every active milestone is broken into thin slices.**
+20. **Every slice is tested with fixtures, not live dependencies.**
+21. **Every slice is refactored after it works.**
+22. **Every important decision is versioned and traceable.**
+23. **Approved experience, shell-level direction, and preservation contracts are binding at their stated fidelity.**
+24. **Corrupt output is repaired or quarantined, not forced into state.**
+25. **Milestone close-out refreshes the continuation surface and may recut the future horizon.**
 
 ---
 
@@ -1951,15 +2141,15 @@ The updated pipeline is a **SQLite-backed, experience-first, fresh-agent deliver
 - a brownfield program start that begins by mapping the existing product,
 - and milestone continuation that plans only the next justified increment.
 
-Its central change is that it no longer assumes an LLM should micro-plan the whole project upfront. Instead, it shapes the outer experience first, gets an early mock or simulation in front of the user, then partitions the work into however many milestones the scope actually warrants and deeply plans only the active milestone.
+Its central change is that it no longer assumes an LLM should micro-plan the whole project upfront or build the whole early UI in one pass. Instead, it shapes the outer experience first, assembles a distributed experience envelope, gets that early artifact in front of the user, then partitions the work into however many milestones the scope actually warrants and deeply plans only the active milestone.
 
-It keeps the strongest part of the prior design—specialized agents with minimal context—but strengthens it with milestone continuity, optional brownfield onboarding, capability-based model routing, preservation contracts for existing systems, and a validator-first acceptance model that prevents malformed output from corrupting the orchestrator.
+It keeps the strongest part of the prior design—specialized agents with minimal context—but strengthens it with milestone continuity, optional brownfield onboarding, shell-versus-detail fidelity control, capability-based model routing, preservation contracts for existing systems, and a validator-first acceptance model that prevents malformed output from corrupting the orchestrator.
 
 In practical terms, the flow becomes:
 
-**entry routing -> optional brownfield reconnaissance -> guided ideation or program shaping -> structured intake, readiness, and model policy capture -> program framing and horizon setup -> experience discovery -> targeted experience research -> interaction architecture and impact mapping -> mock-first prototype or experience simulation -> UX lock -> scope sizing, milestone partitioning, and activation -> active-milestone technical derivation -> active-milestone slice planning -> autonomous implement/validate/test/refactor/verify loop -> milestone hardening -> horizon refresh -> next milestone or stop**
+**entry routing -> optional brownfield reconnaissance -> guided ideation or program shaping -> structured intake, readiness, and model policy capture -> program framing and horizon setup -> experience discovery -> targeted experience research -> interaction architecture, impact mapping, and mock decomposition planning -> distributed experience-envelope assembly -> UX lock -> scope sizing, milestone partitioning, and activation -> active-milestone mock deepening and technical derivation -> active-milestone slice planning -> autonomous implement/validate/test/refactor/verify loop -> milestone hardening -> horizon refresh -> next milestone or stop**
 
-The result is a delivery system that can start from nothing, start from a messy real codebase, or keep evolving a product milestone after milestone without constantly losing context or re-solving the whole project.
+The result is a delivery system that can start from nothing, start from a messy real codebase, or keep evolving a product milestone after milestone without constantly losing context, over-planning the future, or forcing a single agent to carry an entire large mock in one context window.
 
 ---
 
@@ -1978,11 +2168,11 @@ flowchart TD
     P1 --> P2[Phase 2<br/>Program Framing and<br/>Horizon Setup]
     P2 --> P3[Phase 3<br/>Experience Discovery]
     P3 --> P4[Phase 4<br/>Targeted Experience Research]
-    P4 --> P5[Phase 5<br/>Interaction Architecture<br/>and Impact Mapping]
-    P5 --> P6[Phase 6<br/>Mock-First Prototype or<br/>Experience Simulation]
+    P4 --> P5[Phase 5<br/>Interaction Architecture,<br/>Impact Mapping, and<br/>Mock Decomposition]
+    P5 --> P6[Phase 6<br/>Distributed Experience<br/>Envelope Assembly]
     P6 --> P7[Phase 7<br/>UX Review and Lock]
     P7 --> P8[Phase 8<br/>Scope Sizing,<br/>Milestone Partitioning,<br/>and Activation]
-    P8 --> P9[Phase 9<br/>Milestone-Scoped Technical<br/>Derivation]
+    P8 --> P9[Phase 9<br/>Active-Milestone Technical<br/>Derivation and Targeted<br/>Mock Deepening]
     P9 --> P10[Phase 10<br/>Active-Milestone Slice<br/>Planning and Rolling Schedule]
     P10 --> P11[Phase 11<br/>Autonomous Slice<br/>Execution Loop]
     P11 --> P12[Phase 12<br/>Milestone Hardening,<br/>Release Readiness,<br/>and Continuation Planning]
@@ -1994,10 +2184,21 @@ flowchart TD
 
     subgraph HORIZON [Rolling Planning Horizon]
         H1[Program direction / north star]
-        H2[Future milestone shells<br/>kept coarse]
-        H3[Active milestone<br/>planned deeply]
-        H4[Current slice / work unit<br/>planned precisely]
-        H1 --> H2 --> H3 --> H4
+        H2[Program experience envelope<br/>global shell + core path]
+        H3[Future milestone shells<br/>kept coarse]
+        H4[Active milestone<br/>planned deeply]
+        H5[Current slice / work unit<br/>planned precisely]
+        H1 --> H2 --> H3 --> H4 --> H5
+    end
+
+    subgraph MOCK [Phase 6 Distributed Experience Assembly]
+        M1[Confirm build graph]
+        M2[Build shell + nav scaffold]
+        M3[Build experience spine]
+        M4[Build surface shards + state packs]
+        M5[Stitch + coherence verify]
+        M6[Keep later surfaces shell-level<br/>unless early fidelity is needed]
+        M1 --> M2 --> M3 --> M4 --> M5 --> M6
     end
 
     subgraph EXEC [Phase 11 Loop]
@@ -2015,7 +2216,7 @@ flowchart TD
     end
 
     subgraph ORCH [Thin Orchestrator]
-        O1[Choose entry mode,<br/>active milestone, and horizon state]
+        O1[Choose entry mode,<br/>experience state,<br/>active milestone, and horizon state]
         O2[Pick next best<br/>work unit]
         O3[Assemble minimal<br/>context]
         O4[Select model route]
@@ -2031,11 +2232,12 @@ flowchart TD
         D3[Work Units / Dependencies]
         D4[Generic Records]
         D5[Brownfield Maps / Knowledge Seeds]
-        D6[Model Policies / Assignments]
-        D7[Staged Outputs / Validation / Quarantine]
-        D8[Credentials / Access Metadata]
-        D9[Tests / Fixtures / Verification]
-        D10[Trace Links / Locks / Blockers]
+        D6[Experience Build Graphs /<br/>Mock Shards / Stitch Runs]
+        D7[Model Policies / Assignments]
+        D8[Staged Outputs / Validation / Quarantine]
+        D9[Credentials / Access Metadata]
+        D10[Tests / Fixtures / Verification]
+        D11[Trace Links / Locks / Blockers]
     end
 
     subgraph RULES [Cross-Cutting Controls]
@@ -2044,7 +2246,8 @@ flowchart TD
         R3[Fixture-first tests]
         R4[Atomic acceptance only]
         R5[Batch user requests]
-        R6[Version everything]
+        R6[Selective fidelity tiers]
+        R7[Version everything]
     end
 
     ORCH --> DB
@@ -2070,11 +2273,11 @@ sequenceDiagram
     participant O as Thin Orchestrator
     participant DB as SQLite Memory
     participant B as Brownfield Mapper
-    participant A as Specialist Agent
-    participant P as Milestone Partitioner
     participant C as Context Packer
     participant M as Model Router
+    participant A as Specialist Agent
     participant G as Output Gate
+    participant P as Milestone Partitioner
     participant S as Secure Secret Channel / Vault
     participant R as Repository / Codebase
     participant T as Test Runner
@@ -2091,18 +2294,60 @@ sequenceDiagram
         O->>DB: Write program-shaping records
     end
 
-    O->>A: Launch experience design agents
-    A-->>O: Journeys, interaction architecture,<br/>and prototype or simulation
-    O->>DB: Write experience records
-    O-->>U: Present mock or experience simulation
+    O->>A: Launch experience discovery, research,<br/>interaction architecture, and build-graph agents
+    A-->>O: Journeys, screen specs, view models,<br/>and experience build graph
+    O->>DB: Write experience and decomposition records
+
+    O->>A: Launch shell and shared-contract agents
+    A-->>O: Global shell, nav scaffold,<br/>and shared UI contract
+    O->>DB: Write shell and shared-contract records
+
+    loop For each surface cluster or state pack
+        O->>C: Assemble surface-scoped context
+        C->>DB: Load assigned cluster, relevant view models,<br/>shared UI contract, and fixture or state obligations
+        DB-->>C: Scoped cluster context
+        C-->>O: Surface packet + output contract
+
+        O->>M: Select UI route
+        M->>DB: Load routing policy,<br/>prior failures, and budgets
+        DB-->>M: Policy + run history
+        M-->>O: Shard-builder route
+
+        O->>A: Launch shard or state-pack builder
+        A-->>O: Mock shard or state pack
+        O->>G: Validate against shared UI contract,<br/>cluster scope, and route ownership
+
+        alt Shard invalid or incompatible
+            G-->>O: Reject, repair, or quarantine recommendation
+            O->>M: Escalate or switch route
+            M-->>O: New route
+            O->>A: Launch narrow repair agent
+            A-->>O: Corrected shard
+            O->>G: Re-stage and revalidate
+        else Shard valid
+            G-->>O: Accepted shard
+            O->>DB: Write accepted shard or state-pack records
+        end
+    end
+
+    O->>A: Launch stitcher and coherence verifier
+    A-->>O: Stitched experience envelope + gap report
+    O->>DB: Write envelope, coherence report,<br/>and shell-level deferred surfaces
+    O-->>U: Present early experience envelope
     U-->>O: Feedback / approval
     O->>DB: Lock approved experience contract
 
     O->>P: Size scope and partition into milestones
-    P->>DB: Load approved experience, constraints,<br/>risk signals, and readiness state
-    DB-->>P: Program core + capability map + blockers
-    P-->>O: Active milestone + future milestone shells<br/>+ promotion conditions
+    P->>DB: Load approved experience, build graph,<br/>constraints, risk signals, and readiness state
+    DB-->>P: Program core + active-surface priorities + blockers
+    P-->>O: Active milestone + future milestone shells<br/>+ active surface set + promotion conditions
     O->>DB: Write planning horizon and activation records
+
+    alt Active milestone surfaces are too coarse
+        O->>A: Launch milestone-scoped mock deepening
+        A-->>O: Active-surface contract delta
+        O->>DB: Write milestone mock delta
+    end
 
     O->>A: Launch active-milestone technical derivation<br/>and slice planning
     A-->>O: Technical contracts + slice plans<br/>for active milestone only

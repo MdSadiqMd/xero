@@ -820,6 +820,10 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="branch">{state.activeProject?.branch ?? 'none'}</div>
       <div data-testid="runtime-label">{state.agentView?.runtimeLabel ?? 'none'}</div>
       <div data-testid="runtime-provider-id">{state.agentView?.runtimeSession?.providerId ?? 'none'}</div>
+      <div data-testid="selected-provider-id">{state.agentView?.selectedProviderId ?? 'none'}</div>
+      <div data-testid="selected-provider-label">{state.agentView?.selectedProviderLabel ?? 'none'}</div>
+      <div data-testid="selected-model-id">{state.agentView?.selectedModelId ?? 'none'}</div>
+      <div data-testid="provider-mismatch">{String(state.agentView?.providerMismatch ?? false)}</div>
       <div data-testid="auth-phase">{state.agentView?.authPhase ?? 'none'}</div>
       <div data-testid="auth-phase-label">{state.agentView?.authPhaseLabel ?? 'none'}</div>
       <div data-testid="session-label">{state.agentView?.runtimeSession?.sessionLabel ?? 'none'}</div>
@@ -2061,7 +2065,7 @@ describe('useCadenceDesktopState', () => {
     expect(setup.runtimeUnlisten).toHaveBeenCalledTimes(1)
   })
 
-  it('loads app-global runtime settings and keeps selected-project runtime truth separate after save', async () => {
+  it('eager-loads app-global runtime settings and keeps selected-project runtime truth separate after save', async () => {
     const setup = createMockAdapter({
       listProjects: { projects: [makeProjectSummary('project-1', 'cadence')] },
       runtimeSettings: makeRuntimeSettings({
@@ -2074,12 +2078,10 @@ describe('useCadenceDesktopState', () => {
     render(<Harness adapter={setup.adapter} />)
 
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
-    expect(screen.getByTestId('runtime-settings-provider-id')).toHaveTextContent('none')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Load runtime settings' }))
-
     await waitFor(() => expect(screen.getByTestId('runtime-settings-provider-id')).toHaveTextContent('openai_codex'))
     expect(screen.getByTestId('runtime-settings-model-id')).toHaveTextContent('openai_codex')
+    expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openai_codex')
+    expect(screen.getByTestId('selected-provider-label')).toHaveTextContent('OpenAI Codex')
     expect(screen.getByTestId('runtime-provider-id')).toHaveTextContent('openai_codex')
 
     fireEvent.click(screen.getByRole('button', { name: 'Save OpenRouter runtime settings' }))
@@ -2095,6 +2097,9 @@ describe('useCadenceDesktopState', () => {
 
     expect(screen.getByTestId('runtime-settings-model-id')).toHaveTextContent('openai/gpt-4.1-mini')
     expect(screen.getByTestId('runtime-settings-key-configured')).toHaveTextContent('true')
+    expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openrouter')
+    expect(screen.getByTestId('selected-provider-label')).toHaveTextContent('OpenRouter')
+    expect(screen.getByTestId('selected-model-id')).toHaveTextContent('openai/gpt-4.1-mini')
     expect(screen.getByTestId('runtime-provider-id')).toHaveTextContent('openai_codex')
     expect(screen.getByTestId('auth-phase')).toHaveTextContent('authenticated')
     expect(screen.getByTestId('runtime-settings-load-error-code')).toHaveTextContent('none')
@@ -2140,9 +2145,6 @@ describe('useCadenceDesktopState', () => {
     render(<Harness adapter={setup.adapter} />)
 
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Load runtime settings' }))
-
     await waitFor(() => expect(screen.getByTestId('runtime-settings-provider-id')).toHaveTextContent('openrouter'))
     expect(screen.getByTestId('runtime-settings-model-id')).toHaveTextContent('meta-llama/llama-3.1-8b-instruct')
     expect(screen.getByTestId('runtime-settings-key-configured')).toHaveTextContent('true')
@@ -2161,5 +2163,68 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('runtime-settings-provider-id')).toHaveTextContent('openrouter')
     expect(screen.getByTestId('runtime-settings-model-id')).toHaveTextContent('meta-llama/llama-3.1-8b-instruct')
     expect(screen.getByTestId('runtime-settings-key-configured')).toHaveTextContent('true')
+  })
+
+  it('derives OpenRouter-first guidance and mismatch recovery from app-global settings', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'cadence')] },
+      runtimeSettings: makeRuntimeSettings({
+        providerId: 'openrouter',
+        modelId: 'openai/gpt-4.1-mini',
+        openrouterApiKeyConfigured: true,
+      }),
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          providerId: 'openai_codex',
+          runtimeKind: 'openai_codex',
+          phase: 'authenticated',
+        }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openrouter'))
+    expect(screen.getByTestId('selected-provider-label')).toHaveTextContent('OpenRouter')
+    expect(screen.getByTestId('provider-mismatch')).toHaveTextContent('true')
+    expect(screen.getByTestId('session-reason')).toHaveTextContent('Selected provider is OpenRouter')
+    expect(screen.getByTestId('messages-reason')).toHaveTextContent('Rebind the selected provider before trusting new stream activity.')
+  })
+
+  it('derives missing-key OpenRouter guidance without OpenAI login copy', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'cadence')] },
+      runtimeSettings: makeRuntimeSettings({
+        providerId: 'openrouter',
+        modelId: 'openai/gpt-4.1-mini',
+        openrouterApiKeyConfigured: false,
+      }),
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          providerId: 'openrouter',
+          runtimeKind: 'openrouter',
+          flowId: null,
+          sessionId: null,
+          accountId: null,
+          phase: 'idle',
+          callbackBound: null,
+          authorizationUrl: null,
+          redirectUri: null,
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': null,
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openrouter'))
+    expect(screen.getByTestId('session-reason')).toHaveTextContent('Configure an OpenRouter API key in Settings')
+    expect(screen.getByTestId('messages-reason')).toHaveTextContent('Configure an OpenRouter API key in Settings')
+    expect(screen.getByTestId('session-reason')).not.toHaveTextContent('OpenAI')
+    expect(screen.getByTestId('messages-reason')).not.toHaveTextContent('OpenAI')
   })
 })

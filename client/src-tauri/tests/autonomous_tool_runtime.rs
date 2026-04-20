@@ -1,16 +1,25 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use cadence_desktop_lib::{
+    commands::RepositoryDiffScope,
     configure_builder_with_state, db,
-    git::repository::CanonicalRepository,
+    git::{
+        diff::MAX_PATCH_BYTES,
+        repository::{ensure_cadence_excluded, CanonicalRepository},
+    },
     registry::{self, RegistryProjectRecord},
     runtime::{
-        AutonomousCommandRequest, AutonomousEditRequest, AutonomousReadRequest,
-        AutonomousSearchRequest, AutonomousToolOutput, AutonomousToolRuntime,
+        AutonomousCommandRequest, AutonomousEditRequest, AutonomousGitDiffRequest,
+        AutonomousGitStatusRequest, AutonomousReadRequest, AutonomousSearchRequest,
+        AutonomousToolOutput, AutonomousToolRequest, AutonomousToolRuntime,
         AutonomousWriteRequest,
     },
     state::DesktopState,
 };
+use git2::{IndexAddOption, Repository, Signature};
 use tauri::Manager;
 use tempfile::TempDir;
 
@@ -31,6 +40,12 @@ fn create_state(root: &TempDir) -> DesktopState {
 fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (String, PathBuf) {
     let repo_root = root.path().join("repo");
     fs::create_dir_all(repo_root.join("src")).expect("create repo src");
+    fs::write(repo_root.join("src").join("tracked.txt"), "alpha\n")
+        .expect("seed tracked file");
+
+    let git_repository = Repository::init(&repo_root).expect("init git repo");
+    commit_all(&git_repository, "initial commit");
+
     let canonical_root = fs::canonicalize(&repo_root).expect("canonical repo root");
     let root_path_string = canonical_root.to_string_lossy().into_owned();
 
@@ -41,14 +56,17 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
         root_path_string: root_path_string.clone(),
         common_git_dir: canonical_root.join(".git"),
         display_name: "repo".into(),
-        branch_name: Some("main".into()),
-        head_sha: Some("abc123".into()),
+        branch_name: current_branch_name(&canonical_root),
+        head_sha: current_head_sha(&canonical_root),
         branch: None,
         status_entries: Vec::new(),
         has_staged_changes: false,
         has_unstaged_changes: false,
         has_untracked_changes: false,
     };
+
+    ensure_cadence_excluded(&repository, app.state::<DesktopState>().import_failpoints())
+        .expect("exclude .cadence from seeded repo git status");
 
     db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
         .expect("import project into repo-local db");
@@ -68,6 +86,69 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
     .expect("persist registry entry");
 
     (repository.project_id, canonical_root)
+}
+
+fn commit_all(repository: &Repository, message: &str) {
+    let mut index = repository.index().expect("repo index");
+    index
+        .add_all(["*"], IndexAddOption::DEFAULT, None)
+        .expect("stage files");
+    index.write().expect("write index");
+
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repository.find_tree(tree_id).expect("find tree");
+    let signature = Signature::now("Cadence", "cadence@example.com").expect("signature");
+
+    let parents = repository
+        .head()
+        .ok()
+        .and_then(|head| head.target())
+        .and_then(|oid| repository.find_commit(oid).ok())
+        .into_iter()
+        .collect::<Vec<_>>();
+    let parent_refs = parents.iter().collect::<Vec<_>>();
+
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parent_refs,
+        )
+        .expect("commit");
+}
+
+fn stage_path(repo_root: &Path, relative_path: &str) {
+    let repository = Repository::open(repo_root).expect("open git repo");
+    let mut index = repository.index().expect("repo index");
+    index
+        .add_path(Path::new(relative_path))
+        .expect("stage path");
+    index.write().expect("write index");
+}
+
+fn current_branch_name(repo_root: &Path) -> Option<String> {
+    Repository::open(repo_root)
+        .ok()
+        .and_then(|repository| {
+            repository
+                .head()
+                .ok()
+                .and_then(|head| head.shorthand().map(ToOwned::to_owned))
+        })
+}
+
+fn current_head_sha(repo_root: &Path) -> Option<String> {
+    Repository::open(repo_root)
+        .ok()
+        .and_then(|repository| {
+            repository
+                .head()
+                .ok()
+                .and_then(|head| head.target().map(|oid| oid.to_string()))
+        })
 }
 
 fn shell_argv(script: impl Into<String>) -> Vec<String> {
@@ -128,7 +209,7 @@ fn tool_runtime_executes_repo_scoped_operations_and_returns_stable_envelopes() {
             assert_eq!(output.matches[0].path, "src/app.txt");
             assert_eq!(output.matches[0].line, 2);
             assert_eq!(output.matches[0].column, 1);
-            assert_eq!(output.scanned_files, 1);
+            assert_eq!(output.scanned_files, 2);
         }
         other => panic!("unexpected search output: {other:?}"),
     }
@@ -208,6 +289,194 @@ fn tool_runtime_executes_repo_scoped_operations_and_returns_stable_envelopes() {
 }
 
 #[test]
+fn tool_runtime_executes_git_status_and_diff_with_real_repository_truth() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+
+    let runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    fs::write(repo_root.join("src").join("tracked.txt"), "alpha\nbeta\n")
+        .expect("modify tracked file");
+    fs::write(repo_root.join("src").join("staged.txt"), "staged change\n")
+        .expect("write staged file");
+    stage_path(&repo_root, "src/staged.txt");
+
+    let status = runtime
+        .git_status(AutonomousGitStatusRequest::default())
+        .expect("git status succeeds");
+    assert_eq!(status.tool_name, "git_status");
+    match status.output {
+        AutonomousToolOutput::GitStatus(output) => {
+            assert_eq!(output.changed_files, 2);
+            assert_eq!(
+                output.branch.as_ref().map(|branch| branch.name.clone()),
+                current_branch_name(&repo_root)
+            );
+            assert!(output.has_staged_changes);
+            assert!(output.has_unstaged_changes);
+            assert!(!output.has_untracked_changes);
+            assert!(output.entries.iter().any(|entry| {
+                entry.path == "src/tracked.txt"
+                    && entry.unstaged
+                        == Some(cadence_desktop_lib::commands::ChangeKind::Modified)
+            }));
+            assert!(output.entries.iter().any(|entry| {
+                entry.path == "src/staged.txt"
+                    && entry.staged == Some(cadence_desktop_lib::commands::ChangeKind::Added)
+            }));
+        }
+        other => panic!("unexpected git status output: {other:?}"),
+    }
+
+    let staged_diff = runtime
+        .git_diff(AutonomousGitDiffRequest {
+            scope: RepositoryDiffScope::Staged,
+        })
+        .expect("staged diff succeeds");
+    match staged_diff.output {
+        AutonomousToolOutput::GitDiff(output) => {
+            assert_eq!(output.scope, RepositoryDiffScope::Staged);
+            assert_eq!(output.changed_files, 1);
+            assert_eq!(
+                output.branch.as_ref().map(|branch| branch.name.clone()),
+                current_branch_name(&repo_root)
+            );
+            assert_eq!(output.base_revision, current_head_sha(&repo_root));
+            assert!(!output.truncated);
+            assert!(output.patch.contains("staged.txt"));
+            assert!(!output.patch.contains("tracked.txt"));
+        }
+        other => panic!("unexpected staged diff output: {other:?}"),
+    }
+
+    let unstaged_diff = runtime
+        .git_diff(AutonomousGitDiffRequest {
+            scope: RepositoryDiffScope::Unstaged,
+        })
+        .expect("unstaged diff succeeds");
+    match unstaged_diff.output {
+        AutonomousToolOutput::GitDiff(output) => {
+            assert_eq!(output.scope, RepositoryDiffScope::Unstaged);
+            assert_eq!(output.changed_files, 1);
+            assert_eq!(output.base_revision, None);
+            assert!(!output.truncated);
+            assert!(output.patch.contains("tracked.txt"));
+            assert!(!output.patch.contains("staged.txt"));
+        }
+        other => panic!("unexpected unstaged diff output: {other:?}"),
+    }
+
+    let worktree_diff = runtime
+        .git_diff(AutonomousGitDiffRequest {
+            scope: RepositoryDiffScope::Worktree,
+        })
+        .expect("worktree diff succeeds");
+    match worktree_diff.output {
+        AutonomousToolOutput::GitDiff(output) => {
+            assert_eq!(output.scope, RepositoryDiffScope::Worktree);
+            assert_eq!(output.changed_files, 2);
+            assert_eq!(output.base_revision, current_head_sha(&repo_root));
+            assert!(!output.truncated);
+            assert!(output.patch.contains("tracked.txt"));
+            assert!(output.patch.contains("staged.txt"));
+        }
+        other => panic!("unexpected worktree diff output: {other:?}"),
+    }
+
+    fs::write(repo_root.join("src").join("untracked.txt"), "untracked change\n")
+        .expect("write untracked file");
+    let status_with_untracked = runtime
+        .git_status(AutonomousGitStatusRequest::default())
+        .expect("git status with untracked file succeeds");
+    match status_with_untracked.output {
+        AutonomousToolOutput::GitStatus(output) => {
+            assert_eq!(output.changed_files, 3);
+            assert!(output.has_untracked_changes);
+            assert!(output.entries.iter().any(|entry| {
+                entry.path == "src/untracked.txt" && entry.untracked
+            }));
+        }
+        other => panic!("unexpected git status output with untracked file: {other:?}"),
+    }
+}
+
+#[test]
+fn tool_runtime_git_status_reports_detached_head_truthfully() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let repository = Repository::open(&repo_root).expect("open git repo");
+    let head_oid = repository.head().expect("head").target().expect("head oid");
+    let head_commit = repository.find_commit(head_oid).expect("find commit");
+    repository
+        .checkout_tree(head_commit.as_object(), None)
+        .expect("checkout tree");
+    repository.set_head_detached(head_oid).expect("detach head");
+
+    let runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    let status = runtime
+        .git_status(AutonomousGitStatusRequest::default())
+        .expect("git status succeeds on detached head");
+    match status.output {
+        AutonomousToolOutput::GitStatus(output) => {
+            let branch = output.branch.expect("detached branch summary");
+            assert!(branch.detached);
+            assert_eq!(branch.name, "HEAD");
+            assert_eq!(branch.head_sha, Some(head_oid.to_string()));
+            assert_eq!(output.changed_files, 0);
+        }
+        other => panic!("unexpected git status output on detached head: {other:?}"),
+    }
+}
+
+#[test]
+fn tool_runtime_git_diff_reports_truncation_truthfully() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+
+    let runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    let large_patch =
+        std::iter::repeat_n("line with plenty of diff payload\n", 5_000).collect::<String>();
+    fs::write(repo_root.join("src").join("large.txt"), large_patch)
+        .expect("write large patch fixture");
+    stage_path(&repo_root, "src/large.txt");
+
+    let diff = runtime
+        .git_diff(AutonomousGitDiffRequest {
+            scope: RepositoryDiffScope::Staged,
+        })
+        .expect("staged diff succeeds");
+    match diff.output {
+        AutonomousToolOutput::GitDiff(output) => {
+            assert_eq!(output.changed_files, 1);
+            assert!(output.truncated);
+            assert!(output.patch.len() <= MAX_PATCH_BYTES);
+            assert!(output.patch.contains("large.txt"));
+        }
+        other => panic!("unexpected truncated git diff output: {other:?}"),
+    }
+}
+
+#[test]
 fn tool_runtime_rejects_malformed_inputs_and_reports_error_paths_deterministically() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
@@ -255,6 +524,17 @@ fn tool_runtime_rejects_malformed_inputs_and_reports_error_paths_deterministical
         AutonomousToolOutput::Search(output) => assert!(output.matches.is_empty()),
         other => panic!("unexpected empty-search output: {other:?}"),
     }
+
+    let invalid_scope: Result<AutonomousToolRequest, _> = serde_json::from_value(serde_json::json!({
+        "tool": "git_diff",
+        "input": {
+            "scope": "unsupported"
+        }
+    }));
+    assert!(
+        invalid_scope.is_err(),
+        "unsupported autonomous git diff scope should fail request parsing"
+    );
 
     let invalid_range = runtime
         .edit(AutonomousEditRequest {
@@ -327,6 +607,20 @@ fn tool_runtime_rejects_malformed_inputs_and_reports_error_paths_deterministical
         .expect_err("timed-out command should return a retryable error");
     assert_eq!(timeout.code, "autonomous_tool_command_timeout");
     assert!(timeout.retryable);
+
+    fs::remove_dir_all(repo_root.join(".git")).expect("remove git dir");
+
+    let git_status_error = runtime
+        .git_status(AutonomousGitStatusRequest::default())
+        .expect_err("broken git state should fail git status");
+    assert_eq!(git_status_error.code, "git_repository_not_found");
+
+    let git_diff_error = runtime
+        .git_diff(AutonomousGitDiffRequest {
+            scope: RepositoryDiffScope::Worktree,
+        })
+        .expect_err("broken git state should fail git diff");
+    assert_eq!(git_diff_error.code, "git_repository_not_found");
 }
 
 #[test]
