@@ -13,11 +13,11 @@ use portable_pty::ChildKiller;
 
 use crate::{auth::now_timestamp, commands::CommandError};
 
+use super::live_events::append_live_event;
 use super::{
-    append_live_event, read_json_line_from_reader, write_json_line, BufferedSupervisorEvent,
-    ReplayRegistration, SharedPtyWriter, SidecarSharedState, SupervisorEventHub,
-    CONTROL_ACCEPT_POLL_INTERVAL, DEFAULT_CONTROL_TIMEOUT, LIVE_EVENT_SUBSCRIBER_BUFFER,
-    MAX_CONTROL_INPUT_CHARS,
+    read_json_line_from_reader, write_json_line, BufferedSupervisorEvent, ReplayRegistration,
+    SharedPtyWriter, SidecarSharedState, SupervisorEventHub, CONTROL_ACCEPT_POLL_INTERVAL,
+    DEFAULT_CONTROL_TIMEOUT, LIVE_EVENT_SUBSCRIBER_BUFFER, MAX_CONTROL_INPUT_CHARS,
 };
 use crate::runtime::protocol::{
     SupervisorControlRequest, SupervisorControlResponse, SupervisorLiveEventPayload,

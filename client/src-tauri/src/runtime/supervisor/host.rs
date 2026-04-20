@@ -31,9 +31,10 @@ use crate::{
     state::DesktopState,
 };
 
+use super::persistence::protocol_diagnostic_into_record;
 use super::{
-    protocol_diagnostic_into_record, read_json_line_from_reader, write_json_line,
-    DEFAULT_CONTROL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, DEFAULT_STOP_TIMEOUT,
+    read_json_line_from_reader, write_json_line, DEFAULT_CONTROL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT,
+    DEFAULT_STOP_TIMEOUT,
 };
 
 #[derive(Debug, Clone, Default)]
