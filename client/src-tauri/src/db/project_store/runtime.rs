@@ -8,18 +8,11 @@ use crate::{
     db::database_path_for_repo,
 };
 
-use super::{
-    decode_runtime_run_bool, decode_runtime_run_checkpoint_sequence,
-    decode_runtime_run_optional_non_empty_text, decode_runtime_run_reason,
-    find_prohibited_transition_diagnostic_content, map_runtime_decode_error,
-    map_runtime_run_checkpoint_decode_error, map_runtime_run_commit_error,
-    map_runtime_run_decode_error, map_runtime_run_transaction_error,
-    map_runtime_run_write_error, open_runtime_database, read_project_row,
-    require_runtime_run_checkpoint_non_empty_owned, require_runtime_run_non_empty_owned,
-    validate_non_empty_text, NotificationDispatchEnqueueOutcomeRecord,
-    MAX_RUNTIME_RUN_CHECKPOINT_ROWS, MAX_RUNTIME_RUN_CHECKPOINT_SUMMARY_CHARS,
-    RUNTIME_RUN_STALE_AFTER_SECONDS,
-};
+use super::{open_runtime_database, read_project_row, validate_non_empty_text};
+
+const MAX_RUNTIME_RUN_CHECKPOINT_ROWS: i64 = 32;
+const MAX_RUNTIME_RUN_CHECKPOINT_SUMMARY_CHARS: usize = 280;
+const RUNTIME_RUN_STALE_AFTER_SECONDS: i64 = 45;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSessionDiagnosticRecord {
@@ -263,14 +256,12 @@ pub struct RuntimeRunSnapshotRecord {
     pub last_checkpoint_at: Option<String>,
 }
 
-
 #[derive(Debug)]
-struct StoredRuntimeRunRow {
-    run_id: String,
-    last_checkpoint_sequence: u32,
-    last_checkpoint_at: Option<String>,
+pub(crate) struct StoredRuntimeRunRow {
+    pub(crate) run_id: String,
+    pub(crate) last_checkpoint_sequence: u32,
+    pub(crate) last_checkpoint_at: Option<String>,
 }
-
 
 #[derive(Debug)]
 struct RawRuntimeRunRow {
@@ -292,7 +283,6 @@ struct RawRuntimeRunRow {
     updated_at: String,
 }
 
-
 #[derive(Debug)]
 struct RawRuntimeRunCheckpointRow {
     project_id: String,
@@ -302,7 +292,6 @@ struct RawRuntimeRunCheckpointRow {
     summary: String,
     created_at: String,
 }
-
 
 pub fn load_runtime_session(
     repo_root: &Path,
@@ -673,7 +662,6 @@ pub fn upsert_runtime_run(
     )
 }
 
-
 pub(crate) fn read_runtime_session_row(
     connection: &Connection,
     database_path: &Path,
@@ -965,7 +953,6 @@ pub(crate) fn read_runtime_run_row(
     }
 }
 
-
 fn read_runtime_run_checkpoints(
     connection: &Connection,
     database_path: &Path,
@@ -1150,7 +1137,6 @@ fn decode_runtime_run_row(
     })
 }
 
-
 fn decode_runtime_run_checkpoint_row(
     raw_row: RawRuntimeRunCheckpointRow,
     database_path: &Path,
@@ -1185,7 +1171,6 @@ fn decode_runtime_run_checkpoint_row(
         )?,
     })
 }
-
 
 pub(crate) fn validate_runtime_action_required_payload(
     payload: &RuntimeActionRequiredUpsertRecord,
@@ -1412,7 +1397,6 @@ fn validate_runtime_run_upsert_payload(
     Ok(())
 }
 
-
 pub(crate) fn normalize_runtime_checkpoint_summary(summary: &str) -> String {
     let trimmed = summary.trim();
     let normalized = if trimmed.chars().count() > MAX_RUNTIME_RUN_CHECKPOINT_SUMMARY_CHARS {
@@ -1461,7 +1445,7 @@ pub(crate) fn find_prohibited_runtime_persistence_content(value: &str) -> Option
     None
 }
 
-fn find_prohibited_transition_diagnostic_content(value: &str) -> Option<&'static str> {
+pub(crate) fn find_prohibited_transition_diagnostic_content(value: &str) -> Option<&'static str> {
     let normalized = value.to_ascii_lowercase();
 
     if normalized.contains("access_token")
@@ -1487,7 +1471,6 @@ fn find_prohibited_transition_diagnostic_content(value: &str) -> Option<&'static
     None
 }
 
-
 fn parse_runtime_run_status(value: &str) -> Result<RuntimeRunStatus, String> {
     match value {
         "starting" => Ok(RuntimeRunStatus::Starting),
@@ -1510,7 +1493,6 @@ fn runtime_run_status_sql_value(value: &RuntimeRunStatus) -> &'static str {
         RuntimeRunStatus::Failed => "failed",
     }
 }
-
 
 fn parse_runtime_run_transport_liveness(
     value: &str,
@@ -1546,7 +1528,9 @@ fn parse_runtime_run_checkpoint_kind(value: &str) -> Result<RuntimeRunCheckpoint
     }
 }
 
-pub(crate) fn runtime_run_checkpoint_kind_sql_value(value: &RuntimeRunCheckpointKind) -> &'static str {
+pub(crate) fn runtime_run_checkpoint_kind_sql_value(
+    value: &RuntimeRunCheckpointKind,
+) -> &'static str {
     match value {
         RuntimeRunCheckpointKind::Bootstrap => "bootstrap",
         RuntimeRunCheckpointKind::State => "state",
@@ -1588,7 +1572,6 @@ fn derive_runtime_run_status(
     }
 }
 
-
 fn parse_runtime_auth_phase(value: &str) -> Result<RuntimeAuthPhase, String> {
     match value {
         "idle" => Ok(RuntimeAuthPhase::Idle),
@@ -1620,4 +1603,200 @@ fn runtime_auth_phase_sql_value(value: &RuntimeAuthPhase) -> &'static str {
     }
 }
 
+pub(crate) fn map_runtime_run_transaction_error(
+    code: &str,
+    database_path: &Path,
+    error: SqlError,
+    message: &str,
+) -> CommandError {
+    if super::is_retryable_sql_error(&error) {
+        CommandError::retryable(
+            code,
+            format!("{message} {}", super::sqlite_path_suffix(database_path)),
+        )
+    } else {
+        CommandError::system_fault(
+            code,
+            format!(
+                "{message} {}: {error}",
+                super::sqlite_path_suffix(database_path)
+            ),
+        )
+    }
+}
 
+pub(crate) fn map_runtime_run_write_error(
+    code: &str,
+    database_path: &Path,
+    error: SqlError,
+    message: &str,
+) -> CommandError {
+    if super::is_retryable_sql_error(&error) {
+        CommandError::retryable(
+            code,
+            format!("{message} {}", super::sqlite_path_suffix(database_path)),
+        )
+    } else {
+        CommandError::system_fault(
+            code,
+            format!(
+                "{message} {}: {error}",
+                super::sqlite_path_suffix(database_path)
+            ),
+        )
+    }
+}
+
+pub(crate) fn map_runtime_run_commit_error(
+    code: &str,
+    database_path: &Path,
+    error: SqlError,
+    message: &str,
+) -> CommandError {
+    if super::is_retryable_sql_error(&error) {
+        CommandError::retryable(
+            code,
+            format!("{message} {}", super::sqlite_path_suffix(database_path)),
+        )
+    } else {
+        CommandError::system_fault(
+            code,
+            format!(
+                "{message} {}: {error}",
+                super::sqlite_path_suffix(database_path)
+            ),
+        )
+    }
+}
+
+pub(crate) fn decode_runtime_run_checkpoint_sequence(
+    value: i64,
+    field: &str,
+    database_path: &Path,
+) -> Result<u32, CommandError> {
+    u32::try_from(value).map_err(|_| {
+        map_runtime_run_decode_error(
+            database_path,
+            format!("Field `{field}` must be a non-negative 32-bit integer, found {value}."),
+        )
+    })
+}
+
+pub(crate) fn require_runtime_run_non_empty_owned(
+    value: String,
+    field: &str,
+    database_path: &Path,
+) -> Result<String, CommandError> {
+    if value.trim().is_empty() {
+        Err(map_runtime_run_decode_error(
+            database_path,
+            format!("Field `{field}` must be a non-empty string."),
+        ))
+    } else {
+        Ok(value)
+    }
+}
+
+pub(crate) fn decode_runtime_run_optional_non_empty_text(
+    value: Option<String>,
+    field: &str,
+    database_path: &Path,
+) -> Result<Option<String>, CommandError> {
+    match value {
+        Some(value) if value.trim().is_empty() => Err(map_runtime_run_decode_error(
+            database_path,
+            format!("Field `{field}` must be null or a non-empty string."),
+        )),
+        other => Ok(other),
+    }
+}
+
+pub(crate) fn decode_runtime_run_bool(
+    value: i64,
+    field: &str,
+    database_path: &Path,
+) -> Result<bool, CommandError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        other => Err(map_runtime_run_decode_error(
+            database_path,
+            format!("Field `{field}` must be 0 or 1, found {other}."),
+        )),
+    }
+}
+
+pub(crate) fn decode_runtime_run_reason(
+    code: Option<String>,
+    message: Option<String>,
+    field: &str,
+    database_path: &Path,
+) -> Result<Option<RuntimeRunDiagnosticRecord>, CommandError> {
+    match (code, message) {
+        (None, None) => Ok(None),
+        (Some(code), Some(message)) => Ok(Some(RuntimeRunDiagnosticRecord {
+            code: require_runtime_run_non_empty_owned(
+                code,
+                &format!("{field}_code"),
+                database_path,
+            )?,
+            message: require_runtime_run_non_empty_owned(
+                message,
+                &format!("{field}_message"),
+                database_path,
+            )?,
+        })),
+        _ => Err(map_runtime_run_decode_error(
+            database_path,
+            format!("Field `{field}` must have both code and message populated together."),
+        )),
+    }
+}
+
+pub(crate) fn require_runtime_run_checkpoint_non_empty_owned(
+    value: String,
+    field: &str,
+    database_path: &Path,
+) -> Result<String, CommandError> {
+    if value.trim().is_empty() {
+        Err(map_runtime_run_checkpoint_decode_error(
+            database_path,
+            format!("Field `{field}` must be a non-empty string."),
+        ))
+    } else {
+        Ok(value)
+    }
+}
+
+pub(crate) fn map_runtime_decode_error(database_path: &Path, details: String) -> CommandError {
+    CommandError::system_fault(
+        "runtime_session_decode_failed",
+        format!(
+            "Cadence could not decode runtime-session metadata from {}: {details}",
+            database_path.display()
+        ),
+    )
+}
+
+pub(crate) fn map_runtime_run_decode_error(database_path: &Path, details: String) -> CommandError {
+    CommandError::system_fault(
+        "runtime_run_decode_failed",
+        format!(
+            "Cadence could not decode durable runtime-run metadata from {}: {details}",
+            database_path.display()
+        ),
+    )
+}
+
+pub(crate) fn map_runtime_run_checkpoint_decode_error(
+    database_path: &Path,
+    details: String,
+) -> CommandError {
+    CommandError::system_fault(
+        "runtime_run_checkpoint_decode_failed",
+        format!(
+            "Cadence could not decode durable runtime-run checkpoints from {}: {details}",
+            database_path.display()
+        ),
+    )
+}

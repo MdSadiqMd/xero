@@ -4,7 +4,7 @@ use std::{
 };
 
 use rusqlite::{params, Connection, Error as SqlError, ErrorCode, OptionalExtension, Transaction};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -12,15 +12,14 @@ use crate::{
     commands::{
         CommandError, CommandErrorClass, OperatorApprovalDto, OperatorApprovalStatus, PhaseStatus,
         PhaseStep, PhaseSummaryDto, PlanningLifecycleProjectionDto, PlanningLifecycleStageDto,
-        PlanningLifecycleStageKindDto, ProjectSnapshotResponseDto, ProjectSummaryDto,
-        RepositorySummaryDto, ResumeHistoryEntryDto, ResumeHistoryStatus, RuntimeAuthPhase,
-        VerificationRecordDto, VerificationRecordStatus, WorkflowHandoffPackageDto,
+        PlanningLifecycleStageKindDto, ProjectSnapshotResponseDto, ResumeHistoryEntryDto,
+        ResumeHistoryStatus, VerificationRecordDto, VerificationRecordStatus,
+        WorkflowHandoffPackageDto,
     },
     db::database_path_for_repo,
     notifications::{
         route_target::parse_notification_route_target_for_kind, NotificationRouteKind,
     },
-    runtime::protocol::{GitToolResultScope, ToolResultSummary},
 };
 
 mod autonomous;
@@ -36,23 +35,15 @@ pub(crate) use project_snapshot::{
 };
 pub use runtime::*;
 pub(crate) use runtime::{
-    find_prohibited_runtime_persistence_content, normalize_runtime_checkpoint_summary,
-    read_runtime_run_row, read_runtime_run_snapshot, read_runtime_session_row,
-    runtime_run_checkpoint_kind_sql_value, validate_runtime_action_required_payload,
+    find_prohibited_runtime_persistence_content, find_prohibited_transition_diagnostic_content,
+    map_runtime_run_write_error, normalize_runtime_checkpoint_summary, read_runtime_run_row,
+    read_runtime_run_snapshot, read_runtime_session_row, runtime_run_checkpoint_kind_sql_value,
+    validate_runtime_action_required_payload,
 };
 
 const MAX_APPROVAL_REQUEST_ROWS: i64 = 50;
 const MAX_VERIFICATION_RECORD_ROWS: i64 = 100;
 const MAX_RESUME_HISTORY_ROWS: i64 = 100;
-const MAX_RUNTIME_RUN_CHECKPOINT_ROWS: i64 = 32;
-const MAX_RUNTIME_RUN_CHECKPOINT_SUMMARY_CHARS: usize = 280;
-const MAX_AUTONOMOUS_HISTORY_UNIT_ROWS: i64 = 16;
-const MAX_AUTONOMOUS_HISTORY_ATTEMPT_ROWS: i64 = 32;
-const MAX_AUTONOMOUS_HISTORY_ARTIFACT_ROWS: i64 = 64;
-const AUTONOMOUS_ARTIFACT_KIND_TOOL_RESULT: &str = "tool_result";
-const AUTONOMOUS_ARTIFACT_KIND_VERIFICATION_EVIDENCE: &str = "verification_evidence";
-const AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED: &str = "policy_denied";
-const AUTONOMOUS_ARTIFACT_KIND_SKILL_LIFECYCLE: &str = "skill_lifecycle";
 const MAX_WORKFLOW_TRANSITION_EVENT_ROWS: i64 = 200;
 const MAX_WORKFLOW_HANDOFF_PACKAGE_ROWS: i64 = 200;
 const MAX_LIFECYCLE_TRANSITION_EVENT_ROWS: i64 = 64;
@@ -61,7 +52,6 @@ const MAX_NOTIFICATION_DISPATCH_ROWS: i64 = 256;
 const MAX_NOTIFICATION_PENDING_DISPATCH_BATCH_ROWS: i64 = 64;
 const MAX_NOTIFICATION_REPLY_CLAIM_ROWS: i64 = 512;
 const WORKFLOW_HANDOFF_PACKAGE_SCHEMA_VERSION: u32 = 1;
-const RUNTIME_RUN_STALE_AFTER_SECONDS: i64 = 45;
 const NOTIFICATION_CORRELATION_KEY_PREFIX: &str = "nfy";
 const NOTIFICATION_CORRELATION_KEY_HEX_LEN: usize = 32;
 
@@ -10638,63 +10628,6 @@ fn map_operator_loop_commit_error(
     }
 }
 
-fn map_runtime_run_transaction_error(
-    code: &str,
-    database_path: &Path,
-    error: SqlError,
-    message: &str,
-) -> CommandError {
-    if is_retryable_sql_error(&error) {
-        CommandError::retryable(
-            code,
-            format!("{message} {}", sqlite_path_suffix(database_path)),
-        )
-    } else {
-        CommandError::system_fault(
-            code,
-            format!("{message} {}: {error}", sqlite_path_suffix(database_path)),
-        )
-    }
-}
-
-fn map_runtime_run_write_error(
-    code: &str,
-    database_path: &Path,
-    error: SqlError,
-    message: &str,
-) -> CommandError {
-    if is_retryable_sql_error(&error) {
-        CommandError::retryable(
-            code,
-            format!("{message} {}", sqlite_path_suffix(database_path)),
-        )
-    } else {
-        CommandError::system_fault(
-            code,
-            format!("{message} {}: {error}", sqlite_path_suffix(database_path)),
-        )
-    }
-}
-
-fn map_runtime_run_commit_error(
-    code: &str,
-    database_path: &Path,
-    error: SqlError,
-    message: &str,
-) -> CommandError {
-    if is_retryable_sql_error(&error) {
-        CommandError::retryable(
-            code,
-            format!("{message} {}", sqlite_path_suffix(database_path)),
-        )
-    } else {
-        CommandError::system_fault(
-            code,
-            format!("{message} {}: {error}", sqlite_path_suffix(database_path)),
-        )
-    }
-}
-
 fn sqlite_path_suffix(database_path: &Path) -> String {
     format!("against {}.", database_path.display())
 }
@@ -10733,105 +10666,6 @@ fn decode_snapshot_row_id(
             format!("Field `{field}` must be a non-negative 32-bit integer, found {value}."),
         )
     })
-}
-
-fn decode_runtime_run_checkpoint_sequence(
-    value: i64,
-    field: &str,
-    database_path: &Path,
-) -> Result<u32, CommandError> {
-    u32::try_from(value).map_err(|_| {
-        map_runtime_run_decode_error(
-            database_path,
-            format!("Field `{field}` must be a non-negative 32-bit integer, found {value}."),
-        )
-    })
-}
-
-fn require_runtime_run_non_empty_owned(
-    value: String,
-    field: &str,
-    database_path: &Path,
-) -> Result<String, CommandError> {
-    if value.trim().is_empty() {
-        Err(map_runtime_run_decode_error(
-            database_path,
-            format!("Field `{field}` must be a non-empty string."),
-        ))
-    } else {
-        Ok(value)
-    }
-}
-
-fn decode_runtime_run_optional_non_empty_text(
-    value: Option<String>,
-    field: &str,
-    database_path: &Path,
-) -> Result<Option<String>, CommandError> {
-    match value {
-        Some(value) if value.trim().is_empty() => Err(map_runtime_run_decode_error(
-            database_path,
-            format!("Field `{field}` must be null or a non-empty string."),
-        )),
-        other => Ok(other),
-    }
-}
-
-fn decode_runtime_run_bool(
-    value: i64,
-    field: &str,
-    database_path: &Path,
-) -> Result<bool, CommandError> {
-    match value {
-        0 => Ok(false),
-        1 => Ok(true),
-        other => Err(map_runtime_run_decode_error(
-            database_path,
-            format!("Field `{field}` must be 0 or 1, found {other}."),
-        )),
-    }
-}
-
-fn decode_runtime_run_reason(
-    code: Option<String>,
-    message: Option<String>,
-    field: &str,
-    database_path: &Path,
-) -> Result<Option<RuntimeRunDiagnosticRecord>, CommandError> {
-    match (code, message) {
-        (None, None) => Ok(None),
-        (Some(code), Some(message)) => Ok(Some(RuntimeRunDiagnosticRecord {
-            code: require_runtime_run_non_empty_owned(
-                code,
-                &format!("{field}_code"),
-                database_path,
-            )?,
-            message: require_runtime_run_non_empty_owned(
-                message,
-                &format!("{field}_message"),
-                database_path,
-            )?,
-        })),
-        _ => Err(map_runtime_run_decode_error(
-            database_path,
-            format!("Field `{field}` must have both code and message populated together."),
-        )),
-    }
-}
-
-fn require_runtime_run_checkpoint_non_empty_owned(
-    value: String,
-    field: &str,
-    database_path: &Path,
-) -> Result<String, CommandError> {
-    if value.trim().is_empty() {
-        Err(map_runtime_run_checkpoint_decode_error(
-            database_path,
-            format!("Field `{field}` must be a non-empty string."),
-        ))
-    } else {
-        Ok(value)
-    }
 }
 
 fn require_non_empty_owned(
@@ -10926,36 +10760,6 @@ fn map_snapshot_decode_error(code: &str, database_path: &Path, details: String) 
         code,
         format!(
             "Cadence could not decode selected-project operator-loop metadata from {}: {details}",
-            database_path.display()
-        ),
-    )
-}
-
-fn map_runtime_decode_error(database_path: &Path, details: String) -> CommandError {
-    CommandError::system_fault(
-        "runtime_session_decode_failed",
-        format!(
-            "Cadence could not decode runtime-session metadata from {}: {details}",
-            database_path.display()
-        ),
-    )
-}
-
-fn map_runtime_run_decode_error(database_path: &Path, details: String) -> CommandError {
-    CommandError::system_fault(
-        "runtime_run_decode_failed",
-        format!(
-            "Cadence could not decode durable runtime-run metadata from {}: {details}",
-            database_path.display()
-        ),
-    )
-}
-
-fn map_runtime_run_checkpoint_decode_error(database_path: &Path, details: String) -> CommandError {
-    CommandError::system_fault(
-        "runtime_run_checkpoint_decode_failed",
-        format!(
-            "Cadence could not decode durable runtime-run checkpoints from {}: {details}",
             database_path.display()
         ),
     )
