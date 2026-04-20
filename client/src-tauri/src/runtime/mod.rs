@@ -1,4 +1,5 @@
 pub mod autonomous_orchestrator;
+pub(crate) mod autonomous_run_state;
 pub mod autonomous_skill_runtime;
 pub mod autonomous_tool_runtime;
 pub mod autonomous_web_runtime;

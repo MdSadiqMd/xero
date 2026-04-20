@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use rand::RngCore;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -8,12 +7,15 @@ use crate::{
     commands::{CommandError, PhaseStatus, PhaseStep, PlanningLifecycleStageKindDto},
     db::project_store::{
         self, ApplyWorkflowTransitionRecord, AutonomousRunSnapshotRecord, AutonomousRunStatus,
-        AutonomousRunUpsertRecord, AutonomousUnitArtifactRecord, AutonomousUnitAttemptRecord,
-        AutonomousUnitKind, AutonomousUnitRecord, AutonomousUnitStatus,
-        AutonomousWorkflowLinkageRecord, WorkflowAutomaticDispatchOutcome,
-        WorkflowAutomaticDispatchPackageOutcome, WorkflowGraphEdgeRecord, WorkflowGraphNodeRecord,
-        WorkflowHandoffPackageRecord, WorkflowTransitionEventRecord,
-        WorkflowTransitionGateDecision,
+        AutonomousRunUpsertRecord, AutonomousUnitAttemptRecord, AutonomousUnitKind,
+        AutonomousUnitRecord, AutonomousUnitStatus, AutonomousWorkflowLinkageRecord,
+        WorkflowAutomaticDispatchOutcome, WorkflowAutomaticDispatchPackageOutcome,
+        WorkflowGraphEdgeRecord, WorkflowGraphNodeRecord, WorkflowHandoffPackageRecord,
+        WorkflowTransitionEventRecord, WorkflowTransitionGateDecision,
+    },
+    runtime::autonomous_run_state::{
+        autonomous_unit_status_for_run, current_attempt_artifacts,
+        generate_autonomous_child_session_id,
     },
 };
 
@@ -111,30 +113,6 @@ fn autonomous_run_payload_matches_existing(
         && existing.unit == payload.unit
         && existing.attempt == payload.attempt
         && current_attempt_artifacts(existing) == payload.artifacts.as_slice()
-}
-
-fn current_attempt_artifacts(
-    existing: &AutonomousRunSnapshotRecord,
-) -> &[AutonomousUnitArtifactRecord] {
-    let Some(attempt_id) = existing
-        .attempt
-        .as_ref()
-        .map(|attempt| attempt.attempt_id.as_str())
-    else {
-        return &[];
-    };
-
-    existing
-        .history
-        .iter()
-        .find(|entry| {
-            entry
-                .latest_attempt
-                .as_ref()
-                .is_some_and(|attempt| attempt.attempt_id == attempt_id)
-        })
-        .map(|entry| entry.artifacts.as_slice())
-        .unwrap_or(&[])
 }
 
 #[derive(Debug, Clone)]
@@ -722,31 +700,4 @@ fn autonomous_unit_kind_label(kind: &AutonomousUnitKind) -> &'static str {
         AutonomousUnitKind::Executor => "Executor",
         AutonomousUnitKind::Verifier => "Verifier",
     }
-}
-
-fn autonomous_unit_status_for_run(status: &AutonomousRunStatus) -> AutonomousUnitStatus {
-    match status {
-        AutonomousRunStatus::Starting
-        | AutonomousRunStatus::Running
-        | AutonomousRunStatus::Stale
-        | AutonomousRunStatus::Cancelling => AutonomousUnitStatus::Active,
-        AutonomousRunStatus::Paused => AutonomousUnitStatus::Paused,
-        AutonomousRunStatus::Cancelled => AutonomousUnitStatus::Cancelled,
-        AutonomousRunStatus::Stopped | AutonomousRunStatus::Completed => {
-            AutonomousUnitStatus::Completed
-        }
-        AutonomousRunStatus::Failed | AutonomousRunStatus::Crashed => AutonomousUnitStatus::Failed,
-    }
-}
-
-fn generate_autonomous_child_session_id() -> String {
-    let mut bytes = [0_u8; 8];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    format!(
-        "child-{}",
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    )
 }
