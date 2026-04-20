@@ -61,11 +61,9 @@ pub fn upsert_runtime_settings<R: Runtime>(
         &request.model_id,
         next_credentials.is_some(),
     )?;
-    next_settings.updated_at = settings_updated_at(
-        &current_settings,
-        &next_settings,
-    );
-    let next_settings = validate_runtime_settings_file(next_settings, "runtime_settings_request_invalid")?;
+    next_settings.updated_at = settings_updated_at(&current_settings, &next_settings);
+    let next_settings =
+        validate_runtime_settings_file(next_settings, "runtime_settings_request_invalid")?;
 
     persist_runtime_settings_update(
         &settings_path,
@@ -95,11 +93,9 @@ fn persist_runtime_settings_update(
     let settings_json = serialize_pretty_json(next_settings, "runtime_settings")?;
     write_json_file_atomically(settings_path, &settings_json, "runtime_settings")?;
 
-    if let Err(error) = persist_openrouter_credential_state(
-        credentials_path,
-        current_credentials,
-        next_credentials,
-    ) {
+    if let Err(error) =
+        persist_openrouter_credential_state(credentials_path, current_credentials, next_credentials)
+    {
         return match rollback_settings_file(settings_path, previous_settings_bytes) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(crate::commands::CommandError::retryable(

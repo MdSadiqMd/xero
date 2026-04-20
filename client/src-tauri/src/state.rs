@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
-    auth::{
-        ActiveAuthFlowRegistry, AuthFlowError, OpenAiCodexAuthConfig, OpenRouterAuthConfig,
-    },
+    auth::{ActiveAuthFlowRegistry, AuthFlowError, OpenAiCodexAuthConfig, OpenRouterAuthConfig},
     commands::CommandError,
     notifications::NOTIFICATION_CREDENTIAL_STORE_FILE_NAME,
     runtime::{

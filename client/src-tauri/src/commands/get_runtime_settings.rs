@@ -115,7 +115,10 @@ pub(crate) fn read_runtime_settings_file(
         )
     })?;
 
-    Ok(Some(validate_runtime_settings_file(parsed, "runtime_settings_decode_failed")?))
+    Ok(Some(validate_runtime_settings_file(
+        parsed,
+        "runtime_settings_decode_failed",
+    )?))
 }
 
 pub(crate) fn read_openrouter_credentials_file(
@@ -182,9 +185,8 @@ pub(crate) fn validate_runtime_settings_file(
         ));
     }
 
-    let provider = resolve_runtime_provider_identity(Some(provider_id), Some(provider_id)).map_err(
-        |diagnostic| CommandError::user_fixable(error_code, diagnostic.message),
-    )?;
+    let provider = resolve_runtime_provider_identity(Some(provider_id), Some(provider_id))
+        .map_err(|diagnostic| CommandError::user_fixable(error_code, diagnostic.message))?;
 
     if provider.provider_id == OPENAI_CODEX_PROVIDER_ID && model_id != OPENAI_CODEX_PROVIDER_ID {
         return Err(CommandError::user_fixable(
@@ -218,14 +220,10 @@ pub(crate) fn runtime_settings_file_from_request(
         return Err(CommandError::invalid_request("modelId"));
     }
 
-    let provider = resolve_runtime_provider_identity(Some(provider_id), Some(provider_id)).map_err(
-        |diagnostic| {
-            CommandError::user_fixable(
-                "runtime_settings_request_invalid",
-                diagnostic.message,
-            )
-        },
-    )?;
+    let provider = resolve_runtime_provider_identity(Some(provider_id), Some(provider_id))
+        .map_err(|diagnostic| {
+            CommandError::user_fixable("runtime_settings_request_invalid", diagnostic.message)
+        })?;
 
     if provider.provider_id == OPENAI_CODEX_PROVIDER_ID && model_id != OPENAI_CODEX_PROVIDER_ID {
         return Err(CommandError::user_fixable(
@@ -365,7 +363,9 @@ fn validate_runtime_settings_contract(
 
     Ok(RuntimeSettingsSnapshot {
         settings: settings.clone(),
-        openrouter_api_key: credentials.as_ref().map(|credentials| credentials.api_key.clone()),
+        openrouter_api_key: credentials
+            .as_ref()
+            .map(|credentials| credentials.api_key.clone()),
         openrouter_credentials_updated_at: credentials.map(|credentials| credentials.updated_at),
     })
 }

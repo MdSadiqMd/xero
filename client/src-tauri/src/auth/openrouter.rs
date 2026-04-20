@@ -71,13 +71,13 @@ pub enum OpenRouterReconcileOutcome {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct ModelsResponse {
     data: Vec<ModelSummary>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct ModelSummary {
     id: String,
 }
@@ -95,8 +95,14 @@ pub(crate) fn bind_openrouter_runtime_session<R: Runtime>(
         }));
     };
 
-    validate_openrouter_models_probe(api_key, &settings.settings.model_id, &state.openrouter_auth_config())?;
-    Ok(OpenRouterBindOutcome::Ready(synthetic_binding(settings, api_key)))
+    validate_openrouter_models_probe(
+        api_key,
+        &settings.settings.model_id,
+        &state.openrouter_auth_config(),
+    )?;
+    Ok(OpenRouterBindOutcome::Ready(synthetic_binding(
+        settings, api_key,
+    )))
 }
 
 pub(crate) fn reconcile_openrouter_runtime_session<R: Runtime>(
@@ -158,17 +164,11 @@ fn validate_openrouter_models_probe(
         AuthFlowError::terminal(
             "openrouter_models_decode_failed",
             RuntimeAuthPhase::Failed,
-            format!(
-                "Cadence could not decode the OpenRouter models response: {error}"
-            ),
+            format!("Cadence could not decode the OpenRouter models response: {error}"),
         )
     })?;
 
-    if !models
-        .data
-        .iter()
-        .any(|model| model.id.trim() == model_id)
-    {
+    if !models.data.iter().any(|model| model.id.trim() == model_id) {
         return Err(AuthFlowError::terminal(
             "openrouter_model_unavailable",
             RuntimeAuthPhase::Failed,
@@ -193,9 +193,7 @@ fn map_probe_transport_error(error: reqwest::Error) -> AuthFlowError {
     AuthFlowError::retryable(
         "openrouter_provider_unavailable",
         RuntimeAuthPhase::Failed,
-        format!(
-            "Cadence could not reach the OpenRouter models endpoint: {error}"
-        ),
+        format!("Cadence could not reach the OpenRouter models endpoint: {error}"),
     )
 }
 

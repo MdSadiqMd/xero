@@ -46,15 +46,15 @@ pub(crate) fn reconcile_runtime_session<R: Runtime>(
     runtime: RuntimeSessionDto,
 ) -> CommandResult<RuntimeSessionDto> {
     let original = runtime.clone();
-    let (runtime, selection) = match prepare_runtime_session_for_selected_provider(app, state, runtime)
-    {
-        Ok(prepared) => prepared,
-        Err(updated) => {
-            let persisted = persist_runtime_session(repo_root, &updated)?;
-            emit_runtime_updated(app, &persisted)?;
-            return Ok(persisted);
-        }
-    };
+    let (runtime, selection) =
+        match prepare_runtime_session_for_selected_provider(app, state, runtime) {
+            Ok(prepared) => prepared,
+            Err(updated) => {
+                let persisted = persist_runtime_session(repo_root, &updated)?;
+                emit_runtime_updated(app, &persisted)?;
+                return Ok(persisted);
+            }
+        };
 
     reconcile_prepared_runtime_session(app, state, repo_root, original, runtime, selection)
 }
@@ -182,7 +182,8 @@ fn runtime_with_selected_provider(
     runtime: RuntimeSessionDto,
     provider: ResolvedRuntimeProvider,
 ) -> RuntimeSessionDto {
-    if runtime.provider_id == provider.provider_id && runtime.runtime_kind == provider.runtime_kind {
+    if runtime.provider_id == provider.provider_id && runtime.runtime_kind == provider.runtime_kind
+    {
         return runtime;
     }
 

@@ -4,9 +4,9 @@ use crate::{
     auth::{
         bind_openrouter_runtime_session, load_latest_openai_codex_session,
         load_openai_codex_session, reconcile_openrouter_runtime_session,
-        refresh_provider_auth_session, remove_openai_codex_session, AuthDiagnostic,
-        AuthFlowError, OpenRouterBindOutcome, OpenRouterReconcileOutcome,
-        OpenRouterRuntimeSessionBinding, RuntimeAuthSession,
+        refresh_provider_auth_session, remove_openai_codex_session, AuthDiagnostic, AuthFlowError,
+        OpenRouterBindOutcome, OpenRouterReconcileOutcome, OpenRouterRuntimeSessionBinding,
+        RuntimeAuthSession,
     },
     commands::get_runtime_settings::RuntimeSettingsSnapshot,
     state::DesktopState,
@@ -167,10 +167,12 @@ pub(crate) fn reconcile_provider_runtime_session<R: Runtime>(
                 )
             })?;
 
-            match reconcile_openrouter_runtime_session(app, state, account_id, session_id, settings)? {
-                OpenRouterReconcileOutcome::Authenticated(binding) => {
-                    Ok(RuntimeProviderReconcileOutcome::Authenticated(binding.into()))
-                }
+            match reconcile_openrouter_runtime_session(
+                app, state, account_id, session_id, settings,
+            )? {
+                OpenRouterReconcileOutcome::Authenticated(binding) => Ok(
+                    RuntimeProviderReconcileOutcome::Authenticated(binding.into()),
+                ),
                 OpenRouterReconcileOutcome::SignedOut(diagnostic) => {
                     Ok(RuntimeProviderReconcileOutcome::SignedOut(diagnostic))
                 }
@@ -229,7 +231,12 @@ fn bind_openai_codex_runtime_session<R: Runtime>(
         }));
     };
 
-    let binding = binding_from_stored_openai_session(provider, &stored.session_id, &stored.account_id, &stored.updated_at);
+    let binding = binding_from_stored_openai_session(
+        provider,
+        &stored.session_id,
+        &stored.account_id,
+        &stored.updated_at,
+    );
     if stored.expires_at <= current_unix_timestamp() {
         return Ok(RuntimeProviderBindOutcome::RefreshRequired(binding));
     }
@@ -284,7 +291,12 @@ fn reconcile_openai_codex_runtime_session<R: Runtime>(
     }
 
     Ok(RuntimeProviderReconcileOutcome::Authenticated(
-        binding_from_stored_openai_session(provider, &stored.session_id, &stored.account_id, &stored.updated_at),
+        binding_from_stored_openai_session(
+            provider,
+            &stored.session_id,
+            &stored.account_id,
+            &stored.updated_at,
+        ),
     ))
 }
 

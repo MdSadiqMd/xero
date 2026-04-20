@@ -1405,14 +1405,13 @@ fn serialization_stays_camel_case_for_responses_events_and_errors() {
         })
     );
 
-    let runtime_settings_response = serde_json::to_value(
-        cadence_desktop_lib::commands::RuntimeSettingsDto {
+    let runtime_settings_response =
+        serde_json::to_value(cadence_desktop_lib::commands::RuntimeSettingsDto {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key_configured: true,
-        },
-    )
-    .expect("runtime settings response should serialize");
+        })
+        .expect("runtime settings response should serialize");
     assert_eq!(
         runtime_settings_response,
         json!({

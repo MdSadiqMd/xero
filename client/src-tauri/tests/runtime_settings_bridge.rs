@@ -86,7 +86,8 @@ fn upsert_runtime_settings_persists_redacted_settings_without_secret_in_settings
     assert!(settings_file.contains("\"openrouterApiKeyConfigured\": true"));
     assert!(!settings_file.contains("credential-value-1"));
 
-    let credential_file = std::fs::read_to_string(&credentials_path).expect("read credentials file");
+    let credential_file =
+        std::fs::read_to_string(&credentials_path).expect("read credentials file");
     assert!(credential_file.contains("\"apiKey\": \"credential-value-1\""));
 }
 
@@ -122,7 +123,8 @@ fn upsert_runtime_settings_preserves_existing_openrouter_key_when_request_omits_
     assert_eq!(response.model_id, "openai/gpt-4.1-mini");
     assert!(response.openrouter_api_key_configured);
 
-    let credential_file = std::fs::read_to_string(&credentials_path).expect("read credentials file");
+    let credential_file =
+        std::fs::read_to_string(&credentials_path).expect("read credentials file");
     assert!(credential_file.contains("credential-value-1"));
 }
 
@@ -357,7 +359,10 @@ fn upsert_runtime_settings_rejects_invalid_runtime_settings_file_on_preserve() {
                 ("providerId".into(), Value::String("openrouter".into())),
                 ("modelId".into(), Value::String("openai/gpt-4o-mini".into())),
                 ("openrouterApiKeyConfigured".into(), Value::Bool(true)),
-                ("updatedAt".into(), Value::String("2026-04-19T21:00:00Z".into())),
+                (
+                    "updatedAt".into(),
+                    Value::String("2026-04-19T21:00:00Z".into()),
+                ),
             ]
             .into_iter()
             .collect(),
