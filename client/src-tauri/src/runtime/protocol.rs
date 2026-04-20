@@ -31,6 +31,46 @@ pub enum SupervisorToolCallState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum SupervisorSkillLifecycleStage {
+    Discovery,
+    Install,
+    Invoke,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupervisorSkillLifecycleResult {
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupervisorSkillCacheStatus {
+    Miss,
+    Hit,
+    Refreshed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SupervisorSkillSourceMetadata {
+    pub repo: String,
+    pub path: String,
+    pub reference: String,
+    pub tree_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SupervisorSkillDiagnostic {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum GitToolResultScope {
     Staged,
     Unstaged,
@@ -112,6 +152,17 @@ pub enum SupervisorLiveEventPayload {
         code: String,
         title: String,
         detail: Option<String>,
+    },
+    Skill {
+        skill_id: String,
+        stage: SupervisorSkillLifecycleStage,
+        result: SupervisorSkillLifecycleResult,
+        detail: String,
+        source: SupervisorSkillSourceMetadata,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cache_status: Option<SupervisorSkillCacheStatus>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        diagnostic: Option<SupervisorSkillDiagnostic>,
     },
     ActionRequired {
         action_id: String,

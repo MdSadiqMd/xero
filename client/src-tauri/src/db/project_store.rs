@@ -34,6 +34,7 @@ const MAX_AUTONOMOUS_HISTORY_ARTIFACT_ROWS: i64 = 64;
 const AUTONOMOUS_ARTIFACT_KIND_TOOL_RESULT: &str = "tool_result";
 const AUTONOMOUS_ARTIFACT_KIND_VERIFICATION_EVIDENCE: &str = "verification_evidence";
 const AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED: &str = "policy_denied";
+const AUTONOMOUS_ARTIFACT_KIND_SKILL_LIFECYCLE: &str = "skill_lifecycle";
 const MAX_WORKFLOW_TRANSITION_EVENT_ROWS: i64 = 200;
 const MAX_WORKFLOW_HANDOFF_PACKAGE_ROWS: i64 = 200;
 const MAX_LIFECYCLE_TRANSITION_EVENT_ROWS: i64 = 64;
@@ -409,12 +410,78 @@ pub struct AutonomousPolicyDeniedPayloadRecord {
     pub boundary_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSkillLifecycleStageRecord {
+    Discovery,
+    Install,
+    Invoke,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSkillLifecycleResultRecord {
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSkillCacheStatusRecord {
+    Miss,
+    Hit,
+    Refreshed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillLifecycleSourceRecord {
+    pub repo: String,
+    pub path: String,
+    pub reference: String,
+    pub tree_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillLifecycleCacheRecord {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<AutonomousSkillCacheStatusRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillLifecycleDiagnosticRecord {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillLifecyclePayloadRecord {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub stage: AutonomousSkillLifecycleStageRecord,
+    pub result: AutonomousSkillLifecycleResultRecord,
+    pub skill_id: String,
+    pub source: AutonomousSkillLifecycleSourceRecord,
+    pub cache: AutonomousSkillLifecycleCacheRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<AutonomousSkillLifecycleDiagnosticRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum AutonomousArtifactPayloadRecord {
     ToolResult(AutonomousToolResultPayloadRecord),
     VerificationEvidence(AutonomousVerificationEvidencePayloadRecord),
     PolicyDenied(AutonomousPolicyDeniedPayloadRecord),
+    SkillLifecycle(AutonomousSkillLifecyclePayloadRecord),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13286,6 +13353,21 @@ fn validate_autonomous_artifact_payload(
                 policy.boundary_id.as_deref(),
             )?;
         }
+        AutonomousArtifactPayloadRecord::SkillLifecycle(skill) => {
+            validate_autonomous_artifact_payload_linkage(
+                &skill.project_id,
+                &skill.run_id,
+                &skill.unit_id,
+                &skill.attempt_id,
+                &skill.artifact_id,
+                project_id,
+                run_id,
+                unit_id,
+                attempt_id,
+                artifact_id,
+            )?;
+            validate_autonomous_skill_lifecycle_payload(skill)?;
+        }
     }
 
     Ok(())
@@ -13536,6 +13618,125 @@ fn validate_autonomous_tool_result_summary(
     Ok(())
 }
 
+fn validate_autonomous_skill_lifecycle_payload(
+    skill: &AutonomousSkillLifecyclePayloadRecord,
+) -> Result<(), CommandError> {
+    validate_autonomous_skill_lifecycle_skill_id(&skill.skill_id)?;
+    validate_autonomous_skill_lifecycle_source(&skill.source)?;
+
+    validate_non_empty_text(
+        &skill.cache.key,
+        "skill_lifecycle_cache_key",
+        "autonomous_run_request_invalid",
+    )?;
+    validate_autonomous_artifact_text(&skill.cache.key, "skill_lifecycle_cache_key")?;
+
+    match skill.stage {
+        AutonomousSkillLifecycleStageRecord::Discovery => {
+            if skill.cache.status.is_some() {
+                return Err(CommandError::user_fixable(
+                    "autonomous_run_request_invalid",
+                    "Cadence discovery skill_lifecycle payloads must omit cache status because no install or invoke step has completed yet.",
+                ));
+            }
+        }
+        AutonomousSkillLifecycleStageRecord::Install
+        | AutonomousSkillLifecycleStageRecord::Invoke => {
+            if matches!(
+                skill.result,
+                AutonomousSkillLifecycleResultRecord::Succeeded
+            ) && skill.cache.status.is_none()
+            {
+                return Err(CommandError::user_fixable(
+                    "autonomous_run_request_invalid",
+                    "Cadence successful install/invoke skill_lifecycle payloads must include cache status.",
+                ));
+            }
+        }
+    }
+
+    match (&skill.result, skill.diagnostic.as_ref()) {
+        (AutonomousSkillLifecycleResultRecord::Succeeded, Some(_)) => {
+            return Err(CommandError::user_fixable(
+                "autonomous_run_request_invalid",
+                "Cadence rejected a successful skill_lifecycle payload that also reported failure diagnostics.",
+            ));
+        }
+        (AutonomousSkillLifecycleResultRecord::Failed, None) => {
+            return Err(CommandError::user_fixable(
+                "autonomous_run_request_invalid",
+                "Cadence failed skill_lifecycle payloads require typed diagnostics.",
+            ));
+        }
+        (AutonomousSkillLifecycleResultRecord::Failed, Some(diagnostic)) => {
+            validate_non_empty_text(
+                &diagnostic.code,
+                "skill_lifecycle_diagnostic_code",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_non_empty_text(
+                &diagnostic.message,
+                "skill_lifecycle_diagnostic_message",
+                "autonomous_run_request_invalid",
+            )?;
+            validate_autonomous_artifact_text(
+                &diagnostic.message,
+                "skill_lifecycle_diagnostic_message",
+            )?;
+        }
+        (AutonomousSkillLifecycleResultRecord::Succeeded, None) => {}
+    }
+
+    Ok(())
+}
+
+fn validate_autonomous_skill_lifecycle_skill_id(skill_id: &str) -> Result<(), CommandError> {
+    validate_non_empty_text(
+        skill_id,
+        "skill_lifecycle_skill_id",
+        "autonomous_run_request_invalid",
+    )?;
+    validate_autonomous_artifact_text(skill_id, "skill_lifecycle_skill_id")?;
+    if !skill_id.chars().all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    }) {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires skill_lifecycle skill ids to stay lowercase kebab-case values.",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_autonomous_skill_lifecycle_source(
+    source: &AutonomousSkillLifecycleSourceRecord,
+) -> Result<(), CommandError> {
+    for (value, field) in [
+        (&source.repo, "skill_lifecycle_source_repo"),
+        (&source.path, "skill_lifecycle_source_path"),
+        (&source.reference, "skill_lifecycle_source_reference"),
+        (&source.tree_hash, "skill_lifecycle_source_tree_hash"),
+    ] {
+        validate_non_empty_text(value, field, "autonomous_run_request_invalid")?;
+        validate_autonomous_artifact_text(value, field)?;
+    }
+
+    if source.tree_hash.len() != 40
+        || source
+            .tree_hash
+            .chars()
+            .any(|ch| !ch.is_ascii_hexdigit() || ch.is_ascii_uppercase())
+    {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires skill_lifecycle source tree_hash values to be lowercase 40-character hexadecimal Git tree hashes.",
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_autonomous_artifact_text(value: &str, field: &str) -> Result<(), CommandError> {
     if let Some(secret_hint) = find_prohibited_runtime_persistence_content(value) {
         return Err(CommandError::user_fixable(
@@ -13556,6 +13757,9 @@ fn autonomous_artifact_payload_kind(payload: &AutonomousArtifactPayloadRecord) -
             AUTONOMOUS_ARTIFACT_KIND_VERIFICATION_EVIDENCE
         }
         AutonomousArtifactPayloadRecord::PolicyDenied(_) => AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED,
+        AutonomousArtifactPayloadRecord::SkillLifecycle(_) => {
+            AUTONOMOUS_ARTIFACT_KIND_SKILL_LIFECYCLE
+        }
     }
 }
 
@@ -13565,6 +13769,7 @@ fn autonomous_artifact_kind_requires_payload(kind: &str) -> bool {
         AUTONOMOUS_ARTIFACT_KIND_TOOL_RESULT
             | AUTONOMOUS_ARTIFACT_KIND_VERIFICATION_EVIDENCE
             | AUTONOMOUS_ARTIFACT_KIND_POLICY_DENIED
+            | AUTONOMOUS_ARTIFACT_KIND_SKILL_LIFECYCLE
     )
 }
 

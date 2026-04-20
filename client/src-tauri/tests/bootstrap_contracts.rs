@@ -3,14 +3,17 @@ use cadence_desktop_lib::{
         ApplyWorkflowTransitionRequestDto, ApplyWorkflowTransitionResponseDto,
         AutonomousArtifactPayloadDto, AutonomousCommandResultDto, AutonomousLifecycleReasonDto,
         AutonomousRunDto, AutonomousRunRecoveryStateDto, AutonomousRunStateDto,
-        AutonomousRunStatusDto, AutonomousToolCallStateDto, AutonomousToolResultPayloadDto,
-        AutonomousUnitArtifactDto, AutonomousUnitArtifactStatusDto, AutonomousUnitAttemptDto,
-        AutonomousUnitDto, AutonomousUnitHistoryEntryDto, AutonomousUnitKindDto,
-        AutonomousUnitStatusDto, AutonomousWorkflowLinkageDto, BranchSummaryDto,
-        CancelAutonomousRunRequestDto, ChangeKind, CommandError, CommandErrorClass,
-        CommandToolResultSummaryDto, FileToolResultSummaryDto, GetAutonomousRunRequestDto,
-        GetRuntimeRunRequestDto, GitToolResultScopeDto, GitToolResultSummaryDto,
-        ImportRepositoryRequestDto, ListNotificationDispatchesRequestDto,
+        AutonomousRunStatusDto, AutonomousSkillCacheStatusDto, AutonomousSkillLifecycleCacheDto,
+        AutonomousSkillLifecycleDiagnosticDto, AutonomousSkillLifecyclePayloadDto,
+        AutonomousSkillLifecycleResultDto, AutonomousSkillLifecycleSourceDto,
+        AutonomousSkillLifecycleStageDto, AutonomousToolCallStateDto,
+        AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto, AutonomousUnitArtifactStatusDto,
+        AutonomousUnitAttemptDto, AutonomousUnitDto, AutonomousUnitHistoryEntryDto,
+        AutonomousUnitKindDto, AutonomousUnitStatusDto, AutonomousWorkflowLinkageDto,
+        BranchSummaryDto, CancelAutonomousRunRequestDto, ChangeKind, CommandError,
+        CommandErrorClass, CommandToolResultSummaryDto, FileToolResultSummaryDto,
+        GetAutonomousRunRequestDto, GetRuntimeRunRequestDto, GitToolResultScopeDto,
+        GitToolResultSummaryDto, ImportRepositoryRequestDto, ListNotificationDispatchesRequestDto,
         ListNotificationDispatchesResponseDto, ListNotificationRoutesRequestDto,
         ListNotificationRoutesResponseDto, ListProjectsResponseDto, NotificationDispatchDto,
         NotificationDispatchOutcomeStatusDto, NotificationDispatchStatusDto,
@@ -369,6 +372,34 @@ fn sample_autonomous_artifact() -> AutonomousUnitArtifactDto {
         )),
         created_at: "2026-04-15T23:10:03Z".into(),
         updated_at: "2026-04-15T23:10:03Z".into(),
+    }
+}
+
+fn sample_skill_lifecycle_payload() -> AutonomousSkillLifecyclePayloadDto {
+    AutonomousSkillLifecyclePayloadDto {
+        project_id: "project-1".into(),
+        run_id: "run-1".into(),
+        unit_id: "run-1:unit:researcher".into(),
+        attempt_id: "run-1:unit:researcher:attempt:1".into(),
+        artifact_id: "artifact-skill-lifecycle".into(),
+        stage: AutonomousSkillLifecycleStageDto::Install,
+        result: AutonomousSkillLifecycleResultDto::Failed,
+        skill_id: "find-skills".into(),
+        source: AutonomousSkillLifecycleSourceDto {
+            repo: "vercel-labs/skills".into(),
+            path: "skills/find-skills".into(),
+            reference: "main".into(),
+            tree_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+        },
+        cache: AutonomousSkillLifecycleCacheDto {
+            key: "find-skills-576b45048241".into(),
+            status: Some(AutonomousSkillCacheStatusDto::Refreshed),
+        },
+        diagnostic: Some(AutonomousSkillLifecycleDiagnosticDto {
+            code: "autonomous_skill_cache_drift".into(),
+            message: "Cadence detected autonomous skill cache drift for `find-skills`.".into(),
+            retryable: false,
+        }),
     }
 }
 
@@ -1188,6 +1219,120 @@ fn tool_result_summary_contracts_remain_tagged_and_camel_case_across_nested_payl
             "contentType": "text/html",
             "truncated": false
         })
+    );
+}
+
+#[test]
+fn skill_lifecycle_payload_contracts_remain_tagged_and_camel_case() {
+    assert_eq!(
+        serde_json::to_value(sample_skill_lifecycle_payload())
+            .expect("skill lifecycle payload should serialize"),
+        json!({
+            "projectId": "project-1",
+            "runId": "run-1",
+            "unitId": "run-1:unit:researcher",
+            "attemptId": "run-1:unit:researcher:attempt:1",
+            "artifactId": "artifact-skill-lifecycle",
+            "stage": "install",
+            "result": "failed",
+            "skillId": "find-skills",
+            "source": {
+                "repo": "vercel-labs/skills",
+                "path": "skills/find-skills",
+                "reference": "main",
+                "treeHash": "0123456789abcdef0123456789abcdef01234567"
+            },
+            "cache": {
+                "key": "find-skills-576b45048241",
+                "status": "refreshed"
+            },
+            "diagnostic": {
+                "code": "autonomous_skill_cache_drift",
+                "message": "Cadence detected autonomous skill cache drift for `find-skills`.",
+                "retryable": false
+            }
+        })
+    );
+
+    let discovery_payload = serde_json::to_value(AutonomousSkillLifecyclePayloadDto {
+        stage: AutonomousSkillLifecycleStageDto::Discovery,
+        result: AutonomousSkillLifecycleResultDto::Succeeded,
+        cache: AutonomousSkillLifecycleCacheDto {
+            key: "find-skills-576b45048241".into(),
+            status: None,
+        },
+        diagnostic: None,
+        ..sample_skill_lifecycle_payload()
+    })
+    .expect("discovery skill lifecycle payload should serialize");
+    assert_eq!(discovery_payload["stage"], json!("discovery"));
+    assert!(
+        discovery_payload.get("diagnostic").is_none(),
+        "successful discovery payload should omit diagnostics"
+    );
+    assert_eq!(
+        discovery_payload["cache"],
+        json!({ "key": "find-skills-576b45048241" })
+    );
+}
+
+#[test]
+fn skill_lifecycle_payload_contracts_fail_closed_on_unknown_stage_or_extra_fields() {
+    assert!(
+        serde_json::from_value::<AutonomousArtifactPayloadDto>(json!({
+            "kind": "skill_lifecycle",
+            "projectId": "project-1",
+            "runId": "run-1",
+            "unitId": "run-1:unit:researcher",
+            "attemptId": "run-1:unit:researcher:attempt:1",
+            "artifactId": "artifact-skill-lifecycle",
+            "stage": "discover",
+            "result": "succeeded",
+            "skillId": "find-skills",
+            "source": {
+                "repo": "vercel-labs/skills",
+                "path": "skills/find-skills",
+                "reference": "main",
+                "treeHash": "0123456789abcdef0123456789abcdef01234567"
+            },
+            "cache": {
+                "key": "find-skills-576b45048241"
+            }
+        }))
+        .is_err(),
+        "skill lifecycle payload should reject unknown stage enums"
+    );
+
+    assert!(
+        serde_json::from_value::<AutonomousArtifactPayloadDto>(json!({
+            "kind": "skill_lifecycle",
+            "projectId": "project-1",
+            "runId": "run-1",
+            "unitId": "run-1:unit:researcher",
+            "attemptId": "run-1:unit:researcher:attempt:1",
+            "artifactId": "artifact-skill-lifecycle",
+            "stage": "invoke",
+            "result": "failed",
+            "skillId": "find-skills",
+            "source": {
+                "repo": "vercel-labs/skills",
+                "path": "skills/find-skills",
+                "reference": "main",
+                "treeHash": "0123456789abcdef0123456789abcdef01234567",
+                "unexpected": true
+            },
+            "cache": {
+                "key": "find-skills-576b45048241",
+                "status": "hit"
+            },
+            "diagnostic": {
+                "code": "autonomous_skill_cache_read_failed",
+                "message": "Cadence could not read the autonomous skill cache manifest.",
+                "retryable": true
+            }
+        }))
+        .is_err(),
+        "skill lifecycle payload should reject unknown nested source fields"
     );
 }
 

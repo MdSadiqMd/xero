@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use rand::RngCore;
+use sha2::{Digest, Sha256};
 
 use super::autonomous_workflow_progression::persist_autonomous_workflow_progression;
 
@@ -10,16 +11,24 @@ use crate::{
     db::project_store::{
         self, AutonomousArtifactCommandResultRecord, AutonomousArtifactPayloadRecord,
         AutonomousPolicyDeniedPayloadRecord, AutonomousRunRecord, AutonomousRunSnapshotRecord,
-        AutonomousRunStatus, AutonomousRunUpsertRecord, AutonomousToolCallStateRecord,
-        AutonomousToolResultPayloadRecord, AutonomousUnitArtifactRecord,
-        AutonomousUnitArtifactStatus, AutonomousUnitAttemptRecord, AutonomousUnitKind,
-        AutonomousUnitRecord, AutonomousUnitStatus, AutonomousVerificationEvidencePayloadRecord,
-        AutonomousVerificationOutcomeRecord, RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord,
-        RuntimeRunStatus,
+        AutonomousRunStatus, AutonomousRunUpsertRecord, AutonomousSkillCacheStatusRecord,
+        AutonomousSkillLifecycleCacheRecord, AutonomousSkillLifecycleDiagnosticRecord,
+        AutonomousSkillLifecyclePayloadRecord, AutonomousSkillLifecycleResultRecord,
+        AutonomousSkillLifecycleSourceRecord, AutonomousSkillLifecycleStageRecord,
+        AutonomousToolCallStateRecord, AutonomousToolResultPayloadRecord,
+        AutonomousUnitArtifactRecord, AutonomousUnitArtifactStatus, AutonomousUnitAttemptRecord,
+        AutonomousUnitKind, AutonomousUnitRecord, AutonomousUnitStatus,
+        AutonomousVerificationEvidencePayloadRecord, AutonomousVerificationOutcomeRecord,
+        RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord, RuntimeRunStatus,
     },
-    runtime::protocol::{
-        CommandToolResultSummary, SupervisorLiveEventPayload, SupervisorToolCallState,
-        ToolResultSummary,
+    runtime::{
+        protocol::{
+            CommandToolResultSummary, SupervisorLiveEventPayload, SupervisorSkillCacheStatus,
+            SupervisorSkillDiagnostic, SupervisorSkillLifecycleResult,
+            SupervisorSkillLifecycleStage, SupervisorToolCallState, ToolResultSummary,
+        },
+        AutonomousSkillCacheStatus, AutonomousSkillInstallOutput, AutonomousSkillInvokeOutput,
+        AutonomousSkillSourceMetadata,
     },
 };
 
@@ -37,6 +46,73 @@ pub enum AutonomousRuntimeReconcileIntent {
     Observe,
     DuplicateStart,
     CancelRequested,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousSkillLifecycleEvent {
+    pub stage: AutonomousSkillLifecycleStageRecord,
+    pub result: AutonomousSkillLifecycleResultRecord,
+    pub skill_id: String,
+    pub source: AutonomousSkillSourceMetadata,
+    pub cache_key: String,
+    pub cache_status: Option<AutonomousSkillCacheStatus>,
+    pub diagnostic: Option<CommandError>,
+}
+
+impl AutonomousSkillLifecycleEvent {
+    pub fn discovered(skill_id: impl Into<String>, source: AutonomousSkillSourceMetadata) -> Self {
+        Self {
+            stage: AutonomousSkillLifecycleStageRecord::Discovery,
+            result: AutonomousSkillLifecycleResultRecord::Succeeded,
+            skill_id: skill_id.into(),
+            cache_key: autonomous_skill_cache_key(&source),
+            source,
+            cache_status: None,
+            diagnostic: None,
+        }
+    }
+
+    pub fn installed(output: &AutonomousSkillInstallOutput) -> Self {
+        Self {
+            stage: AutonomousSkillLifecycleStageRecord::Install,
+            result: AutonomousSkillLifecycleResultRecord::Succeeded,
+            skill_id: output.skill_id.clone(),
+            source: output.source.clone(),
+            cache_key: output.cache_key.clone(),
+            cache_status: Some(output.cache_status),
+            diagnostic: None,
+        }
+    }
+
+    pub fn invoked(output: &AutonomousSkillInvokeOutput) -> Self {
+        Self {
+            stage: AutonomousSkillLifecycleStageRecord::Invoke,
+            result: AutonomousSkillLifecycleResultRecord::Succeeded,
+            skill_id: output.skill_id.clone(),
+            source: output.source.clone(),
+            cache_key: output.cache_key.clone(),
+            cache_status: Some(output.cache_status),
+            diagnostic: None,
+        }
+    }
+
+    pub fn failed(
+        stage: AutonomousSkillLifecycleStageRecord,
+        skill_id: impl Into<String>,
+        source: AutonomousSkillSourceMetadata,
+        cache_status: Option<AutonomousSkillCacheStatus>,
+        diagnostic: &CommandError,
+    ) -> Self {
+        Self {
+            stage,
+            result: AutonomousSkillLifecycleResultRecord::Failed,
+            skill_id: skill_id.into(),
+            cache_key: autonomous_skill_cache_key(&source),
+            source,
+            cache_status,
+            diagnostic: Some(diagnostic.clone()),
+        }
+    }
 }
 
 pub fn reconcile_runtime_snapshot(
@@ -358,6 +434,31 @@ pub fn persist_supervisor_event(
                 },
             );
         }
+        SupervisorLiveEventPayload::Skill {
+            skill_id,
+            stage,
+            result,
+            detail: _,
+            source,
+            cache_status,
+            diagnostic,
+        } => {
+            let source = autonomous_skill_source_metadata_from_supervisor(source);
+            let lifecycle = AutonomousSkillLifecycleEvent {
+                stage: autonomous_skill_lifecycle_stage_record_from_supervisor(stage),
+                result: autonomous_skill_lifecycle_result_record_from_supervisor(result),
+                skill_id: skill_id.clone(),
+                cache_key: autonomous_skill_cache_key(&source),
+                source,
+                cache_status: cache_status
+                    .as_ref()
+                    .map(autonomous_skill_cache_status_from_supervisor),
+                diagnostic: diagnostic
+                    .as_ref()
+                    .map(command_error_from_supervisor_skill_diagnostic),
+            };
+            return persist_skill_lifecycle_event(repo_root, project_id, &lifecycle);
+        }
         SupervisorLiveEventPayload::ActionRequired {
             action_id,
             boundary_id,
@@ -473,6 +574,94 @@ pub fn persist_supervisor_event(
         }
         _ => return Ok(None),
     }
+
+    persist_progressed_autonomous_run(repo_root, project_id, existing.as_ref(), payload).map(Some)
+}
+
+pub fn persist_skill_lifecycle_event(
+    repo_root: &Path,
+    project_id: &str,
+    lifecycle: &AutonomousSkillLifecycleEvent,
+) -> Result<Option<AutonomousRunSnapshotRecord>, CommandError> {
+    let runtime_snapshot = match project_store::load_runtime_run(repo_root, project_id)? {
+        Some(snapshot) => snapshot,
+        None => return Ok(None),
+    };
+    let existing = project_store::load_autonomous_run(repo_root, project_id)?;
+    if let Some(snapshot) = existing.as_ref() {
+        if snapshot.run.run_id != runtime_snapshot.run.run_id {
+            return Err(CommandError::retryable(
+                "autonomous_skill_lifecycle_run_mismatch",
+                format!(
+                    "Cadence refused to persist autonomous skill lifecycle state because durable autonomous run `{}` does not match active runtime run `{}` for project `{project_id}`.",
+                    snapshot.run.run_id, runtime_snapshot.run.run_id,
+                ),
+            ));
+        }
+    }
+
+    let mut payload = reconcile_runtime_snapshot(
+        existing.as_ref(),
+        &runtime_snapshot,
+        AutonomousRuntimeReconcileIntent::Observe,
+    );
+    let Some(attempt) = payload.attempt.as_ref() else {
+        return Ok(None);
+    };
+
+    let stage_label = autonomous_skill_lifecycle_stage_label(&lifecycle.stage);
+    let result_label = autonomous_skill_lifecycle_result_label(&lifecycle.result);
+    let artifact_id = format!(
+        "{}:skill:{}:{}:{}",
+        attempt.attempt_id,
+        sanitize_artifact_fragment(&lifecycle.skill_id),
+        stage_label,
+        result_label,
+    );
+    let timestamp =
+        existing_artifact_timestamp(existing.as_ref(), &artifact_id).unwrap_or_else(now_timestamp);
+    let summary = autonomous_skill_lifecycle_summary(lifecycle);
+
+    upsert_artifact(
+        &mut payload.artifacts,
+        AutonomousUnitArtifactRecord {
+            project_id: attempt.project_id.clone(),
+            run_id: attempt.run_id.clone(),
+            unit_id: attempt.unit_id.clone(),
+            attempt_id: attempt.attempt_id.clone(),
+            artifact_id: artifact_id.clone(),
+            artifact_kind: "skill_lifecycle".into(),
+            status: autonomous_skill_lifecycle_artifact_status(&lifecycle.result),
+            summary,
+            content_hash: None,
+            payload: Some(AutonomousArtifactPayloadRecord::SkillLifecycle(
+                AutonomousSkillLifecyclePayloadRecord {
+                    project_id: attempt.project_id.clone(),
+                    run_id: attempt.run_id.clone(),
+                    unit_id: attempt.unit_id.clone(),
+                    attempt_id: attempt.attempt_id.clone(),
+                    artifact_id,
+                    stage: lifecycle.stage,
+                    result: lifecycle.result,
+                    skill_id: lifecycle.skill_id.clone(),
+                    source: autonomous_skill_lifecycle_source_record(&lifecycle.source),
+                    cache: AutonomousSkillLifecycleCacheRecord {
+                        key: lifecycle.cache_key.clone(),
+                        status: lifecycle
+                            .cache_status
+                            .as_ref()
+                            .map(autonomous_skill_cache_status_record),
+                    },
+                    diagnostic: lifecycle
+                        .diagnostic
+                        .as_ref()
+                        .map(autonomous_skill_lifecycle_diagnostic_record),
+                },
+            )),
+            created_at: timestamp,
+            updated_at: now_timestamp(),
+        },
+    );
 
     persist_progressed_autonomous_run(repo_root, project_id, existing.as_ref(), payload).map(Some)
 }
@@ -798,6 +987,143 @@ fn supervisor_tool_state_label(state: &SupervisorToolCallState) -> &'static str 
         SupervisorToolCallState::Succeeded => "succeeded",
         SupervisorToolCallState::Failed => "failed",
     }
+}
+
+fn autonomous_skill_source_metadata_from_supervisor(
+    source: &crate::runtime::protocol::SupervisorSkillSourceMetadata,
+) -> AutonomousSkillSourceMetadata {
+    AutonomousSkillSourceMetadata {
+        repo: source.repo.clone(),
+        path: source.path.clone(),
+        reference: source.reference.clone(),
+        tree_hash: source.tree_hash.clone(),
+    }
+}
+
+fn autonomous_skill_lifecycle_stage_record_from_supervisor(
+    stage: &SupervisorSkillLifecycleStage,
+) -> AutonomousSkillLifecycleStageRecord {
+    match stage {
+        SupervisorSkillLifecycleStage::Discovery => AutonomousSkillLifecycleStageRecord::Discovery,
+        SupervisorSkillLifecycleStage::Install => AutonomousSkillLifecycleStageRecord::Install,
+        SupervisorSkillLifecycleStage::Invoke => AutonomousSkillLifecycleStageRecord::Invoke,
+    }
+}
+
+fn autonomous_skill_lifecycle_result_record_from_supervisor(
+    result: &SupervisorSkillLifecycleResult,
+) -> AutonomousSkillLifecycleResultRecord {
+    match result {
+        SupervisorSkillLifecycleResult::Succeeded => {
+            AutonomousSkillLifecycleResultRecord::Succeeded
+        }
+        SupervisorSkillLifecycleResult::Failed => AutonomousSkillLifecycleResultRecord::Failed,
+    }
+}
+
+fn autonomous_skill_cache_status_from_supervisor(
+    status: &SupervisorSkillCacheStatus,
+) -> AutonomousSkillCacheStatus {
+    match status {
+        SupervisorSkillCacheStatus::Miss => AutonomousSkillCacheStatus::Miss,
+        SupervisorSkillCacheStatus::Hit => AutonomousSkillCacheStatus::Hit,
+        SupervisorSkillCacheStatus::Refreshed => AutonomousSkillCacheStatus::Refreshed,
+    }
+}
+
+fn command_error_from_supervisor_skill_diagnostic(
+    diagnostic: &SupervisorSkillDiagnostic,
+) -> CommandError {
+    if diagnostic.retryable {
+        CommandError::retryable(diagnostic.code.clone(), diagnostic.message.clone())
+    } else {
+        CommandError::user_fixable(diagnostic.code.clone(), diagnostic.message.clone())
+    }
+}
+
+fn autonomous_skill_lifecycle_source_record(
+    source: &AutonomousSkillSourceMetadata,
+) -> AutonomousSkillLifecycleSourceRecord {
+    AutonomousSkillLifecycleSourceRecord {
+        repo: source.repo.clone(),
+        path: source.path.clone(),
+        reference: source.reference.clone(),
+        tree_hash: source.tree_hash.clone(),
+    }
+}
+
+fn autonomous_skill_cache_status_record(
+    status: &AutonomousSkillCacheStatus,
+) -> AutonomousSkillCacheStatusRecord {
+    match status {
+        AutonomousSkillCacheStatus::Miss => AutonomousSkillCacheStatusRecord::Miss,
+        AutonomousSkillCacheStatus::Hit => AutonomousSkillCacheStatusRecord::Hit,
+        AutonomousSkillCacheStatus::Refreshed => AutonomousSkillCacheStatusRecord::Refreshed,
+    }
+}
+
+fn autonomous_skill_lifecycle_diagnostic_record(
+    diagnostic: &CommandError,
+) -> AutonomousSkillLifecycleDiagnosticRecord {
+    AutonomousSkillLifecycleDiagnosticRecord {
+        code: diagnostic.code.clone(),
+        message: diagnostic.message.clone(),
+        retryable: diagnostic.retryable,
+    }
+}
+
+fn autonomous_skill_lifecycle_stage_label(
+    stage: &AutonomousSkillLifecycleStageRecord,
+) -> &'static str {
+    match stage {
+        AutonomousSkillLifecycleStageRecord::Discovery => "discovery",
+        AutonomousSkillLifecycleStageRecord::Install => "install",
+        AutonomousSkillLifecycleStageRecord::Invoke => "invoke",
+    }
+}
+
+fn autonomous_skill_lifecycle_result_label(
+    result: &AutonomousSkillLifecycleResultRecord,
+) -> &'static str {
+    match result {
+        AutonomousSkillLifecycleResultRecord::Succeeded => "succeeded",
+        AutonomousSkillLifecycleResultRecord::Failed => "failed",
+    }
+}
+
+fn autonomous_skill_lifecycle_artifact_status(
+    result: &AutonomousSkillLifecycleResultRecord,
+) -> AutonomousUnitArtifactStatus {
+    match result {
+        AutonomousSkillLifecycleResultRecord::Succeeded => AutonomousUnitArtifactStatus::Recorded,
+        AutonomousSkillLifecycleResultRecord::Failed => AutonomousUnitArtifactStatus::Rejected,
+    }
+}
+
+fn autonomous_skill_lifecycle_summary(lifecycle: &AutonomousSkillLifecycleEvent) -> String {
+    let stage_label = autonomous_skill_lifecycle_stage_label(&lifecycle.stage);
+    match (&lifecycle.result, lifecycle.diagnostic.as_ref()) {
+        (AutonomousSkillLifecycleResultRecord::Succeeded, None) => format!(
+            "Autonomous skill `{}` recorded a successful {stage_label} stage.",
+            lifecycle.skill_id
+        ),
+        (AutonomousSkillLifecycleResultRecord::Failed, Some(diagnostic)) => format!(
+            "Autonomous skill `{}` failed during {stage_label}: {}",
+            lifecycle.skill_id, diagnostic.message
+        ),
+        _ => format!(
+            "Autonomous skill `{}` recorded a {stage_label} lifecycle update.",
+            lifecycle.skill_id
+        ),
+    }
+}
+
+fn autonomous_skill_cache_key(source: &AutonomousSkillSourceMetadata) -> String {
+    let skill_id = source.path.rsplit('/').next().unwrap_or("skill");
+    let mut hasher = Sha256::new();
+    hasher.update(format!("{}:{}", source.repo, source.path).as_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    format!("{}-{}", skill_id, &digest[..12])
 }
 
 fn autonomous_unit_status_for_run(status: &AutonomousRunStatus) -> AutonomousUnitStatus {

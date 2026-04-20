@@ -11,35 +11,45 @@ use crate::{
     commands::{
         AutonomousArtifactPayloadDto, AutonomousCommandResultDto, AutonomousLifecycleReasonDto,
         AutonomousPolicyDeniedPayloadDto, AutonomousRunDto, AutonomousRunRecoveryStateDto,
-        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousToolCallStateDto,
-        AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto, AutonomousUnitArtifactStatusDto,
-        AutonomousUnitAttemptDto, AutonomousUnitDto, AutonomousUnitHistoryEntryDto,
-        AutonomousUnitKindDto, AutonomousUnitStatusDto, AutonomousVerificationEvidencePayloadDto,
-        AutonomousVerificationOutcomeDto, AutonomousWorkflowLinkageDto, CommandError,
-        CommandErrorClass, CommandResult, CommandToolResultSummaryDto, FileToolResultSummaryDto,
-        GitToolResultScopeDto, GitToolResultSummaryDto, ProjectUpdateReason,
-        ProjectUpdatedPayloadDto, RuntimeDiagnosticDto, RuntimeRunCheckpointDto,
-        RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto, RuntimeRunDto, RuntimeRunStatusDto,
-        RuntimeRunTransportDto, RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto,
-        RuntimeSessionDto, RuntimeUpdatedPayloadDto, ToolResultSummaryDto,
-        WebToolResultContentKindDto, WebToolResultSummaryDto, PROJECT_UPDATED_EVENT,
-        RUNTIME_RUN_UPDATED_EVENT, RUNTIME_UPDATED_EVENT,
+        AutonomousRunStateDto, AutonomousRunStatusDto, AutonomousSkillCacheStatusDto,
+        AutonomousSkillLifecycleCacheDto, AutonomousSkillLifecycleDiagnosticDto,
+        AutonomousSkillLifecyclePayloadDto, AutonomousSkillLifecycleResultDto,
+        AutonomousSkillLifecycleSourceDto, AutonomousSkillLifecycleStageDto,
+        AutonomousToolCallStateDto, AutonomousToolResultPayloadDto, AutonomousUnitArtifactDto,
+        AutonomousUnitArtifactStatusDto, AutonomousUnitAttemptDto, AutonomousUnitDto,
+        AutonomousUnitHistoryEntryDto, AutonomousUnitKindDto, AutonomousUnitStatusDto,
+        AutonomousVerificationEvidencePayloadDto, AutonomousVerificationOutcomeDto,
+        AutonomousWorkflowLinkageDto, CommandError, CommandErrorClass, CommandResult,
+        CommandToolResultSummaryDto, FileToolResultSummaryDto, GitToolResultScopeDto,
+        GitToolResultSummaryDto, ProjectUpdateReason, ProjectUpdatedPayloadDto,
+        RuntimeDiagnosticDto, RuntimeRunCheckpointDto, RuntimeRunCheckpointKindDto,
+        RuntimeRunDiagnosticDto, RuntimeRunDto, RuntimeRunStatusDto, RuntimeRunTransportDto,
+        RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto, RuntimeSessionDto,
+        RuntimeUpdatedPayloadDto, ToolResultSummaryDto, WebToolResultContentKindDto,
+        WebToolResultSummaryDto, PROJECT_UPDATED_EVENT, RUNTIME_RUN_UPDATED_EVENT,
+        RUNTIME_UPDATED_EVENT,
     },
     db::project_store::{
         self, AutonomousArtifactCommandResultRecord, AutonomousArtifactPayloadRecord,
         AutonomousRunSnapshotRecord, AutonomousRunStatus, AutonomousRunUpsertRecord,
-        AutonomousToolCallStateRecord, AutonomousUnitArtifactRecord, AutonomousUnitArtifactStatus,
-        AutonomousUnitAttemptRecord, AutonomousUnitHistoryRecord, AutonomousUnitKind,
-        AutonomousUnitRecord, AutonomousUnitStatus, AutonomousVerificationOutcomeRecord,
-        RuntimeRunCheckpointKind, RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord,
-        RuntimeRunStatus, RuntimeRunTransportLiveness, RuntimeSessionDiagnosticRecord,
-        RuntimeSessionRecord,
+        AutonomousSkillCacheStatusRecord, AutonomousSkillLifecycleDiagnosticRecord,
+        AutonomousSkillLifecycleResultRecord, AutonomousSkillLifecycleSourceRecord,
+        AutonomousSkillLifecycleStageRecord, AutonomousToolCallStateRecord,
+        AutonomousUnitArtifactRecord, AutonomousUnitArtifactStatus, AutonomousUnitAttemptRecord,
+        AutonomousUnitHistoryRecord, AutonomousUnitKind, AutonomousUnitRecord,
+        AutonomousUnitStatus, AutonomousVerificationOutcomeRecord, RuntimeRunCheckpointKind,
+        RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord, RuntimeRunStatus,
+        RuntimeRunTransportLiveness, RuntimeSessionDiagnosticRecord, RuntimeSessionRecord,
     },
     runtime::{
         autonomous_orchestrator::{reconcile_runtime_snapshot, AutonomousRuntimeReconcileIntent},
         autonomous_workflow_progression::persist_autonomous_workflow_progression,
         default_runtime_provider, probe_runtime_run,
-        protocol::{GitToolResultScope, ToolResultSummary, WebToolResultContentKind},
+        protocol::{
+            GitToolResultScope, SupervisorSkillCacheStatus, SupervisorSkillDiagnostic,
+            SupervisorSkillLifecycleResult, SupervisorSkillLifecycleStage,
+            SupervisorSkillSourceMetadata, ToolResultSummary, WebToolResultContentKind,
+        },
         resolve_runtime_provider_identity, RuntimeSupervisorProbeRequest,
     },
     state::DesktopState,
@@ -654,6 +664,24 @@ fn autonomous_artifact_payload_dto_from_record(
                 boundary_id: policy.boundary_id.clone(),
             })
         }
+        AutonomousArtifactPayloadRecord::SkillLifecycle(skill) => {
+            AutonomousArtifactPayloadDto::SkillLifecycle(AutonomousSkillLifecyclePayloadDto {
+                project_id: skill.project_id.clone(),
+                run_id: skill.run_id.clone(),
+                unit_id: skill.unit_id.clone(),
+                attempt_id: skill.attempt_id.clone(),
+                artifact_id: skill.artifact_id.clone(),
+                stage: autonomous_skill_lifecycle_stage_dto(&skill.stage),
+                result: autonomous_skill_lifecycle_result_dto(&skill.result),
+                skill_id: skill.skill_id.clone(),
+                source: autonomous_skill_lifecycle_source_dto_from_record(&skill.source),
+                cache: autonomous_skill_lifecycle_cache_dto_from_record(&skill.cache),
+                diagnostic: skill
+                    .diagnostic
+                    .as_ref()
+                    .map(autonomous_skill_lifecycle_diagnostic_dto_from_record),
+            })
+        }
     }
 }
 
@@ -708,6 +736,58 @@ pub(crate) fn tool_result_summary_dto_from_protocol(
     }
 }
 
+pub(crate) fn autonomous_skill_lifecycle_stage_dto_from_protocol(
+    stage: SupervisorSkillLifecycleStage,
+) -> AutonomousSkillLifecycleStageDto {
+    match stage {
+        SupervisorSkillLifecycleStage::Discovery => AutonomousSkillLifecycleStageDto::Discovery,
+        SupervisorSkillLifecycleStage::Install => AutonomousSkillLifecycleStageDto::Install,
+        SupervisorSkillLifecycleStage::Invoke => AutonomousSkillLifecycleStageDto::Invoke,
+    }
+}
+
+pub(crate) fn autonomous_skill_lifecycle_result_dto_from_protocol(
+    result: SupervisorSkillLifecycleResult,
+) -> AutonomousSkillLifecycleResultDto {
+    match result {
+        SupervisorSkillLifecycleResult::Succeeded => {
+            AutonomousSkillLifecycleResultDto::Succeeded
+        }
+        SupervisorSkillLifecycleResult::Failed => AutonomousSkillLifecycleResultDto::Failed,
+    }
+}
+
+pub(crate) fn autonomous_skill_lifecycle_source_dto_from_protocol(
+    source: &SupervisorSkillSourceMetadata,
+) -> AutonomousSkillLifecycleSourceDto {
+    AutonomousSkillLifecycleSourceDto {
+        repo: source.repo.clone(),
+        path: source.path.clone(),
+        reference: source.reference.clone(),
+        tree_hash: source.tree_hash.clone(),
+    }
+}
+
+pub(crate) fn autonomous_skill_cache_status_dto_from_protocol(
+    status: SupervisorSkillCacheStatus,
+) -> AutonomousSkillCacheStatusDto {
+    match status {
+        SupervisorSkillCacheStatus::Miss => AutonomousSkillCacheStatusDto::Miss,
+        SupervisorSkillCacheStatus::Hit => AutonomousSkillCacheStatusDto::Hit,
+        SupervisorSkillCacheStatus::Refreshed => AutonomousSkillCacheStatusDto::Refreshed,
+    }
+}
+
+pub(crate) fn autonomous_skill_lifecycle_diagnostic_dto_from_protocol(
+    diagnostic: &SupervisorSkillDiagnostic,
+) -> AutonomousSkillLifecycleDiagnosticDto {
+    AutonomousSkillLifecycleDiagnosticDto {
+        code: diagnostic.code.clone(),
+        message: diagnostic.message.clone(),
+        retryable: diagnostic.retryable,
+    }
+}
+
 fn git_tool_result_scope_dto(scope: GitToolResultScope) -> GitToolResultScopeDto {
     match scope {
         GitToolResultScope::Staged => GitToolResultScopeDto::Staged,
@@ -720,6 +800,69 @@ fn web_tool_result_content_kind_dto(kind: WebToolResultContentKind) -> WebToolRe
     match kind {
         WebToolResultContentKind::Html => WebToolResultContentKindDto::Html,
         WebToolResultContentKind::PlainText => WebToolResultContentKindDto::PlainText,
+    }
+}
+
+fn autonomous_skill_lifecycle_source_dto_from_record(
+    source: &AutonomousSkillLifecycleSourceRecord,
+) -> AutonomousSkillLifecycleSourceDto {
+    AutonomousSkillLifecycleSourceDto {
+        repo: source.repo.clone(),
+        path: source.path.clone(),
+        reference: source.reference.clone(),
+        tree_hash: source.tree_hash.clone(),
+    }
+}
+
+fn autonomous_skill_lifecycle_cache_dto_from_record(
+    cache: &crate::db::project_store::AutonomousSkillLifecycleCacheRecord,
+) -> AutonomousSkillLifecycleCacheDto {
+    AutonomousSkillLifecycleCacheDto {
+        key: cache.key.clone(),
+        status: cache.status.as_ref().map(autonomous_skill_cache_status_dto),
+    }
+}
+
+fn autonomous_skill_lifecycle_diagnostic_dto_from_record(
+    diagnostic: &AutonomousSkillLifecycleDiagnosticRecord,
+) -> AutonomousSkillLifecycleDiagnosticDto {
+    AutonomousSkillLifecycleDiagnosticDto {
+        code: diagnostic.code.clone(),
+        message: diagnostic.message.clone(),
+        retryable: diagnostic.retryable,
+    }
+}
+
+fn autonomous_skill_lifecycle_stage_dto(
+    stage: &AutonomousSkillLifecycleStageRecord,
+) -> AutonomousSkillLifecycleStageDto {
+    match stage {
+        AutonomousSkillLifecycleStageRecord::Discovery => {
+            AutonomousSkillLifecycleStageDto::Discovery
+        }
+        AutonomousSkillLifecycleStageRecord::Install => AutonomousSkillLifecycleStageDto::Install,
+        AutonomousSkillLifecycleStageRecord::Invoke => AutonomousSkillLifecycleStageDto::Invoke,
+    }
+}
+
+fn autonomous_skill_lifecycle_result_dto(
+    result: &AutonomousSkillLifecycleResultRecord,
+) -> AutonomousSkillLifecycleResultDto {
+    match result {
+        AutonomousSkillLifecycleResultRecord::Succeeded => {
+            AutonomousSkillLifecycleResultDto::Succeeded
+        }
+        AutonomousSkillLifecycleResultRecord::Failed => AutonomousSkillLifecycleResultDto::Failed,
+    }
+}
+
+fn autonomous_skill_cache_status_dto(
+    status: &AutonomousSkillCacheStatusRecord,
+) -> AutonomousSkillCacheStatusDto {
+    match status {
+        AutonomousSkillCacheStatusRecord::Miss => AutonomousSkillCacheStatusDto::Miss,
+        AutonomousSkillCacheStatusRecord::Hit => AutonomousSkillCacheStatusDto::Hit,
+        AutonomousSkillCacheStatusRecord::Refreshed => AutonomousSkillCacheStatusDto::Refreshed,
     }
 }
 

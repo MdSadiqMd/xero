@@ -19,8 +19,10 @@ use crate::{
             load_persisted_runtime_run, load_runtime_run_status, load_runtime_session_status,
             DEFAULT_RUNTIME_RUN_CONTROL_TIMEOUT,
         },
-        CommandError, OperatorApprovalStatus, RuntimeAuthPhase, RuntimeStreamItemDto,
-        RuntimeStreamItemKind, RuntimeToolCallState,
+        AutonomousSkillLifecycleDiagnosticDto, AutonomousSkillLifecycleResultDto,
+        AutonomousSkillLifecycleSourceDto, AutonomousSkillLifecycleStageDto, CommandError,
+        OperatorApprovalStatus, RuntimeAuthPhase, RuntimeStreamItemDto, RuntimeStreamItemKind,
+        RuntimeToolCallState,
     },
     db::project_store::{
         self, RuntimeRunSnapshotRecord, RuntimeRunStatus, RuntimeRunTransportLiveness,
@@ -953,6 +955,12 @@ fn map_supervisor_event_to_stream_item(
             tool_name: None,
             tool_state: None,
             tool_summary: None,
+            skill_id: None,
+            skill_stage: None,
+            skill_result: None,
+            skill_source: None,
+            skill_cache_status: None,
+            skill_diagnostic: None,
             action_id: None,
             boundary_id: None,
             action_type: None,
@@ -982,11 +990,62 @@ fn map_supervisor_event_to_stream_item(
             tool_summary: tool_summary
                 .as_ref()
                 .map(crate::commands::runtime_support::tool_result_summary_dto_from_protocol),
+            skill_id: None,
+            skill_stage: None,
+            skill_result: None,
+            skill_source: None,
+            skill_cache_status: None,
+            skill_diagnostic: None,
             action_id: None,
             boundary_id: None,
             action_type: None,
             title: None,
             detail,
+            code: None,
+            message: None,
+            retryable: None,
+            created_at,
+        },
+        SupervisorLiveEventPayload::Skill {
+            skill_id,
+            stage,
+            result,
+            detail,
+            source,
+            cache_status,
+            diagnostic,
+        } => RuntimeStreamItemDto {
+            kind: RuntimeStreamItemKind::Skill,
+            run_id: request.run_id.clone(),
+            sequence,
+            session_id: Some(request.session_id.clone()),
+            flow_id: request.flow_id.clone(),
+            text: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_state: None,
+            tool_summary: None,
+            skill_id: Some(skill_id),
+            skill_stage: Some(
+                crate::commands::runtime_support::autonomous_skill_lifecycle_stage_dto_from_protocol(stage),
+            ),
+            skill_result: Some(
+                crate::commands::runtime_support::autonomous_skill_lifecycle_result_dto_from_protocol(result),
+            ),
+            skill_source: Some(
+                crate::commands::runtime_support::autonomous_skill_lifecycle_source_dto_from_protocol(&source),
+            ),
+            skill_cache_status: cache_status.map(
+                crate::commands::runtime_support::autonomous_skill_cache_status_dto_from_protocol,
+            ),
+            skill_diagnostic: diagnostic
+                .as_ref()
+                .map(crate::commands::runtime_support::autonomous_skill_lifecycle_diagnostic_dto_from_protocol),
+            action_id: None,
+            boundary_id: None,
+            action_type: None,
+            title: None,
+            detail: Some(detail),
             code: None,
             message: None,
             retryable: None,
@@ -1007,6 +1066,12 @@ fn map_supervisor_event_to_stream_item(
             tool_name: None,
             tool_state: None,
             tool_summary: None,
+            skill_id: None,
+            skill_stage: None,
+            skill_result: None,
+            skill_source: None,
+            skill_cache_status: None,
+            skill_diagnostic: None,
             action_id: None,
             boundary_id: None,
             action_type: None,
@@ -1034,6 +1099,12 @@ fn map_supervisor_event_to_stream_item(
             tool_name: None,
             tool_state: None,
             tool_summary: None,
+            skill_id: None,
+            skill_stage: None,
+            skill_result: None,
+            skill_source: None,
+            skill_cache_status: None,
+            skill_diagnostic: None,
             action_id: Some(action_id),
             boundary_id: Some(boundary_id),
             action_type: Some(action_type),
@@ -1253,6 +1324,69 @@ fn validate_stream_item(item: &RuntimeStreamItemDto) -> Result<(), CommandError>
                 ));
             }
         }
+        RuntimeStreamItemKind::Skill => {
+            require_non_empty(item.skill_id.as_deref(), "skillId", "runtime skill item")?;
+            require_non_empty(item.detail.as_deref(), "detail", "runtime skill item")?;
+
+            let Some(stage) = item.skill_stage.as_ref() else {
+                return Err(CommandError::system_fault(
+                    "runtime_stream_item_invalid",
+                    "Cadence produced a runtime skill item without a lifecycle stage.",
+                ));
+            };
+            let Some(result) = item.skill_result.as_ref() else {
+                return Err(CommandError::system_fault(
+                    "runtime_stream_item_invalid",
+                    "Cadence produced a runtime skill item without a lifecycle result.",
+                ));
+            };
+            let Some(source) = item.skill_source.as_ref() else {
+                return Err(CommandError::system_fault(
+                    "runtime_stream_item_invalid",
+                    "Cadence produced a runtime skill item without source metadata.",
+                ));
+            };
+            validate_runtime_skill_source(source)?;
+
+            match (result, item.skill_diagnostic.as_ref()) {
+                (AutonomousSkillLifecycleResultDto::Succeeded, Some(_)) => {
+                    return Err(CommandError::system_fault(
+                        "runtime_stream_item_invalid",
+                        "Cadence produced a successful runtime skill item that also included diagnostics.",
+                    ));
+                }
+                (AutonomousSkillLifecycleResultDto::Failed, None) => {
+                    return Err(CommandError::system_fault(
+                        "runtime_stream_item_invalid",
+                        "Cadence produced a failed runtime skill item without diagnostics.",
+                    ));
+                }
+                (AutonomousSkillLifecycleResultDto::Failed, Some(diagnostic)) => {
+                    validate_runtime_skill_diagnostic(diagnostic)?;
+                }
+                (AutonomousSkillLifecycleResultDto::Succeeded, None) => {}
+            }
+
+            if matches!(stage, AutonomousSkillLifecycleStageDto::Discovery)
+                && item.skill_cache_status.is_some()
+            {
+                return Err(CommandError::system_fault(
+                    "runtime_stream_item_invalid",
+                    "Cadence produced a discovery runtime skill item with cache status.",
+                ));
+            }
+            if matches!(
+                stage,
+                AutonomousSkillLifecycleStageDto::Install | AutonomousSkillLifecycleStageDto::Invoke
+            ) && matches!(result, AutonomousSkillLifecycleResultDto::Succeeded)
+                && item.skill_cache_status.is_none()
+            {
+                return Err(CommandError::system_fault(
+                    "runtime_stream_item_invalid",
+                    "Cadence produced a successful install/invoke runtime skill item without cache status.",
+                ));
+            }
+        }
         RuntimeStreamItemKind::Activity => {
             require_non_empty(item.code.as_deref(), "code", "runtime activity item")?;
             require_non_empty(item.title.as_deref(), "title", "runtime activity item")?;
@@ -1305,6 +1439,53 @@ fn require_non_empty(value: Option<&str>, field: &str, kind: &str) -> Result<(),
             format!("Cadence produced a {kind} without a non-empty `{field}` field."),
         )),
     }
+}
+
+fn validate_runtime_skill_source(
+    source: &AutonomousSkillLifecycleSourceDto,
+) -> Result<(), CommandError> {
+    require_non_empty(Some(source.repo.as_str()), "repo", "runtime skill source")?;
+    require_non_empty(Some(source.path.as_str()), "path", "runtime skill source")?;
+    require_non_empty(
+        Some(source.reference.as_str()),
+        "reference",
+        "runtime skill source",
+    )?;
+    require_non_empty(
+        Some(source.tree_hash.as_str()),
+        "treeHash",
+        "runtime skill source",
+    )?;
+
+    if source.tree_hash.len() != 40
+        || source
+            .tree_hash
+            .chars()
+            .any(|character| !character.is_ascii_hexdigit() || character.is_ascii_uppercase())
+    {
+        return Err(CommandError::system_fault(
+            "runtime_stream_item_invalid",
+            "Cadence produced a runtime skill item with an invalid source tree hash.",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_runtime_skill_diagnostic(
+    diagnostic: &AutonomousSkillLifecycleDiagnosticDto,
+) -> Result<(), CommandError> {
+    require_non_empty(
+        Some(diagnostic.code.as_str()),
+        "code",
+        "runtime skill diagnostic",
+    )?;
+    require_non_empty(
+        Some(diagnostic.message.as_str()),
+        "message",
+        "runtime skill diagnostic",
+    )?;
+    Ok(())
 }
 
 fn parse_runtime_boundary_id_for_run(
@@ -1403,6 +1584,12 @@ fn action_required_item(
         tool_name: None,
         tool_state: None,
         tool_summary: None,
+        skill_id: None,
+        skill_stage: None,
+        skill_result: None,
+        skill_source: None,
+        skill_cache_status: None,
+        skill_diagnostic: None,
         action_id: Some(action_required.action_id),
         boundary_id: action_required.boundary_id,
         action_type: Some(action_required.action_type),
@@ -1431,6 +1618,12 @@ fn complete_item(
         tool_name: None,
         tool_state: None,
         tool_summary: None,
+        skill_id: None,
+        skill_stage: None,
+        skill_result: None,
+        skill_source: None,
+        skill_cache_status: None,
+        skill_diagnostic: None,
         action_id: None,
         boundary_id: None,
         action_type: None,
@@ -1459,6 +1652,12 @@ fn failure_item(
         tool_name: None,
         tool_state: None,
         tool_summary: None,
+        skill_id: None,
+        skill_stage: None,
+        skill_result: None,
+        skill_source: None,
+        skill_cache_status: None,
+        skill_diagnostic: None,
         action_id: None,
         boundary_id: None,
         action_type: None,

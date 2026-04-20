@@ -1526,6 +1526,29 @@ pub enum AutonomousVerificationOutcomeDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSkillLifecycleStageDto {
+    Discovery,
+    Install,
+    Invoke,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSkillLifecycleResultDto {
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSkillCacheStatusDto {
+    Miss,
+    Hit,
+    Refreshed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousCommandResultDto {
     pub exit_code: Option<i32>,
@@ -1648,11 +1671,54 @@ pub struct AutonomousPolicyDeniedPayloadDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillLifecycleSourceDto {
+    pub repo: String,
+    pub path: String,
+    pub reference: String,
+    pub tree_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillLifecycleCacheDto {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<AutonomousSkillCacheStatusDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillLifecycleDiagnosticDto {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillLifecyclePayloadDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub unit_id: String,
+    pub attempt_id: String,
+    pub artifact_id: String,
+    pub stage: AutonomousSkillLifecycleStageDto,
+    pub result: AutonomousSkillLifecycleResultDto,
+    pub skill_id: String,
+    pub source: AutonomousSkillLifecycleSourceDto,
+    pub cache: AutonomousSkillLifecycleCacheDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<AutonomousSkillLifecycleDiagnosticDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum AutonomousArtifactPayloadDto {
     ToolResult(AutonomousToolResultPayloadDto),
     VerificationEvidence(AutonomousVerificationEvidencePayloadDto),
     PolicyDenied(AutonomousPolicyDeniedPayloadDto),
+    SkillLifecycle(AutonomousSkillLifecyclePayloadDto),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1847,6 +1913,7 @@ pub struct StopRuntimeRunRequestDto {
 pub enum RuntimeStreamItemKind {
     Transcript,
     Tool,
+    Skill,
     Activity,
     ActionRequired,
     Complete,
@@ -1858,6 +1925,7 @@ impl RuntimeStreamItemKind {
         match self {
             Self::Transcript => "transcript",
             Self::Tool => "tool",
+            Self::Skill => "skill",
             Self::Activity => "activity",
             Self::ActionRequired => "action_required",
             Self::Complete => "complete",
@@ -1889,6 +1957,18 @@ pub struct RuntimeStreamItemDto {
     pub tool_state: Option<RuntimeToolCallState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_summary: Option<ToolResultSummaryDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_stage: Option<AutonomousSkillLifecycleStageDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_result: Option<AutonomousSkillLifecycleResultDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<AutonomousSkillLifecycleSourceDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_cache_status: Option<AutonomousSkillCacheStatusDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_diagnostic: Option<AutonomousSkillLifecycleDiagnosticDto>,
     pub action_id: Option<String>,
     pub boundary_id: Option<String>,
     pub action_type: Option<String>,
@@ -1901,9 +1981,10 @@ pub struct RuntimeStreamItemDto {
 }
 
 impl RuntimeStreamItemDto {
-    pub const ALLOWED_KIND_NAMES: [&'static str; 6] = [
+    pub const ALLOWED_KIND_NAMES: [&'static str; 7] = [
         "transcript",
         "tool",
+        "skill",
         "activity",
         "action_required",
         "complete",

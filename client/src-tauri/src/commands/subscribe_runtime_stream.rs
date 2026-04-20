@@ -109,6 +109,7 @@ fn parse_runtime_stream_item_kind(value: &str) -> CommandResult<RuntimeStreamIte
     match value {
         "transcript" => Ok(RuntimeStreamItemKind::Transcript),
         "tool" => Ok(RuntimeStreamItemKind::Tool),
+        "skill" => Ok(RuntimeStreamItemKind::Skill),
         "activity" => Ok(RuntimeStreamItemKind::Activity),
         "action_required" => Ok(RuntimeStreamItemKind::ActionRequired),
         "complete" => Ok(RuntimeStreamItemKind::Complete),

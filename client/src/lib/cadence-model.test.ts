@@ -348,7 +348,7 @@ const streamSubscription = subscribeRuntimeStreamResponseSchema.parse({
   runId: 'run-1',
   sessionId: 'session-1',
   flowId: 'flow-1',
-  subscribedItemKinds: ['transcript', 'tool', 'activity', 'action_required', 'complete', 'failure'],
+  subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
 })
 
 function makeStreamEvent(
@@ -2017,8 +2017,39 @@ describe('cadence-model', () => {
         createdAt: '2026-04-13T20:01:01Z',
       }),
     )
-    const withActivity = mergeRuntimeStreamEvent(
+    const withSkill = mergeRuntimeStreamEvent(
       withTool,
+      makeStreamEvent({
+        kind: 'skill',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        text: null,
+        toolCallId: null,
+        toolName: null,
+        toolState: null,
+        toolSummary: null,
+        skillId: 'find-skills',
+        skillStage: 'install',
+        skillResult: 'succeeded',
+        skillSource: {
+          repo: 'vercel-labs/skills',
+          path: 'skills/find-skills',
+          reference: 'main',
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+        },
+        skillCacheStatus: 'refreshed',
+        skillDiagnostic: null,
+        actionType: null,
+        title: null,
+        detail: 'Installed autonomous skill `find-skills` from the cached vercel-labs/skills tree.',
+        code: null,
+        message: null,
+        retryable: null,
+        createdAt: '2026-04-13T20:01:02Z',
+      }),
+    )
+    const withActivity = mergeRuntimeStreamEvent(
+      withSkill,
       makeStreamEvent({
         kind: 'activity',
         sessionId: 'session-1',
@@ -2027,13 +2058,20 @@ describe('cadence-model', () => {
         toolCallId: null,
         toolName: null,
         toolState: null,
+        toolSummary: null,
+        skillId: null,
+        skillStage: null,
+        skillResult: null,
+        skillSource: null,
+        skillCacheStatus: null,
+        skillDiagnostic: null,
         actionType: null,
         title: 'Planning',
         detail: 'Replay buffer ready.',
         code: 'phase_progress',
         message: null,
         retryable: null,
-        createdAt: '2026-04-13T20:01:02Z',
+        createdAt: '2026-04-13T20:01:03Z',
       }),
     )
     const withActionRequired = mergeRuntimeStreamEvent(
@@ -2054,7 +2092,7 @@ describe('cadence-model', () => {
         code: null,
         message: null,
         retryable: null,
-        createdAt: '2026-04-13T20:01:03Z',
+        createdAt: '2026-04-13T20:01:04Z',
       }),
     )
     const completed = mergeRuntimeStreamEvent(
@@ -2073,7 +2111,7 @@ describe('cadence-model', () => {
         code: null,
         message: null,
         retryable: null,
-        createdAt: '2026-04-13T20:01:04Z',
+        createdAt: '2026-04-13T20:01:05Z',
       }),
     )
 
@@ -2093,6 +2131,17 @@ describe('cadence-model', () => {
         kind: 'command',
         stdoutTruncated: true,
         stderrRedacted: true,
+      },
+    })
+    expect(withSkill.skillItems[0]).toMatchObject({
+      runId: 'run-1',
+      skillId: 'find-skills',
+      stage: 'install',
+      result: 'succeeded',
+      cacheStatus: 'refreshed',
+      source: {
+        repo: 'vercel-labs/skills',
+        treeHash: '0123456789abcdef0123456789abcdef01234567',
       },
     })
     expect(withActivity.activityItems[0]).toMatchObject({
@@ -2585,9 +2634,85 @@ describe('cadence-model', () => {
         toolCallId: null,
         toolName: null,
         toolState: null,
+        skillId: null,
+        skillStage: null,
+        skillResult: null,
+        skillSource: null,
+        skillCacheStatus: null,
+        skillDiagnostic: null,
+        actionId: null,
         actionType: null,
         title: null,
         detail: null,
+        code: null,
+        message: null,
+        retryable: null,
+        createdAt: '2026-04-13T20:01:00Z',
+      }),
+    ).toThrow()
+
+    expect(() =>
+      runtimeStreamItemSchema.parse({
+        kind: 'skill',
+        runId: 'run-1',
+        sequence: 2,
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        text: null,
+        toolCallId: null,
+        toolName: null,
+        toolState: null,
+        toolSummary: null,
+        skillId: 'find-skills',
+        skillStage: 'install',
+        skillResult: 'failed',
+        skillSource: {
+          repo: 'vercel-labs/skills',
+          path: 'skills/find-skills',
+          reference: 'main',
+        },
+        skillCacheStatus: 'refreshed',
+        skillDiagnostic: null,
+        actionId: null,
+        boundaryId: null,
+        actionType: null,
+        title: null,
+        detail: 'Install failed while refreshing the cached skill tree.',
+        code: null,
+        message: null,
+        retryable: null,
+        createdAt: '2026-04-13T20:01:00Z',
+      }),
+    ).toThrow(/skillSource|skillDiagnostic|tree hashes/i)
+
+    expect(() =>
+      runtimeStreamItemSchema.parse({
+        kind: 'skill',
+        runId: 'run-1',
+        sequence: 3,
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        text: null,
+        toolCallId: null,
+        toolName: null,
+        toolState: null,
+        toolSummary: null,
+        skillId: 'find-skills',
+        skillStage: 'discover',
+        skillResult: 'succeeded',
+        skillSource: {
+          repo: 'vercel-labs/skills',
+          path: 'skills/find-skills',
+          reference: 'main',
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+        },
+        skillCacheStatus: null,
+        skillDiagnostic: null,
+        actionId: null,
+        boundaryId: null,
+        actionType: null,
+        title: null,
+        detail: 'Discovery completed.',
         code: null,
         message: null,
         retryable: null,
@@ -2604,7 +2729,7 @@ describe('cadence-model', () => {
             sessionId: 'session-1',
             flowId: 'flow-1',
             text: null,
-            toolCallId: null,
+            toolCallId: 'tool-call-cross-project',
             toolName: 'inspect_repository_context',
             toolState: 'running',
             actionType: null,

@@ -32,7 +32,9 @@ use super::{
     protocol::{
         CommandToolResultSummary, FileToolResultSummary, GitToolResultSummary,
         SupervisorControlRequest, SupervisorControlResponse, SupervisorLiveEventPayload,
-        SupervisorProcessStatus, SupervisorProtocolDiagnostic, SupervisorStartupMessage,
+        SupervisorProcessStatus, SupervisorProtocolDiagnostic, SupervisorSkillCacheStatus,
+        SupervisorSkillDiagnostic, SupervisorSkillLifecycleResult,
+        SupervisorSkillLifecycleStage, SupervisorSkillSourceMetadata, SupervisorStartupMessage,
         SupervisorToolCallState, ToolResultSummary, WebToolResultSummary,
         SUPERVISOR_KIND_DETACHED_PTY, SUPERVISOR_PROTOCOL_VERSION, SUPERVISOR_TRANSPORT_KIND_TCP,
     },
@@ -2552,6 +2554,159 @@ fn normalize_structured_event(payload: &str) -> NormalizedPtyEvent {
                 }
             }
         }
+        "skill" => {
+            let Some(skill_id) = value.get("skill_id").and_then(serde_json::Value::as_str) else {
+                return diagnostic_skill_live_event(SkillLiveEventDecodeError::Missing(
+                    "skill_id",
+                ));
+            };
+            let Some(stage) = value.get("stage").and_then(serde_json::Value::as_str) else {
+                return diagnostic_skill_live_event(SkillLiveEventDecodeError::Missing("stage"));
+            };
+            let Some(result) = value.get("result").and_then(serde_json::Value::as_str) else {
+                return diagnostic_skill_live_event(SkillLiveEventDecodeError::Missing("result"));
+            };
+            let Some(detail) = value.get("detail").and_then(serde_json::Value::as_str) else {
+                return diagnostic_skill_live_event(SkillLiveEventDecodeError::Missing("detail"));
+            };
+            let Some(source_value) = value.get("source") else {
+                return diagnostic_skill_live_event(SkillLiveEventDecodeError::Missing("source"));
+            };
+
+            let Some(skill_id) = sanitize_skill_id_fragment(skill_id) else {
+                return diagnostic_skill_live_event(SkillLiveEventDecodeError::Blank("skill_id"));
+            };
+            let stage = match stage {
+                "discovery" => SupervisorSkillLifecycleStage::Discovery,
+                "install" => SupervisorSkillLifecycleStage::Install,
+                "invoke" => SupervisorSkillLifecycleStage::Invoke,
+                _ => {
+                    return diagnostic_skill_live_event(SkillLiveEventDecodeError::Unsupported(
+                        "stage",
+                    ))
+                }
+            };
+            let result = match result {
+                "succeeded" => SupervisorSkillLifecycleResult::Succeeded,
+                "failed" => SupervisorSkillLifecycleResult::Failed,
+                _ => {
+                    return diagnostic_skill_live_event(SkillLiveEventDecodeError::Unsupported(
+                        "result",
+                    ))
+                }
+            };
+            let detail = match sanitize_text_fragment(detail) {
+                Ok(Some(detail)) => detail,
+                Ok(None) => {
+                    return diagnostic_skill_live_event(SkillLiveEventDecodeError::Blank(
+                        "detail",
+                    ))
+                }
+                Err(()) => {
+                    return diagnostic_skill_live_event(SkillLiveEventDecodeError::Oversized(
+                        "detail",
+                    ))
+                }
+            };
+            let source = match sanitize_skill_source_metadata(source_value) {
+                Ok(source) => source,
+                Err(error) => return diagnostic_skill_live_event(error),
+            };
+            let cache_status = match value.get("cache_status") {
+                Some(raw_cache_status) if raw_cache_status.is_null() => None,
+                Some(raw_cache_status) => {
+                    let Some(cache_status) = raw_cache_status.as_str() else {
+                        return diagnostic_skill_live_event(SkillLiveEventDecodeError::Invalid(
+                            "cache_status",
+                        ));
+                    };
+                    let cache_status = match cache_status {
+                        "miss" => SupervisorSkillCacheStatus::Miss,
+                        "hit" => SupervisorSkillCacheStatus::Hit,
+                        "refreshed" => SupervisorSkillCacheStatus::Refreshed,
+                        _ => {
+                            return diagnostic_skill_live_event(
+                                SkillLiveEventDecodeError::Unsupported("cache_status"),
+                            )
+                        }
+                    };
+                    Some(cache_status)
+                }
+                None => None,
+            };
+            let diagnostic = match value.get("diagnostic") {
+                Some(raw_diagnostic) if raw_diagnostic.is_null() => None,
+                Some(raw_diagnostic) => match sanitize_skill_diagnostic(raw_diagnostic) {
+                    Ok(diagnostic) => Some(diagnostic),
+                    Err(error) => return diagnostic_skill_live_event(error),
+                },
+                None => None,
+            };
+
+            if matches!(stage, SupervisorSkillLifecycleStage::Discovery) && cache_status.is_some() {
+                return diagnostic_skill_live_event(SkillLiveEventDecodeError::Invalid(
+                    "cache_status",
+                ));
+            }
+            if matches!(
+                stage,
+                SupervisorSkillLifecycleStage::Install | SupervisorSkillLifecycleStage::Invoke
+            ) && matches!(result, SupervisorSkillLifecycleResult::Succeeded)
+                && cache_status.is_none()
+            {
+                return diagnostic_skill_live_event(SkillLiveEventDecodeError::Missing(
+                    "cache_status",
+                ));
+            }
+            match (&result, diagnostic.as_ref()) {
+                (SupervisorSkillLifecycleResult::Succeeded, Some(_)) => {
+                    return diagnostic_skill_live_event(SkillLiveEventDecodeError::Invalid(
+                        "diagnostic",
+                    ))
+                }
+                (SupervisorSkillLifecycleResult::Failed, None) => {
+                    return diagnostic_skill_live_event(SkillLiveEventDecodeError::Missing(
+                        "diagnostic",
+                    ))
+                }
+                _ => {}
+            }
+
+            if [
+                Some(skill_id.as_str()),
+                Some(detail.as_str()),
+                Some(source.repo.as_str()),
+                Some(source.path.as_str()),
+                Some(source.reference.as_str()),
+                Some(source.tree_hash.as_str()),
+            ]
+            .into_iter()
+            .flatten()
+            .chain(diagnostic.as_ref().into_iter().flat_map(|diagnostic| {
+                [
+                    diagnostic.code.as_str(),
+                    diagnostic.message.as_str(),
+                ]
+                .into_iter()
+            }))
+            .any(|value| contains_prohibited_live_content(value).is_some())
+            {
+                redacted_live_event()
+            } else {
+                NormalizedPtyEvent {
+                    checkpoint_summary: Some(skill_checkpoint_summary(&skill_id, &stage, &result)),
+                    item: SupervisorLiveEventPayload::Skill {
+                        skill_id,
+                        stage,
+                        result,
+                        detail,
+                        source,
+                        cache_status,
+                        diagnostic,
+                    },
+                }
+            }
+        }
         "action_required" => {
             let Some(action_id) = value.get("action_id").and_then(serde_json::Value::as_str) else {
                 return diagnostic_live_event(
@@ -2707,6 +2862,113 @@ fn sanitize_text_fragment(raw: &str) -> Result<Option<String>, ()> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillLiveEventDecodeError {
+    Missing(&'static str),
+    Blank(&'static str),
+    Invalid(&'static str),
+    Oversized(&'static str),
+    Unsupported(&'static str),
+}
+
+fn diagnostic_skill_live_event(error: SkillLiveEventDecodeError) -> NormalizedPtyEvent {
+    let (code, detail) = match error {
+        SkillLiveEventDecodeError::Missing(field) => (
+            "runtime_supervisor_skill_event_invalid",
+            format!("Cadence dropped a structured skill payload without a {field}."),
+        ),
+        SkillLiveEventDecodeError::Blank(field) => (
+            "runtime_supervisor_skill_event_blank",
+            format!("Cadence dropped a structured skill payload with a blank {field}."),
+        ),
+        SkillLiveEventDecodeError::Invalid(field) => (
+            "runtime_supervisor_skill_event_invalid",
+            format!("Cadence dropped a structured skill payload with invalid {field} metadata."),
+        ),
+        SkillLiveEventDecodeError::Oversized(field) => (
+            "runtime_supervisor_skill_event_oversized",
+            format!("Cadence dropped an oversized structured skill {field} before replay."),
+        ),
+        SkillLiveEventDecodeError::Unsupported(field) => (
+            "runtime_supervisor_skill_event_unsupported",
+            format!("Cadence dropped a structured skill payload with an unsupported {field}."),
+        ),
+    };
+
+    diagnostic_live_event(code, "Skill event dropped", &detail)
+}
+
+fn sanitize_skill_id_fragment(raw: &str) -> Option<String> {
+    let value = sanitize_identifier_fragment(raw)?;
+    if value.chars().all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    }) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn sanitize_skill_source_text_field(
+    value: Option<&serde_json::Value>,
+    field: &'static str,
+) -> Result<String, SkillLiveEventDecodeError> {
+    let Some(value) = value.and_then(serde_json::Value::as_str) else {
+        return Err(SkillLiveEventDecodeError::Missing(field));
+    };
+
+    match sanitize_text_fragment(value) {
+        Ok(Some(sanitized)) => Ok(sanitized),
+        Ok(None) => Err(SkillLiveEventDecodeError::Blank(field)),
+        Err(()) => Err(SkillLiveEventDecodeError::Oversized(field)),
+    }
+}
+
+fn sanitize_skill_source_metadata(
+    value: &serde_json::Value,
+) -> Result<SupervisorSkillSourceMetadata, SkillLiveEventDecodeError> {
+    let Some(source) = value.as_object() else {
+        return Err(SkillLiveEventDecodeError::Invalid("source"));
+    };
+
+    let tree_hash = sanitize_skill_source_text_field(source.get("tree_hash"), "source.tree_hash")?;
+    if tree_hash.len() != 40
+        || tree_hash
+            .chars()
+            .any(|character| !character.is_ascii_hexdigit() || character.is_ascii_uppercase())
+    {
+        return Err(SkillLiveEventDecodeError::Invalid("source.tree_hash"));
+    }
+
+    Ok(SupervisorSkillSourceMetadata {
+        repo: sanitize_skill_source_text_field(source.get("repo"), "source.repo")?,
+        path: sanitize_skill_source_text_field(source.get("path"), "source.path")?,
+        reference: sanitize_skill_source_text_field(source.get("reference"), "source.reference")?,
+        tree_hash,
+    })
+}
+
+fn sanitize_skill_diagnostic(
+    value: &serde_json::Value,
+) -> Result<SupervisorSkillDiagnostic, SkillLiveEventDecodeError> {
+    let Some(diagnostic) = value.as_object() else {
+        return Err(SkillLiveEventDecodeError::Invalid("diagnostic"));
+    };
+
+    let code = sanitize_skill_source_text_field(diagnostic.get("code"), "diagnostic.code")?;
+    let message =
+        sanitize_skill_source_text_field(diagnostic.get("message"), "diagnostic.message")?;
+    let Some(retryable) = diagnostic.get("retryable").and_then(serde_json::Value::as_bool) else {
+        return Err(SkillLiveEventDecodeError::Missing("diagnostic.retryable"));
+    };
+
+    Ok(SupervisorSkillDiagnostic {
+        code,
+        message,
+        retryable,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolSummaryDecodeError {
     Invalid,
     Oversized,
@@ -2856,6 +3118,24 @@ fn tool_checkpoint_summary(tool_name: &str, tool_state: &SupervisorToolCallState
     format!("Tool `{tool_name}` {state}.")
 }
 
+fn skill_checkpoint_summary(
+    skill_id: &str,
+    stage: &SupervisorSkillLifecycleStage,
+    result: &SupervisorSkillLifecycleResult,
+) -> String {
+    let stage = match stage {
+        SupervisorSkillLifecycleStage::Discovery => "discovery",
+        SupervisorSkillLifecycleStage::Install => "install",
+        SupervisorSkillLifecycleStage::Invoke => "invoke",
+    };
+    let result = match result {
+        SupervisorSkillLifecycleResult::Succeeded => "succeeded",
+        SupervisorSkillLifecycleResult::Failed => "failed",
+    };
+
+    format!("Skill `{skill_id}` {stage} {result}.")
+}
+
 fn activity_checkpoint_summary(code: &str, title: &str) -> String {
     format!("{ACTIVITY_OUTPUT_PREFIX} {code}: {title}")
 }
@@ -2885,6 +3165,7 @@ fn emit_normalized_events(
 
         let should_persist_autonomous_event = match &event.item {
             SupervisorLiveEventPayload::Tool { .. }
+            | SupervisorLiveEventPayload::Skill { .. }
             | SupervisorLiveEventPayload::ActionRequired { .. } => true,
             SupervisorLiveEventPayload::Activity { code, .. } => code.contains("policy_denied"),
             _ => false,
@@ -3130,6 +3411,7 @@ fn should_persist_live_event_checkpoint(event: &BufferedSupervisorEvent, _summar
         || matches!(
             event.item,
             SupervisorLiveEventPayload::Tool { .. }
+                | SupervisorLiveEventPayload::Skill { .. }
                 | SupervisorLiveEventPayload::Activity { .. }
                 | SupervisorLiveEventPayload::ActionRequired { .. }
         )

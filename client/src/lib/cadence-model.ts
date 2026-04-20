@@ -10,6 +10,7 @@ const STEP_INDEX = new Map(PHASE_STEPS.map((step, index) => [step, index]))
 export const MAX_RUNTIME_STREAM_ITEMS = 40
 export const MAX_RUNTIME_STREAM_TRANSCRIPTS = 20
 export const MAX_RUNTIME_STREAM_TOOL_CALLS = 20
+export const MAX_RUNTIME_STREAM_SKILLS = 20
 export const MAX_RUNTIME_STREAM_ACTIVITY = 20
 export const MAX_RUNTIME_STREAM_ACTION_REQUIRED = 10
 
@@ -2232,41 +2233,263 @@ export const autonomousRunStateSchema = z
   })
 
 export const runtimeToolCallStateSchema = z.enum(['pending', 'running', 'succeeded', 'failed'])
+export const runtimeSkillLifecycleStageSchema = z.enum(['discovery', 'install', 'invoke'])
+export const runtimeSkillLifecycleResultSchema = z.enum(['succeeded', 'failed'])
+export const runtimeSkillCacheStatusSchema = z.enum(['miss', 'hit', 'refreshed'])
+export const runtimeSkillSourceSchema = z
+  .object({
+    repo: z.string().trim().min(1),
+    path: z.string().trim().min(1),
+    reference: z.string().trim().min(1),
+    treeHash: z.string().regex(/^[0-9a-f]{40}$/, 'Runtime skill source tree hashes must be lowercase 40-character hex digests.'),
+  })
+  .strict()
+export const runtimeSkillDiagnosticSchema = z
+  .object({
+    code: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+    retryable: z.boolean(),
+  })
+  .strict()
 export const runtimeStreamItemKindSchema = z.enum([
   'transcript',
   'tool',
+  'skill',
   'activity',
   'action_required',
   'complete',
   'failure',
 ])
 
-export const runtimeStreamItemSchema = z.object({
-  kind: runtimeStreamItemKindSchema,
-  runId: z.string().trim().min(1),
-  sequence: z.number().int().positive(),
-  sessionId: nonEmptyOptionalTextSchema,
-  flowId: nonEmptyOptionalTextSchema,
-  text: nonEmptyOptionalTextSchema,
-  toolCallId: nonEmptyOptionalTextSchema,
-  toolName: nonEmptyOptionalTextSchema,
-  toolState: runtimeToolCallStateSchema.nullable().optional(),
-  toolSummary: toolResultSummarySchema.nullable().optional(),
-  actionId: nonEmptyOptionalTextSchema,
-  boundaryId: nonEmptyOptionalTextSchema,
-  actionType: nonEmptyOptionalTextSchema,
-  title: nonEmptyOptionalTextSchema,
-  detail: nonEmptyOptionalTextSchema,
-  code: nonEmptyOptionalTextSchema,
-  message: nonEmptyOptionalTextSchema,
-  retryable: z.boolean().nullable().optional(),
-  createdAt: isoTimestampSchema,
-})
+export const runtimeStreamItemSchema = z
+  .object({
+    kind: runtimeStreamItemKindSchema,
+    runId: z.string().trim().min(1),
+    sequence: z.number().int().positive(),
+    sessionId: nonEmptyOptionalTextSchema,
+    flowId: nonEmptyOptionalTextSchema,
+    text: nonEmptyOptionalTextSchema,
+    toolCallId: nonEmptyOptionalTextSchema,
+    toolName: nonEmptyOptionalTextSchema,
+    toolState: runtimeToolCallStateSchema.nullable().optional(),
+    toolSummary: toolResultSummarySchema.nullable().optional(),
+    skillId: nonEmptyOptionalTextSchema,
+    skillStage: runtimeSkillLifecycleStageSchema.nullable().optional(),
+    skillResult: runtimeSkillLifecycleResultSchema.nullable().optional(),
+    skillSource: runtimeSkillSourceSchema.nullable().optional(),
+    skillCacheStatus: runtimeSkillCacheStatusSchema.nullable().optional(),
+    skillDiagnostic: runtimeSkillDiagnosticSchema.nullable().optional(),
+    actionId: nonEmptyOptionalTextSchema,
+    boundaryId: nonEmptyOptionalTextSchema,
+    actionType: nonEmptyOptionalTextSchema,
+    title: nonEmptyOptionalTextSchema,
+    detail: nonEmptyOptionalTextSchema,
+    code: nonEmptyOptionalTextSchema,
+    message: nonEmptyOptionalTextSchema,
+    retryable: z.boolean().nullable().optional(),
+    createdAt: isoTimestampSchema,
+  })
+  .strict()
+  .superRefine((item, ctx) => {
+    const hasSkillMetadata =
+      item.skillId != null
+      || item.skillStage != null
+      || item.skillResult != null
+      || item.skillSource != null
+      || item.skillCacheStatus != null
+      || item.skillDiagnostic != null
+
+    if (item.kind !== 'skill' && hasSkillMetadata) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['skillId'],
+        message: `Cadence received non-skill runtime item kind \`${item.kind}\` with skill lifecycle metadata.`,
+      })
+    }
+
+    switch (item.kind) {
+      case 'transcript':
+        if (!item.text) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['text'],
+            message: 'Cadence received a runtime transcript item without a non-empty text field.',
+          })
+        }
+        return
+      case 'tool':
+        if (!item.toolCallId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['toolCallId'],
+            message: 'Cadence received a runtime tool item without a non-empty toolCallId field.',
+          })
+        }
+        if (!item.toolName) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['toolName'],
+            message: 'Cadence received a runtime tool item without a non-empty toolName field.',
+          })
+        }
+        if (!item.toolState) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['toolState'],
+            message: 'Cadence received a runtime tool item without a toolState value.',
+          })
+        }
+        return
+      case 'skill':
+        if (!item.skillId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['skillId'],
+            message: 'Cadence received a runtime skill item without a non-empty skillId field.',
+          })
+        }
+        if (!item.skillStage) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['skillStage'],
+            message: 'Cadence received a runtime skill item without a skillStage value.',
+          })
+        }
+        if (!item.skillResult) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['skillResult'],
+            message: 'Cadence received a runtime skill item without a skillResult value.',
+          })
+        }
+        if (!item.skillSource) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['skillSource'],
+            message: 'Cadence received a runtime skill item without skillSource metadata.',
+          })
+        }
+        if (!item.detail) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['detail'],
+            message: 'Cadence received a runtime skill item without a non-empty detail field.',
+          })
+        }
+        if (item.skillResult === 'succeeded' && item.skillDiagnostic) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['skillDiagnostic'],
+            message: 'Successful runtime skill items must not include skillDiagnostic payloads.',
+          })
+        }
+        if (item.skillResult === 'failed' && !item.skillDiagnostic) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['skillDiagnostic'],
+            message: 'Failed runtime skill items must include typed skillDiagnostic payloads.',
+          })
+        }
+        if (item.skillStage === 'discovery' && item.skillCacheStatus) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['skillCacheStatus'],
+            message: 'Discovery runtime skill items must omit skillCacheStatus because no install or invoke step has completed yet.',
+          })
+        }
+        if ((item.skillStage === 'install' || item.skillStage === 'invoke') && item.skillResult === 'succeeded' && !item.skillCacheStatus) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['skillCacheStatus'],
+            message: 'Successful install/invoke runtime skill items must include skillCacheStatus.',
+          })
+        }
+        return
+      case 'activity':
+        if (!item.code) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['code'],
+            message: 'Cadence received a runtime activity item without a non-empty code field.',
+          })
+        }
+        if (!item.title) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['title'],
+            message: 'Cadence received a runtime activity item without a non-empty title field.',
+          })
+        }
+        return
+      case 'action_required':
+        if (!item.actionId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['actionId'],
+            message: 'Cadence received a runtime action-required item without a non-empty actionId field.',
+          })
+        }
+        if (!item.actionType) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['actionType'],
+            message: 'Cadence received a runtime action-required item without a non-empty actionType field.',
+          })
+        }
+        if (!item.title) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['title'],
+            message: 'Cadence received a runtime action-required item without a non-empty title field.',
+          })
+        }
+        if (!item.detail) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['detail'],
+            message: 'Cadence received a runtime action-required item without a non-empty detail field.',
+          })
+        }
+        return
+      case 'complete':
+        if (!item.detail) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['detail'],
+            message: 'Cadence received a runtime completion item without a non-empty detail field.',
+          })
+        }
+        return
+      case 'failure':
+        if (!item.code) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['code'],
+            message: 'Cadence received a runtime failure item without a non-empty code field.',
+          })
+        }
+        if (!item.message) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['message'],
+            message: 'Cadence received a runtime failure item without a non-empty message field.',
+          })
+        }
+        if (typeof item.retryable !== 'boolean') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['retryable'],
+            message: 'Cadence received a runtime failure item without a retryable flag.',
+          })
+        }
+        return
+    }
+  })
 
 export const subscribeRuntimeStreamRequestSchema = z.object({
   projectId: z.string().trim().min(1),
   itemKinds: z.array(runtimeStreamItemKindSchema).min(1),
-})
+}).strict()
 
 export const subscribeRuntimeStreamResponseSchema = z.object({
   projectId: z.string().trim().min(1),
@@ -2275,7 +2498,7 @@ export const subscribeRuntimeStreamResponseSchema = z.object({
   sessionId: z.string().trim().min(1),
   flowId: nonEmptyOptionalTextSchema,
   subscribedItemKinds: z.array(runtimeStreamItemKindSchema).min(1),
-})
+}).strict()
 
 export type ProjectSummaryDto = z.infer<typeof projectSummarySchema>
 export type PhaseSummaryDto = z.infer<typeof phaseSummarySchema>
@@ -2397,6 +2620,11 @@ export type AutonomousUnitArtifactDto = z.infer<typeof autonomousUnitArtifactSch
 export type AutonomousUnitHistoryEntryDto = z.infer<typeof autonomousUnitHistoryEntrySchema>
 export type AutonomousRunStateDto = z.infer<typeof autonomousRunStateSchema>
 export type RuntimeToolCallStateDto = z.infer<typeof runtimeToolCallStateSchema>
+export type RuntimeSkillLifecycleStageDto = z.infer<typeof runtimeSkillLifecycleStageSchema>
+export type RuntimeSkillLifecycleResultDto = z.infer<typeof runtimeSkillLifecycleResultSchema>
+export type RuntimeSkillCacheStatusDto = z.infer<typeof runtimeSkillCacheStatusSchema>
+export type RuntimeSkillSourceDto = z.infer<typeof runtimeSkillSourceSchema>
+export type RuntimeSkillDiagnosticDto = z.infer<typeof runtimeSkillDiagnosticSchema>
 export type RuntimeStreamItemKindDto = z.infer<typeof runtimeStreamItemKindSchema>
 export type RuntimeStreamItemDto = z.infer<typeof runtimeStreamItemSchema>
 export type SubscribeRuntimeStreamRequestDto = z.infer<typeof subscribeRuntimeStreamRequestSchema>
@@ -2900,6 +3128,17 @@ export interface RuntimeStreamToolItemView extends RuntimeStreamBaseItemView {
   toolSummary: ToolResultSummaryDto | null
 }
 
+export interface RuntimeStreamSkillItemView extends RuntimeStreamBaseItemView {
+  kind: 'skill'
+  skillId: string
+  stage: RuntimeSkillLifecycleStageDto
+  result: RuntimeSkillLifecycleResultDto
+  detail: string
+  source: RuntimeSkillSourceDto
+  cacheStatus: RuntimeSkillCacheStatusDto | null
+  diagnostic: RuntimeSkillDiagnosticDto | null
+}
+
 export interface RuntimeStreamActivityItemView extends RuntimeStreamBaseItemView {
   kind: 'activity'
   code: string
@@ -2931,6 +3170,7 @@ export interface RuntimeStreamFailureItemView extends RuntimeStreamBaseItemView 
 export type RuntimeStreamViewItem =
   | RuntimeStreamTranscriptItemView
   | RuntimeStreamToolItemView
+  | RuntimeStreamSkillItemView
   | RuntimeStreamActivityItemView
   | RuntimeStreamActionRequiredItemView
   | RuntimeStreamCompleteItemView
@@ -2957,6 +3197,7 @@ export interface RuntimeStreamView {
   items: RuntimeStreamViewItem[]
   transcriptItems: RuntimeStreamTranscriptItemView[]
   toolCalls: RuntimeStreamToolItemView[]
+  skillItems: RuntimeStreamSkillItemView[]
   activityItems: RuntimeStreamActivityItemView[]
   actionRequired: RuntimeStreamActionRequiredItemView[]
   completion: RuntimeStreamCompleteItemView | null
@@ -3500,6 +3741,38 @@ function normalizeRuntimeStreamItem(event: RuntimeStreamEventDto): RuntimeStream
         toolSummary: event.item.toolSummary ?? null,
       }
     }
+    case 'skill': {
+      const skillId = ensureRuntimeStreamText(event.item.skillId, 'skillId', 'skill')
+      const stage = event.item.skillStage
+      const result = event.item.skillResult
+      const source = event.item.skillSource
+      const detail = ensureRuntimeStreamText(event.item.detail, 'detail', 'skill')
+
+      if (!stage) {
+        throw new Error('Cadence received a runtime skill item without a skillStage value.')
+      }
+      if (!result) {
+        throw new Error('Cadence received a runtime skill item without a skillResult value.')
+      }
+      if (!source) {
+        throw new Error('Cadence received a runtime skill item without skillSource metadata.')
+      }
+
+      return {
+        id: runtimeStreamItemId('skill', itemRunId, event.item.sequence),
+        kind: 'skill',
+        runId: itemRunId,
+        sequence: event.item.sequence,
+        createdAt: event.item.createdAt,
+        skillId,
+        stage,
+        result,
+        detail,
+        source,
+        cacheStatus: event.item.skillCacheStatus ?? null,
+        diagnostic: event.item.skillDiagnostic ?? null,
+      }
+    }
     case 'activity': {
       const code = ensureRuntimeStreamText(event.item.code, 'code', 'activity')
       const title = ensureRuntimeStreamText(event.item.title, 'title', 'activity')
@@ -3584,6 +3857,7 @@ export function createRuntimeStreamView(options: {
     items: [],
     transcriptItems: [],
     toolCalls: [],
+    skillItems: [],
     activityItems: [],
     actionRequired: [],
     completion: null,
@@ -3670,6 +3944,10 @@ export function mergeRuntimeStreamEvent(
           MAX_RUNTIME_STREAM_TOOL_CALLS,
         )
       : base.toolCalls
+  const nextSkillItems =
+    nextItem.kind === 'skill'
+      ? capRecent([...base.skillItems, nextItem], MAX_RUNTIME_STREAM_SKILLS)
+      : base.skillItems
   const nextTranscriptItems =
     nextItem.kind === 'transcript'
       ? capRecent([...base.transcriptItems, nextItem], MAX_RUNTIME_STREAM_TRANSCRIPTS)
@@ -3707,6 +3985,7 @@ export function mergeRuntimeStreamEvent(
     items: nextItems,
     transcriptItems: nextTranscriptItems,
     toolCalls: nextToolCalls,
+    skillItems: nextSkillItems,
     activityItems: nextActivityItems,
     actionRequired: nextActionRequired,
     completion: nextItem.kind === 'complete' ? nextItem : base.completion,

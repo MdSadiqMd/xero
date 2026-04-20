@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use cadence_desktop_lib::{
     db::{self, database_path_for_repo, project_store},
     git::repository::CanonicalRepository,
+    runtime::{
+        autonomous_orchestrator::{persist_skill_lifecycle_event, AutonomousSkillLifecycleEvent},
+        AutonomousSkillCacheStatus, AutonomousSkillSourceMetadata,
+    },
     state::DesktopState,
 };
 use rusqlite::{params, Connection};
@@ -209,6 +213,63 @@ fn sample_tool_result_artifact(
                 boundary_id: Some("boundary-1".into()),
             },
         )),
+        created_at: "2099-04-15T19:00:20Z".into(),
+        updated_at: "2099-04-15T19:00:20Z".into(),
+    }
+}
+
+fn sample_skill_source_metadata() -> AutonomousSkillSourceMetadata {
+    AutonomousSkillSourceMetadata {
+        repo: "vercel-labs/skills".into(),
+        path: "skills/find-skills".into(),
+        reference: "main".into(),
+        tree_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+    }
+}
+
+fn sample_skill_lifecycle_artifact(
+    project_id: &str,
+    run_id: &str,
+) -> project_store::AutonomousUnitArtifactRecord {
+    let unit_id = format!("{run_id}:unit:1");
+    let attempt_id = format!("{run_id}:unit:1:attempt:1");
+    let artifact_id = "artifact-skill-lifecycle-discovery".to_string();
+
+    project_store::AutonomousUnitArtifactRecord {
+        project_id: project_id.into(),
+        run_id: run_id.into(),
+        unit_id: unit_id.clone(),
+        attempt_id: attempt_id.clone(),
+        artifact_id: artifact_id.clone(),
+        artifact_kind: "skill_lifecycle".into(),
+        status: project_store::AutonomousUnitArtifactStatus::Recorded,
+        summary: "Autonomous skill `find-skills` recorded a successful discovery stage.".into(),
+        content_hash: None,
+        payload: Some(
+            project_store::AutonomousArtifactPayloadRecord::SkillLifecycle(
+                project_store::AutonomousSkillLifecyclePayloadRecord {
+                    project_id: project_id.into(),
+                    run_id: run_id.into(),
+                    unit_id,
+                    attempt_id,
+                    artifact_id,
+                    stage: project_store::AutonomousSkillLifecycleStageRecord::Discovery,
+                    result: project_store::AutonomousSkillLifecycleResultRecord::Succeeded,
+                    skill_id: "find-skills".into(),
+                    source: project_store::AutonomousSkillLifecycleSourceRecord {
+                        repo: "vercel-labs/skills".into(),
+                        path: "skills/find-skills".into(),
+                        reference: "main".into(),
+                        tree_hash: "0123456789abcdef0123456789abcdef01234567".into(),
+                    },
+                    cache: project_store::AutonomousSkillLifecycleCacheRecord {
+                        key: "find-skills-576b45048241".into(),
+                        status: None,
+                    },
+                    diagnostic: None,
+                },
+            ),
+        ),
         created_at: "2099-04-15T19:00:20Z".into(),
         updated_at: "2099-04-15T19:00:20Z".into(),
     }
@@ -1435,6 +1496,91 @@ fn autonomous_run_persistence_canonicalizes_structured_artifact_payloads_and_rel
 }
 
 #[test]
+fn autonomous_run_persistence_canonicalizes_skill_lifecycle_payloads_and_reloads_them() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Supervisor launched and connected to the project PTY.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for skill lifecycle persistence");
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![sample_skill_lifecycle_artifact(project_id, run_id)];
+
+    let persisted = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect("persist autonomous run with skill lifecycle artifact");
+    let artifact = &persisted.history[0].artifacts[0];
+    let payload_hash = artifact
+        .content_hash
+        .as_ref()
+        .expect("skill lifecycle artifact should compute content hash")
+        .clone();
+    assert!(matches!(
+        artifact.payload.as_ref(),
+        Some(project_store::AutonomousArtifactPayloadRecord::SkillLifecycle(_))
+    ));
+
+    let stored_payload_json: String = open_state_connection(&repo_root)
+        .query_row(
+            "SELECT payload_json FROM autonomous_unit_artifacts WHERE artifact_id = ?1",
+            params![artifact.artifact_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("read stored skill lifecycle payload json");
+    let expected_payload_json = concat!(
+        "{",
+        "\"artifactId\":\"artifact-skill-lifecycle-discovery\"",
+        ",\"attemptId\":\"run-1:unit:1:attempt:1\"",
+        ",\"cache\":{\"key\":\"find-skills-576b45048241\"}",
+        ",\"kind\":\"skill_lifecycle\"",
+        ",\"projectId\":\"project-1\"",
+        ",\"result\":\"succeeded\"",
+        ",\"runId\":\"run-1\"",
+        ",\"skillId\":\"find-skills\"",
+        ",\"source\":{\"path\":\"skills/find-skills\",\"reference\":\"main\",\"repo\":\"vercel-labs/skills\",\"treeHash\":\"0123456789abcdef0123456789abcdef01234567\"}",
+        ",\"stage\":\"discovery\"",
+        ",\"unitId\":\"run-1:unit:1\"",
+        "}"
+    );
+    assert_eq!(stored_payload_json, expected_payload_json);
+
+    let mut hasher = Sha256::new();
+    hasher.update(stored_payload_json.as_bytes());
+    let expected_hash = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(payload_hash, expected_hash);
+
+    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
+        .expect("reload autonomous run with skill lifecycle artifact")
+        .expect("skill lifecycle autonomous run should exist");
+    assert_eq!(
+        recovered.history[0].artifacts[0].content_hash.as_deref(),
+        Some(expected_hash.as_str())
+    );
+    assert!(matches!(
+        recovered.history[0].artifacts[0].payload.as_ref(),
+        Some(project_store::AutonomousArtifactPayloadRecord::SkillLifecycle(_))
+    ));
+}
+
+#[test]
 fn autonomous_run_persistence_rejects_structured_artifact_payload_linkage_mismatch() {
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-1";
@@ -1509,6 +1655,120 @@ fn autonomous_run_persistence_rejects_secret_bearing_structured_payload_content(
 
     let error = project_store::upsert_autonomous_run(&repo_root, &payload)
         .expect_err("secret-bearing payload should be rejected");
+    assert_eq!(error.code, "autonomous_run_request_invalid");
+}
+
+#[test]
+fn autonomous_run_persistence_rejects_skill_lifecycle_payloads_without_tree_hash() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for missing tree hash rejection");
+
+    let mut artifact = sample_skill_lifecycle_artifact(project_id, run_id);
+    if let Some(project_store::AutonomousArtifactPayloadRecord::SkillLifecycle(skill)) =
+        artifact.payload.as_mut()
+    {
+        skill.source.tree_hash.clear();
+    }
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![artifact];
+
+    let error = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect_err("missing skill tree hash should be rejected");
+    assert_eq!(error.code, "autonomous_run_request_invalid");
+}
+
+#[test]
+fn autonomous_run_persistence_rejects_skill_lifecycle_kind_mismatch() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for kind mismatch rejection");
+
+    let mut artifact = sample_skill_lifecycle_artifact(project_id, run_id);
+    artifact.artifact_kind = "tool_result".into();
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![artifact];
+
+    let error = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect_err("mismatched artifact kind should be rejected");
+    assert_eq!(error.code, "autonomous_run_request_invalid");
+}
+
+#[test]
+fn autonomous_run_persistence_rejects_successful_skill_lifecycle_payloads_with_diagnostics() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for invalid success/diagnostic rejection");
+
+    let mut artifact = sample_skill_lifecycle_artifact(project_id, run_id);
+    if let Some(project_store::AutonomousArtifactPayloadRecord::SkillLifecycle(skill)) =
+        artifact.payload.as_mut()
+    {
+        skill.diagnostic = Some(project_store::AutonomousSkillLifecycleDiagnosticRecord {
+            code: "autonomous_skill_source_timeout".into(),
+            message: "Cadence timed out while contacting the autonomous skill source.".into(),
+            retryable: true,
+        });
+    }
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![artifact];
+
+    let error = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect_err("successful skill lifecycle payload with diagnostics should be rejected");
     assert_eq!(error.code, "autonomous_run_request_invalid");
 }
 
@@ -1616,6 +1876,151 @@ fn autonomous_run_decode_fails_closed_when_structured_payload_json_is_tampered()
     let error = project_store::load_autonomous_run(&repo_root, project_id)
         .expect_err("malformed payload json should fail closed");
     assert_eq!(error.code, "runtime_run_decode_failed");
+}
+
+#[test]
+fn autonomous_run_decode_fails_closed_when_skill_lifecycle_payload_stage_is_tampered() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run before skill lifecycle tampering");
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![sample_skill_lifecycle_artifact(project_id, run_id)];
+    project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect("persist skill lifecycle artifact before tampering");
+
+    open_state_connection(&repo_root)
+        .execute(
+            "UPDATE autonomous_unit_artifacts SET payload_json = ?1 WHERE artifact_id = ?2",
+            params![
+                concat!(
+                    "{",
+                    "\"kind\":\"skill_lifecycle\"",
+                    ",\"projectId\":\"project-1\"",
+                    ",\"runId\":\"run-1\"",
+                    ",\"unitId\":\"run-1:unit:1\"",
+                    ",\"attemptId\":\"run-1:unit:1:attempt:1\"",
+                    ",\"artifactId\":\"artifact-skill-lifecycle-discovery\"",
+                    ",\"stage\":\"discover\"",
+                    ",\"result\":\"succeeded\"",
+                    ",\"skillId\":\"find-skills\"",
+                    ",\"source\":{\"repo\":\"vercel-labs/skills\",\"path\":\"skills/find-skills\",\"reference\":\"main\",\"treeHash\":\"0123456789abcdef0123456789abcdef01234567\"}",
+                    ",\"cache\":{\"key\":\"find-skills-576b45048241\"}",
+                    "}"
+                ),
+                "artifact-skill-lifecycle-discovery"
+            ],
+        )
+        .expect("tamper skill lifecycle payload stage");
+
+    let error = project_store::load_autonomous_run(&repo_root, project_id)
+        .expect_err("tampered skill lifecycle payload should fail closed");
+    assert_eq!(error.code, "runtime_run_decode_failed");
+}
+
+#[test]
+fn autonomous_skill_lifecycle_persistence_is_replay_safe_across_stage_upserts() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+        },
+    )
+    .expect("persist runtime run for replay-safe skill lifecycle persistence");
+
+    let discovery =
+        AutonomousSkillLifecycleEvent::discovered("find-skills", sample_skill_source_metadata());
+    persist_skill_lifecycle_event(&repo_root, project_id, &discovery)
+        .expect("persist discovery skill lifecycle event")
+        .expect("skill lifecycle snapshot should exist");
+
+    let after_discovery = project_store::load_autonomous_run(&repo_root, project_id)
+        .expect("load autonomous run after discovery")
+        .expect("autonomous run should exist after discovery");
+    let discovery_artifact = after_discovery
+        .history
+        .iter()
+        .flat_map(|entry| entry.artifacts.iter())
+        .find(|artifact| artifact.artifact_kind == "skill_lifecycle")
+        .expect("discovery artifact should exist")
+        .clone();
+
+    persist_skill_lifecycle_event(&repo_root, project_id, &discovery)
+        .expect("persist repeated discovery skill lifecycle event")
+        .expect("skill lifecycle snapshot should still exist");
+
+    let install = AutonomousSkillLifecycleEvent {
+        stage: project_store::AutonomousSkillLifecycleStageRecord::Install,
+        result: project_store::AutonomousSkillLifecycleResultRecord::Succeeded,
+        skill_id: "find-skills".into(),
+        source: sample_skill_source_metadata(),
+        cache_key: "find-skills-576b45048241".into(),
+        cache_status: Some(AutonomousSkillCacheStatus::Hit),
+        diagnostic: None,
+    };
+    persist_skill_lifecycle_event(&repo_root, project_id, &install)
+        .expect("persist install skill lifecycle event")
+        .expect("skill lifecycle snapshot should still exist");
+
+    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
+        .expect("reload autonomous run after repeated stage writes")
+        .expect("autonomous run should exist after repeated stage writes");
+    let skill_artifacts = recovered
+        .history
+        .iter()
+        .flat_map(|entry| entry.artifacts.iter())
+        .filter(|artifact| artifact.artifact_kind == "skill_lifecycle")
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        skill_artifacts.len(),
+        2,
+        "expected one discovery row and one install row"
+    );
+    let repeated_discovery = skill_artifacts
+        .iter()
+        .find(|artifact| artifact.artifact_id == discovery_artifact.artifact_id)
+        .expect("repeated discovery artifact should still exist");
+    assert_eq!(repeated_discovery.created_at, discovery_artifact.created_at);
+    assert!(skill_artifacts.iter().any(|artifact| {
+        matches!(
+            artifact.payload.as_ref(),
+            Some(project_store::AutonomousArtifactPayloadRecord::SkillLifecycle(payload))
+                if payload.stage == project_store::AutonomousSkillLifecycleStageRecord::Install
+                    && payload.result
+                        == project_store::AutonomousSkillLifecycleResultRecord::Succeeded
+        )
+    }));
 }
 
 #[test]
