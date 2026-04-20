@@ -14,7 +14,9 @@ pub fn load_repository_status(
     Ok(repository.repository_status())
 }
 
-pub fn load_repository_status_from_root(root_path: &Path) -> CommandResult<RepositoryStatusResponseDto> {
+pub fn load_repository_status_from_root(
+    root_path: &Path,
+) -> CommandResult<RepositoryStatusResponseDto> {
     let repository = repository::open_repository_root(root_path)?;
     Ok(repository.canonical_repository()?.repository_status())
 }
@@ -34,7 +36,9 @@ pub fn resolve_project_repository(
     {
         match repository::open_repository_root(Path::new(&root_path)) {
             Ok(repository) => {
-                if repository.project_id() != project_id || repository.repository_id() != repository_id {
+                if repository.project_id() != project_id
+                    || repository.repository_id() != repository_id
+                {
                     return Err(CommandError::system_fault(
                         "project_registry_mismatch",
                         format!(

@@ -120,7 +120,9 @@ fn commit_all(repository: &Repository, message: &str) {
 
 fn stage_path(repository: &Repository, relative_path: &str) {
     let mut index = repository.index().expect("repo index");
-    index.add_path(Path::new(relative_path)).expect("stage path");
+    index
+        .add_path(Path::new(relative_path))
+        .expect("stage path");
     index.write().expect("write index");
 }
 
@@ -138,10 +140,7 @@ fn current_head_sha(repository: &Repository) -> Option<String> {
         .and_then(|head| head.target().map(|oid| oid.to_string()))
 }
 
-fn assert_status_matches_root(
-    repository_root: &Path,
-    status: &RepositoryStatusResponseDto,
-) {
+fn assert_status_matches_root(repository_root: &Path, status: &RepositoryStatusResponseDto) {
     let root_status =
         load_repository_status_from_root(repository_root).expect("load root git status projection");
     assert_eq!(status, &root_status);
@@ -204,7 +203,11 @@ fn clean_repo_status_and_empty_diffs_are_truthful() {
     assert_eq!(worktree_diff.patch, "");
     assert!(!worktree_diff.truncated);
     assert_eq!(worktree_diff.base_revision, current_head_sha(&repository));
-    assert_diff_matches_root(repository_root.path(), &staged_diff, RepositoryDiffScope::Staged);
+    assert_diff_matches_root(
+        repository_root.path(),
+        &staged_diff,
+        RepositoryDiffScope::Staged,
+    );
     assert_diff_matches_root(
         repository_root.path(),
         &unstaged_diff,
@@ -274,7 +277,11 @@ fn repository_status_and_diffs_surface_real_staged_unstaged_and_untracked_truth(
             .expect("worktree diff succeeds");
     assert!(worktree_diff.patch.contains("README.md"));
     assert!(worktree_diff.patch.contains("staged.txt"));
-    assert_diff_matches_root(repository_root.path(), &staged_diff, RepositoryDiffScope::Staged);
+    assert_diff_matches_root(
+        repository_root.path(),
+        &staged_diff,
+        RepositoryDiffScope::Staged,
+    );
     assert_diff_matches_root(
         repository_root.path(),
         &unstaged_diff,

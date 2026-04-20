@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use globset::{GlobBuilder, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
@@ -24,13 +25,26 @@ use crate::{
 
 pub const AUTONOMOUS_TOOL_READ: &str = "read";
 pub const AUTONOMOUS_TOOL_SEARCH: &str = "search";
+pub const AUTONOMOUS_TOOL_FIND: &str = "find";
 pub const AUTONOMOUS_TOOL_GIT_STATUS: &str = "git_status";
 pub const AUTONOMOUS_TOOL_GIT_DIFF: &str = "git_diff";
 pub const AUTONOMOUS_TOOL_EDIT: &str = "edit";
 pub const AUTONOMOUS_TOOL_WRITE: &str = "write";
 pub const AUTONOMOUS_TOOL_COMMAND: &str = "command";
 
-const SKIPPED_DIRECTORIES: &[&str] = &[".git", ".cadence"];
+const SKIPPED_DIRECTORIES: &[&str] = &[
+    ".git",
+    ".cadence",
+    "node_modules",
+    "target",
+    ".next",
+    "dist",
+    "build",
+    "coverage",
+    ".turbo",
+    ".yarn",
+    ".pnpm-store",
+];
 const DEFAULT_READ_LINE_COUNT: usize = 200;
 const MAX_READ_LINE_COUNT: usize = 400;
 const MAX_TEXT_FILE_BYTES: usize = 512 * 1024;
@@ -139,6 +153,7 @@ impl AutonomousToolRuntime {
         match request {
             AutonomousToolRequest::Read(request) => self.read(request),
             AutonomousToolRequest::Search(request) => self.search(request),
+            AutonomousToolRequest::Find(request) => self.find(request),
             AutonomousToolRequest::GitStatus(request) => self.git_status(request),
             AutonomousToolRequest::GitDiff(request) => self.git_diff(request),
             AutonomousToolRequest::Edit(request) => self.edit(request),
@@ -237,13 +252,8 @@ impl AutonomousToolRuntime {
         };
 
         let mut matches = Vec::new();
-        let mut scanned_files = 0_usize;
-        self.search_scope(
-            &scope_path,
-            request.query.as_str(),
-            &mut matches,
-            &mut scanned_files,
-        )?;
+        let mut walk = WalkState::default();
+        self.search_scope(&scope_path, request.query.as_str(), &mut matches, &mut walk)?;
 
         let scope_string = scope
             .as_ref()
@@ -258,6 +268,14 @@ impl AutonomousToolRuntime {
                 Some(scope) => format!("Found 0 matches for `{}` under `{scope}`.", request.query),
                 None => format!("Found 0 matches for `{}` in the repository.", request.query),
             }
+        } else if walk.truncated {
+            format!(
+                "Found {} match(es) for `{}` across {} file(s); results truncated at {} match(es).",
+                matches.len(),
+                request.query,
+                matched_files,
+                self.limits.max_search_results
+            )
         } else {
             format!(
                 "Found {} match(es) for `{}` across {} file(s).",
@@ -275,8 +293,92 @@ impl AutonomousToolRuntime {
                 query: request.query,
                 scope: scope_string,
                 matches,
-                scanned_files,
-                truncated: false,
+                scanned_files: walk.scanned_files,
+                truncated: walk.truncated,
+            }),
+        })
+    }
+
+    pub fn find(&self, request: AutonomousFindRequest) -> CommandResult<AutonomousToolResult> {
+        validate_non_empty(&request.pattern, "pattern")?;
+        if request.pattern.chars().count() > self.limits.max_search_query_chars {
+            return Err(CommandError::user_fixable(
+                "autonomous_tool_find_pattern_too_large",
+                format!(
+                    "Cadence requires find patterns to be {} characters or fewer.",
+                    self.limits.max_search_query_chars
+                ),
+            ));
+        }
+
+        let normalized_pattern = normalize_glob_pattern(&request.pattern)?;
+        let matcher = build_glob_matcher(&normalized_pattern)?;
+        let scope = request
+            .path
+            .as_deref()
+            .map(|path| {
+                validate_non_empty(path, "path")?;
+                normalize_relative_path(path, "path")
+            })
+            .transpose()?;
+
+        let scope_path = match scope.as_ref() {
+            Some(scope) => self.resolve_existing_path(scope)?,
+            None => self.repo_root.clone(),
+        };
+        let scope_is_file = scope_path.is_file();
+        let scope_relative = if scope_path == self.repo_root {
+            None
+        } else {
+            Some(self.repo_relative_path(&scope_path)?)
+        };
+
+        let mut matches = Vec::new();
+        let mut walk = WalkState::default();
+        self.find_scope(
+            &scope_path,
+            scope_relative.as_deref(),
+            scope_is_file,
+            &matcher,
+            &mut matches,
+            &mut walk,
+        )?;
+
+        let scope_string = scope
+            .as_ref()
+            .map(|path| path_to_forward_slash(path.as_path()));
+        let summary = if matches.is_empty() {
+            match scope_string.as_deref() {
+                Some(scope) => {
+                    format!("Found 0 path(s) matching `{normalized_pattern}` under `{scope}`.")
+                }
+                None => {
+                    format!("Found 0 path(s) matching `{normalized_pattern}` in the repository.")
+                }
+            }
+        } else if walk.truncated {
+            format!(
+                "Found {} path(s) matching `{normalized_pattern}`; results truncated at {} path(s).",
+                matches.len(),
+                self.limits.max_search_results
+            )
+        } else {
+            format!(
+                "Found {} path(s) matching `{normalized_pattern}`.",
+                matches.len()
+            )
+        };
+
+        Ok(AutonomousToolResult {
+            tool_name: AUTONOMOUS_TOOL_FIND.into(),
+            summary,
+            command_result: None,
+            output: AutonomousToolOutput::Find(AutonomousFindOutput {
+                pattern: normalized_pattern,
+                scope: scope_string,
+                matches,
+                scanned_files: walk.scanned_files,
+                truncated: walk.truncated,
             }),
         })
     }
@@ -620,15 +722,105 @@ impl AutonomousToolRuntime {
         scope: &Path,
         query: &str,
         matches: &mut Vec<AutonomousSearchMatch>,
-        scanned_files: &mut usize,
+        walk: &mut WalkState,
     ) -> CommandResult<()> {
-        if matches.len() >= self.limits.max_search_results {
+        self.walk_scope(
+            scope,
+            WalkErrorCodes {
+                metadata_failed: "autonomous_tool_search_metadata_failed",
+                read_dir_failed: "autonomous_tool_search_read_dir_failed",
+            },
+            walk,
+            &mut |path, walk| {
+                let text = match self.read_text_file(path) {
+                    Ok(text) => text,
+                    Err(error) if should_skip_search_file_error(&error) => return Ok(()),
+                    Err(error) => return Err(error),
+                };
+                let relative = path_to_forward_slash(&self.repo_relative_path(path)?);
+
+                for (line_index, line) in text.lines().enumerate() {
+                    for (byte_offset, _) in line.match_indices(query) {
+                        if !push_bounded(
+                            matches,
+                            AutonomousSearchMatch {
+                                path: relative.clone(),
+                                line: line_index + 1,
+                                column: byte_offset + 1,
+                                preview: truncate_chars(
+                                    line.trim(),
+                                    self.limits.max_search_preview_chars,
+                                ),
+                            },
+                            self.limits.max_search_results,
+                            &mut walk.truncated,
+                        ) {
+                            return Ok(());
+                        }
+                    }
+                }
+
+                Ok(())
+            },
+        )
+    }
+
+    fn find_scope(
+        &self,
+        scope: &Path,
+        scope_relative: Option<&Path>,
+        scope_is_file: bool,
+        matcher: &GlobMatcher,
+        matches: &mut Vec<String>,
+        walk: &mut WalkState,
+    ) -> CommandResult<()> {
+        self.walk_scope(
+            scope,
+            WalkErrorCodes {
+                metadata_failed: "autonomous_tool_find_metadata_failed",
+                read_dir_failed: "autonomous_tool_find_read_dir_failed",
+            },
+            walk,
+            &mut |path, walk| {
+                let repo_relative = self.repo_relative_path(path)?;
+                let candidate = scope_relative_match_path(
+                    repo_relative.as_path(),
+                    scope_relative,
+                    scope_is_file,
+                )?;
+                if matcher.is_match(&path_to_forward_slash(&candidate))
+                    && !push_bounded(
+                        matches,
+                        path_to_forward_slash(&repo_relative),
+                        self.limits.max_search_results,
+                        &mut walk.truncated,
+                    )
+                {
+                    return Ok(());
+                }
+
+                Ok(())
+            },
+        )
+    }
+
+    fn walk_scope<F>(
+        &self,
+        scope: &Path,
+        error_codes: WalkErrorCodes,
+        walk: &mut WalkState,
+        visit_file: &mut F,
+    ) -> CommandResult<()>
+    where
+        F: FnMut(&Path, &mut WalkState) -> CommandResult<()>,
+    {
+        if walk.truncated {
             return Ok(());
         }
 
         let metadata = fs::symlink_metadata(scope).map_err(|error| {
             CommandError::retryable(
-                "autonomous_tool_search_metadata_failed",
+                error_codes.metadata_failed,
                 format!("Cadence could not inspect {}: {error}", scope.display()),
             )
         })?;
@@ -638,74 +830,77 @@ impl AutonomousToolRuntime {
         }
 
         if metadata.is_dir() {
-            let mut entries = fs::read_dir(scope)
-                .map_err(|error| {
-                    CommandError::retryable(
-                        "autonomous_tool_search_read_dir_failed",
-                        format!(
-                            "Cadence could not enumerate directory {}: {error}",
-                            scope.display()
-                        ),
-                    )
-                })?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    CommandError::retryable(
-                        "autonomous_tool_search_read_dir_failed",
-                        format!(
-                            "Cadence could not enumerate directory {}: {error}",
-                            scope.display()
-                        ),
-                    )
-                })?;
-            entries.sort_by_key(|entry| entry.path());
+            if self.should_skip_directory(scope) {
+                return Ok(());
+            }
 
-            for entry in entries {
-                let file_name = entry.file_name();
-                if SKIPPED_DIRECTORIES.contains(&file_name.to_string_lossy().as_ref()) {
-                    continue;
-                }
-                self.search_scope(&entry.path(), query, matches, scanned_files)?;
-                if matches.len() >= self.limits.max_search_results {
+            for entry in self.read_sorted_directory_entries(scope, error_codes.read_dir_failed)? {
+                if walk.truncated {
                     break;
                 }
+                self.walk_scope(&entry.path(), error_codes, walk, visit_file)?;
             }
             return Ok(());
         }
 
-        let text = match self.read_text_file(scope) {
-            Ok(text) => text,
-            Err(error)
-                if matches!(
-                    error.code.as_str(),
-                    "autonomous_tool_file_not_text" | "autonomous_tool_file_too_large"
-                ) =>
-            {
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        };
-        *scanned_files = scanned_files.saturating_add(1);
-        let relative = scope
-            .strip_prefix(&self.repo_root)
-            .map(path_to_forward_slash)
-            .unwrap_or_else(|_| scope.display().to_string());
+        walk.scanned_files = walk.scanned_files.saturating_add(1);
+        visit_file(scope, walk)
+    }
 
-        for (line_index, line) in text.lines().enumerate() {
-            for (byte_offset, _) in line.match_indices(query) {
-                matches.push(AutonomousSearchMatch {
-                    path: relative.clone(),
-                    line: line_index + 1,
-                    column: byte_offset + 1,
-                    preview: truncate_chars(line.trim(), self.limits.max_search_preview_chars),
-                });
-                if matches.len() >= self.limits.max_search_results {
-                    return Ok(());
-                }
-            }
-        }
+    fn read_sorted_directory_entries(
+        &self,
+        scope: &Path,
+        error_code: &'static str,
+    ) -> CommandResult<Vec<fs::DirEntry>> {
+        let mut entries = fs::read_dir(scope)
+            .map_err(|error| {
+                CommandError::retryable(
+                    error_code,
+                    format!(
+                        "Cadence could not enumerate directory {}: {error}",
+                        scope.display()
+                    ),
+                )
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                CommandError::retryable(
+                    error_code,
+                    format!(
+                        "Cadence could not enumerate directory {}: {error}",
+                        scope.display()
+                    ),
+                )
+            })?;
+        entries.sort_by(|left, right| {
+            left.file_name()
+                .to_string_lossy()
+                .cmp(&right.file_name().to_string_lossy())
+        });
+        Ok(entries)
+    }
 
-        Ok(())
+    fn repo_relative_path(&self, path: &Path) -> CommandResult<PathBuf> {
+        path.strip_prefix(&self.repo_root)
+            .map(|relative| relative.to_path_buf())
+            .map_err(|_| {
+                CommandError::new(
+                    "autonomous_tool_path_denied",
+                    CommandErrorClass::PolicyDenied,
+                    format!(
+                        "Cadence denied access to `{}` because it resolves outside the imported repository root.",
+                        path.display()
+                    ),
+                    false,
+                )
+            })
+    }
+
+    fn should_skip_directory(&self, path: &Path) -> bool {
+        path != self.repo_root
+            && path
+                .file_name()
+                .is_some_and(|name| SKIPPED_DIRECTORIES.contains(&name.to_string_lossy().as_ref()))
     }
 
     fn resolve_existing_path(&self, relative_path: &Path) -> CommandResult<PathBuf> {
@@ -898,6 +1093,7 @@ pub fn resolve_imported_repo_root_from_registry(
 pub enum AutonomousToolRequest {
     Read(AutonomousReadRequest),
     Search(AutonomousSearchRequest),
+    Find(AutonomousFindRequest),
     GitStatus(AutonomousGitStatusRequest),
     GitDiff(AutonomousGitDiffRequest),
     Edit(AutonomousEditRequest),
@@ -917,6 +1113,13 @@ pub struct AutonomousReadRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousSearchRequest {
     pub query: String,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFindRequest {
+    pub pattern: String,
     pub path: Option<String>,
 }
 
@@ -977,6 +1180,7 @@ pub struct AutonomousToolResult {
 pub enum AutonomousToolOutput {
     Read(AutonomousReadOutput),
     Search(AutonomousSearchOutput),
+    Find(AutonomousFindOutput),
     GitStatus(AutonomousGitStatusOutput),
     GitDiff(AutonomousGitDiffOutput),
     Edit(AutonomousEditOutput),
@@ -1001,6 +1205,16 @@ pub struct AutonomousSearchOutput {
     pub query: String,
     pub scope: Option<String>,
     pub matches: Vec<AutonomousSearchMatch>,
+    pub scanned_files: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousFindOutput {
+    pub pattern: String,
+    pub scope: Option<String>,
+    pub matches: Vec<String>,
     pub scanned_files: usize,
     pub truncated: bool,
 }
@@ -1068,6 +1282,18 @@ pub struct AutonomousCommandOutput {
     pub timed_out: bool,
 }
 
+#[derive(Debug, Default)]
+struct WalkState {
+    scanned_files: usize,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WalkErrorCodes {
+    metadata_failed: &'static str,
+    read_dir_failed: &'static str,
+}
+
 fn display_branch_name(branch: Option<&BranchSummaryDto>) -> String {
     branch
         .map(|branch| branch.name.clone())
@@ -1109,6 +1335,58 @@ fn normalize_relative_path(value: &str, field: &'static str) -> CommandResult<Pa
     }
 
     Ok(normalized)
+}
+
+fn normalize_glob_pattern(value: &str) -> CommandResult<String> {
+    validate_non_empty(value, "pattern")?;
+    let normalized = value.trim().replace('\\', "/");
+    let mut segments = Vec::new();
+
+    for segment in normalized.split('/') {
+        if segment.is_empty() || segment == "." {
+            return Err(CommandError::user_fixable(
+                "autonomous_tool_find_pattern_invalid",
+                format!(
+                    "Cadence requires glob pattern `{}` to use non-empty repo-relative segments.",
+                    value.trim()
+                ),
+            ));
+        }
+
+        if segment == ".." {
+            return Err(CommandError::new(
+                "autonomous_tool_path_denied",
+                CommandErrorClass::PolicyDenied,
+                format!(
+                    "Cadence denied glob pattern `{}` because autonomous tools may only access paths relative to the imported repository root.",
+                    value.trim()
+                ),
+                false,
+            ));
+        }
+
+        segments.push(segment);
+    }
+
+    let normalized = segments.join("/");
+    if normalized.is_empty() {
+        return Err(CommandError::invalid_request("pattern"));
+    }
+
+    Ok(normalized)
+}
+
+fn build_glob_matcher(pattern: &str) -> CommandResult<GlobMatcher> {
+    GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+        .map(|glob| glob.compile_matcher())
+        .map_err(|error| {
+            CommandError::user_fixable(
+                "autonomous_tool_find_pattern_invalid",
+                format!("Cadence could not parse glob pattern `{pattern}`: {error}"),
+            )
+        })
 }
 
 fn normalize_command_argv(argv: &[String]) -> CommandResult<Vec<String>> {
@@ -1250,6 +1528,61 @@ fn truncate_chars(value: &str, limit: usize) -> String {
         .take(limit.saturating_sub(1))
         .collect::<String>();
     format!("{truncated}…")
+}
+
+fn scope_relative_match_path(
+    repo_relative: &Path,
+    scope_relative: Option<&Path>,
+    scope_is_file: bool,
+) -> CommandResult<PathBuf> {
+    if scope_is_file {
+        return repo_relative
+            .file_name()
+            .map(PathBuf::from)
+            .ok_or_else(|| CommandError::invalid_request("path"));
+    }
+
+    match scope_relative {
+        Some(scope_relative) => repo_relative
+            .strip_prefix(scope_relative)
+            .map(|relative| relative.to_path_buf())
+            .map_err(|_| {
+                CommandError::new(
+                    "autonomous_tool_path_denied",
+                    CommandErrorClass::PolicyDenied,
+                    format!(
+                        "Cadence denied access to `{}` because it escaped the scoped search root.",
+                        path_to_forward_slash(repo_relative)
+                    ),
+                    false,
+                )
+            }),
+        None => Ok(repo_relative.to_path_buf()),
+    }
+}
+
+fn should_skip_search_file_error(error: &CommandError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "autonomous_tool_file_not_text"
+            | "autonomous_tool_file_too_large"
+            | "autonomous_tool_read_failed"
+    )
+}
+
+fn push_bounded<T>(results: &mut Vec<T>, value: T, limit: usize, truncated: &mut bool) -> bool {
+    if results.len() >= limit {
+        *truncated = true;
+        return false;
+    }
+
+    results.push(value);
+    if results.len() >= limit {
+        *truncated = true;
+        return false;
+    }
+
+    true
 }
 
 fn render_command_for_summary(argv: &[String]) -> String {

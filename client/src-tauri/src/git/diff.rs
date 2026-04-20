@@ -36,7 +36,9 @@ pub fn load_repository_diff(
     {
         match repository::open_repository_root(Path::new(&root_path)) {
             Ok(repository) => {
-                if repository.project_id() != project_id || repository.repository_id() != repository_id {
+                if repository.project_id() != project_id
+                    || repository.repository_id() != repository_id
+                {
                     return Err(CommandError::system_fault(
                         "project_registry_mismatch",
                         format!(
@@ -120,8 +122,9 @@ fn render_patch(
     })?;
 
     let diff = match scope {
-        RepositoryDiffScope::Staged => repository
-            .diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut diff_options)),
+        RepositoryDiffScope::Staged => {
+            repository.diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut diff_options))
+        }
         RepositoryDiffScope::Unstaged => {
             repository.diff_index_to_workdir(Some(&index), Some(&mut diff_options))
         }

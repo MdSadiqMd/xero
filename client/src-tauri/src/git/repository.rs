@@ -178,16 +178,17 @@ pub fn ensure_cadence_excluded(
 }
 
 fn open_repository_internal(selected_path: &str) -> CommandResult<RepositoryHandle> {
-    let canonical_selected_path = fs::canonicalize(selected_path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => CommandError::user_fixable(
-            "repository_path_not_found",
-            format!("Repository path `{selected_path}` does not exist."),
-        ),
-        _ => CommandError::user_fixable(
-            "repository_path_invalid",
-            format!("Cadence could not read repository path `{selected_path}`: {error}"),
-        ),
-    })?;
+    let canonical_selected_path =
+        fs::canonicalize(selected_path).map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => CommandError::user_fixable(
+                "repository_path_not_found",
+                format!("Repository path `{selected_path}` does not exist."),
+            ),
+            _ => CommandError::user_fixable(
+                "repository_path_invalid",
+                format!("Cadence could not read repository path `{selected_path}`: {error}"),
+            ),
+        })?;
 
     let repository = Repository::discover(&canonical_selected_path).map_err(|_| {
         CommandError::user_fixable(

@@ -20,9 +20,9 @@ use cadence_desktop_lib::{
     git::repository::{ensure_cadence_excluded, CanonicalRepository},
     registry::{self, RegistryProjectRecord},
     runtime::{
-        AutonomousCommandRequest, AutonomousEditRequest, AutonomousGitDiffRequest,
-        AutonomousGitStatusRequest, AutonomousReadRequest, AutonomousToolOutput,
-        AutonomousToolRuntime, AutonomousWriteRequest,
+        AutonomousCommandRequest, AutonomousEditRequest, AutonomousFindRequest,
+        AutonomousGitDiffRequest, AutonomousGitStatusRequest, AutonomousReadRequest,
+        AutonomousToolOutput, AutonomousToolRuntime, AutonomousWriteRequest,
     },
     state::DesktopState,
 };
@@ -273,25 +273,21 @@ fn stage_path(repo_root: &Path, relative_path: &str) {
 }
 
 fn current_branch_name(repo_root: &Path) -> Option<String> {
-    Repository::open(repo_root)
-        .ok()
-        .and_then(|repository| {
-            repository
-                .head()
-                .ok()
-                .and_then(|head| head.shorthand().map(ToOwned::to_owned))
-        })
+    Repository::open(repo_root).ok().and_then(|repository| {
+        repository
+            .head()
+            .ok()
+            .and_then(|head| head.shorthand().map(ToOwned::to_owned))
+    })
 }
 
 fn current_head_sha(repo_root: &Path) -> Option<String> {
-    Repository::open(repo_root)
-        .ok()
-        .and_then(|repository| {
-            repository
-                .head()
-                .ok()
-                .and_then(|head| head.target().map(|oid| oid.to_string()))
-        })
+    Repository::open(repo_root).ok().and_then(|repository| {
+        repository
+            .head()
+            .ok()
+            .and_then(|head| head.target().map(|oid| oid.to_string()))
+    })
 }
 
 #[test]
@@ -337,6 +333,21 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
         }
         other => panic!("unexpected write output: {other:?}"),
     }
+
+    let find = runtime
+        .find(AutonomousFindRequest {
+            pattern: "*.txt".into(),
+            path: Some("notes".into()),
+        })
+        .expect("find imported repo files inside notes");
+    match find.output {
+        AutonomousToolOutput::Find(output) => {
+            assert_eq!(output.scope.as_deref(), Some("notes"));
+            assert_eq!(output.matches, vec!["notes/proof.txt"]);
+            assert!(!output.truncated);
+        }
+        other => panic!("unexpected find output: {other:?}"),
+    }
     stage_path(&repo_root, "notes/proof.txt");
 
     let edited = runtime
@@ -372,8 +383,7 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
             assert!(!output.has_untracked_changes);
             assert!(output.entries.iter().any(|entry| {
                 entry.path == "README.md"
-                    && entry.unstaged
-                        == Some(cadence_desktop_lib::commands::ChangeKind::Modified)
+                    && entry.unstaged == Some(cadence_desktop_lib::commands::ChangeKind::Modified)
             }));
             assert!(output.entries.iter().any(|entry| {
                 entry.path == "notes/proof.txt"

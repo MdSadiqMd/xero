@@ -12,10 +12,10 @@ use cadence_desktop_lib::{
     },
     registry::{self, RegistryProjectRecord},
     runtime::{
-        AutonomousCommandRequest, AutonomousEditRequest, AutonomousGitDiffRequest,
-        AutonomousGitStatusRequest, AutonomousReadRequest, AutonomousSearchRequest,
-        AutonomousToolOutput, AutonomousToolRequest, AutonomousToolRuntime,
-        AutonomousWriteRequest,
+        AutonomousCommandRequest, AutonomousEditRequest, AutonomousFindRequest,
+        AutonomousGitDiffRequest, AutonomousGitStatusRequest, AutonomousReadRequest,
+        AutonomousSearchRequest, AutonomousToolOutput, AutonomousToolRequest,
+        AutonomousToolRuntime, AutonomousToolRuntimeLimits, AutonomousWriteRequest,
     },
     state::DesktopState,
 };
@@ -40,8 +40,7 @@ fn create_state(root: &TempDir) -> DesktopState {
 fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (String, PathBuf) {
     let repo_root = root.path().join("repo");
     fs::create_dir_all(repo_root.join("src")).expect("create repo src");
-    fs::write(repo_root.join("src").join("tracked.txt"), "alpha\n")
-        .expect("seed tracked file");
+    fs::write(repo_root.join("src").join("tracked.txt"), "alpha\n").expect("seed tracked file");
 
     let git_repository = Repository::init(&repo_root).expect("init git repo");
     commit_all(&git_repository, "initial commit");
@@ -130,25 +129,21 @@ fn stage_path(repo_root: &Path, relative_path: &str) {
 }
 
 fn current_branch_name(repo_root: &Path) -> Option<String> {
-    Repository::open(repo_root)
-        .ok()
-        .and_then(|repository| {
-            repository
-                .head()
-                .ok()
-                .and_then(|head| head.shorthand().map(ToOwned::to_owned))
-        })
+    Repository::open(repo_root).ok().and_then(|repository| {
+        repository
+            .head()
+            .ok()
+            .and_then(|head| head.shorthand().map(ToOwned::to_owned))
+    })
 }
 
 fn current_head_sha(repo_root: &Path) -> Option<String> {
-    Repository::open(repo_root)
-        .ok()
-        .and_then(|repository| {
-            repository
-                .head()
-                .ok()
-                .and_then(|head| head.target().map(|oid| oid.to_string()))
-        })
+    Repository::open(repo_root).ok().and_then(|repository| {
+        repository
+            .head()
+            .ok()
+            .and_then(|head| head.target().map(|oid| oid.to_string()))
+    })
 }
 
 fn shell_argv(script: impl Into<String>) -> Vec<String> {
@@ -167,6 +162,22 @@ fn tool_runtime_executes_repo_scoped_operations_and_returns_stable_envelopes() {
         "alpha\nbeta\ngamma\n",
     )
     .expect("seed repo file");
+    fs::create_dir_all(repo_root.join("src").join("nested")).expect("create nested repo dir");
+    fs::write(
+        repo_root.join("src").join("nested").join("inner.txt"),
+        "nested\n",
+    )
+    .expect("seed nested repo file");
+    fs::create_dir_all(repo_root.join("node_modules").join("pkg"))
+        .expect("create skipped node_modules dir");
+    fs::write(
+        repo_root
+            .join("node_modules")
+            .join("pkg")
+            .join("ignored.txt"),
+        "beta\n",
+    )
+    .expect("seed skipped dependency file");
 
     let runtime = AutonomousToolRuntime::for_project(
         &app.handle().clone(),
@@ -209,9 +220,30 @@ fn tool_runtime_executes_repo_scoped_operations_and_returns_stable_envelopes() {
             assert_eq!(output.matches[0].path, "src/app.txt");
             assert_eq!(output.matches[0].line, 2);
             assert_eq!(output.matches[0].column, 1);
-            assert_eq!(output.scanned_files, 2);
+            assert_eq!(output.scanned_files, 3);
         }
         other => panic!("unexpected search output: {other:?}"),
+    }
+
+    let find = runtime
+        .find(AutonomousFindRequest {
+            pattern: "**/*.txt".into(),
+            path: Some("src".into()),
+        })
+        .expect("find repo files");
+    assert_eq!(find.tool_name, "find");
+    match find.output {
+        AutonomousToolOutput::Find(output) => {
+            assert_eq!(output.pattern, "**/*.txt");
+            assert_eq!(output.scope.as_deref(), Some("src"));
+            assert_eq!(
+                output.matches,
+                vec!["src/app.txt", "src/nested/inner.txt", "src/tracked.txt"]
+            );
+            assert_eq!(output.scanned_files, 3);
+            assert!(!output.truncated);
+        }
+        other => panic!("unexpected find output: {other:?}"),
     }
 
     let written = runtime
@@ -323,8 +355,7 @@ fn tool_runtime_executes_git_status_and_diff_with_real_repository_truth() {
             assert!(!output.has_untracked_changes);
             assert!(output.entries.iter().any(|entry| {
                 entry.path == "src/tracked.txt"
-                    && entry.unstaged
-                        == Some(cadence_desktop_lib::commands::ChangeKind::Modified)
+                    && entry.unstaged == Some(cadence_desktop_lib::commands::ChangeKind::Modified)
             }));
             assert!(output.entries.iter().any(|entry| {
                 entry.path == "src/staged.txt"
@@ -389,8 +420,11 @@ fn tool_runtime_executes_git_status_and_diff_with_real_repository_truth() {
         other => panic!("unexpected worktree diff output: {other:?}"),
     }
 
-    fs::write(repo_root.join("src").join("untracked.txt"), "untracked change\n")
-        .expect("write untracked file");
+    fs::write(
+        repo_root.join("src").join("untracked.txt"),
+        "untracked change\n",
+    )
+    .expect("write untracked file");
     let status_with_untracked = runtime
         .git_status(AutonomousGitStatusRequest::default())
         .expect("git status with untracked file succeeds");
@@ -398,9 +432,10 @@ fn tool_runtime_executes_git_status_and_diff_with_real_repository_truth() {
         AutonomousToolOutput::GitStatus(output) => {
             assert_eq!(output.changed_files, 3);
             assert!(output.has_untracked_changes);
-            assert!(output.entries.iter().any(|entry| {
-                entry.path == "src/untracked.txt" && entry.untracked
-            }));
+            assert!(output
+                .entries
+                .iter()
+                .any(|entry| { entry.path == "src/untracked.txt" && entry.untracked }));
         }
         other => panic!("unexpected git status output with untracked file: {other:?}"),
     }
@@ -488,6 +523,11 @@ fn tool_runtime_rejects_malformed_inputs_and_reports_error_paths_deterministical
     )
     .expect("seed repo file");
     fs::write(repo_root.join("binary.bin"), [0xff_u8, 0xfe, 0x00]).expect("seed binary file");
+    fs::write(
+        repo_root.join("large.txt"),
+        "z".repeat(AutonomousToolRuntimeLimits::default().max_text_file_bytes + 1),
+    )
+    .expect("seed oversized text file");
 
     let runtime = AutonomousToolRuntime::for_project(
         &app.handle().clone(),
@@ -525,12 +565,57 @@ fn tool_runtime_rejects_malformed_inputs_and_reports_error_paths_deterministical
         other => panic!("unexpected empty-search output: {other:?}"),
     }
 
-    let invalid_scope: Result<AutonomousToolRequest, _> = serde_json::from_value(serde_json::json!({
-        "tool": "git_diff",
-        "input": {
-            "scope": "unsupported"
+    let search_with_binary_and_large_files = runtime
+        .search(AutonomousSearchRequest {
+            query: "gamma".into(),
+            path: None,
+        })
+        .expect("search should skip binary and oversized files");
+    match search_with_binary_and_large_files.output {
+        AutonomousToolOutput::Search(output) => {
+            assert_eq!(output.matches.len(), 1);
+            assert_eq!(output.matches[0].path, "src/app.txt");
         }
-    }));
+        other => panic!("unexpected search output with skipped files: {other:?}"),
+    }
+
+    let empty_find = runtime
+        .find(AutonomousFindRequest {
+            pattern: "**/*.md".into(),
+            path: Some("src".into()),
+        })
+        .expect("zero-match find should still succeed");
+    match empty_find.output {
+        AutonomousToolOutput::Find(output) => assert!(output.matches.is_empty()),
+        other => panic!("unexpected empty-find output: {other:?}"),
+    }
+
+    let invalid_find_pattern = runtime
+        .find(AutonomousFindRequest {
+            pattern: "[*.txt".into(),
+            path: None,
+        })
+        .expect_err("malformed find patterns should be rejected");
+    assert_eq!(
+        invalid_find_pattern.code,
+        "autonomous_tool_find_pattern_invalid"
+    );
+
+    let invalid_find_scope = runtime
+        .find(AutonomousFindRequest {
+            pattern: "**/*.txt".into(),
+            path: Some("../outside".into()),
+        })
+        .expect_err("find path traversal should be denied");
+    assert_eq!(invalid_find_scope.code, "autonomous_tool_path_denied");
+
+    let invalid_scope: Result<AutonomousToolRequest, _> =
+        serde_json::from_value(serde_json::json!({
+            "tool": "git_diff",
+            "input": {
+                "scope": "unsupported"
+            }
+        }));
     assert!(
         invalid_scope.is_err(),
         "unsupported autonomous git diff scope should fail request parsing"
@@ -624,6 +709,68 @@ fn tool_runtime_rejects_malformed_inputs_and_reports_error_paths_deterministical
 }
 
 #[test]
+fn tool_runtime_reports_truncation_for_bounded_search_and_find_results() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (_project_id, repo_root) = seed_project(&root, &app);
+
+    fs::create_dir_all(repo_root.join("fixtures")).expect("create fixture dir");
+    for (file_name, contents) in [
+        ("a.txt", "needle\n"),
+        ("b.txt", "needle\n"),
+        ("c.txt", "needle\n"),
+    ] {
+        fs::write(repo_root.join("fixtures").join(file_name), contents)
+            .expect("seed truncation fixture");
+    }
+
+    let runtime = AutonomousToolRuntime::with_limits(
+        &repo_root,
+        AutonomousToolRuntimeLimits {
+            max_search_results: 2,
+            ..AutonomousToolRuntimeLimits::default()
+        },
+    )
+    .expect("build bounded autonomous tool runtime");
+
+    let search = runtime
+        .search(AutonomousSearchRequest {
+            query: "needle".into(),
+            path: Some("fixtures".into()),
+        })
+        .expect("bounded search succeeds");
+    match search.output {
+        AutonomousToolOutput::Search(output) => {
+            assert_eq!(output.matches.len(), 2);
+            assert_eq!(
+                output
+                    .matches
+                    .iter()
+                    .map(|entry| entry.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["fixtures/a.txt", "fixtures/b.txt"]
+            );
+            assert!(output.truncated);
+        }
+        other => panic!("unexpected bounded search output: {other:?}"),
+    }
+
+    let find = runtime
+        .find(AutonomousFindRequest {
+            pattern: "**/*.txt".into(),
+            path: Some("fixtures".into()),
+        })
+        .expect("bounded find succeeds");
+    match find.output {
+        AutonomousToolOutput::Find(output) => {
+            assert_eq!(output.matches, vec!["fixtures/a.txt", "fixtures/b.txt"]);
+            assert!(output.truncated);
+        }
+        other => panic!("unexpected bounded find output: {other:?}"),
+    }
+}
+
+#[test]
 fn tool_runtime_denies_path_traversal_and_out_of_repo_cwds() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
@@ -673,6 +820,101 @@ fn tool_runtime_denies_path_traversal_and_out_of_repo_cwds() {
         cwd_error.class,
         cadence_desktop_lib::commands::CommandErrorClass::PolicyDenied
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_runtime_search_and_find_skip_symlink_escapes() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let outside = root.path().join("outside.txt");
+    fs::write(&outside, "needle\n").expect("seed outside file");
+    symlink(&outside, repo_root.join("linked.txt")).expect("create escape symlink");
+    fs::write(repo_root.join("src").join("inside.txt"), "needle\n").expect("seed inside file");
+
+    let runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    let search = runtime
+        .search(AutonomousSearchRequest {
+            query: "needle".into(),
+            path: None,
+        })
+        .expect("search should skip symlink escapes");
+    match search.output {
+        AutonomousToolOutput::Search(output) => {
+            assert_eq!(output.matches.len(), 1);
+            assert_eq!(output.matches[0].path, "src/inside.txt");
+        }
+        other => panic!("unexpected symlink-skip search output: {other:?}"),
+    }
+
+    let find = runtime
+        .find(AutonomousFindRequest {
+            pattern: "**/*.txt".into(),
+            path: None,
+        })
+        .expect("find should skip symlink escapes");
+    match find.output {
+        AutonomousToolOutput::Find(output) => {
+            assert!(output.matches.contains(&"src/inside.txt".to_string()));
+            assert!(
+                !output.matches.contains(&"linked.txt".to_string()),
+                "find results should exclude symlink escapes: {:?}",
+                output.matches
+            );
+        }
+        other => panic!("unexpected symlink-skip find output: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn tool_runtime_search_reports_unreadable_directories() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let blocked_dir = repo_root.join("blocked");
+    fs::create_dir_all(&blocked_dir).expect("create blocked dir");
+    fs::write(blocked_dir.join("hidden.txt"), "needle\n").expect("seed blocked file");
+
+    let runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    let mut permissions = fs::metadata(&blocked_dir)
+        .expect("blocked dir metadata")
+        .permissions();
+    permissions.set_mode(0o000);
+    fs::set_permissions(&blocked_dir, permissions).expect("lock blocked dir");
+
+    let error = runtime
+        .search(AutonomousSearchRequest {
+            query: "needle".into(),
+            path: None,
+        })
+        .expect_err("unreadable directories should fail deterministically");
+
+    let mut restore = fs::metadata(&blocked_dir)
+        .expect("blocked dir metadata for restore")
+        .permissions();
+    restore.set_mode(0o755);
+    fs::set_permissions(&blocked_dir, restore).expect("restore blocked dir permissions");
+
+    assert_eq!(error.code, "autonomous_tool_search_read_dir_failed");
+    assert!(error.retryable);
 }
 
 #[test]
