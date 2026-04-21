@@ -3,6 +3,8 @@ import { AgentRuntime } from '@/components/cadence/agent-runtime'
 import { type View } from '@/components/cadence/data'
 import { EmptyPanel } from '@/components/cadence/empty-panel'
 import { ExecutionView } from '@/components/cadence/execution-view'
+import { NoProjectEmptyState } from '@/components/cadence/no-project-empty-state'
+import { OnboardingFlow } from '@/components/cadence/onboarding/onboarding-flow'
 import { PhaseView } from '@/components/cadence/phase-view'
 import { ProjectRail } from '@/components/cadence/project-rail'
 import { CadenceShell, type PlatformVariant } from '@/components/cadence/shell'
@@ -67,6 +69,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [platformOverride, setPlatformOverride] = useState<PlatformVariant | null>(null)
+  const [onboardingDismissed, setOnboardingDismissed] = useState(false)
   const shouldRestoreSidebarFromEditorRef = useRef(false)
   const previousViewRef = useRef<View>(activeView)
 
@@ -126,26 +129,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
 
     if (!activeProject) {
       return (
-        <EmptyPanel
-          eyebrow={isDesktopRuntime ? 'Desktop Shell Ready' : 'Desktop Runtime Required'}
-          title="No projects imported"
-          body={
-            isDesktopRuntime
-              ? 'The Vite/Tauri shell is running, but there is no backend project state loaded yet.'
-              : 'Project import is only available inside the Tauri desktop runtime. Open the desktop shell to load backend state.'
-          }
-          action={
-            isDesktopRuntime ? (
-              <button
-                className="rounded-md border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-secondary/60 disabled:opacity-50"
-                disabled={isImporting}
-                onClick={() => void importProject()}
-                type="button"
-              >
-                {isImporting ? 'Importing…' : 'Import repository'}
-              </button>
-            ) : null
-          }
+        <NoProjectEmptyState
+          isDesktopRuntime={isDesktopRuntime}
+          isImporting={isImporting}
+          onImport={() => void importProject()}
         />
       )
     }
@@ -210,6 +197,32 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     }
 
     return null
+  }
+
+  const hasConfiguredProvider = Boolean(
+    runtimeSettings?.openrouterApiKeyConfigured || agentView?.runtimeSession?.isAuthenticated,
+  )
+  const showOnboarding =
+    !onboardingDismissed && !isLoading && projects.length === 0 && !hasConfiguredProvider
+
+  if (showOnboarding) {
+    return (
+      <CadenceShell
+        activeView={activeView}
+        onViewChange={setActiveView}
+        projectName={activeProject?.name}
+        onOpenSettings={() => setSettingsOpen(true)}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+        platformOverride={platformOverride}
+        chromeOnly
+      >
+        <OnboardingFlow
+          onComplete={() => setOnboardingDismissed(true)}
+          onDismiss={() => setOnboardingDismissed(true)}
+        />
+      </CadenceShell>
+    )
   }
 
   return (

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Folder, Loader2, MoreHorizontal, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Loader2, MoreHorizontal, Plus, RefreshCw, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import {
@@ -49,32 +49,43 @@ export function ProjectRail({
   onRemoveProject,
 }: ProjectRailProps) {
   const isRemovingProject = projectRemovalStatus === 'running'
+  const isBusy = isLoading || isImporting || isRemovingProject
 
   return (
     <aside
       className={cn(
-        'flex shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar transition-[width] duration-300 ease-in-out',
+        'flex shrink-0 flex-col overflow-hidden border-r border-border/80 bg-sidebar transition-[width] duration-300 ease-in-out',
         collapsed ? 'w-11' : 'w-56',
       )}
       data-collapsed={collapsed ? 'true' : 'false'}
     >
       <div
         className={cn(
-          'flex h-10 items-center border-b border-border transition-[padding,justify-content] duration-300 ease-in-out',
+          'flex h-10 items-center border-b border-border/70 transition-[padding] duration-300 ease-in-out',
           collapsed ? 'justify-center px-1' : 'justify-between px-3',
         )}
       >
-        <span
+        <div
           className={cn(
-            'overflow-hidden text-[11px] font-medium uppercase tracking-wider text-muted-foreground transition-[max-width,opacity] duration-200 ease-in-out',
-            collapsed ? 'max-w-0 opacity-0' : 'max-w-24 opacity-100',
+            'flex items-center gap-1.5 overflow-hidden transition-[max-width,opacity] duration-200 ease-in-out',
+            collapsed ? 'max-w-0 opacity-0' : 'max-w-[10rem] opacity-100',
           )}
         >
-          Projects
-        </span>
+          <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+            Projects
+          </span>
+          {projects.length > 0 ? (
+            <span className="rounded-full bg-muted/80 px-1.5 py-[1px] font-mono text-[10px] leading-none tabular-nums text-muted-foreground">
+              {projects.length}
+            </span>
+          ) : null}
+        </div>
         <button
           aria-label="Import repository"
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground disabled:opacity-50"
+          className={cn(
+            'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors',
+            'hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50',
+          )}
           disabled={isImporting || isRemovingProject}
           onClick={onImportProject}
           type="button"
@@ -86,41 +97,53 @@ export function ProjectRail({
       {errorMessage ? (
         <div
           className={cn(
-            'border-b border-border text-[11px] text-destructive transition-[padding,opacity,max-height] duration-200 ease-in-out',
-            collapsed ? 'max-h-0 px-0 py-0 opacity-0' : 'max-h-16 px-3 py-2 opacity-100',
+            'border-b border-border/70 bg-destructive/5 text-[11px] leading-snug text-destructive transition-[padding,opacity,max-height] duration-200 ease-in-out',
+            collapsed ? 'max-h-0 px-0 py-0 opacity-0' : 'max-h-20 px-3 py-2 opacity-100',
           )}
         >
           {errorMessage}
         </div>
       ) : null}
 
-      <div className="flex-1 overflow-y-auto scrollbar-thin pb-1">
+      <div
+        className={cn(
+          'flex-1 overflow-y-auto scrollbar-thin',
+          collapsed ? 'py-2' : '',
+        )}
+      >
         {projects.length === 0 ? (
-          collapsed ? null : <div className="px-3 py-4 text-[12px] text-muted-foreground">No projects imported yet.</div>
+          collapsed ? null : (
+            <div className="px-3 py-5 text-center text-[11px] leading-relaxed text-muted-foreground/80">
+              No projects imported yet.
+            </div>
+          )
         ) : (
-          projects.map((project) => (
-            <ProjectRailItem
-              key={project.id}
-              collapsed={collapsed}
-              project={project}
-              isActive={project.id === activeProjectId}
-              isRemovalPending={project.id === pendingProjectRemovalId}
-              isRemovalLocked={isRemovingProject}
-              onRemoveProject={onRemoveProject}
-              onSelectProject={onSelectProject}
-            />
-          ))
+          <ul className={cn('flex flex-col', collapsed ? 'gap-1.5 px-1.5' : '')}>
+            {projects.map((project) => (
+              <li key={project.id}>
+                <ProjectRailItem
+                  collapsed={collapsed}
+                  project={project}
+                  isActive={project.id === activeProjectId}
+                  isRemovalPending={project.id === pendingProjectRemovalId}
+                  isRemovalLocked={isRemovingProject}
+                  onRemoveProject={onRemoveProject}
+                  onSelectProject={onSelectProject}
+                />
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 
-      {(isLoading || isImporting || isRemovingProject) && (
+      {isBusy && (
         <div
           className={cn(
-            'flex items-center border-t border-border text-[11px] text-muted-foreground transition-[padding,gap] duration-300 ease-in-out',
+            'flex items-center border-t border-border/70 bg-sidebar text-[11px] text-muted-foreground transition-[padding,gap] duration-300 ease-in-out',
             collapsed ? 'justify-center gap-0 px-1.5 py-2.5' : 'gap-2 px-3 py-2.5',
           )}
         >
-          <RefreshCw className="h-3 w-3 animate-spin" />
+          <RefreshCw className="h-3 w-3 animate-spin text-primary/80" />
           <span
             className={cn(
               'overflow-hidden whitespace-nowrap transition-[max-width,opacity] duration-200 ease-in-out',
@@ -162,48 +185,65 @@ function ProjectRailItem({
       <div className="group relative">
         <button
           className={cn(
-            'w-full transition-[padding,background-color] duration-200',
-            isActive ? 'bg-secondary' : 'hover:bg-secondary/40',
-            collapsed ? 'flex justify-center px-0 py-1.5' : 'px-3 py-2.5 text-left',
+            'relative w-full transition-colors duration-150',
+            collapsed
+              ? cn(
+                  'flex items-center justify-center rounded-md p-1',
+                  isActive ? 'bg-primary/10' : 'hover:bg-secondary/60',
+                )
+              : cn(
+                  'flex items-center gap-2.5 px-3 py-3 text-left',
+                  isActive ? 'bg-primary/[0.08]' : 'hover:bg-secondary/50',
+                ),
           )}
           onClick={() => onSelectProject(project.id)}
           title={collapsed ? project.name : undefined}
           type="button"
         >
-          {collapsed ? (
-            <div className="relative flex h-[1.875rem] w-[1.875rem] items-center justify-center transition-colors">
-              <span
-                aria-hidden="true"
-                className={cn(
-                  'text-[12px] font-semibold uppercase leading-none',
-                  isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
-                )}
-              >
-                {projectInitial}
-              </span>
-              <span className="sr-only">{project.name}</span>
-            </div>
-          ) : (
-            <>
-              <div className="mb-1 flex items-center gap-2">
-                <Folder className={cn('h-3.5 w-3.5 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground')} />
-                <span className={cn('truncate text-[13px] font-medium', isActive ? 'text-foreground' : 'text-foreground/80')}>
+          <div
+            className={cn(
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-[12px] font-semibold leading-none transition-colors duration-150',
+              isActive
+                ? 'border-primary/45 bg-primary/15 text-primary'
+                : 'border-border/70 bg-secondary/70 text-muted-foreground group-hover:border-border group-hover:bg-secondary group-hover:text-foreground',
+            )}
+          >
+            <span aria-hidden="true">{projectInitial}</span>
+            {collapsed ? <span className="sr-only">{project.name}</span> : null}
+          </div>
+
+          {collapsed ? null : (
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center pr-6">
+                <span
+                  className={cn(
+                    'truncate text-[12.5px] font-medium leading-tight',
+                    isActive ? 'text-foreground' : 'text-foreground/85 group-hover:text-foreground',
+                  )}
+                >
                   {project.name}
                 </span>
               </div>
-
-              <div className="mt-1 ml-[22px] flex items-center gap-2">
-                <div className="h-1 flex-1 overflow-hidden rounded-full bg-border">
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <div className="h-[3px] flex-1 overflow-hidden rounded-full bg-border/70">
                   <div
-                    className="h-full rounded-full bg-primary/60 transition-all"
+                    className={cn(
+                      'h-full rounded-full transition-[width] duration-500 ease-out',
+                      isActive ? 'bg-primary' : 'bg-primary/55',
+                    )}
                     style={{ width: `${project.phaseProgressPercent}%` }}
                   />
                 </div>
-                <span className="w-8 text-[10px] font-mono tabular-nums text-muted-foreground">
+                <span
+                  className={cn(
+                    'font-mono text-[10px] leading-none tabular-nums',
+                    isActive ? 'text-foreground/80' : 'text-muted-foreground',
+                  )}
+                >
                   {project.phaseProgressPercent}%
                 </span>
               </div>
-            </>
+            </div>
           )}
         </button>
 
@@ -212,13 +252,21 @@ function ProjectRailItem({
             <DropdownMenuTrigger asChild>
               <button
                 aria-label={`Project actions for ${project.name}`}
-                className={`absolute top-2 right-2 z-10 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary/80 hover:text-foreground disabled:opacity-50 ${
-                  isActive || isRemovalPending ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
-                }`}
+                className={cn(
+                  'absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors',
+                  'hover:bg-secondary hover:text-foreground disabled:opacity-50',
+                  isActive || isRemovalPending
+                    ? 'opacity-100'
+                    : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                )}
                 disabled={isRemovalLocked}
                 type="button"
               >
-                {isRemovalPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MoreHorizontal className="h-3.5 w-3.5" />}
+                {isRemovalPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                )}
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">

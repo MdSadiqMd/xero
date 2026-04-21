@@ -34,6 +34,8 @@ interface CadenceShellProps {
   onToggleSidebar?: () => void
   /** Dev override — null means auto-detect */
   platformOverride?: PlatformVariant | null
+  /** Hide app-level controls (nav, sidebar toggle, settings). Window chrome stays. */
+  chromeOnly?: boolean
 }
 
 type WindowAction = "close" | "minimize" | "toggle-maximize"
@@ -56,6 +58,7 @@ export function CadenceShell({
   sidebarCollapsed = false,
   onToggleSidebar,
   platformOverride,
+  chromeOnly = false,
 }: CadenceShellProps) {
   const desktopRuntime = isTauri()
   const platform = platformOverride ?? detectPlatform()
@@ -240,19 +243,23 @@ export function CadenceShell({
       >
         {TrafficLights}
         {Logo}
-        <div className="titlebar-no-drag ml-3 flex items-center gap-3" data-titlebar-no-drag="true">
-          {Divider}
-          {SidebarToggleBtn}
-        </div>
+        {!chromeOnly ? (
+          <div className="titlebar-no-drag ml-3 flex items-center gap-3" data-titlebar-no-drag="true">
+            {Divider}
+            {SidebarToggleBtn}
+          </div>
+        ) : null}
         {/* center is pure drag zone */}
-        <div
-          className="titlebar-no-drag ml-auto flex items-center gap-2"
-          data-titlebar-no-drag="true"
-        >
-          {NavButtons}
-          <div className="mx-1.5 h-4 w-px bg-border" />
-          {SettingsBtn}
-        </div>
+        {!chromeOnly ? (
+          <div
+            className="titlebar-no-drag ml-auto flex items-center gap-2"
+            data-titlebar-no-drag="true"
+          >
+            {NavButtons}
+            <div className="mx-1.5 h-4 w-px bg-border" />
+            {SettingsBtn}
+          </div>
+        ) : null}
       </header>
     )
   } else {
@@ -268,18 +275,26 @@ export function CadenceShell({
           data-titlebar-no-drag="true"
         >
           {Logo}
-          <div className="mx-4 h-4 w-px bg-border" />
-          {SidebarToggleBtn}
-          <div className="mx-4 h-4 w-px bg-border" />
-          {NavButtons}
+          {!chromeOnly ? (
+            <>
+              <div className="mx-4 h-4 w-px bg-border" />
+              {SidebarToggleBtn}
+              <div className="mx-4 h-4 w-px bg-border" />
+              {NavButtons}
+            </>
+          ) : null}
         </div>
         {/* center drag zone */}
         <div
           className="titlebar-no-drag ml-auto flex items-center"
           data-titlebar-no-drag="true"
         >
-          {SettingsBtn}
-          <div className="mx-2 h-4 w-px bg-border" />
+          {!chromeOnly ? (
+            <>
+              {SettingsBtn}
+              <div className="mx-2 h-4 w-px bg-border" />
+            </>
+          ) : null}
           {RectControls}
         </div>
       </header>

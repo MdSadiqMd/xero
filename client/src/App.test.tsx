@@ -571,13 +571,39 @@ function createAdapter(options?: {
 }
 
 describe('CadenceApp current UI', () => {
-  it('renders the no-projects empty state', async () => {
-    const { adapter } = createAdapter({ projects: [] })
+  it('shows the onboarding flow on a cold-start empty state', async () => {
+    const { adapter } = createAdapter({
+      projects: [],
+      runtimeSession: makeRuntimeSession('project-1', {
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
 
     render(<CadenceApp adapter={adapter} />)
 
-    expect(await screen.findByText('No projects imported')).toBeVisible()
-    expect(screen.getAllByRole('button', { name: 'Import repository' }).length).toBeGreaterThanOrEqual(1)
+    expect(await screen.findByRole('heading', { name: /Welcome to Cadence/i })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Get started' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Skip setup' })).toBeVisible()
+  })
+
+  it('falls through to the legacy empty state when onboarding is dismissed', async () => {
+    const { adapter } = createAdapter({
+      projects: [],
+      runtimeSession: makeRuntimeSession('project-1', {
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Skip setup' }))
+
+    expect(await screen.findByRole('heading', { name: 'Add your first project' })).toBeVisible()
+    expect(screen.getAllByRole('button', { name: /Import repository/ }).length).toBeGreaterThanOrEqual(1)
   })
 
   it('renders the current workflow empty state for an imported project', async () => {
