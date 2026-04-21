@@ -4,19 +4,21 @@ import {
   type CadenceDesktopAdapter,
   getDesktopErrorMessage,
 } from '@/src/lib/cadence-desktop'
+import { mapAutonomousRunInspection } from '@/src/lib/cadence-model/autonomous'
+import { type NotificationRouteDto } from '@/src/lib/cadence-model/notifications'
 import {
-  mapAutonomousRunInspection,
   mapProjectSummary,
+  upsertProjectListItem,
+  type ProjectListItem,
+} from '@/src/lib/cadence-model/project'
+import {
   mapRuntimeRun,
   mapRuntimeSession,
-  upsertProjectListItem,
-  type NotificationRouteDto,
-  type ProjectDetailView,
-  type ProjectListItem,
   type RuntimeRunView,
   type RuntimeSessionView,
   type RuntimeSettingsDto,
-} from '@/src/lib/cadence-model'
+} from '@/src/lib/cadence-model/runtime'
+import { type ProjectDetailView } from '@/src/lib/cadence-model'
 
 import type { ProjectLoadSource } from './project-loaders'
 import type {

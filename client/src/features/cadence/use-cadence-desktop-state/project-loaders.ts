@@ -1,25 +1,26 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { getDesktopErrorMessage, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
+import { applyRuntimeRun, applyRuntimeSession, mapProjectSnapshot, type ProjectDetailView } from '@/src/lib/cadence-model'
+import { mapAutonomousRunInspection } from '@/src/lib/cadence-model/autonomous'
 import {
-  applyRepositoryStatus,
-  applyRuntimeRun,
-  applyRuntimeSession,
-  mapAutonomousRunInspection,
-  mapProjectSnapshot,
-  mapProjectSummary,
-  mapRepositoryStatus,
-  mapRuntimeRun,
-  mapRuntimeSession,
-  upsertProjectListItem,
   type NotificationDispatchDto,
   type NotificationRouteDto,
-  type ProjectDetailView,
+  type SyncNotificationAdaptersResponseDto,
+} from '@/src/lib/cadence-model/notifications'
+import {
+  applyRepositoryStatus,
+  mapProjectSummary,
+  mapRepositoryStatus,
+  upsertProjectListItem,
   type ProjectListItem,
   type RepositoryStatusView,
+} from '@/src/lib/cadence-model/project'
+import {
+  mapRuntimeRun,
+  mapRuntimeSession,
   type RuntimeRunView,
   type RuntimeSessionView,
-  type SyncNotificationAdaptersResponseDto,
-} from '@/src/lib/cadence-model'
+} from '@/src/lib/cadence-model/runtime'
 import type {
   AutonomousRunActionKind,
   AutonomousRunActionStatus,

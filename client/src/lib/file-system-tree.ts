@@ -1,4 +1,4 @@
-import type { ListProjectFilesResponseDto, ProjectFileNodeDto } from '@/src/lib/cadence-model'
+import type { ListProjectFilesResponseDto, ProjectFileNodeDto } from '@/src/lib/cadence-model/project'
 
 export interface FileSystemNode {
   id: string

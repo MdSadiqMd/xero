@@ -1,22 +1,28 @@
 import {
   createEmptyPlanningLifecycle,
-  deriveAutonomousWorkflowContext,
-  getRuntimeStreamStatusLabel,
-  type NotificationRouteDto,
-  type Phase,
   type PlanningLifecycleView,
-  type ProjectDetailView,
-  type RepositoryStatusView,
+} from '@/src/lib/cadence-model/workflow'
+import { deriveAutonomousWorkflowContext } from '@/src/lib/cadence-model/autonomous'
+import {
+  type NotificationRouteDto,
+  type SyncNotificationAdaptersResponseDto,
+} from '@/src/lib/cadence-model/notifications'
+import { type RepositoryStatusView } from '@/src/lib/cadence-model/project'
+import {
   type RuntimeRunView,
   type RuntimeSessionView,
   type RuntimeSettingsDto,
-  type RuntimeStreamView,
-  type SyncNotificationAdaptersResponseDto,
-} from '@/src/lib/cadence-model'
+} from '@/src/lib/cadence-model/runtime'
 import {
-  projectCheckpointControlLoops,
-  projectRecentAutonomousUnits,
-} from '../agent-runtime-projections'
+  getRuntimeStreamStatusLabel,
+  type RuntimeStreamView,
+} from '@/src/lib/cadence-model/runtime-stream'
+import {
+  type Phase,
+  type ProjectDetailView,
+} from '@/src/lib/cadence-model'
+import { projectCheckpointControlLoops } from '../agent-runtime-projections/checkpoint-control-loops'
+import { projectRecentAutonomousUnits } from '../agent-runtime-projections/recent-autonomous-units'
 import {
   composeAgentTrustSnapshot,
   createUnavailableTrustSnapshot,

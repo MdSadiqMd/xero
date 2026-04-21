@@ -4,13 +4,12 @@ import {
   type NotificationRouteCredentialReadinessDto,
   type NotificationRouteDto,
   type NotificationRouteKindDto,
-  type OperatorApprovalView,
-  type ProjectDetailView,
-  type RuntimeRunView,
-  type RuntimeSessionView,
-  type RuntimeStreamView,
   type SyncNotificationAdaptersResponseDto,
-} from '@/src/lib/cadence-model'
+} from '@/src/lib/cadence-model/notifications'
+import { type OperatorApprovalView } from '@/src/lib/cadence-model/operator-actions'
+import { type RuntimeRunView, type RuntimeSessionView } from '@/src/lib/cadence-model/runtime'
+import { type RuntimeStreamView } from '@/src/lib/cadence-model/runtime-stream'
+import { type ProjectDetailView } from '@/src/lib/cadence-model'
 import type {
   AgentTrustSignalState,
   AgentTrustSnapshotView,

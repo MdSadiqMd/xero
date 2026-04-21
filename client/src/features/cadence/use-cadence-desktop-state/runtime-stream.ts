@@ -1,26 +1,28 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { CadenceDesktopError, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
+import { applyRuntimeRun, applyRuntimeSession, type ProjectDetailView } from '@/src/lib/cadence-model'
 import {
   applyRepositoryStatus,
-  applyRuntimeRun,
-  applyRuntimeSession,
+  mapProjectSummary,
+  mapRepositoryStatus,
+  upsertProjectListItem,
+  type ProjectListItem,
+  type RepositoryStatusView,
+} from '@/src/lib/cadence-model/project'
+import {
+  mapRuntimeRun,
+  mergeRuntimeUpdated,
+  type RuntimeRunView,
+  type RuntimeSessionView,
+} from '@/src/lib/cadence-model/runtime'
+import {
   applyRuntimeStreamIssue,
   createRuntimeStreamFromSubscription,
   createRuntimeStreamView,
-  mapProjectSummary,
-  mapRepositoryStatus,
-  mapRuntimeRun,
   mergeRuntimeStreamEvent,
-  mergeRuntimeUpdated,
-  upsertProjectListItem,
-  type ProjectDetailView,
-  type ProjectListItem,
-  type RepositoryStatusView,
-  type RuntimeRunView,
-  type RuntimeSessionView,
   type RuntimeStreamItemKindDto,
   type RuntimeStreamView,
-} from '@/src/lib/cadence-model'
+} from '@/src/lib/cadence-model/runtime-stream'
 
 import {
   BLOCKED_NOTIFICATION_SYNC_POLL_MS,
