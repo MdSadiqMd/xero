@@ -741,6 +741,96 @@ describe('AgentRuntime current UI', () => {
     )
   })
 
+  it('fails closed on whitespace-only answers and keeps action/boundary ids visible during operator-action failures', () => {
+    const pendingCard = makeCheckpointControlLoopCard({
+      actionId: 'action-pending',
+      key: 'action-pending::boundary-1',
+      boundaryId: 'boundary-1',
+      title: 'Review worktree changes',
+      detail: 'Inspect the repository diff before trusting the next operator step.',
+      approval: {
+        actionId: 'action-pending',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        actionType: 'review_worktree',
+        title: 'Review worktree changes',
+        detail: 'Inspect the repository diff before trusting the next operator step.',
+        gateNodeId: 'workflow-research',
+        gateKey: 'requires_user_input',
+        transitionFromNodeId: 'workflow-discussion',
+        transitionToNodeId: 'workflow-research',
+        transitionKind: 'advance',
+        userAnswer: null,
+        status: 'pending',
+        statusLabel: 'Pending approval',
+        decisionNote: null,
+        createdAt: '2026-04-13T20:02:00Z',
+        updatedAt: '2026-04-13T20:02:00Z',
+        resolvedAt: null,
+        isPending: true,
+        isResolved: false,
+        canResume: false,
+        isGateLinked: true,
+        isRuntimeResumable: false,
+        requiresUserAnswer: true,
+        answerRequirementReason: 'gate_linked',
+        answerRequirementLabel: 'Required',
+        answerShapeKind: 'plain_text',
+        answerShapeLabel: 'Required user answer',
+        answerShapeHint: 'Describe the operator decision that justifies approval.',
+        answerPlaceholder: 'Provide operator input for this action.',
+      },
+      durableStateLabel: 'Pending approval',
+      durableStateDetail: 'Inspect the repository diff before trusting the next operator step.',
+      durableUpdatedAt: '2026-04-13T20:02:00Z',
+      latestResume: null,
+      resumeStateLabel: 'Waiting on approval',
+      resumeDetail: 'Cadence is waiting for operator input before this action can resume the run.',
+      resumeUpdatedAt: '2026-04-13T20:02:00Z',
+      evidenceCount: 0,
+      evidenceStateLabel: 'No durable evidence in bounded window',
+      evidenceSummary:
+        'Cadence did not retain a matching tool result, verification row, or policy denial for this action in the bounded evidence window.',
+      latestEvidenceAt: null,
+      evidencePreviews: [],
+    })
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+          approvalRequests: [pendingCard.approval!],
+          pendingApprovalCount: 1,
+          operatorActionStatus: 'running',
+          pendingOperatorActionId: 'action-pending',
+          operatorActionError: {
+            code: 'operator_action_failed',
+            message: 'Cadence could not approve action action-pending for boundary boundary-1.',
+            retryable: true,
+          },
+          checkpointControlLoop: makeCheckpointControlLoop({
+            items: [pendingCard],
+          }),
+        })}
+      />
+    )
+
+    const checkpointSection = screen.getByRole('heading', { name: 'Checkpoint control loop' }).closest('section')
+    expect(checkpointSection).not.toBeNull()
+    const checkpointQueries = within(checkpointSection as HTMLElement)
+
+    fireEvent.change(checkpointQueries.getByLabelText('Operator answer for action-pending'), {
+      target: { value: '   ' },
+    })
+
+    expect(checkpointQueries.getByText('A non-empty user answer is required before approving this action.')).toBeVisible()
+    expect(checkpointQueries.getByRole('button', { name: 'Approve' })).toBeDisabled()
+    expect(checkpointQueries.getByRole('button', { name: 'Reject' })).toBeDisabled()
+    expect(screen.getByText('Cadence could not approve action action-pending for boundary boundary-1.')).toBeVisible()
+    expect(checkpointQueries.getByText(/Action action-pending · Boundary boundary-1/)).toBeVisible()
+  })
+
   it('renders degraded checkpoint recovery banners and bounded coverage copy explicitly', () => {
     render(
       <AgentRuntime
