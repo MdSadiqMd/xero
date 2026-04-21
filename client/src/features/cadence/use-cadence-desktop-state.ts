@@ -65,6 +65,7 @@ import {
   getBlockedNotificationSyncPollTarget,
   type BlockedNotificationSyncPollTarget,
 } from './use-cadence-desktop-state/notification-health'
+import { useCadenceDesktopMutations } from './use-cadence-desktop-state/mutations'
 import {
   applyAutonomousRunState,
   applyRuntimeToProjectList,
@@ -868,52 +869,6 @@ export function useCadenceDesktopState(
     [loadProject],
   )
 
-  const importProject = useCallback(async () => {
-    setIsImporting(true)
-    setRefreshSource('import')
-    setErrorMessage(null)
-
-    try {
-      const selectedPath = await adapter.pickRepositoryFolder()
-      if (!selectedPath) {
-        return
-      }
-
-      const response = await adapter.importRepository(selectedPath)
-      const summary = mapProjectSummary(response.project)
-      setProjects((currentProjects) => upsertProjectListItem(currentProjects, summary))
-      await loadProject(summary.id, 'import')
-    } catch (error) {
-      setErrorMessage(getDesktopErrorMessage(error))
-    } finally {
-      setIsImporting(false)
-    }
-  }, [adapter, loadProject])
-
-  const removeProject = useCallback(
-    async (projectId: string) => {
-      if (!projectId.trim()) {
-        return
-      }
-
-      setProjectRemovalStatus('running')
-      setPendingProjectRemovalId(projectId)
-      setRefreshSource('remove')
-      setErrorMessage(null)
-
-      try {
-        await adapter.removeProject(projectId)
-        await bootstrap('remove')
-      } catch (error) {
-        setErrorMessage(getDesktopErrorMessage(error))
-      } finally {
-        setPendingProjectRemovalId(null)
-        setProjectRemovalStatus('idle')
-      }
-    },
-    [adapter, bootstrap],
-  )
-
   const retry = useCallback(async () => {
     if (activeProjectIdRef.current) {
       const projectId = activeProjectIdRef.current
@@ -931,105 +886,79 @@ export function useCadenceDesktopState(
     await showRepositoryDiff(activeDiffScope, { force: true })
   }, [activeDiffScope, showRepositoryDiff])
 
-  const listProjectFiles = useCallback(
-    async (projectId: string) => {
-      return await adapter.listProjectFiles(projectId)
+  const {
+    importProject,
+    removeProject,
+    listProjectFiles,
+    readProjectFile,
+    writeProjectFile,
+    createProjectEntry,
+    renameProjectEntry,
+    deleteProjectEntry,
+    startOpenAiLogin,
+    submitOpenAiCallback,
+    startAutonomousRun,
+    inspectAutonomousRun,
+    cancelAutonomousRun,
+    startRuntimeRun,
+    startRuntimeSession,
+    stopRuntimeRun,
+    logoutRuntimeSession,
+    resolveOperatorAction,
+    resumeOperatorRun,
+    refreshRuntimeSettings,
+    upsertRuntimeSettings,
+    refreshNotificationRoutes,
+    upsertNotificationRoute,
+  } = useCadenceDesktopMutations({
+    adapter,
+    refs: {
+      activeProjectIdRef,
+      activeProjectRef,
+      runtimeSettingsRef,
+      runtimeSettingsLoadInFlightRef,
     },
-    [adapter],
-  )
-
-  const readProjectFile = useCallback(
-    async (projectId: string, path: string) => {
-      return await adapter.readProjectFile(projectId, path)
+    setters: {
+      setProjects,
+      setIsImporting,
+      setProjectRemovalStatus,
+      setPendingProjectRemovalId,
+      setRefreshSource,
+      setErrorMessage,
+      setOperatorActionStatus,
+      setPendingOperatorActionId,
+      setOperatorActionError,
+      setAutonomousRunActionStatus,
+      setPendingAutonomousRunAction,
+      setAutonomousRunActionError,
+      setRuntimeRunActionStatus,
+      setPendingRuntimeRunAction,
+      setRuntimeRunActionError,
+      setNotificationRoutes,
+      setNotificationRouteLoadStatuses,
+      setNotificationRouteLoadErrors,
+      setNotificationRouteMutationStatus,
+      setPendingNotificationRouteId,
+      setNotificationRouteMutationError,
+      setRuntimeSettings,
+      setRuntimeSettingsLoadStatus,
+      setRuntimeSettingsLoadError,
+      setRuntimeSettingsSaveStatus,
+      setRuntimeSettingsSaveError,
     },
-    [adapter],
-  )
-
-  const writeProjectFile = useCallback(
-    async (projectId: string, path: string, content: string) => {
-      return await adapter.writeProjectFile(projectId, path, content)
+    operations: {
+      bootstrap,
+      loadProject,
+      loadNotificationRoutes,
+      syncRuntimeSession,
+      syncRuntimeRun,
+      syncAutonomousRun,
+      applyRuntimeSessionUpdate,
+      applyRuntimeRunUpdate,
+      applyAutonomousRunStateUpdate,
     },
-    [adapter],
-  )
-
-  const createProjectEntry = useCallback(
-    async (request: CreateProjectEntryRequestDto) => {
-      return await adapter.createProjectEntry(request)
-    },
-    [adapter],
-  )
-
-  const renameProjectEntry = useCallback(
-    async (request: RenameProjectEntryRequestDto) => {
-      return await adapter.renameProjectEntry(request)
-    },
-    [adapter],
-  )
-
-  const deleteProjectEntry = useCallback(
-    async (projectId: string, path: string) => {
-      return await adapter.deleteProjectEntry(projectId, path)
-    },
-    [adapter],
-  )
-
-  const refreshRuntimeSettings = useCallback(
-    async (options: { force?: boolean } = {}) => {
-      if (runtimeSettingsLoadInFlightRef.current) {
-        return runtimeSettingsLoadInFlightRef.current
-      }
-
-      const cachedRuntimeSettings = runtimeSettingsRef.current
-      if (!options.force && cachedRuntimeSettings && runtimeSettingsLoadStatus === 'ready') {
-        return cachedRuntimeSettings
-      }
-
-      setRuntimeSettingsLoadStatus('loading')
-      setRuntimeSettingsLoadError(null)
-
-      const loadPromise = (async () => {
-        try {
-          const response = await adapter.getRuntimeSettings()
-          setRuntimeSettings(response)
-          setRuntimeSettingsLoadStatus('ready')
-          setRuntimeSettingsLoadError(null)
-          return response
-        } catch (error) {
-          setRuntimeSettingsLoadStatus('error')
-          setRuntimeSettingsLoadError(getOperatorActionError(error, 'Cadence could not load app-global runtime settings.'))
-          throw error
-        } finally {
-          runtimeSettingsLoadInFlightRef.current = null
-        }
-      })()
-
-      runtimeSettingsLoadInFlightRef.current = loadPromise
-      return loadPromise
-    },
-    [adapter, runtimeSettingsLoadStatus],
-  )
-
-  const upsertRuntimeSettings = useCallback(
-    async (request: UpsertRuntimeSettingsRequestDto) => {
-      setRuntimeSettingsSaveStatus('running')
-      setRuntimeSettingsSaveError(null)
-
-      try {
-        const response = await adapter.upsertRuntimeSettings(request)
-        setRuntimeSettings(response)
-        setRuntimeSettingsLoadStatus('ready')
-        setRuntimeSettingsLoadError(null)
-        setRuntimeSettingsSaveError(null)
-        return response
-      } catch (error) {
-        setRuntimeSettingsSaveError(getOperatorActionError(error, 'Cadence could not save app-global runtime settings.'))
-        throw error
-      } finally {
-        setRuntimeSettingsSaveStatus('idle')
-      }
-    },
-    [adapter],
-  )
+    runtimeSettingsLoadStatus,
+  })
 
   useEffect(() => {
     if (runtimeSettings || runtimeSettingsLoadStatus !== 'idle') {
@@ -1038,403 +967,6 @@ export function useCadenceDesktopState(
 
     void refreshRuntimeSettings().catch(() => undefined)
   }, [refreshRuntimeSettings, runtimeSettings, runtimeSettingsLoadStatus])
-
-  const refreshNotificationRoutes = useCallback(
-    async (options: { force?: boolean } = {}) => {
-      const projectId = activeProjectIdRef.current
-      if (!projectId) {
-        throw new Error('Select an imported project before loading notification routes.')
-      }
-
-      const result = await loadNotificationRoutes(projectId, {
-        force: options.force ?? false,
-      })
-
-      if (result.loadError) {
-        setNotificationRouteLoadStatuses((currentStatuses) => ({
-          ...currentStatuses,
-          [projectId]: 'error',
-        }))
-        setNotificationRouteLoadErrors((currentErrors) => ({
-          ...currentErrors,
-          [projectId]: result.loadError,
-        }))
-      }
-
-      return result.routes
-    },
-    [loadNotificationRoutes],
-  )
-
-  const upsertNotificationRoute = useCallback(
-    async (request: Omit<UpsertNotificationRouteRequestDto, 'projectId'>) => {
-      const projectId = activeProjectIdRef.current
-      if (!projectId) {
-        throw new Error('Select an imported project before saving a notification route.')
-      }
-
-      const trimmedRouteId = request.routeId.trim()
-      setNotificationRouteMutationStatus('running')
-      setPendingNotificationRouteId(trimmedRouteId.length > 0 ? trimmedRouteId : null)
-      setNotificationRouteMutationError(null)
-
-      try {
-        const response = await adapter.upsertNotificationRoute({
-          ...request,
-          projectId,
-        })
-
-        setNotificationRoutes((currentRoutes) => {
-          const existingRoutes = currentRoutes[projectId] ?? []
-          const nextRoutes = [response.route, ...existingRoutes.filter((route) => route.routeId !== response.route.routeId)]
-
-          return {
-            ...currentRoutes,
-            [projectId]: nextRoutes,
-          }
-        })
-        setNotificationRouteLoadStatuses((currentStatuses) => ({
-          ...currentStatuses,
-          [projectId]: 'ready',
-        }))
-        setNotificationRouteLoadErrors((currentErrors) => ({
-          ...currentErrors,
-          [projectId]: null,
-        }))
-
-        void loadNotificationRoutes(projectId, { force: true })
-        return response.route
-      } catch (error) {
-        setNotificationRouteMutationError(
-          getOperatorActionError(error, 'Cadence could not save the notification route for this project.'),
-        )
-
-        try {
-          await loadNotificationRoutes(projectId, { force: true })
-        } catch {
-          // Preserve the last truthful route list when refresh-after-failure also fails.
-        }
-
-        throw error
-      } finally {
-        setNotificationRouteMutationStatus('idle')
-        setPendingNotificationRouteId(null)
-      }
-    },
-    [adapter, loadNotificationRoutes],
-  )
-
-  const resolveOperatorAction = useCallback(
-    async (actionId: string, decision: OperatorActionDecision, options: { userAnswer?: string | null } = {}) => {
-      const projectId = activeProjectIdRef.current
-      if (!projectId) {
-        throw new Error('Select an imported project before resolving an operator action.')
-      }
-
-      setOperatorActionStatus('running')
-      setPendingOperatorActionId(actionId)
-      setOperatorActionError(null)
-      setErrorMessage(null)
-
-      try {
-        await adapter.resolveOperatorAction(projectId, actionId, decision, {
-          userAnswer: options.userAnswer ?? null,
-        })
-        await loadProject(projectId, 'operator:resolve')
-        return activeProjectIdRef.current === projectId ? activeProjectRef.current : null
-      } catch (error) {
-        setOperatorActionError(
-          getOperatorActionError(error, 'Cadence could not persist the operator decision for this project.'),
-        )
-        throw error
-      } finally {
-        setOperatorActionStatus('idle')
-        setPendingOperatorActionId(null)
-      }
-    },
-    [adapter, loadProject],
-  )
-
-  const resumeOperatorRun = useCallback(
-    async (actionId: string, options: { userAnswer?: string | null } = {}) => {
-      const projectId = activeProjectIdRef.current
-      if (!projectId) {
-        throw new Error('Select an imported project before resuming the runtime session.')
-      }
-
-      setOperatorActionStatus('running')
-      setPendingOperatorActionId(actionId)
-      setOperatorActionError(null)
-      setErrorMessage(null)
-
-      try {
-        await adapter.resumeOperatorRun(projectId, actionId, {
-          userAnswer: options.userAnswer ?? null,
-        })
-        await loadProject(projectId, 'operator:resume')
-        return activeProjectIdRef.current === projectId ? activeProjectRef.current : null
-      } catch (error) {
-        setOperatorActionError(
-          getOperatorActionError(error, 'Cadence could not record the operator resume request for this project.'),
-        )
-        throw error
-      } finally {
-        setOperatorActionStatus('idle')
-        setPendingOperatorActionId(null)
-      }
-    },
-    [adapter, loadProject],
-  )
-
-  const startOpenAiLogin = useCallback(async () => {
-    const projectId = activeProjectIdRef.current
-    if (!projectId) {
-      throw new Error('Select an imported project before starting OpenAI login.')
-    }
-
-    try {
-      const response = await adapter.startOpenAiLogin(projectId, { originator: 'agent-pane' })
-      return applyRuntimeSessionUpdate(mapRuntimeSession(response))
-    } catch (error) {
-      try {
-        await syncRuntimeSession(projectId)
-      } catch {
-        // Ignore follow-up refresh failures and preserve the last truthful state.
-      }
-
-      throw error
-    }
-  }, [adapter, applyRuntimeSessionUpdate, syncRuntimeSession])
-
-  const submitOpenAiCallback = useCallback(
-    async (flowId: string, options: { manualInput?: string | null } = {}) => {
-      const projectId = activeProjectIdRef.current
-      if (!projectId) {
-        throw new Error('Select an imported project before completing OpenAI login.')
-      }
-
-      try {
-        const response = await adapter.submitOpenAiCallback(projectId, flowId, {
-          manualInput: options.manualInput ?? null,
-        })
-        return applyRuntimeSessionUpdate(mapRuntimeSession(response))
-      } catch (error) {
-        try {
-          await syncRuntimeSession(projectId)
-        } catch {
-          // Ignore follow-up refresh failures and preserve the last truthful state.
-        }
-
-        throw error
-      }
-    },
-    [adapter, applyRuntimeSessionUpdate, syncRuntimeSession],
-  )
-
-  const startAutonomousRun = useCallback(async () => {
-    const projectId = activeProjectIdRef.current
-    if (!projectId) {
-      throw new Error('Select an imported project before starting an autonomous run.')
-    }
-
-    setAutonomousRunActionStatus('running')
-    setPendingAutonomousRunAction('start')
-    setAutonomousRunActionError(null)
-
-    try {
-      const response = await adapter.startAutonomousRun(projectId)
-      return applyAutonomousRunStateUpdate(projectId, mapAutonomousRunInspection(response), {
-        clearGlobalError: false,
-        loadError: null,
-      })
-    } catch (error) {
-      setAutonomousRunActionError(
-        getOperatorActionError(error, 'Cadence could not start or inspect the autonomous run for this project.'),
-      )
-
-      try {
-        await syncAutonomousRun(projectId)
-      } catch {
-        // Ignore follow-up refresh failures and preserve the last truthful state.
-      }
-
-      throw error
-    } finally {
-      setAutonomousRunActionStatus('idle')
-      setPendingAutonomousRunAction(null)
-    }
-  }, [adapter, applyAutonomousRunStateUpdate, syncAutonomousRun])
-
-  const inspectAutonomousRun = useCallback(async () => {
-    const projectId = activeProjectIdRef.current
-    if (!projectId) {
-      throw new Error('Select an imported project before inspecting autonomous run truth.')
-    }
-
-    setAutonomousRunActionStatus('running')
-    setPendingAutonomousRunAction('inspect')
-    setAutonomousRunActionError(null)
-
-    try {
-      return await syncAutonomousRun(projectId)
-    } catch (error) {
-      setAutonomousRunActionError(
-        getOperatorActionError(error, 'Cadence could not inspect the autonomous run truth for this project.'),
-      )
-      throw error
-    } finally {
-      setAutonomousRunActionStatus('idle')
-      setPendingAutonomousRunAction(null)
-    }
-  }, [syncAutonomousRun])
-
-  const cancelAutonomousRun = useCallback(
-    async (runId: string) => {
-      const projectId = activeProjectIdRef.current
-      if (!projectId) {
-        throw new Error('Select an imported project before cancelling the autonomous run.')
-      }
-
-      setAutonomousRunActionStatus('running')
-      setPendingAutonomousRunAction('cancel')
-      setAutonomousRunActionError(null)
-
-      try {
-        const response = await adapter.cancelAutonomousRun(projectId, runId)
-        return applyAutonomousRunStateUpdate(projectId, mapAutonomousRunInspection(response), {
-          clearGlobalError: false,
-          loadError: null,
-        })
-      } catch (error) {
-        setAutonomousRunActionError(
-          getOperatorActionError(error, 'Cadence could not cancel the autonomous run for this project.'),
-        )
-
-        try {
-          await syncAutonomousRun(projectId)
-        } catch {
-          // Ignore follow-up refresh failures and preserve the last truthful state.
-        }
-
-        throw error
-      } finally {
-        setAutonomousRunActionStatus('idle')
-        setPendingAutonomousRunAction(null)
-      }
-    },
-    [adapter, applyAutonomousRunStateUpdate, syncAutonomousRun],
-  )
-
-  const startRuntimeRun = useCallback(async () => {
-    const projectId = activeProjectIdRef.current
-    if (!projectId) {
-      throw new Error('Select an imported project before starting a supervised runtime run.')
-    }
-
-    setRuntimeRunActionStatus('running')
-    setPendingRuntimeRunAction('start')
-    setRuntimeRunActionError(null)
-
-    try {
-      const response = await adapter.startRuntimeRun(projectId)
-      return applyRuntimeRunUpdate(projectId, mapRuntimeRun(response), {
-        clearGlobalError: false,
-        loadError: null,
-      })
-    } catch (error) {
-      setRuntimeRunActionError(
-        getOperatorActionError(error, 'Cadence could not start or reconnect the supervised runtime run for this project.'),
-      )
-
-      try {
-        await syncRuntimeRun(projectId)
-      } catch {
-        // Ignore follow-up refresh failures and preserve the last truthful state.
-      }
-
-      throw error
-    } finally {
-      setRuntimeRunActionStatus('idle')
-      setPendingRuntimeRunAction(null)
-    }
-  }, [adapter, applyRuntimeRunUpdate, syncRuntimeRun])
-
-  const startRuntimeSession = useCallback(async () => {
-    const projectId = activeProjectIdRef.current
-    if (!projectId) {
-      throw new Error('Select an imported project before binding a runtime session.')
-    }
-
-    try {
-      const response = await adapter.startRuntimeSession(projectId)
-      return applyRuntimeSessionUpdate(mapRuntimeSession(response))
-    } catch (error) {
-      try {
-        await syncRuntimeSession(projectId)
-      } catch {
-        // Ignore follow-up refresh failures and preserve the last truthful state.
-      }
-
-      throw error
-    }
-  }, [adapter, applyRuntimeSessionUpdate, syncRuntimeSession])
-
-  const stopRuntimeRun = useCallback(
-    async (runId: string) => {
-      const projectId = activeProjectIdRef.current
-      if (!projectId) {
-        throw new Error('Select an imported project before stopping the supervised runtime run.')
-      }
-
-      setRuntimeRunActionStatus('running')
-      setPendingRuntimeRunAction('stop')
-      setRuntimeRunActionError(null)
-
-      try {
-        const response = await adapter.stopRuntimeRun(projectId, runId)
-        return applyRuntimeRunUpdate(projectId, response ? mapRuntimeRun(response) : null, {
-          clearGlobalError: false,
-          loadError: null,
-        })
-      } catch (error) {
-        setRuntimeRunActionError(
-          getOperatorActionError(error, 'Cadence could not stop the supervised runtime run for this project.'),
-        )
-
-        try {
-          await syncRuntimeRun(projectId)
-        } catch {
-          // Ignore follow-up refresh failures and preserve the last truthful state.
-        }
-
-        throw error
-      } finally {
-        setRuntimeRunActionStatus('idle')
-        setPendingRuntimeRunAction(null)
-      }
-    },
-    [adapter, applyRuntimeRunUpdate, syncRuntimeRun],
-  )
-
-  const logoutRuntimeSession = useCallback(async () => {
-    const projectId = activeProjectIdRef.current
-    if (!projectId) {
-      throw new Error('Select an imported project before signing out.')
-    }
-
-    try {
-      const response = await adapter.logoutRuntimeSession(projectId)
-      return applyRuntimeSessionUpdate(mapRuntimeSession(response))
-    } catch (error) {
-      try {
-        await syncRuntimeSession(projectId)
-      } catch {
-        // Ignore follow-up refresh failures and preserve the last truthful state.
-      }
-
-      throw error
-    }
-  }, [adapter, applyRuntimeSessionUpdate, syncRuntimeSession])
 
   const activeRuntimeSession = activeProjectId
     ? runtimeSessions[activeProjectId] ?? activeProject?.runtimeSession ?? null

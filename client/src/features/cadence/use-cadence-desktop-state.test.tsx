@@ -665,6 +665,29 @@ function createMockAdapter(options?: {
     },
   )
 
+  const listProjectFiles = vi.fn(async (projectId: string) => ({
+    projectId,
+    root: {
+      name: 'root',
+      path: '/',
+      type: 'folder' as const,
+      children: [],
+    },
+  }))
+  const readProjectFile = vi.fn(async (projectId: string, path: string) => ({ projectId, path, content: '' }))
+  const writeProjectFile = vi.fn(async (projectId: string, path: string) => ({ projectId, path }))
+  const createProjectEntry = vi.fn(async (request) => ({
+    projectId: request.projectId,
+    path: request.parentPath === '/' ? `/${request.name}` : `${request.parentPath}/${request.name}`,
+  }))
+  const renameProjectEntry = vi.fn(async (request) => ({
+    projectId: request.projectId,
+    path: request.path.split('/').slice(0, -1).filter(Boolean).length
+      ? `/${request.path.split('/').slice(0, -1).filter(Boolean).join('/')}/${request.newName}`
+      : `/${request.newName}`,
+  }))
+  const deleteProjectEntry = vi.fn(async (projectId: string, path: string) => ({ projectId, path }))
+
   const adapter: CadenceDesktopAdapter = {
     isDesktopRuntime: () => true,
     pickRepositoryFolder,
@@ -674,28 +697,12 @@ function createMockAdapter(options?: {
     getProjectSnapshot,
     getRepositoryStatus,
     getRepositoryDiff,
-    listProjectFiles: vi.fn(async (projectId: string) => ({
-      projectId,
-      root: {
-        name: 'root',
-        path: '/',
-        type: 'folder' as const,
-        children: [],
-      },
-    })),
-    readProjectFile: vi.fn(async (projectId: string, path: string) => ({ projectId, path, content: '' })),
-    writeProjectFile: vi.fn(async (projectId: string, path: string) => ({ projectId, path })),
-    createProjectEntry: vi.fn(async (request) => ({
-      projectId: request.projectId,
-      path: request.parentPath === '/' ? `/${request.name}` : `${request.parentPath}/${request.name}`,
-    })),
-    renameProjectEntry: vi.fn(async (request) => ({
-      projectId: request.projectId,
-      path: request.path.split('/').slice(0, -1).filter(Boolean).length
-        ? `/${request.path.split('/').slice(0, -1).filter(Boolean).join('/')}/${request.newName}`
-        : `/${request.newName}`,
-    })),
-    deleteProjectEntry: vi.fn(async (projectId: string, path: string) => ({ projectId, path })),
+    listProjectFiles,
+    readProjectFile,
+    writeProjectFile,
+    createProjectEntry,
+    renameProjectEntry,
+    deleteProjectEntry,
     getAutonomousRun,
     getRuntimeRun,
     getRuntimeSession,
@@ -775,6 +782,12 @@ function createMockAdapter(options?: {
     getRuntimeRun,
     getRuntimeSession,
     getRuntimeSettings,
+    listProjectFiles,
+    readProjectFile,
+    writeProjectFile,
+    createProjectEntry,
+    renameProjectEntry,
+    deleteProjectEntry,
     upsertRuntimeSettings,
     listNotificationRoutes,
     listNotificationDispatches,
@@ -915,6 +928,101 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       </button>
       <button onClick={() => void state.retry()} type="button">
         Retry state
+      </button>
+      <button
+        onClick={() => {
+          void state.listProjectFiles('project-1').catch(() => undefined)
+        }}
+        type="button"
+      >
+        List project files
+      </button>
+      <button
+        onClick={() => {
+          void state.readProjectFile('project-1', '/README.md').catch(() => undefined)
+        }}
+        type="button"
+      >
+        Read README
+      </button>
+      <button
+        onClick={() => {
+          void state.writeProjectFile('project-1', '/README.md', '# Cadence').catch(() => undefined)
+        }}
+        type="button"
+      >
+        Write README
+      </button>
+      <button
+        onClick={() => {
+          void state
+            .createProjectEntry({
+              projectId: 'project-1',
+              parentPath: '/',
+              name: 'notes.md',
+              entryType: 'file',
+            })
+            .catch(() => undefined)
+        }}
+        type="button"
+      >
+        Create notes file
+      </button>
+      <button
+        onClick={() => {
+          void state
+            .renameProjectEntry({
+              projectId: 'project-1',
+              path: '/notes.md',
+              newName: 'notes-2.md',
+            })
+            .catch(() => undefined)
+        }}
+        type="button"
+      >
+        Rename notes file
+      </button>
+      <button
+        onClick={() => {
+          void state.deleteProjectEntry('project-1', '/notes-2.md').catch(() => undefined)
+        }}
+        type="button"
+      >
+        Delete notes file
+      </button>
+      <button
+        onClick={() => {
+          void state.startOpenAiLogin().catch(() => undefined)
+        }}
+        type="button"
+      >
+        Start OpenAI login
+      </button>
+      <button
+        onClick={() => {
+          void state
+            .submitOpenAiCallback('flow-1', { manualInput: 'browser-callback-token' })
+            .catch(() => undefined)
+        }}
+        type="button"
+      >
+        Submit OpenAI callback
+      </button>
+      <button
+        onClick={() => {
+          void state.startRuntimeSession().catch(() => undefined)
+        }}
+        type="button"
+      >
+        Start runtime session
+      </button>
+      <button
+        onClick={() => {
+          void state.logoutRuntimeSession().catch(() => undefined)
+        }}
+        type="button"
+      >
+        Logout runtime session
       </button>
       <button
         onClick={() => {
@@ -1490,6 +1598,94 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('project-count')).toHaveTextContent('1')
     expect(setup.removeProject).toHaveBeenCalledWith('project-1')
     expect(setup.listProjects).toHaveBeenCalledTimes(2)
+  })
+
+  it('forwards execution file actions to the adapter with the requested project payloads', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'Cadence')] },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'List project files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Read README' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Write README' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create notes file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Rename notes file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete notes file' }))
+
+    await waitFor(() => expect(setup.listProjectFiles).toHaveBeenCalledWith('project-1'))
+    expect(setup.readProjectFile).toHaveBeenCalledWith('project-1', '/README.md')
+    expect(setup.writeProjectFile).toHaveBeenCalledWith('project-1', '/README.md', '# Cadence')
+    expect(setup.createProjectEntry).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      parentPath: '/',
+      name: 'notes.md',
+      entryType: 'file',
+    })
+    expect(setup.renameProjectEntry).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      path: '/notes.md',
+      newName: 'notes-2.md',
+    })
+    expect(setup.deleteProjectEntry).toHaveBeenCalledWith('project-1', '/notes-2.md')
+  })
+
+  it('transitions runtime auth state through login, callback, logout, and session bind actions', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'Cadence')] },
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          flowId: null,
+          sessionId: null,
+          accountId: null,
+          phase: 'idle',
+          callbackBound: null,
+          authorizationUrl: null,
+          redirectUri: null,
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': null,
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    expect(screen.getByTestId('auth-phase')).toHaveTextContent('idle')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start OpenAI login' }))
+
+    await waitFor(() =>
+      expect(setup.startOpenAiLogin).toHaveBeenCalledWith('project-1', { originator: 'agent-pane' }),
+    )
+    await waitFor(() => expect(screen.getByTestId('auth-phase')).toHaveTextContent('awaiting_browser_callback'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit OpenAI callback' }))
+
+    await waitFor(() =>
+      expect(setup.submitOpenAiCallback).toHaveBeenCalledWith('project-1', 'flow-1', {
+        manualInput: 'browser-callback-token',
+      }),
+    )
+    await waitFor(() => expect(screen.getByTestId('auth-phase')).toHaveTextContent('authenticated'))
+    expect(screen.getByTestId('session-label')).toHaveTextContent('session-1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Logout runtime session' }))
+
+    await waitFor(() => expect(setup.logoutRuntimeSession).toHaveBeenCalledWith('project-1'))
+    await waitFor(() => expect(screen.getByTestId('auth-phase')).toHaveTextContent('idle'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start runtime session' }))
+
+    await waitFor(() => expect(setup.startRuntimeSession).toHaveBeenCalledWith('project-1'))
+    await waitFor(() => expect(screen.getByTestId('auth-phase')).toHaveTextContent('authenticated'))
+    expect(screen.getByTestId('session-label')).toHaveTextContent('session-1')
   })
 
   it('keeps the current selection intact when snapshot loading fails', async () => {
