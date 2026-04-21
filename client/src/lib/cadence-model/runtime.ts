@@ -1,0 +1,448 @@
+
+import { z } from 'zod'
+import {
+  humanizeSegmentedLabel as humanizeRuntimeKind,
+  isoTimestampSchema,
+  nonEmptyOptionalTextSchema,
+  normalizeOptionalText,
+  normalizeText,
+} from './shared'
+
+export const runtimeAuthPhaseSchema = z.enum([
+  'idle',
+  'starting',
+  'awaiting_browser_callback',
+  'awaiting_manual_input',
+  'exchanging_code',
+  'authenticated',
+  'refreshing',
+  'cancelled',
+  'failed',
+])
+
+export const runtimeDiagnosticSchema = z.object({
+  code: z.string().trim().min(1),
+  message: z.string().trim().min(1),
+  retryable: z.boolean(),
+})
+
+export const runtimeProviderIdSchema = z.enum(['openrouter', 'openai_codex'])
+
+function validateRuntimeSettingsProviderModel(
+  payload: { providerId: z.infer<typeof runtimeProviderIdSchema>; modelId: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (payload.providerId === 'openai_codex' && payload.modelId !== 'openai_codex') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['modelId'],
+      message: 'Cadence only supports modelId `openai_codex` for provider `openai_codex`.',
+    })
+  }
+}
+
+export const runtimeSettingsSchema = z
+  .object({
+    providerId: runtimeProviderIdSchema,
+    modelId: z.string().trim().min(1),
+    openrouterApiKeyConfigured: z.boolean(),
+  })
+  .strict()
+  .superRefine((payload, ctx) => {
+    validateRuntimeSettingsProviderModel(payload, ctx)
+  })
+
+export const upsertRuntimeSettingsRequestSchema = z
+  .object({
+    providerId: runtimeProviderIdSchema,
+    modelId: z.string().trim().min(1),
+    openrouterApiKey: z.string().nullable().optional(),
+  })
+  .strict()
+  .superRefine((payload, ctx) => {
+    validateRuntimeSettingsProviderModel(payload, ctx)
+  })
+
+export const runtimeSessionSchema = z.object({
+  projectId: z.string().trim().min(1),
+  runtimeKind: z.string().trim().min(1),
+  providerId: z.string().trim().min(1),
+  flowId: nonEmptyOptionalTextSchema,
+  sessionId: nonEmptyOptionalTextSchema,
+  accountId: nonEmptyOptionalTextSchema,
+  phase: runtimeAuthPhaseSchema,
+  callbackBound: z.boolean().nullable().optional(),
+  authorizationUrl: z.string().url().nullable().optional(),
+  redirectUri: z.string().url().nullable().optional(),
+  lastErrorCode: nonEmptyOptionalTextSchema,
+  lastError: runtimeDiagnosticSchema.nullable().optional(),
+  updatedAt: isoTimestampSchema,
+})
+
+export const runtimeUpdatedPayloadSchema = z.object({
+  projectId: z.string().trim().min(1),
+  runtimeKind: z.string().trim().min(1),
+  providerId: z.string().trim().min(1),
+  flowId: nonEmptyOptionalTextSchema,
+  sessionId: nonEmptyOptionalTextSchema,
+  accountId: nonEmptyOptionalTextSchema,
+  authPhase: runtimeAuthPhaseSchema,
+  lastErrorCode: nonEmptyOptionalTextSchema,
+  lastError: runtimeDiagnosticSchema.nullable().optional(),
+  updatedAt: isoTimestampSchema,
+})
+
+export const runtimeRunStatusSchema = z.enum(['starting', 'running', 'stale', 'stopped', 'failed'])
+export const runtimeRunTransportLivenessSchema = z.enum(['unknown', 'reachable', 'unreachable'])
+export const runtimeRunCheckpointKindSchema = z.enum(['bootstrap', 'state', 'tool', 'action_required', 'diagnostic'])
+
+export const runtimeRunDiagnosticSchema = z
+  .object({
+    code: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+  })
+  .strict()
+
+export const runtimeRunTransportSchema = z
+  .object({
+    kind: z.string().trim().min(1),
+    endpoint: z.string().trim().min(1),
+    liveness: runtimeRunTransportLivenessSchema,
+  })
+  .strict()
+
+export const runtimeRunCheckpointSchema = z
+  .object({
+    sequence: z.number().int().nonnegative(),
+    kind: runtimeRunCheckpointKindSchema,
+    summary: z.string().trim().min(1),
+    createdAt: isoTimestampSchema,
+  })
+  .strict()
+
+export const runtimeRunSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+    runtimeKind: z.string().trim().min(1),
+    providerId: z.string().trim().min(1),
+    supervisorKind: z.string().trim().min(1),
+    status: runtimeRunStatusSchema,
+    transport: runtimeRunTransportSchema,
+    startedAt: isoTimestampSchema,
+    lastHeartbeatAt: nonEmptyOptionalTextSchema,
+    lastCheckpointSequence: z.number().int().nonnegative(),
+    lastCheckpointAt: nonEmptyOptionalTextSchema,
+    stoppedAt: nonEmptyOptionalTextSchema,
+    lastErrorCode: nonEmptyOptionalTextSchema,
+    lastError: runtimeRunDiagnosticSchema.nullable().optional(),
+    updatedAt: isoTimestampSchema,
+    checkpoints: z.array(runtimeRunCheckpointSchema),
+  })
+  .strict()
+
+export const runtimeRunUpdatedPayloadSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    run: runtimeRunSchema.nullable(),
+  })
+  .strict()
+  .superRefine((payload, ctx) => {
+    if (payload.run && payload.run.projectId !== payload.projectId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['run', 'projectId'],
+        message: 'Cadence received a runtime-run update for a different project than the event envelope.',
+      })
+    }
+  })
+
+export type RuntimeAuthPhaseDto = z.infer<typeof runtimeAuthPhaseSchema>
+export type RuntimeDiagnosticDto = z.infer<typeof runtimeDiagnosticSchema>
+export type RuntimeProviderIdDto = z.infer<typeof runtimeProviderIdSchema>
+export type RuntimeSettingsDto = z.infer<typeof runtimeSettingsSchema>
+export type UpsertRuntimeSettingsRequestDto = z.infer<typeof upsertRuntimeSettingsRequestSchema>
+export type RuntimeSessionDto = z.infer<typeof runtimeSessionSchema>
+export type RuntimeUpdatedPayloadDto = z.infer<typeof runtimeUpdatedPayloadSchema>
+export type RuntimeRunStatusDto = z.infer<typeof runtimeRunStatusSchema>
+export type RuntimeRunTransportLivenessDto = z.infer<typeof runtimeRunTransportLivenessSchema>
+export type RuntimeRunCheckpointKindDto = z.infer<typeof runtimeRunCheckpointKindSchema>
+export type RuntimeRunDiagnosticDto = z.infer<typeof runtimeRunDiagnosticSchema>
+export type RuntimeRunTransportDto = z.infer<typeof runtimeRunTransportSchema>
+export type RuntimeRunCheckpointDto = z.infer<typeof runtimeRunCheckpointSchema>
+export type RuntimeRunDto = z.infer<typeof runtimeRunSchema>
+export type RuntimeRunUpdatedPayloadDto = z.infer<typeof runtimeRunUpdatedPayloadSchema>
+
+export interface RuntimeSessionView {
+  projectId: string
+  runtimeKind: string
+  providerId: string
+  flowId: string | null
+  sessionId: string | null
+  accountId: string | null
+  phase: RuntimeAuthPhaseDto
+  phaseLabel: string
+  runtimeLabel: string
+  accountLabel: string
+  sessionLabel: string
+  callbackBound: boolean | null
+  authorizationUrl: string | null
+  redirectUri: string | null
+  lastErrorCode: string | null
+  lastError: RuntimeDiagnosticDto | null
+  updatedAt: string
+  isAuthenticated: boolean
+  isLoginInProgress: boolean
+  needsManualInput: boolean
+  isSignedOut: boolean
+  isFailed: boolean
+}
+
+export interface RuntimeRunTransportView {
+  kind: string
+  endpoint: string
+  liveness: RuntimeRunTransportLivenessDto
+  livenessLabel: string
+}
+
+export interface RuntimeRunCheckpointView {
+  sequence: number
+  kind: RuntimeRunCheckpointKindDto
+  kindLabel: string
+  summary: string
+  createdAt: string
+}
+
+export interface RuntimeRunView {
+  projectId: string
+  runId: string
+  runtimeKind: string
+  providerId: string
+  runtimeLabel: string
+  supervisorKind: string
+  supervisorLabel: string
+  status: RuntimeRunStatusDto
+  statusLabel: string
+  transport: RuntimeRunTransportView
+  startedAt: string
+  lastHeartbeatAt: string | null
+  lastCheckpointSequence: number
+  lastCheckpointAt: string | null
+  stoppedAt: string | null
+  lastErrorCode: string | null
+  lastError: RuntimeRunDiagnosticDto | null
+  updatedAt: string
+  checkpoints: RuntimeRunCheckpointView[]
+  latestCheckpoint: RuntimeRunCheckpointView | null
+  checkpointCount: number
+  hasCheckpoints: boolean
+  isActive: boolean
+  isTerminal: boolean
+  isStale: boolean
+  isFailed: boolean
+}
+
+function timestampToSortValue(value: string | null): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY
+  }
+
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY
+}
+
+function getRuntimePhaseLabel(phase: RuntimeAuthPhaseDto): string {
+  switch (phase) {
+    case 'idle':
+      return 'Signed out'
+    case 'starting':
+      return 'Starting login'
+    case 'awaiting_browser_callback':
+      return 'Awaiting browser'
+    case 'awaiting_manual_input':
+      return 'Awaiting manual input'
+    case 'exchanging_code':
+      return 'Signing in'
+    case 'authenticated':
+      return 'Authenticated'
+    case 'refreshing':
+      return 'Refreshing session'
+    case 'cancelled':
+      return 'Login cancelled'
+    case 'failed':
+      return 'Login failed'
+  }
+}
+
+function getRuntimeLabel(runtimeKind: string, phase: RuntimeAuthPhaseDto): string {
+  if (phase === 'idle' || phase === 'failed' || phase === 'cancelled') {
+    return 'Runtime unavailable'
+  }
+
+  return `${humanizeRuntimeKind(runtimeKind)} · ${getRuntimePhaseLabel(phase)}`
+}
+
+export function getRuntimeRunStatusLabel(status: RuntimeRunStatusDto): string {
+  switch (status) {
+    case 'starting':
+      return 'Supervisor starting'
+    case 'running':
+      return 'Supervisor running'
+    case 'stale':
+      return 'Supervisor stale'
+    case 'stopped':
+      return 'Run stopped'
+    case 'failed':
+      return 'Run failed'
+  }
+}
+
+export function getRuntimeRunTransportLivenessLabel(liveness: RuntimeRunTransportLivenessDto): string {
+  switch (liveness) {
+    case 'unknown':
+      return 'Probe unknown'
+    case 'reachable':
+      return 'Control reachable'
+    case 'unreachable':
+      return 'Control unreachable'
+  }
+}
+
+export function getRuntimeRunCheckpointKindLabel(kind: RuntimeRunCheckpointKindDto): string {
+  switch (kind) {
+    case 'bootstrap':
+      return 'Bootstrap'
+    case 'state':
+      return 'State'
+    case 'tool':
+      return 'Tool'
+    case 'action_required':
+      return 'Action required'
+    case 'diagnostic':
+      return 'Diagnostic'
+  }
+}
+
+function getRuntimeRunLabel(runtimeKind: string, status: RuntimeRunStatusDto): string {
+  return `${humanizeRuntimeKind(runtimeKind)} · ${getRuntimeRunStatusLabel(status)}`
+}
+
+export function mapRuntimeSession(runtime: RuntimeSessionDto): RuntimeSessionView {
+  const runtimeKind = normalizeText(runtime.runtimeKind, 'openai_codex')
+  const providerId = normalizeText(runtime.providerId, 'provider-unavailable')
+  const accountId = normalizeOptionalText(runtime.accountId)
+  const sessionId = normalizeOptionalText(runtime.sessionId)
+
+  return {
+    projectId: runtime.projectId,
+    runtimeKind,
+    providerId,
+    flowId: normalizeOptionalText(runtime.flowId),
+    sessionId,
+    accountId,
+    phase: runtime.phase,
+    phaseLabel: getRuntimePhaseLabel(runtime.phase),
+    runtimeLabel: getRuntimeLabel(runtimeKind, runtime.phase),
+    accountLabel: accountId ?? 'Not signed in',
+    sessionLabel: sessionId ?? 'No session',
+    callbackBound: runtime.callbackBound ?? null,
+    authorizationUrl: normalizeOptionalText(runtime.authorizationUrl),
+    redirectUri: normalizeOptionalText(runtime.redirectUri),
+    lastErrorCode: normalizeOptionalText(runtime.lastErrorCode),
+    lastError: runtime.lastError ?? null,
+    updatedAt: runtime.updatedAt,
+    isAuthenticated: runtime.phase === 'authenticated',
+    isLoginInProgress: [
+      'starting',
+      'awaiting_browser_callback',
+      'awaiting_manual_input',
+      'exchanging_code',
+      'refreshing',
+    ].includes(runtime.phase),
+    needsManualInput: runtime.phase === 'awaiting_manual_input',
+    isSignedOut: runtime.phase === 'idle',
+    isFailed: runtime.phase === 'failed' || runtime.phase === 'cancelled',
+  }
+}
+
+export function mapRuntimeRunCheckpoint(checkpoint: RuntimeRunCheckpointDto): RuntimeRunCheckpointView {
+  return {
+    sequence: checkpoint.sequence,
+    kind: checkpoint.kind,
+    kindLabel: getRuntimeRunCheckpointKindLabel(checkpoint.kind),
+    summary: normalizeText(checkpoint.summary, 'Durable checkpoint recorded.'),
+    createdAt: checkpoint.createdAt,
+  }
+}
+
+export function mapRuntimeRun(runtimeRun: RuntimeRunDto): RuntimeRunView {
+  const runtimeKind = normalizeText(runtimeRun.runtimeKind, 'openai_codex')
+  const providerId = normalizeText(runtimeRun.providerId, 'provider-unavailable')
+  const supervisorKind = normalizeText(runtimeRun.supervisorKind, 'detached_pty')
+  const checkpoints = runtimeRun.checkpoints
+    .map(mapRuntimeRunCheckpoint)
+    .sort((left, right) => left.sequence - right.sequence)
+  const latestCheckpoint = checkpoints[checkpoints.length - 1] ?? null
+
+  return {
+    projectId: runtimeRun.projectId,
+    runId: normalizeText(runtimeRun.runId, 'run-unavailable'),
+    runtimeKind,
+    providerId,
+    runtimeLabel: getRuntimeRunLabel(runtimeKind, runtimeRun.status),
+    supervisorKind,
+    supervisorLabel: humanizeRuntimeKind(supervisorKind),
+    status: runtimeRun.status,
+    statusLabel: getRuntimeRunStatusLabel(runtimeRun.status),
+    transport: {
+      kind: normalizeText(runtimeRun.transport.kind, 'tcp'),
+      endpoint: normalizeText(runtimeRun.transport.endpoint, 'Unavailable'),
+      liveness: runtimeRun.transport.liveness,
+      livenessLabel: getRuntimeRunTransportLivenessLabel(runtimeRun.transport.liveness),
+    },
+    startedAt: runtimeRun.startedAt,
+    lastHeartbeatAt: normalizeOptionalText(runtimeRun.lastHeartbeatAt),
+    lastCheckpointSequence: runtimeRun.lastCheckpointSequence,
+    lastCheckpointAt: normalizeOptionalText(runtimeRun.lastCheckpointAt),
+    stoppedAt: normalizeOptionalText(runtimeRun.stoppedAt),
+    lastErrorCode: normalizeOptionalText(runtimeRun.lastErrorCode),
+    lastError: runtimeRun.lastError ?? null,
+    updatedAt: runtimeRun.updatedAt,
+    checkpoints,
+    latestCheckpoint,
+    checkpointCount: checkpoints.length,
+    hasCheckpoints: checkpoints.length > 0,
+    isActive: runtimeRun.status === 'starting' || runtimeRun.status === 'running',
+    isTerminal: runtimeRun.status === 'stopped' || runtimeRun.status === 'failed',
+    isStale: runtimeRun.status === 'stale',
+    isFailed: runtimeRun.status === 'failed',
+  }
+}
+
+export function mergeRuntimeUpdated(
+  currentRuntime: RuntimeSessionView | null,
+  payload: RuntimeUpdatedPayloadDto,
+): RuntimeSessionView {
+  if (currentRuntime && timestampToSortValue(payload.updatedAt) < timestampToSortValue(currentRuntime.updatedAt)) {
+    return currentRuntime
+  }
+
+  const nextFlowId = normalizeOptionalText(payload.flowId)
+  const currentFlowId = currentRuntime?.flowId ?? null
+
+  return mapRuntimeSession({
+    projectId: payload.projectId,
+    runtimeKind: payload.runtimeKind,
+    providerId: payload.providerId,
+    flowId: nextFlowId,
+    sessionId: normalizeOptionalText(payload.sessionId),
+    accountId: normalizeOptionalText(payload.accountId),
+    phase: payload.authPhase,
+    callbackBound: currentFlowId === nextFlowId ? currentRuntime?.callbackBound ?? null : null,
+    authorizationUrl: currentFlowId === nextFlowId ? currentRuntime?.authorizationUrl ?? null : null,
+    redirectUri: currentFlowId === nextFlowId ? currentRuntime?.redirectUri ?? null : null,
+    lastErrorCode: normalizeOptionalText(payload.lastErrorCode),
+    lastError: payload.lastError ?? null,
+    updatedAt: payload.updatedAt,
+  })
+}

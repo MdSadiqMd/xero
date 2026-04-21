@@ -21,6 +21,57 @@ export const nonEmptyOptionalTextSchema = z.string().trim().min(1).nullable().op
 export const isoTimestampSchema = z.string().datetime({ offset: true })
 export const optionalIsoTimestampSchema = isoTimestampSchema.nullable().optional()
 
+export const gitToolResultScopeSchema = z.enum(['staged', 'unstaged', 'worktree'])
+export const webToolResultContentKindSchema = z.enum(['html', 'plain_text'])
+
+export const toolResultSummarySchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('command'),
+      exitCode: z.number().int().nullable().optional(),
+      timedOut: z.boolean(),
+      stdoutTruncated: z.boolean(),
+      stderrTruncated: z.boolean(),
+      stdoutRedacted: z.boolean(),
+      stderrRedacted: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('file'),
+      path: nonEmptyOptionalTextSchema,
+      scope: nonEmptyOptionalTextSchema,
+      lineCount: z.number().int().nonnegative().nullable().optional(),
+      matchCount: z.number().int().nonnegative().nullable().optional(),
+      truncated: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('git'),
+      scope: gitToolResultScopeSchema.nullable().optional(),
+      changedFiles: z.number().int().nonnegative(),
+      truncated: z.boolean(),
+      baseRevision: nonEmptyOptionalTextSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('web'),
+      target: z.string().trim().min(1),
+      resultCount: z.number().int().nonnegative().nullable().optional(),
+      finalUrl: nonEmptyOptionalTextSchema,
+      contentKind: webToolResultContentKindSchema.nullable().optional(),
+      contentType: nonEmptyOptionalTextSchema,
+      truncated: z.boolean(),
+    })
+    .strict(),
+])
+
+export type GitToolResultScopeDto = z.infer<typeof gitToolResultScopeSchema>
+export type WebToolResultContentKindDto = z.infer<typeof webToolResultContentKindSchema>
+export type ToolResultSummaryDto = z.infer<typeof toolResultSummarySchema>
+
 export function sortByNewest<T>(
   items: readonly T[],
   getTimestamp: (item: T) => string | null | undefined,
@@ -71,4 +122,12 @@ export function normalizeOptionalText(value: string | null | undefined): string 
 
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null
+}
+
+export function humanizeSegmentedLabel(value: string): string {
+  return value
+    .split(/[_-]+/)
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
 }
