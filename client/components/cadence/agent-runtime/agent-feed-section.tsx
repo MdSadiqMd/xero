@@ -10,8 +10,6 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 
 import {
-  displayValue,
-  formatSequence,
   formatSkillSource,
   formatSkillTreeHash,
   getSkillCacheLabel,
@@ -22,7 +20,8 @@ import {
   getStreamStatusMeta,
   getToolStateBadgeVariant,
   getToolStateLabel,
-} from './helpers'
+} from './runtime-stream-helpers'
+import { displayValue, formatSequence } from './shared-helpers'
 
 interface AgentFeedSectionProps {
   streamStatusMeta: ReturnType<typeof getStreamStatusMeta>

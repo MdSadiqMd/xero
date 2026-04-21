@@ -7,8 +7,6 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 
 import {
-  displayValue,
-  formatTimestamp,
   getCheckpointControlLoopBrokerBadgeVariant,
   getCheckpointControlLoopCoverageAlertMeta,
   getCheckpointControlLoopDurableBadgeVariant,
@@ -16,7 +14,8 @@ import {
   getCheckpointControlLoopRecoveryAlertMeta,
   getCheckpointControlLoopTruthBadgeVariant,
   getPerActionResumeStateMeta,
-} from './helpers'
+} from './checkpoint-control-loop-helpers'
+import { displayValue, formatTimestamp } from './shared-helpers'
 import type { PendingOperatorIntent } from './use-agent-runtime-controller'
 
 type CheckpointControlLoop = NonNullable<AgentPaneView['checkpointControlLoop']>

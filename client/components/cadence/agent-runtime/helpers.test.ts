@@ -2,14 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createEmptyCheckpointControlLoop,
-  displayValue,
-  formatSequence,
   getCheckpointControlLoopCoverageAlertMeta,
   getCheckpointControlLoopRecoveryAlertMeta,
-  getComposerPlaceholder,
   getPerActionResumeStateMeta,
-  getStreamStatusMeta,
-} from '@/components/cadence/agent-runtime/helpers'
+} from '@/components/cadence/agent-runtime/checkpoint-control-loop-helpers'
+import { getComposerPlaceholder } from '@/components/cadence/agent-runtime/composer-helpers'
+import { getStreamStatusMeta } from '@/components/cadence/agent-runtime/runtime-stream-helpers'
+import { displayValue, formatSequence } from '@/components/cadence/agent-runtime/shared-helpers'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type { RuntimeSessionView } from '@/src/lib/cadence-model'
 

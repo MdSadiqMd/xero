@@ -12,9 +12,27 @@ import { getRuntimeStreamStatusLabel } from '@/src/lib/cadence-model'
 
 import { AgentFeedSection } from './agent-runtime/agent-feed-section'
 import { CheckpointControlLoopSection } from './agent-runtime/checkpoint-control-loop-section'
+import {
+  createEmptyCheckpointControlLoop,
+  getCheckpointControlLoopCoverageAlertMeta,
+  getCheckpointControlLoopRecoveryAlertMeta,
+} from './agent-runtime/checkpoint-control-loop-helpers'
+import {
+  getComposerModelGroups,
+  getComposerPlaceholder,
+  getSelectedProviderId,
+  getSelectedProviderLabel,
+} from './agent-runtime/composer-helpers'
 import { ComposerDock } from './agent-runtime/composer-dock'
-import * as runtimeHelpers from './agent-runtime/helpers'
 import { RecoveredRuntimeSection } from './agent-runtime/recovered-runtime-section'
+import {
+  getPrimaryRuntimeRunActionLabel,
+  getRuntimeRunStatusText,
+  getStreamRunId,
+  getStreamStatusMeta,
+  hasUsableRuntimeRunId,
+} from './agent-runtime/runtime-stream-helpers'
+import { displayValue, formatSequence, sortByNewest } from './agent-runtime/shared-helpers'
 import { SetupEmptyState } from './agent-runtime/setup-empty-state'
 import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-controller'
 
@@ -53,7 +71,7 @@ export function AgentRuntime({
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
   const runtimeRun = agent.runtimeRun ?? null
-  const renderableRuntimeRun = runtimeHelpers.hasUsableRuntimeRunId(runtimeRun) ? runtimeRun : null
+  const renderableRuntimeRun = hasUsableRuntimeRunId(runtimeRun) ? runtimeRun : null
   const hasIncompleteRuntimeRunPayload = Boolean(runtimeRun && !renderableRuntimeRun)
   const runtimeStream = agent.runtimeStream ?? null
   const streamStatus = agent.runtimeStreamStatus ?? runtimeStream?.status ?? 'idle'
@@ -63,22 +81,19 @@ export function AgentRuntime({
   const transcriptItems = runtimeStream?.transcriptItems ?? []
   const toolCalls = runtimeStream?.toolCalls ?? []
   const streamIssue = agent.runtimeStreamError ?? runtimeStream?.lastIssue ?? null
-  const checkpointControlLoop = agent.checkpointControlLoop ?? runtimeHelpers.createEmptyCheckpointControlLoop()
-  const streamStatusLabel = runtimeHelpers.displayValue(
+  const checkpointControlLoop = agent.checkpointControlLoop ?? createEmptyCheckpointControlLoop()
+  const streamStatusLabel = displayValue(
     agent.runtimeStreamStatusLabel,
     getRuntimeStreamStatusLabel(streamStatus),
   )
   const runtimeRunCheckpoints = useMemo(
-    () =>
-      runtimeHelpers
-        .sortByNewest(renderableRuntimeRun?.checkpoints ?? [], (checkpoint) => checkpoint.createdAt)
-        .slice(0, 4),
+    () => sortByNewest(renderableRuntimeRun?.checkpoints ?? [], (checkpoint) => checkpoint.createdAt).slice(0, 4),
     [renderableRuntimeRun],
   )
 
-  const selectedProviderId = runtimeHelpers.getSelectedProviderId(agent, runtimeSession)
-  const selectedProviderLabel = runtimeHelpers.getSelectedProviderLabel(agent, runtimeSession)
-  const selectedModelId = runtimeHelpers.displayValue(
+  const selectedProviderId = getSelectedProviderId(agent, runtimeSession)
+  const selectedProviderLabel = getSelectedProviderLabel(agent, runtimeSession)
+  const selectedModelId = displayValue(
     agent.selectedModelId,
     selectedProviderId === 'openrouter' ? 'Model not configured' : 'openai_codex',
   )
@@ -111,18 +126,13 @@ export function AgentRuntime({
   })
 
   const composerModelGroups = useMemo(
-    () =>
-      runtimeHelpers.getComposerModelGroups(
-        selectedProviderId,
-        selectedProviderLabel,
-        controller.composerModelId,
-      ),
+    () => getComposerModelGroups(selectedProviderId, selectedProviderLabel, controller.composerModelId),
     [controller.composerModelId, selectedProviderId, selectedProviderLabel],
   )
-  const streamStatusMeta = useMemo(() => runtimeHelpers.getStreamStatusMeta(agent, runtimeSession), [agent, runtimeSession])
-  const streamRunId = runtimeHelpers.getStreamRunId(runtimeStream, renderableRuntimeRun)
-  const streamSequenceLabel = runtimeHelpers.formatSequence(runtimeStream?.lastSequence ?? null)
-  const streamSessionLabel = runtimeHelpers.displayValue(
+  const streamStatusMeta = useMemo(() => getStreamStatusMeta(agent, runtimeSession), [agent, runtimeSession])
+  const streamRunId = getStreamRunId(runtimeStream, renderableRuntimeRun)
+  const streamSequenceLabel = formatSequence(runtimeStream?.lastSequence ?? null)
+  const streamSessionLabel = displayValue(
     runtimeStream?.sessionId,
     runtimeSession?.sessionLabel ?? 'No session',
   )
@@ -135,7 +145,7 @@ export function AgentRuntime({
           ? 'Cadence is keeping the last observed sync counts visible, but hook-owned trust projection is unavailable.'
           : 'No notification adapter sync summary is available yet.',
     }
-  const checkpointControlLoopRecoveryAlert = runtimeHelpers.getCheckpointControlLoopRecoveryAlertMeta({
+  const checkpointControlLoopRecoveryAlert = getCheckpointControlLoopRecoveryAlertMeta({
     controlLoop: checkpointControlLoop,
     trustSnapshot: checkpointTrustSnapshot,
     autonomousRunErrorMessage: agent.autonomousRunErrorMessage ?? null,
@@ -143,11 +153,9 @@ export function AgentRuntime({
     notificationSyncPollingActionId: agent.notificationSyncPollingActionId ?? null,
     notificationSyncPollingBoundaryId: agent.notificationSyncPollingBoundaryId ?? null,
   })
-  const checkpointControlLoopCoverageAlert = runtimeHelpers.getCheckpointControlLoopCoverageAlertMeta(
-    checkpointControlLoop,
-  )
-  const runtimeRunStatusText = runtimeHelpers.getRuntimeRunStatusText(renderableRuntimeRun)
-  const primaryRuntimeRunActionLabel = runtimeHelpers.getPrimaryRuntimeRunActionLabel(renderableRuntimeRun)
+  const checkpointControlLoopCoverageAlert = getCheckpointControlLoopCoverageAlertMeta(checkpointControlLoop)
+  const runtimeRunStatusText = getRuntimeRunStatusText(renderableRuntimeRun)
+  const primaryRuntimeRunActionLabel = getPrimaryRuntimeRunActionLabel(renderableRuntimeRun)
   const showNoRunStreamBanner = Boolean(runtimeSession?.isAuthenticated && !renderableRuntimeRun)
   const hasCheckpointControlLoopSurface = Boolean(checkpointControlLoop.totalCount > 0 || agent.operatorActionError)
   const hasAgentFeedSurface = Boolean(
@@ -164,7 +172,7 @@ export function AgentRuntime({
       runtimeStream?.completion ||
       runtimeStream?.failure,
   )
-  const composerPlaceholder = runtimeHelpers.getComposerPlaceholder(
+  const composerPlaceholder = getComposerPlaceholder(
     runtimeSession,
     streamStatus,
     renderableRuntimeRun,

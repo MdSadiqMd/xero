@@ -13,12 +13,8 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
-import {
-  displayValue,
-  formatSequence,
-  formatTimestamp,
-  getRuntimeRunBadgeVariant,
-} from './helpers'
+import { getRuntimeRunBadgeVariant } from './runtime-stream-helpers'
+import { displayValue, formatSequence, formatTimestamp } from './shared-helpers'
 
 interface RecoveredRuntimeSectionProps {
   hasIncompleteRuntimeRunPayload: boolean
