@@ -32,7 +32,7 @@ pub fn list_notification_routes<R: Runtime>(
             .into_iter()
             .map(|route| {
                 let mut mapped_route = map_notification_route_record(route, None)?;
-                let route_kind = map_notification_route_kind(mapped_route.route_kind);
+                let route_kind = map_notification_route_kind(&mapped_route.route_kind);
                 let readiness = readiness_projector.project_route(
                     &mapped_route.project_id,
                     &mapped_route.route_id,
@@ -46,7 +46,7 @@ pub fn list_notification_routes<R: Runtime>(
     })
 }
 
-fn map_notification_route_kind(value: NotificationRouteKindDto) -> NotificationRouteKind {
+fn map_notification_route_kind(value: &NotificationRouteKindDto) -> NotificationRouteKind {
     match value {
         NotificationRouteKindDto::Telegram => NotificationRouteKind::Telegram,
         NotificationRouteKindDto::Discord => NotificationRouteKind::Discord,

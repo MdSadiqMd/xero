@@ -4,9 +4,10 @@ use rusqlite::{Connection, Error as SqlError};
 
 use crate::{
     commands::{
-        CommandError, PhaseStatus, PhaseSummaryDto, PlanningLifecycleProjectionDto,
-        PlanningLifecycleStageDto, PlanningLifecycleStageKindDto, ProjectSnapshotResponseDto,
-        ProjectSummaryDto, RepositorySummaryDto,
+        map_workflow_handoff_package_record, CommandError, PhaseStatus, PhaseSummaryDto,
+        PlanningLifecycleProjectionDto, PlanningLifecycleStageDto,
+        PlanningLifecycleStageKindDto, ProjectSnapshotResponseDto, ProjectSummaryDto,
+        RepositorySummaryDto,
     },
     db::database_path_for_repo,
 };
@@ -15,9 +16,9 @@ use super::{
     map_snapshot_decode_error, open_project_database, parse_phase_status, parse_phase_step,
     read_operator_approvals, read_project_row, read_resume_history, read_verification_records,
     workflow::{
-        map_workflow_handoff_package_record, read_transition_events, read_workflow_gate_metadata,
-        read_workflow_graph_nodes, read_workflow_handoff_packages, WorkflowGateState,
-        WorkflowGraphNodeRecord, MAX_LIFECYCLE_TRANSITION_EVENT_ROWS,
+        read_transition_events, read_workflow_gate_metadata, read_workflow_graph_nodes,
+        read_workflow_handoff_packages, WorkflowGateState, WorkflowGraphNodeRecord,
+        MAX_LIFECYCLE_TRANSITION_EVENT_ROWS,
     },
     ProjectSummaryRow,
 };
