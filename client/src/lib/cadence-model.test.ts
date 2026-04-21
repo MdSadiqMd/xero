@@ -1159,6 +1159,7 @@ describe('cadence-model', () => {
     expect(composeNotificationRouteTarget('telegram', ' telegram:@ops-room ')).toBe('telegram:@ops-room')
     expect(composeNotificationRouteTarget('discord', '123456789012345678')).toBe('discord:123456789012345678')
 
+    expect(() => composeNotificationRouteTarget('telegram', '   ')).toThrow(/Route target is required/)
     expect(() => composeNotificationRouteTarget('telegram', 'discord:123456789012345678')).toThrow(
       /does not match the selected route kind/,
     )
@@ -1168,6 +1169,7 @@ describe('cadence-model', () => {
       canonicalTarget: 'discord:123456789012345678',
     })
 
+    expect(() => decomposeNotificationRouteTarget('discord', '   ')).toThrow(/Route target is required/)
     expect(() => decomposeNotificationRouteTarget('discord', '123456789012345678')).toThrow(
       /must use `<kind>:<channel-target>` format/,
     )
