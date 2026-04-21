@@ -2687,6 +2687,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
         .mock.calls.filter(([projectId]) => projectId === 'project-1').length
 
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
     project1Blocked = true
 
     act(() => {

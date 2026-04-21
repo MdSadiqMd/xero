@@ -1659,6 +1659,10 @@ describe('useCadenceDesktopState', () => {
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
     expect(screen.getByTestId('auth-phase')).toHaveTextContent('idle')
 
+    await act(async () => {
+      await Promise.resolve()
+    })
+
     fireEvent.click(screen.getByRole('button', { name: 'Start OpenAI login' }))
 
     await waitFor(() =>
