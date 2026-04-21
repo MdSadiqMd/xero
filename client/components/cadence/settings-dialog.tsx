@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { z } from "zod"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import type {
   AgentPaneView,
@@ -10,7 +9,6 @@ import type {
   RuntimeSettingsSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import type {
-  NotificationRouteKindDto,
   RuntimeSessionView,
   RuntimeSettingsDto,
   UpsertNotificationRouteRequestDto,
@@ -18,11 +16,6 @@ import type {
 } from "@/src/lib/cadence-model"
 import type { PlatformVariant } from "@/components/cadence/shell"
 import { detectPlatform } from "@/components/cadence/shell"
-import {
-  composeNotificationRouteTarget,
-  decomposeNotificationRouteTarget,
-  notificationRouteKindSchema,
-} from "@/src/lib/cadence-model"
 import {
   AlertCircle,
   Bell,
@@ -32,15 +25,8 @@ import {
   LoaderCircle,
   LogIn,
   LogOut,
-  Plus,
 } from "lucide-react"
-import {
-  AnthropicIcon,
-  DiscordIcon,
-  GoogleIcon,
-  OpenAIIcon,
-  TelegramIcon,
-} from "@/components/cadence/brand-icons"
+import { AnthropicIcon, GoogleIcon, OpenAIIcon } from "@/components/cadence/brand-icons"
 import {
   Dialog,
   DialogContent,
@@ -55,6 +41,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import { NotificationsSection } from "@/components/cadence/settings-dialog/notifications-section"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,79 +53,9 @@ function errMsg(error: unknown, fallback: string): string {
   return fallback
 }
 
-function routeTargetDisplay(kind: NotificationRouteKindDto, target: string): string {
-  try {
-    return decomposeNotificationRouteTarget(kind, target).channelTarget
-  } catch {
-    return target || "—"
-  }
-}
-
 function errorViewMessage(error: OperatorActionErrorView | null, fallback: string): string {
   if (error?.message?.trim()) return error.message
   return fallback
-}
-
-// ---------------------------------------------------------------------------
-// Route form
-// ---------------------------------------------------------------------------
-
-const routeFormSchema = z
-  .object({
-    routeId: z.string().trim().min(1, "Give this route an ID."),
-    routeKind: notificationRouteKindSchema,
-    routeTarget: z.string().trim().min(1, "A target is required."),
-    enabled: z.boolean(),
-  })
-  .strict()
-  .superRefine((v, ctx) => {
-    try {
-      composeNotificationRouteTarget(v.routeKind, v.routeTarget)
-    } catch (e) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["routeTarget"], message: errMsg(e, "Invalid target format.") })
-    }
-  })
-
-type RouteFormValues = z.input<typeof routeFormSchema>
-type RouteFormErrors = Partial<Record<"routeId" | "routeKind" | "routeTarget" | "form", string>>
-
-function defaultRouteForm(kind: NotificationRouteKindDto = "telegram"): RouteFormValues {
-  return { routeId: "", routeKind: kind, routeTarget: "", enabled: true }
-}
-
-function parseFormErrors(error: unknown): RouteFormErrors {
-  if (!(error instanceof z.ZodError)) return { form: errMsg(error, "Validation failed.") }
-  const out: RouteFormErrors = {}
-  for (const issue of error.issues) {
-    const p = issue.path[0]
-    if ((p === "routeId" || p === "routeKind" || p === "routeTarget") && !out[p]) {
-      out[p] = issue.message
-      continue
-    }
-    if (!out.form) out.form = issue.message
-  }
-  return out
-}
-
-function toRouteRequest(form: RouteFormValues): Omit<UpsertNotificationRouteRequestDto, "projectId" | "updatedAt"> {
-  const v = routeFormSchema.parse(form)
-  return {
-    routeId: v.routeId,
-    routeKind: v.routeKind,
-    routeTarget: composeNotificationRouteTarget(v.routeKind, v.routeTarget),
-    enabled: v.enabled,
-    metadataJson: null,
-  }
-}
-
-const ROUTE_KINDS: Array<{ value: NotificationRouteKindDto; label: string; placeholder: string }> = [
-  { value: "telegram", label: "Telegram", placeholder: "Chat ID or @channel" },
-  { value: "discord", label: "Discord", placeholder: "Channel ID" },
-]
-
-function FieldError({ msg }: { msg?: string }) {
-  if (!msg) return null
-  return <p className="text-[12px] text-destructive">{msg}</p>
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +114,6 @@ export function SettingsDialog({
   onUpsertRuntimeSettings,
   onStartLogin,
   onLogout,
-  onRefreshNotificationRoutes,
   onUpsertNotificationRoute,
   platformOverride,
   onPlatformOverrideChange,
@@ -267,7 +183,6 @@ export function SettingsDialog({
               agent ? (
                 <NotificationsSection
                   agent={agent}
-                  onRefreshNotificationRoutes={onRefreshNotificationRoutes}
                   onUpsertNotificationRoute={onUpsertNotificationRoute}
                 />
               ) : (
@@ -658,308 +573,6 @@ function ProvidersSection({
                           setConfiguringId(null)
                           setFormError(null)
                         }}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-// ===========================================================================
-// Notifications Section — channel-card layout mirroring providers
-// ===========================================================================
-
-type RoutePending = "save" | "toggle" | null
-
-const CHANNELS: Array<{
-  kind: NotificationRouteKindDto
-  label: string
-  description: string
-  Icon: React.ElementType
-}> = [
-  { kind: "telegram", label: "Telegram", description: "Route operator prompts via Telegram", Icon: TelegramIcon },
-  { kind: "discord", label: "Discord", description: "Route operator prompts via Discord", Icon: DiscordIcon },
-]
-
-function NotificationsSection({ agent, onRefreshNotificationRoutes, onUpsertNotificationRoute }: {
-  agent: AgentPaneView
-  onRefreshNotificationRoutes?: (opts?: { force?: boolean }) => Promise<unknown>
-  onUpsertNotificationRoute?: (req: Omit<UpsertNotificationRouteRequestDto, "projectId" | "updatedAt">) => Promise<unknown>
-}) {
-  const hasBind = Boolean(agent.repositoryPath?.trim())
-  const canMutate = hasBind && typeof onUpsertNotificationRoute === "function"
-  const routes = agent.notificationRoutes ?? []
-  const isMutating = (agent.notificationRouteMutationStatus ?? "idle") === "running"
-  const pendingRouteId = agent.pendingNotificationRouteId ?? null
-
-  const [pending, setPending] = useState<RoutePending>(null)
-  const [formKind, setFormKind] = useState<NotificationRouteKindDto | null>(null)
-  const [form, setForm] = useState<RouteFormValues>(() => defaultRouteForm())
-  const [formErrors, setFormErrors] = useState<RouteFormErrors>({})
-  const [formError, setFormError] = useState<string | null>(null)
-  const [editingId, setEditingId] = useState<string | null>(null)
-
-  useEffect(() => {
-    setForm(defaultRouteForm())
-    setFormErrors({})
-    setFormError(null)
-    setEditingId(null)
-    setFormKind(null)
-  }, [agent.project.id])
-
-  const kindOpt = ROUTE_KINDS.find((o) => o.value === form.routeKind) ?? ROUTE_KINDS[0]
-
-  function setField<F extends keyof RouteFormValues>(field: F, value: RouteFormValues[F]) {
-    setForm((p) => ({ ...p, [field]: value }))
-    setFormErrors((p) => {
-      const key = field as string as keyof RouteFormErrors
-      if (!p[key] && !p.form) return p
-      const n = { ...p }
-      delete n[key]
-      delete n.form
-      return n
-    })
-  }
-
-  function startNew(kind: NotificationRouteKindDto) {
-    setEditingId(null)
-    setForm(defaultRouteForm(kind))
-    setFormErrors({})
-    setFormError(null)
-    setFormKind(kind)
-  }
-
-  function editRoute(r: AgentPaneView["notificationRoutes"][number]) {
-    let target = r.routeTarget
-    try {
-      target = decomposeNotificationRouteTarget(r.routeKind, r.routeTarget).channelTarget
-    } catch {
-      // Keep the truthful stored target when decomposition fails.
-    }
-    setEditingId(r.routeId)
-    setForm({ routeId: r.routeId, routeKind: r.routeKind, routeTarget: target, enabled: r.enabled })
-    setFormErrors({})
-    setFormError(null)
-    setFormKind(r.routeKind)
-  }
-
-  function cancelForm() {
-    setFormKind(null)
-    setEditingId(null)
-    setFormErrors({})
-    setFormError(null)
-  }
-
-  async function save() {
-    if (!canMutate || !onUpsertNotificationRoute) return
-    let req: Omit<UpsertNotificationRouteRequestDto, "projectId" | "updatedAt">
-    try {
-      req = toRouteRequest(form)
-      setFormErrors({})
-    } catch (error) {
-      setFormErrors(parseFormErrors(error))
-      return
-    }
-    setPending("save")
-    setFormError(null)
-    try {
-      await onUpsertNotificationRoute(req)
-      setFormKind(null)
-      setEditingId(null)
-    } catch (error) {
-      setFormError(errMsg(error, "Could not save route."))
-    } finally {
-      setPending(null)
-    }
-  }
-
-  async function toggleRoute(r: AgentPaneView["notificationRoutes"][number]) {
-    if (!canMutate || !onUpsertNotificationRoute) return
-    setPending("toggle")
-    try {
-      await onUpsertNotificationRoute({
-        routeId: r.routeId,
-        routeKind: r.routeKind,
-        routeTarget: r.routeTarget,
-        enabled: !r.enabled,
-        metadataJson: r.metadataJson ?? null,
-      })
-    } catch (error) {
-      setFormError(errMsg(error, `Could not update ${r.routeId}.`))
-    } finally {
-      setPending(null)
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      <div>
-        <h3 className="text-sm font-semibold text-foreground">Notifications</h3>
-        <p className="mt-1 text-[12px] text-muted-foreground">
-          Route operator prompts to Telegram or Discord.
-        </p>
-      </div>
-
-      <div className="grid gap-2">
-        {CHANNELS.map(({ kind, label, description, Icon }) => {
-          const channelRoutes = routes.filter((r) => r.routeKind === kind)
-          const formOpen = formKind === kind
-          const hasRoutes = channelRoutes.length > 0
-
-          return (
-            <div key={kind} className="rounded-lg border border-border bg-card px-4 py-3">
-              <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/60">
-                  <Icon className="h-4 w-4 text-foreground/70" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-medium text-foreground">{label}</p>
-                  <p className="text-[11px] text-muted-foreground">{description}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {!hasRoutes && !formOpen ? (
-                    <>
-                      <Badge variant="outline" className="text-[10px]">Not configured</Badge>
-                      <Button
-                        size="sm"
-                        className="h-7 text-[11px]"
-                        disabled={!canMutate}
-                        onClick={() => startNew(kind)}
-                      >
-                        <Plus className="h-3 w-3" />
-                        Add route
-                      </Button>
-                    </>
-                  ) : !formOpen ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-[11px]"
-                      disabled={!canMutate}
-                      onClick={() => startNew(kind)}
-                    >
-                      <Plus className="h-3 w-3" />
-                      Add
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-
-              {hasRoutes && (
-                <div className="mt-2 grid gap-0.5 border-t border-border pt-2">
-                  {channelRoutes.map((r) => {
-                    const busy = pendingRouteId === r.routeId && (isMutating || pending === "toggle")
-                    const isActiveEdit = editingId === r.routeId && formOpen
-                    return (
-                      <div
-                        key={r.routeId}
-                        className={cn(
-                          "flex items-center gap-2 rounded-md px-1.5 py-1.5 -mx-1.5",
-                          isActiveEdit && "bg-secondary/40",
-                        )}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <p className="text-[12px] font-medium text-foreground leading-none">{r.routeId}</p>
-                          <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
-                            {routeTargetDisplay(r.routeKind, r.routeTarget)}
-                          </p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 px-2 text-[11px]"
-                          onClick={() => editRoute(r)}
-                        >
-                          Edit
-                        </Button>
-                        <div className="flex items-center gap-1.5">
-                          <Label htmlFor={`rt-${r.routeId}`} className="text-[10px] text-muted-foreground w-4">
-                            {r.enabled ? "On" : "Off"}
-                          </Label>
-                          <Switch
-                            id={`rt-${r.routeId}`}
-                            checked={r.enabled}
-                            onCheckedChange={() => void toggleRoute(r)}
-                            disabled={!canMutate || busy}
-                          />
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              {formOpen && (
-                <div className={cn("border-t border-border pt-3", hasRoutes ? "mt-1" : "mt-3")}>
-                  <p className="mb-2.5 text-[12px] font-medium text-foreground">
-                    {editingId ? `Edit — ${editingId}` : `New ${label} route`}
-                  </p>
-                  <div className="grid gap-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor={`s-route-id-${kind}`} className="text-[11px]">Route name</Label>
-                        <Input
-                          id={`s-route-id-${kind}`}
-                          className="h-8 text-[12px]"
-                          disabled={isMutating || pending === "save"}
-                          onChange={(e) => setField("routeId", e.target.value)}
-                          placeholder="e.g. ops-alerts"
-                          value={form.routeId}
-                        />
-                        <FieldError msg={formErrors.routeId} />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor={`s-route-target-${kind}`} className="text-[11px]">Target</Label>
-                        <Input
-                          id={`s-route-target-${kind}`}
-                          className="h-8 text-[12px]"
-                          disabled={isMutating || pending === "save"}
-                          onChange={(e) => setField("routeTarget", e.target.value)}
-                          placeholder={kindOpt.placeholder}
-                          value={form.routeTarget}
-                        />
-                        <FieldError msg={formErrors.routeTarget} />
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        id={`s-route-enabled-${kind}`}
-                        checked={form.enabled}
-                        onCheckedChange={(v) => setField("enabled", v)}
-                        disabled={isMutating || pending === "save"}
-                      />
-                      <Label htmlFor={`s-route-enabled-${kind}`} className="text-[11px] text-muted-foreground">
-                        Enable immediately
-                      </Label>
-                    </div>
-                    {(formErrors.form || formError) && (
-                      <p className="text-[12px] text-destructive">{formErrors.form ?? formError}</p>
-                    )}
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        className="h-7 text-[11px]"
-                        disabled={!canMutate || isMutating || pending === "save"}
-                        onClick={() => void save()}
-                      >
-                        {pending === "save" || isMutating
-                          ? <LoaderCircle className="h-3 w-3 animate-spin" />
-                          : <Check className="h-3 w-3" />}
-                        {editingId ? "Save changes" : "Create route"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 text-[11px]"
-                        onClick={cancelForm}
                       >
                         Cancel
                       </Button>

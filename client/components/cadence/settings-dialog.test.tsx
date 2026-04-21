@@ -50,6 +50,23 @@ function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): Runtim
   }
 }
 
+function makeNotificationRoute(
+  overrides: Partial<AgentPaneView['notificationRoutes'][number]> = {},
+): AgentPaneView['notificationRoutes'][number] {
+  return {
+    projectId: 'project-1',
+    routeId: 'ops-alerts',
+    routeKind: 'telegram',
+    routeTarget: 'telegram:@ops-room',
+    enabled: true,
+    metadataJson: null,
+    credentialReadiness: null,
+    createdAt: '2026-04-20T00:00:00Z',
+    updatedAt: '2026-04-20T00:00:00Z',
+    ...overrides,
+  }
+}
+
 function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
   return {
     project: {
@@ -165,9 +182,7 @@ describe('SettingsDialog', () => {
     )
 
     await waitFor(() => expect(onRefreshRuntimeSettings).toHaveBeenCalledWith({ force: true }))
-    expect(
-      screen.getByText('Configure AI model providers for Cadence'),
-    ).toBeVisible()
+    expect(screen.getByText('Configure AI model providers for Cadence')).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
 
@@ -177,6 +192,109 @@ describe('SettingsDialog', () => {
         'Provider settings are app-global, but notification routes stay project-bound so Cadence never writes cross-project delivery state into the wrong repository view.',
       ),
     ).toBeVisible()
+  })
+
+  it('shows route target validation errors and omits project metadata when creating routes', async () => {
+    const onUpsertNotificationRoute = vi.fn(async () => ({ route: makeNotificationRoute() }))
+
+    render(
+      <SettingsDialog
+        open
+        onOpenChange={vi.fn()}
+        agent={makeAgent()}
+        runtimeSettings={makeRuntimeSettings()}
+        runtimeSettingsLoadStatus="ready"
+        runtimeSettingsLoadError={null}
+        runtimeSettingsSaveStatus="idle"
+        runtimeSettingsSaveError={null}
+        onRefreshRuntimeSettings={vi.fn(async () => makeRuntimeSettings())}
+        onUpsertNotificationRoute={onUpsertNotificationRoute}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add route' })[0])
+
+    fireEvent.change(screen.getByLabelText('Route name'), { target: { value: 'ops-alerts' } })
+    fireEvent.change(screen.getByLabelText('Target'), { target: { value: 'discord:12345' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create route' }))
+
+    expect(
+      screen.getByText('Route target prefix `discord` does not match the selected route kind `telegram`.'),
+    ).toBeVisible()
+    expect(onUpsertNotificationRoute).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('Target'), { target: { value: '@ops-room' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create route' }))
+
+    await waitFor(() => expect(onUpsertNotificationRoute).toHaveBeenCalledTimes(1))
+
+    const request = onUpsertNotificationRoute.mock.calls[0][0]
+    expect(request).toEqual({
+      routeId: 'ops-alerts',
+      routeKind: 'telegram',
+      routeTarget: 'telegram:@ops-room',
+      enabled: true,
+      metadataJson: null,
+    })
+    expect(request).not.toHaveProperty('projectId')
+    expect(request).not.toHaveProperty('updatedAt')
+  })
+
+  it('keeps truthful stored targets for edit fallback and toggles existing routes', async () => {
+    const onUpsertNotificationRoute = vi.fn(async () => ({ route: makeNotificationRoute() }))
+
+    render(
+      <SettingsDialog
+        open
+        onOpenChange={vi.fn()}
+        agent={makeAgent({
+          notificationRoutes: [
+            makeNotificationRoute({
+              routeTarget: 'ops-room',
+              enabled: false,
+            }),
+          ],
+        })}
+        runtimeSettings={makeRuntimeSettings()}
+        runtimeSettingsLoadStatus="ready"
+        runtimeSettingsLoadError={null}
+        runtimeSettingsSaveStatus="idle"
+        runtimeSettingsSaveError={null}
+        onRefreshRuntimeSettings={vi.fn(async () => makeRuntimeSettings())}
+        onUpsertNotificationRoute={onUpsertNotificationRoute}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
+
+    expect(screen.getByText('ops-room')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    expect(screen.getByLabelText('Target')).toHaveValue('ops-room')
+
+    fireEvent.change(screen.getByLabelText('Target'), { target: { value: '@pager-room' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(onUpsertNotificationRoute).toHaveBeenCalledTimes(1))
+    expect(onUpsertNotificationRoute.mock.calls[0][0]).toEqual({
+      routeId: 'ops-alerts',
+      routeKind: 'telegram',
+      routeTarget: 'telegram:@pager-room',
+      enabled: false,
+      metadataJson: null,
+    })
+
+    fireEvent.click(screen.getByLabelText('Off'))
+
+    await waitFor(() => expect(onUpsertNotificationRoute).toHaveBeenCalledTimes(2))
+    expect(onUpsertNotificationRoute.mock.calls[1][0]).toEqual({
+      routeId: 'ops-alerts',
+      routeKind: 'telegram',
+      routeTarget: 'ops-room',
+      enabled: true,
+      metadataJson: null,
+    })
   })
 
   it('keeps an OpenRouter-specific model draft and never echoes a saved API key back into the dialog state', async () => {
@@ -213,7 +331,6 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    // Click Configure button on OpenRouter card
     const configureButton = screen.getAllByRole('button', { name: 'Configure' })[0]
     fireEvent.click(configureButton)
 
@@ -239,11 +356,9 @@ describe('SettingsDialog', () => {
       }),
     )
 
-    // After save, the configuration form closes - key input is no longer in DOM
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
     expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument()
 
-    // Rerender with updated settings
     rerender(
       <SettingsDialog
         open
@@ -259,11 +374,9 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    // OpenRouter should now show as Configured
     expect(screen.getByText('Configured')).toBeVisible()
     expect(screen.getByText('Active')).toBeVisible()
 
-    // Open Configure form again to verify model ID is saved and secret is not echoed
     const configureButtonAfter = screen.getAllByRole('button', { name: 'Configure' })[0]
     fireEvent.click(configureButtonAfter)
 
@@ -299,12 +412,9 @@ describe('SettingsDialog', () => {
     )
 
     expect(screen.getByText('Cadence timed out while loading app-global runtime settings.')).toBeVisible()
-
-    // Provider cards should still be visible showing the snapshot
     expect(screen.getByText('OpenRouter')).toBeVisible()
     expect(screen.getByText('OpenAI Codex')).toBeVisible()
 
-    // Click Configure to verify the model ID is preserved
     const configureButton = screen.getByRole('button', { name: 'Configure' })
     fireEvent.click(configureButton)
 
