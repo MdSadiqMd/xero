@@ -41,6 +41,9 @@ use tempfile::TempDir;
 #[path = "support/runtime_shell.rs"]
 mod runtime_shell;
 
+#[path = "support/supervisor_test_lock.rs"]
+mod supervisor_test_lock;
+
 fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::MockRuntime> {
     configure_builder_with_state(tauri::test::mock_builder(), state)
         .build(tauri::generate_context!())
@@ -442,6 +445,7 @@ fn read_manifest(cache_root: &Path, cache_key: &str) -> AutonomousSkillCacheMani
 
 #[test]
 fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_changes() {
+    let _guard = supervisor_test_lock::lock_supervisor_test_process();
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -646,6 +650,7 @@ fn imported_repo_bridge_executes_repo_scoped_tool_operations_and_surfaces_git_ch
 
 #[test]
 fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuation() {
+    let _guard = supervisor_test_lock::lock_supervisor_test_process();
     let root = tempfile::tempdir().expect("temp dir");
     let (state, auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -786,6 +791,7 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
 
 #[test]
 fn imported_repo_skill_runtime_uses_cadence_cache_boundary_and_keeps_repo_clean() {
+    let _guard = supervisor_test_lock::lock_supervisor_test_process();
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
