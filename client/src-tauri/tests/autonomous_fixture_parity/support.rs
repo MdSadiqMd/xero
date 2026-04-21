@@ -112,10 +112,10 @@ pub(crate) fn create_openrouter_state(root: &TempDir, models_url: String) -> Des
 }
 
 pub(crate) fn openrouter_auth_config(models_url: String) -> OpenRouterAuthConfig {
-    let mut config = OpenRouterAuthConfig::default();
-    config.models_url = models_url;
-    config.timeout = Duration::from_secs(5);
-    config
+    OpenRouterAuthConfig {
+        models_url,
+        timeout: Duration::from_secs(5),
+    }
 }
 
 pub(crate) fn spawn_static_http_server(status: u16, body: &str) -> String {
@@ -314,6 +314,7 @@ pub(crate) fn upsert_notification_route(
     .expect("upsert notification route");
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn launch_scripted_runtime_run_with_runtime_kind(
     state: &DesktopState,
     repo_root: &Path,
@@ -493,9 +494,11 @@ pub(crate) fn count_workflow_handoff_rows(repo_root: &Path, project_id: &str) ->
     )
 }
 
+type HistoryShapeEntry = (u32, String, u32, String, String, String, String, String);
+
 pub(crate) fn history_shape(
     state: &AutonomousRunStateDto,
-) -> Vec<(u32, String, u32, String, String, String, String, String)> {
+) -> Vec<HistoryShapeEntry> {
     state
         .history
         .iter()

@@ -54,6 +54,7 @@ export interface SettingsDialogProps {
   onUpsertNotificationRoute?: (req: Omit<UpsertNotificationRouteRequestDto, "projectId" | "updatedAt">) => Promise<unknown>
   platformOverride?: PlatformVariant | null
   onPlatformOverrideChange?: (value: PlatformVariant | null) => void
+  onStartOnboarding?: () => void
 }
 
 export function SettingsDialog({
@@ -72,6 +73,7 @@ export function SettingsDialog({
   onUpsertNotificationRoute,
   platformOverride,
   onPlatformOverrideChange,
+  onStartOnboarding,
 }: SettingsDialogProps) {
   const [section, setSection] = useState<SettingsSection>("providers")
 
@@ -90,37 +92,57 @@ export function SettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex h-[min(560px,85vh)] w-[min(780px,92vw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
+        className="flex h-[min(580px,86vh)] w-[min(800px,93vw)] max-w-none flex-col gap-0 overflow-hidden border-border/70 p-0 sm:max-w-none"
         showCloseButton
       >
-        <DialogHeader className="shrink-0 border-b border-border px-5 py-3">
-          <DialogTitle className="text-sm">Settings</DialogTitle>
+        <DialogHeader className="shrink-0 border-b border-border/70 px-5 py-3">
+          <DialogTitle className="text-[13px] font-semibold tracking-tight">Settings</DialogTitle>
           <DialogDescription className="sr-only">
-            Configure app-global providers, selected-project notification routes, and development options.
+            Configure providers, notification routes, and development options.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex min-h-0 flex-1">
-          <nav className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-border bg-sidebar/50 px-2 py-3">
-            {NAV.map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setSection(id)}
-                className={cn(
-                  "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] font-medium transition-colors",
-                  section === id
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-                )}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                {label}
-              </button>
-            ))}
+          <nav className="flex w-44 shrink-0 flex-col border-r border-border/70 bg-sidebar">
+            <div className="px-3 pt-3 pb-1.5">
+              <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                Settings
+              </span>
+            </div>
+            <div className="flex flex-col">
+              {NAV.map(({ id, label, icon: Icon }) => {
+                const active = section === id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-label={label}
+                    onClick={() => setSection(id)}
+                    className={cn(
+                      "group flex items-center gap-2.5 px-3 py-2 text-left transition-colors duration-150",
+                      active
+                        ? "bg-primary/[0.08] text-foreground"
+                        : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+                    )}
+                  >
+                    <Icon
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0",
+                        active ? "text-primary" : "text-muted-foreground group-hover:text-foreground",
+                      )}
+                    />
+                    <span className="text-[12.5px] font-medium leading-tight">{label}</span>
+                  </button>
+                )
+              })}
+            </div>
           </nav>
 
-          <div className="flex flex-1 flex-col overflow-y-auto px-6 py-5">
+          <div className="flex flex-1 flex-col overflow-y-auto scrollbar-thin">
+            <div
+              key={section}
+              className="flex flex-1 flex-col px-6 py-5 animate-in fade-in-0 slide-in-from-right-2 duration-200 ease-out"
+            >
             {section === "providers" ? (
               <ProvidersSection
                 agent={agent}
@@ -150,8 +172,10 @@ export function SettingsDialog({
               <DevelopmentSection
                 platformOverride={platformOverride}
                 onPlatformOverrideChange={onPlatformOverrideChange}
+                onStartOnboarding={onStartOnboarding}
               />
             ) : null}
+            </div>
           </div>
         </div>
       </DialogContent>
@@ -161,9 +185,9 @@ export function SettingsDialog({
 
 function ProjectBoundEmptyState({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex flex-1 items-center justify-center py-16 text-center">
-      <div className="max-w-md rounded-xl border border-border bg-card px-6 py-8 shadow-sm">
-        <p className="text-sm font-medium text-foreground">{title}</p>
+    <div className="flex flex-1 items-center justify-center py-12 text-center">
+      <div className="max-w-md px-6">
+        <p className="text-[13px] font-medium text-foreground">{title}</p>
         <p className="mt-2 text-[12px] leading-5 text-muted-foreground">{body}</p>
       </div>
     </div>

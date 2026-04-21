@@ -5,6 +5,7 @@ use std::{
 };
 
 use rusqlite::{params, Connection};
+use rusqlite_migration::{Error as MigrationError, MigrationDefinitionError};
 
 use crate::{
     commands::{CommandError, ProjectSummaryDto, RepositorySummaryDto},
@@ -50,16 +51,7 @@ pub fn import_project(
     })?;
 
     let import_result = (|| -> Result<ImportedProjectRecord, CommandError> {
-        let mut connection = Connection::open(&database_path).map_err(|error| {
-            CommandError::retryable(
-                "state_database_open_failed",
-                format!(
-                    "Cadence could not open the repo-local database at {}: {error}",
-                    database_path.display()
-                ),
-            )
-        })?;
-
+        let mut connection = open_database_connection(&database_path)?;
         configure_connection(&connection)?;
 
         if failpoints.fail_migration {
@@ -69,15 +61,24 @@ pub fn import_project(
             ));
         }
 
-        migrations().to_latest(&mut connection).map_err(|error| {
-            CommandError::system_fault(
-                "state_database_migration_failed",
-                format!(
-                    "Cadence could not migrate the repo-local database at {}: {error}",
-                    database_path.display()
-                ),
-            )
-        })?;
+        let connection = match migrations().to_latest(&mut connection) {
+            Ok(()) => connection,
+            Err(error) if database_existed && is_database_too_far_ahead(&error) => {
+                let observed_user_version = read_user_version(&connection);
+                let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                drop(connection);
+
+                quarantine_incompatible_database(&database_path, observed_user_version)?;
+
+                let mut reset_connection = open_database_connection(&database_path)?;
+                configure_connection(&reset_connection)?;
+                migrations()
+                    .to_latest(&mut reset_connection)
+                    .map_err(|error| state_database_migration_error(&database_path, error))?;
+                reset_connection
+            }
+            Err(error) => return Err(state_database_migration_error(&database_path, error)),
+        };
 
         persist_import_rows(&connection, repository)?;
 
@@ -136,6 +137,89 @@ pub(crate) fn configure_connection(connection: &Connection) -> Result<(), Comman
                 format!("Cadence could not configure SQLite pragmas: {error}"),
             )
         })
+}
+
+fn open_database_connection(database_path: &Path) -> Result<Connection, CommandError> {
+    Connection::open(database_path).map_err(|error| {
+        CommandError::retryable(
+            "state_database_open_failed",
+            format!(
+                "Cadence could not open the repo-local database at {}: {error}",
+                database_path.display()
+            ),
+        )
+    })
+}
+
+fn state_database_migration_error(database_path: &Path, error: MigrationError) -> CommandError {
+    CommandError::system_fault(
+        "state_database_migration_failed",
+        format!(
+            "Cadence could not migrate the repo-local database at {}: {error}",
+            database_path.display()
+        ),
+    )
+}
+
+fn is_database_too_far_ahead(error: &MigrationError) -> bool {
+    matches!(
+        error,
+        MigrationError::MigrationDefinition(MigrationDefinitionError::DatabaseTooFarAhead)
+    )
+}
+
+fn read_user_version(connection: &Connection) -> i64 {
+    connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or(0)
+}
+
+fn quarantine_incompatible_database(
+    database_path: &Path,
+    observed_user_version: i64,
+) -> Result<(), CommandError> {
+    let backup_path = next_incompatible_backup_path(database_path, observed_user_version);
+
+    fs::rename(database_path, &backup_path).map_err(|error| {
+        CommandError::retryable(
+            "state_database_backup_failed",
+            format!(
+                "Cadence found repo-local state from a newer build at {} but could not move it aside to {}: {error}",
+                database_path.display(),
+                backup_path.display(),
+            ),
+        )
+    })?;
+
+    remove_database_sidecars(database_path);
+    Ok(())
+}
+
+fn next_incompatible_backup_path(database_path: &Path, observed_user_version: i64) -> PathBuf {
+    let file_name = database_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(STATE_DATABASE_FILE);
+    let version_label = observed_user_version.max(0);
+    let parent = database_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let mut candidate = parent.join(format!("{file_name}.incompatible-v{version_label}.bak"));
+    let mut attempt = 1;
+    while candidate.exists() {
+        candidate = parent.join(format!(
+            "{file_name}.incompatible-v{version_label}.{attempt}.bak"
+        ));
+        attempt += 1;
+    }
+
+    candidate
+}
+
+fn remove_database_sidecars(database_path: &Path) {
+    let wal_path = database_path.with_extension("db-wal");
+    let shm_path = database_path.with_extension("db-shm");
+    let _ = fs::remove_file(wal_path);
+    let _ = fs::remove_file(shm_path);
 }
 
 fn persist_import_rows(

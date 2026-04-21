@@ -13,7 +13,12 @@ pub(crate) use rusqlite::{params, Connection};
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use tempfile::TempDir;
 
-pub(crate) fn seed_project(root: &TempDir, project_id: &str, repository_id: &str, repo_name: &str) -> PathBuf {
+pub(crate) fn seed_project(
+    root: &TempDir,
+    project_id: &str,
+    repository_id: &str,
+    repo_name: &str,
+) -> PathBuf {
     let repo_root = root.path().join(repo_name);
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let canonical_root = std::fs::canonicalize(&repo_root).expect("canonical repo root");
@@ -113,7 +118,8 @@ pub(crate) fn sample_autonomous_run_record(
     }
 }
 
-pub(crate) fn sample_autonomous_workflow_linkage() -> project_store::AutonomousWorkflowLinkageRecord {
+pub(crate) fn sample_autonomous_workflow_linkage() -> project_store::AutonomousWorkflowLinkageRecord
+{
     project_store::AutonomousWorkflowLinkageRecord {
         workflow_node_id: "workflow-research".into(),
         transition_id: "auto:txn-002:workflow-discussion:workflow-research".into(),
@@ -124,7 +130,10 @@ pub(crate) fn sample_autonomous_workflow_linkage() -> project_store::AutonomousW
     }
 }
 
-pub(crate) fn sample_autonomous_unit(project_id: &str, run_id: &str) -> project_store::AutonomousUnitRecord {
+pub(crate) fn sample_autonomous_unit(
+    project_id: &str,
+    run_id: &str,
+) -> project_store::AutonomousUnitRecord {
     project_store::AutonomousUnitRecord {
         project_id: project_id.into(),
         run_id: run_id.into(),

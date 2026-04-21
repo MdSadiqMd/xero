@@ -193,7 +193,8 @@ pub(crate) fn runtime_run_recovery_distinguishes_running_stale_stopped_and_faile
     );
 }
 
-pub(crate) fn runtime_run_checkpoint_writes_reject_secret_bearing_summaries_and_preserve_prior_sequence() {
+pub(crate) fn runtime_run_checkpoint_writes_reject_secret_bearing_summaries_and_preserve_prior_sequence(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-1";
     let repo_root = seed_project(&root, project_id, "repo-1", "repo");

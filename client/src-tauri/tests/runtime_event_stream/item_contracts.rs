@@ -1,6 +1,7 @@
 use super::support::*;
 
-pub(crate) fn runtime_stream_appends_pending_action_required_after_replay_with_monotonic_sequence() {
+pub(crate) fn runtime_stream_appends_pending_action_required_after_replay_with_monotonic_sequence()
+{
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, auth_store_path) = create_state(&root);

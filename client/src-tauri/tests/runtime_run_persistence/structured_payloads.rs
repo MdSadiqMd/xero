@@ -1,5 +1,6 @@
 use super::support::*;
-pub(crate) fn autonomous_run_persistence_canonicalizes_structured_artifact_payloads_and_reloads_them() {
+pub(crate) fn autonomous_run_persistence_canonicalizes_structured_artifact_payloads_and_reloads_them(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-1";
     let repo_root = seed_project(&root, project_id, "repo-1", "repo");
@@ -89,7 +90,8 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_structured_artifact_paylo
     ));
 }
 
-pub(crate) fn autonomous_run_persistence_canonicalizes_verification_evidence_payloads_and_reloads_them() {
+pub(crate) fn autonomous_run_persistence_canonicalizes_verification_evidence_payloads_and_reloads_them(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-1";
     let repo_root = seed_project(&root, project_id, "repo-1", "repo");
@@ -441,7 +443,8 @@ pub(crate) fn autonomous_run_persistence_rejects_skill_lifecycle_kind_mismatch()
     assert_eq!(error.code, "autonomous_run_request_invalid");
 }
 
-pub(crate) fn autonomous_run_persistence_rejects_successful_skill_lifecycle_payloads_with_diagnostics() {
+pub(crate) fn autonomous_run_persistence_rejects_successful_skill_lifecycle_payloads_with_diagnostics(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-1";
     let repo_root = seed_project(&root, project_id, "repo-1", "repo");

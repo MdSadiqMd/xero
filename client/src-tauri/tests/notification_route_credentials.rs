@@ -68,7 +68,7 @@ fn seed_project(
 
     let registry_path = app
         .state::<DesktopState>()
-        .registry_file(&app.handle())
+        .registry_file(app.handle())
         .expect("registry path");
     registry::replace_projects(
         &registry_path,
@@ -176,7 +176,7 @@ fn list_notification_routes_projects_redacted_readiness_for_present_and_partial_
 
     let credential_store_path = app
         .state::<DesktopState>()
-        .notification_credential_store_file(&app.handle())
+        .notification_credential_store_file(app.handle())
         .expect("credential store path");
     write_store_file(
         &credential_store_path,
@@ -327,7 +327,7 @@ fn list_notification_routes_marks_unreadable_store_as_unavailable_with_typed_dia
 
     let credential_store_path = app
         .state::<DesktopState>()
-        .notification_credential_store_file(&app.handle())
+        .notification_credential_store_file(app.handle())
         .expect("credential store path");
     fs::create_dir_all(&credential_store_path).expect("create unreadable credential store path");
 
@@ -377,7 +377,7 @@ fn list_notification_routes_marks_malformed_store_as_fail_closed_with_typed_diag
 
     let credential_store_path = app
         .state::<DesktopState>()
-        .notification_credential_store_file(&app.handle())
+        .notification_credential_store_file(app.handle())
         .expect("credential store path");
     if let Some(parent) = credential_store_path.parent() {
         fs::create_dir_all(parent).expect("create app-data directory");

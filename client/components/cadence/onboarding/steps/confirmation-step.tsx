@@ -1,84 +1,106 @@
-import { Check } from "lucide-react"
-import { Switch } from "@/components/ui/switch"
+import type { NotificationRouteHealthView } from "@/src/features/cadence/use-cadence-desktop-state"
+import { Bell, Check, FolderGit2, Sparkles } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { OnboardingData } from "../types"
 import { StepHeader } from "./providers-step"
 
 interface ConfirmationStepProps {
-  data: OnboardingData
-  onToggleLearn: (value: boolean) => void
+  providerValue: string
+  providerReady: boolean
+  projectName: string | null
+  notifications: NotificationRouteHealthView[]
 }
 
-const PROVIDER_LABELS: Record<OnboardingData["providers"][number]["id"], string> = {
-  openai_codex: "OpenAI Codex",
-  openrouter: "OpenRouter",
-  anthropic: "Anthropic",
-  google: "Google",
-}
+export function ConfirmationStep({ providerValue, providerReady, projectName, notifications }: ConfirmationStepProps) {
+  const enabledRoutes = notifications.filter((route) => route.enabled)
 
-export function ConfirmationStep({ data, onToggleLearn }: ConfirmationStepProps) {
-  const connectedProviders = data.providers.filter((provider) => provider.status === "connected")
-  const connectedChannels = data.notifications.filter((channel) => channel.connected)
-
-  const rows: Array<{ label: string; value: string; ready: boolean }> = [
+  const rows: Array<{ label: string; value: string; ready: boolean; Icon: React.ElementType }> = [
     {
-      label: "Providers",
-      ready: connectedProviders.length > 0,
-      value:
-        connectedProviders.length === 0
-          ? "Not set"
-          : connectedProviders.map((provider) => PROVIDER_LABELS[provider.id]).join(", "),
+      label: "Provider",
+      ready: providerReady,
+      value: providerValue,
+      Icon: Sparkles,
     },
     {
       label: "Project",
-      ready: Boolean(data.project),
-      value: data.project?.name ?? "Not set",
+      ready: Boolean(projectName),
+      value: projectName ?? "Not imported",
+      Icon: FolderGit2,
     },
     {
       label: "Notifications",
-      ready: connectedChannels.length > 0,
+      ready: enabledRoutes.length > 0,
       value:
-        connectedChannels.length === 0
-          ? "Not set"
-          : connectedChannels.map((channel) => (channel.id === "telegram" ? "Telegram" : "Discord")).join(", "),
+        enabledRoutes.length === 0
+          ? "Not configured"
+          : enabledRoutes.map((route) => route.routeKindLabel).join(", "),
+      Icon: Bell,
     },
   ]
 
+  const readyCount = rows.filter((row) => row.ready).length
+
   return (
     <div>
-      <StepHeader title="Review and finish" description="You can revisit any of this from Settings." />
+      <StepHeader title="Review and finish" description="You can change any of this later from the main app and Settings." />
 
-      <dl className="mt-8 flex flex-col divide-y divide-border rounded-lg border border-border bg-card/40">
+      <div className="mt-7 flex flex-col gap-2 animate-in fade-in-0 slide-in-from-bottom-1 duration-300 ease-out [animation-delay:60ms] [animation-fill-mode:both]">
         {rows.map((row) => (
-          <div key={row.label} className="flex items-center gap-3 px-4 py-3">
-            <dt className="w-28 shrink-0 text-[12px] text-muted-foreground">{row.label}</dt>
-            <dd className={cn("flex-1 text-[13px]", row.ready ? "text-foreground" : "text-muted-foreground")}>
-              {row.value}
-            </dd>
-            {row.ready ? (
-              <Check className="h-3.5 w-3.5 shrink-0 text-primary" strokeWidth={2.5} />
-            ) : (
-              <span className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+          <div
+            key={row.label}
+            className={cn(
+              "flex items-center gap-3 rounded-lg border px-3.5 py-3 transition-colors",
+              row.ready
+                ? "border-primary/40 bg-primary/[0.04]"
+                : "border-border/70 bg-card/30",
             )}
+          >
+            <span
+              className={cn(
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border",
+                row.ready
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border bg-secondary/50 text-muted-foreground",
+              )}
+            >
+              <row.Icon className="h-4 w-4" />
+            </span>
+
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{row.label}</p>
+              <p
+                className={cn(
+                  "mt-0.5 truncate text-[13px]",
+                  row.ready ? "font-medium text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {row.value}
+              </p>
+            </div>
+
+            <span
+              className={cn(
+                "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+                row.ready
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border bg-secondary/50 text-muted-foreground/60",
+              )}
+              aria-label={row.ready ? "Ready" : "Not set"}
+            >
+              {row.ready ? (
+                <Check className="h-3 w-3" strokeWidth={3} />
+              ) : (
+                <span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
+              )}
+            </span>
           </div>
         ))}
-      </dl>
-
-      {/* Learn environment */}
-      <div className="mt-5 flex items-start gap-4 rounded-lg border border-border bg-card/40 px-4 py-4">
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-medium text-foreground">Learn my environment</p>
-          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-            Detect your languages, package managers, and CLI tools locally to tailor suggestions.
-          </p>
-        </div>
-        <Switch
-          checked={data.learnEnvironment}
-          onCheckedChange={onToggleLearn}
-          aria-label="Enable environment learning"
-          className="mt-0.5 shrink-0"
-        />
       </div>
+
+      <p className="mt-5 text-center text-[11px] text-muted-foreground/80">
+        {readyCount === rows.length
+          ? "Everything’s set. You’re ready to enter Cadence."
+          : `${readyCount} of ${rows.length} steps ready — skip anything you’d rather configure later.`}
+      </p>
     </div>
   )
 }

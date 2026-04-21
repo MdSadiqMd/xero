@@ -12,7 +12,12 @@ pub(crate) use cadence_desktop_lib::{
 pub(crate) use rusqlite::Connection;
 pub(crate) use tempfile::TempDir;
 
-pub(crate) fn seed_project(root: &TempDir, project_id: &str, repository_id: &str, repo_name: &str) -> PathBuf {
+pub(crate) fn seed_project(
+    root: &TempDir,
+    project_id: &str,
+    repository_id: &str,
+    repo_name: &str,
+) -> PathBuf {
     let repo_root = root.path().join(repo_name);
     fs::create_dir_all(&repo_root).expect("create repo root");
     let canonical_root = fs::canonicalize(&repo_root).expect("canonical repo root");

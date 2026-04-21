@@ -1055,7 +1055,7 @@ pub(super) fn persist_autonomous_live_event(
 
 fn should_persist_live_event_checkpoint(event: &BufferedSupervisorEvent, _summary: &str) -> bool {
     event.sequence == 1
-        || event.sequence % 16 == 0
+        || event.sequence.is_multiple_of(16)
         || matches!(
             event.item,
             SupervisorLiveEventPayload::Tool { .. }

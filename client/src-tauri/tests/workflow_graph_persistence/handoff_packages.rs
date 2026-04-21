@@ -355,7 +355,8 @@ pub(crate) fn workflow_handoff_package_assembly_is_deterministic_for_replay_inpu
     assert_eq!(persisted.package_hash, replayed.package_hash);
 }
 
-pub(crate) fn workflow_handoff_package_assembly_fails_closed_on_secret_bearing_destination_content() {
+pub(crate) fn workflow_handoff_package_assembly_fails_closed_on_secret_bearing_destination_content()
+{
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-graph-handoff-assembly-redaction";
     let repo_root = seed_project(

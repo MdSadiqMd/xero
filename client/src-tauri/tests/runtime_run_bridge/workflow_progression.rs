@@ -1,6 +1,7 @@
 use super::support::*;
 
-pub(crate) fn apply_workflow_transition_gate_pause_returns_skipped_diagnostics_and_truthful_project_update() {
+pub(crate) fn apply_workflow_transition_gate_pause_returns_skipped_diagnostics_and_truthful_project_update(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -188,7 +189,8 @@ pub(crate) fn apply_workflow_transition_gate_pause_returns_skipped_diagnostics_a
     assert_eq!(replay_events, initial_events);
 }
 
-pub(crate) fn gate_linked_resume_gate_pause_returns_skipped_diagnostics_without_runtime_event_drift() {
+pub(crate) fn gate_linked_resume_gate_pause_returns_skipped_diagnostics_without_runtime_event_drift(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -444,7 +446,8 @@ pub(crate) fn gate_linked_resume_auto_dispatch_emits_project_update_without_runt
     assert_eq!(events, reloaded_events);
 }
 
-pub(crate) fn planning_lifecycle_completion_branch_auto_dispatches_to_roadmap_without_duplicate_rows() {
+pub(crate) fn planning_lifecycle_completion_branch_auto_dispatches_to_roadmap_without_duplicate_rows(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -628,7 +631,8 @@ pub(crate) fn planning_lifecycle_completion_branch_auto_dispatches_to_roadmap_wi
     );
 }
 
-pub(crate) fn planning_lifecycle_gate_pause_branch_requires_explicit_resume_without_duplicate_rows() {
+pub(crate) fn planning_lifecycle_gate_pause_branch_requires_explicit_resume_without_duplicate_rows()
+{
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);

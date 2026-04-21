@@ -260,6 +260,7 @@ fn handle_control_connection(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_attach_request(
     stream: &mut TcpStream,
     shared: &Arc<Mutex<SidecarSharedState>>,
@@ -369,7 +370,7 @@ fn register_attach_replay(
     let replay_events = hub
         .ring
         .iter()
-        .filter(|event| after_sequence.map_or(true, |cursor| event.sequence > cursor))
+        .filter(|event| after_sequence.is_none_or(|cursor| event.sequence > cursor))
         .cloned()
         .collect::<Vec<_>>();
     let replay_truncated = after_sequence.map_or(
@@ -416,6 +417,7 @@ fn remove_event_subscriber(event_hub: &Arc<Mutex<SupervisorEventHub>>, subscribe
         .remove(&subscriber_id);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_submit_input_request(
     stream: &mut TcpStream,
     shared: &Arc<Mutex<SidecarSharedState>>,

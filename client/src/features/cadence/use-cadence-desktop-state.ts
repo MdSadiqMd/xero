@@ -749,7 +749,7 @@ export function useCadenceDesktopState(
   }, [adapter, loadProject, resetRepositoryDiffs])
 
   useEffect(() => {
-    let disposeListeners = () => undefined
+    let disposeListeners: () => void = () => {}
     let effectDisposed = false
 
     void bootstrap()

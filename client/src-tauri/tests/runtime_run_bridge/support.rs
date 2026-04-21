@@ -176,7 +176,10 @@ pub(crate) fn jwt_with_account_id(account_id: &str) -> String {
     format!("{header}.{payload}.")
 }
 
-pub(crate) fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (String, PathBuf) {
+pub(crate) fn seed_project(
+    root: &TempDir,
+    app: &tauri::App<tauri::test::MockRuntime>,
+) -> (String, PathBuf) {
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let canonical_root = std::fs::canonicalize(&repo_root).expect("canonical repo root");
@@ -616,7 +619,11 @@ pub(crate) fn count_autonomous_unit_rows(repo_root: &Path, project_id: &str, run
         .expect("count autonomous unit rows")
 }
 
-pub(crate) fn count_autonomous_attempt_rows(repo_root: &Path, project_id: &str, run_id: &str) -> i64 {
+pub(crate) fn count_autonomous_attempt_rows(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> i64 {
     let database_path = database_path_for_repo(repo_root);
     let connection = rusqlite::Connection::open(&database_path).expect("open runtime db");
     connection
@@ -652,7 +659,11 @@ pub(crate) fn count_workflow_handoff_rows(repo_root: &Path, project_id: &str) ->
         .expect("count workflow handoff rows")
 }
 
-pub(crate) fn count_pending_gate_approval_rows(repo_root: &Path, project_id: &str, gate_key: &str) -> i64 {
+pub(crate) fn count_pending_gate_approval_rows(
+    repo_root: &Path,
+    project_id: &str,
+    gate_key: &str,
+) -> i64 {
     let database_path = database_path_for_repo(repo_root);
     let connection = rusqlite::Connection::open(&database_path).expect("open runtime db");
     connection
@@ -896,7 +907,10 @@ pub(crate) fn launch_scripted_runtime_run(
     .expect("launch scripted runtime supervisor")
 }
 
-pub(crate) fn attach_reader(endpoint: &str, request: SupervisorControlRequest) -> BufReader<TcpStream> {
+pub(crate) fn attach_reader(
+    endpoint: &str,
+    request: SupervisorControlRequest,
+) -> BufReader<TcpStream> {
     let mut stream = TcpStream::connect(endpoint).expect("connect attach reader");
     stream
         .set_read_timeout(Some(Duration::from_millis(150)))
@@ -928,7 +942,9 @@ pub(crate) fn read_supervisor_response(
     }
 }
 
-pub(crate) fn expect_attach_ack(response: Option<SupervisorControlResponse>) -> SupervisorControlResponse {
+pub(crate) fn expect_attach_ack(
+    response: Option<SupervisorControlResponse>,
+) -> SupervisorControlResponse {
     match response {
         Some(response @ SupervisorControlResponse::Attached { .. }) => response,
         other => panic!("expected attach ack, got {other:?}"),

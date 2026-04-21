@@ -20,6 +20,7 @@ use cadence_desktop_lib::{
 };
 use git2::{IndexAddOption, Repository, Signature, StatusOptions};
 use rusqlite::{params, Connection};
+use rusqlite_migration::SchemaVersion;
 use tauri::{Listener, Manager};
 use tempfile::TempDir;
 
@@ -666,6 +667,88 @@ fn import_repository_reuses_preexisting_repo_local_database() {
             "workflow_transition_events".to_string(),
         ]
     );
+}
+
+#[test]
+fn import_repository_quarantines_repo_local_database_from_newer_builds() {
+    let registry_root = tempfile::tempdir().expect("registry temp dir");
+    let repository_root = init_git_repo();
+    let cadence_dir = repository_root.path().join(".cadence");
+    fs::create_dir_all(&cadence_dir).expect("create Cadence dir");
+
+    let database_path = database_path(repository_root.path());
+    let connection = Connection::open(&database_path).expect("open sqlite db");
+    connection
+        .execute(
+            "CREATE TABLE IF NOT EXISTS sentinel (value TEXT NOT NULL)",
+            [],
+        )
+        .expect("create sentinel table");
+    connection
+        .execute("INSERT INTO sentinel (value) VALUES ('future-state')", [])
+        .expect("insert sentinel row");
+    connection
+        .execute("PRAGMA user_version = 19", [])
+        .expect("set future schema version");
+    drop(connection);
+
+    let app = build_mock_app(create_state(&registry_root));
+    let response = import_with_app(&app, repository_root.path())
+        .expect("import should recover from a newer repo-local database");
+
+    assert_database_rows(
+        repository_root.path(),
+        &response.project.id,
+        &response.repository.id,
+        &response.repository.root_path,
+    );
+
+    let fresh_connection = Connection::open(&database_path).expect("open fresh sqlite db");
+    assert!(matches!(
+        migrations()
+            .current_version(&fresh_connection)
+            .expect("read fresh schema version"),
+        SchemaVersion::Inside(_)
+    ));
+    let sentinel_tables: i64 = fresh_connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sentinel'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count fresh sentinel tables");
+    assert_eq!(
+        sentinel_tables, 0,
+        "fresh import should rebuild the repo-local database"
+    );
+
+    let backups = fs::read_dir(&cadence_dir)
+        .expect("read cadence dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("state.db.incompatible-v19"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        backups.len(),
+        1,
+        "exactly one incompatible backup should be created for the newer database"
+    );
+
+    let backup_connection = Connection::open(&backups[0]).expect("open backup sqlite db");
+    assert!(matches!(
+        migrations()
+            .current_version(&backup_connection)
+            .expect("read backup schema version"),
+        SchemaVersion::Outside(_)
+    ));
+    let sentinel: String = backup_connection
+        .query_row("SELECT value FROM sentinel LIMIT 1", [], |row| row.get(0))
+        .expect("backup sentinel row should survive quarantine");
+    assert_eq!(sentinel, "future-state");
 }
 
 #[test]

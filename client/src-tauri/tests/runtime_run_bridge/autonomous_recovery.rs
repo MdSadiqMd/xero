@@ -1,6 +1,7 @@
 use super::support::*;
 
-pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplicate_start_visibility() {
+pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplicate_start_visibility(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -94,7 +95,8 @@ pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplica
     );
 }
 
-pub(crate) fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_duplicate_continuation() {
+pub(crate) fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_duplicate_continuation(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, auth_store_path) = create_state(&root);
     let app = build_mock_app(state);

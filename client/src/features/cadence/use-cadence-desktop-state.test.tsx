@@ -1159,7 +1159,8 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('approval-count')).toHaveTextContent('0')
     await waitFor(() => expect(setup.onProjectUpdated).toHaveBeenCalledTimes(1))
     const routeRefreshesBeforeEvent = setup.listNotificationRoutes.mock.calls.length
-    const syncRefreshesBeforeEvent = setup.syncNotificationAdapters.mock.calls.length
+    const syncNotificationAdaptersMock = setup.syncNotificationAdapters as ReturnType<typeof vi.fn>
+    const syncRefreshesBeforeEvent = syncNotificationAdaptersMock.mock.calls.length
 
     act(() => {
       refreshed = true
@@ -1181,7 +1182,7 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('resume-history-count')).toHaveTextContent('1')
     expect(screen.getByTestId('branch')).toHaveTextContent('release/verified')
     expect(setup.listNotificationRoutes.mock.calls.length).toBeGreaterThan(routeRefreshesBeforeEvent)
-    expect(setup.syncNotificationAdapters.mock.calls.length).toBeGreaterThan(syncRefreshesBeforeEvent)
+    expect(syncNotificationAdaptersMock.mock.calls.length).toBeGreaterThan(syncRefreshesBeforeEvent)
   })
 
   it('ignores wrong-project update callbacks so one project cannot overwrite another project\'s operator history', async () => {

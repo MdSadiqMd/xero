@@ -22,8 +22,7 @@ pub(crate) fn lock_supervisor_test_process() -> SupervisorProcessLock {
     loop {
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
-                writeln!(file, "{}", std::process::id())
-                    .expect("write supervisor test lock pid");
+                writeln!(file, "{}", std::process::id()).expect("write supervisor test lock pid");
                 return SupervisorProcessLock { path, _file: file };
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {

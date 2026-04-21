@@ -36,6 +36,7 @@ import type {
   SubscribeRuntimeStreamResponseDto,
   SyncNotificationAdaptersResponseDto,
   UpsertNotificationRouteRequestDto,
+  UpsertRuntimeSettingsRequestDto,
   UpsertWorkflowGraphResponseDto,
   ApplyWorkflowTransitionResponseDto,
 } from '@/src/lib/cadence-model'
@@ -266,6 +267,7 @@ function createAdapter(options?: {
   autonomousState?: AutonomousRunStateDto | null
   notificationRoutes?: ListNotificationRoutesResponseDto['routes']
   projectFiles?: ListProjectFilesResponseDto
+  pickedRepositoryPath?: string | null
 }) {
   let currentSnapshot = options?.snapshot ?? makeSnapshot()
   let currentStatus = options?.status ?? makeStatus()
@@ -277,10 +279,25 @@ function createAdapter(options?: {
   let currentNotificationRoutes = options?.notificationRoutes ?? []
   let currentProjects = options?.projects ?? [makeProjectSummary('project-1', 'Cadence')]
   let currentProjectFiles = options?.projectFiles ?? makeProjectFiles()
+  const pickedRepositoryPath = options?.pickedRepositoryPath ?? null
   const currentFileContents: Record<string, string> = {
     '/README.md': '# Cadence\n',
     '/src/App.tsx': 'export default function App() {\n  return <main>Cadence</main>\n}\n',
   }
+
+  const upsertRuntimeSettings = vi.fn(async (request: UpsertRuntimeSettingsRequestDto) => {
+    currentRuntimeSettings = {
+      providerId: request.providerId,
+      modelId: request.modelId,
+      openrouterApiKeyConfigured:
+        request.providerId === 'openrouter'
+          ? request.openrouterApiKey == null
+            ? currentRuntimeSettings.openrouterApiKeyConfigured
+            : request.openrouterApiKey.trim().length > 0
+          : false,
+    }
+    return currentRuntimeSettings
+  })
 
   const upsertNotificationRoute = vi.fn(async (request: UpsertNotificationRouteRequestDto) => {
     const route = {
@@ -313,13 +330,20 @@ function createAdapter(options?: {
     return currentAutonomousState
   })
 
+  const pickRepositoryFolder = vi.fn(async () => pickedRepositoryPath)
+  const importRepository = vi.fn(async (_path: string): Promise<ImportRepositoryResponseDto> => {
+    const project = makeProjectSummary('project-1', 'Cadence')
+    currentProjects = [project]
+    return {
+      project,
+      repository: makeStatus().repository,
+    }
+  })
+
   const adapter: CadenceDesktopAdapter = {
     isDesktopRuntime: () => true,
-    pickRepositoryFolder: async () => null,
-    importRepository: async (_path: string): Promise<ImportRepositoryResponseDto> => ({
-      project: makeProjectSummary('project-1', 'Cadence'),
-      repository: makeStatus().repository,
-    }),
+    pickRepositoryFolder,
+    importRepository,
     listProjects: async () => ({ projects: currentProjects }),
     removeProject: async (projectId) => {
       currentProjects = currentProjects.filter((project) => project.id !== projectId)
@@ -369,19 +393,7 @@ function createAdapter(options?: {
     },
     startAutonomousRun,
     startRuntimeRun,
-    upsertRuntimeSettings: async (request) => {
-      currentRuntimeSettings = {
-        providerId: request.providerId,
-        modelId: request.modelId,
-        openrouterApiKeyConfigured:
-          request.providerId === 'openrouter'
-            ? request.openrouterApiKey == null
-              ? currentRuntimeSettings.openrouterApiKeyConfigured
-              : request.openrouterApiKey.trim().length > 0
-            : false,
-      }
-      return currentRuntimeSettings
-    },
+    upsertRuntimeSettings,
     startRuntimeSession: async () => {
       currentRuntimeSession = makeRuntimeSession('project-1')
       return currentRuntimeSession
@@ -567,7 +579,7 @@ function createAdapter(options?: {
     onRuntimeRunUpdated: async (_handler: (payload: RuntimeRunUpdatedPayloadDto) => void) => () => {},
   }
 
-  return { adapter, upsertNotificationRoute, startRuntimeRun, startAutonomousRun }
+  return { adapter, upsertNotificationRoute, upsertRuntimeSettings, importRepository, pickRepositoryFolder, startRuntimeRun, startAutonomousRun }
 }
 
 describe('CadenceApp current UI', () => {
@@ -604,6 +616,121 @@ describe('CadenceApp current UI', () => {
 
     expect(await screen.findByRole('heading', { name: 'Add your first project' })).toBeVisible()
     expect(screen.getAllByRole('button', { name: /Import repository/ }).length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('reflects real provider settings in onboarding and disables unsupported providers', async () => {
+    const { adapter } = createAdapter({
+      projects: [],
+      runtimeSession: makeRuntimeSession('project-1', {
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+
+    expect(await screen.findByRole('heading', { name: 'Configure providers' })).toBeVisible()
+    expect(screen.getByText('Provider setup is app-wide. Projects stay separate, and OpenAI sign-in only happens when you start a runtime session.')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Use OpenAI' })).toBeVisible()
+    expect(screen.queryByText('Browser sign-in happens later, when you start a runtime session.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Save an API key and model for runtime sessions.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Not wired into Cadence yet.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Using this')).not.toBeInTheDocument()
+    expect(screen.queryByText('Used for new sessions')).not.toBeInTheDocument()
+    expect(screen.queryByText('Active')).not.toBeInTheDocument()
+    expect(screen.queryByText('Configured')).not.toBeInTheDocument()
+
+    const unavailableButtons = screen.getAllByRole('button', { name: 'Unavailable' })
+    expect(unavailableButtons).toHaveLength(2)
+    unavailableButtons.forEach((button) => expect(button).toBeDisabled())
+  })
+
+  it('keeps onboarding provider review truthful before OpenAI is connected', async () => {
+    const { adapter } = createAdapter({
+      projects: [],
+      runtimeSession: makeRuntimeSession('project-1', {
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+
+    expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
+    expect(screen.getByText('No provider set up yet')).toBeVisible()
+  })
+
+  it('saves OpenRouter provider settings from onboarding', async () => {
+    const { adapter, upsertRuntimeSettings } = createAdapter({
+      projects: [],
+      runtimeSession: makeRuntimeSession('project-1', {
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up' }))
+    fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'openai/gpt-4.1-mini' } })
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-or-v1-test-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save setup' }))
+
+    await waitFor(() => expect(upsertRuntimeSettings).toHaveBeenCalledTimes(1))
+    expect(upsertRuntimeSettings).toHaveBeenCalledWith({
+      providerId: 'openrouter',
+      modelId: 'openai/gpt-4.1-mini',
+      openrouterApiKey: 'sk-or-v1-test-secret',
+    })
+  })
+
+  it('imports a project and creates a notification route from onboarding', async () => {
+    const { adapter, pickRepositoryFolder, importRepository, upsertNotificationRoute } = createAdapter({
+      projects: [],
+      pickedRepositoryPath: '/tmp/Cadence',
+      runtimeSession: makeRuntimeSession('project-1', {
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(await screen.findByRole('heading', { name: 'Add a project' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /Choose a folder/i }))
+
+    await waitFor(() => expect(pickRepositoryFolder).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(importRepository).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByText('/tmp/Cadence')).toBeVisible())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Add route' }))[0])
+    fireEvent.change(screen.getByPlaceholderText('Chat ID or @channel'), { target: { value: '@ops-room' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save route' }))
+
+    await waitFor(() => expect(upsertNotificationRoute).toHaveBeenCalledTimes(1))
+    expect(upsertNotificationRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routeId: 'telegram-primary',
+        routeKind: 'telegram',
+        routeTarget: 'telegram:@ops-room',
+        enabled: true,
+      }),
+    )
   })
 
   it('renders the current workflow empty state for an imported project', async () => {

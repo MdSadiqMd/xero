@@ -16,7 +16,8 @@ pub(crate) fn get_runtime_run_returns_none_when_selected_project_has_no_durable_
     assert!(runtime_run.is_none());
 }
 
-pub(crate) fn get_runtime_run_fails_closed_for_malformed_durable_rows_without_projection_event_drift() {
+pub(crate) fn get_runtime_run_fails_closed_for_malformed_durable_rows_without_projection_event_drift(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -68,7 +69,8 @@ pub(crate) fn start_runtime_run_requires_authenticated_runtime_session() {
     assert_eq!(error.code, "runtime_run_auth_required");
 }
 
-pub(crate) fn start_runtime_run_reconnects_existing_run_without_duplicate_launch_or_auth_event_drift() {
+pub(crate) fn start_runtime_run_reconnects_existing_run_without_duplicate_launch_or_auth_event_drift(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, auth_store_path) = create_state(&root);
     let app = build_mock_app(state);

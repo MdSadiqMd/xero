@@ -320,54 +320,60 @@ function applyAutonomousInspectionRecords(
 
   if (allowRemovals) {
     setters.setAutonomousRuns((currentRuns) => {
-      if (!inspection.autonomousRun) {
+      const nextRun = inspection.autonomousRun
+      if (!nextRun) {
         return removeProjectRecord(currentRuns, projectId)
       }
 
       return {
         ...currentRuns,
-        [projectId]: inspection.autonomousRun,
+        [projectId]: nextRun,
       }
     })
     setters.setAutonomousUnits((currentUnits) => {
-      if (!inspection.autonomousUnit) {
+      const nextUnit = inspection.autonomousUnit
+      if (!nextUnit) {
         return removeProjectRecord(currentUnits, projectId)
       }
 
       return {
         ...currentUnits,
-        [projectId]: inspection.autonomousUnit,
+        [projectId]: nextUnit,
       }
     })
     setters.setAutonomousAttempts((currentAttempts) => {
-      if (!inspection.autonomousAttempt) {
+      const nextAttempt = inspection.autonomousAttempt
+      if (!nextAttempt) {
         return removeProjectRecord(currentAttempts, projectId)
       }
 
       return {
         ...currentAttempts,
-        [projectId]: inspection.autonomousAttempt,
+        [projectId]: nextAttempt,
       }
     })
   } else {
-    if (inspection.autonomousRun) {
+    const nextRun = inspection.autonomousRun
+    if (nextRun) {
       setters.setAutonomousRuns((currentRuns) => ({
         ...currentRuns,
-        [projectId]: inspection.autonomousRun,
+        [projectId]: nextRun,
       }))
     }
 
-    if (inspection.autonomousUnit) {
+    const nextUnit = inspection.autonomousUnit
+    if (nextUnit) {
       setters.setAutonomousUnits((currentUnits) => ({
         ...currentUnits,
-        [projectId]: inspection.autonomousUnit,
+        [projectId]: nextUnit,
       }))
     }
 
-    if (inspection.autonomousAttempt) {
+    const nextAttempt = inspection.autonomousAttempt
+    if (nextAttempt) {
       setters.setAutonomousAttempts((currentAttempts) => ({
         ...currentAttempts,
-        [projectId]: inspection.autonomousAttempt,
+        [projectId]: nextAttempt,
       }))
     }
   }
@@ -597,34 +603,39 @@ export async function loadProjectState({
       return nextProject
     }
 
-    if (runtimeResult.runtime) {
+    const nextRuntime = runtimeResult.runtime
+    if (nextRuntime) {
       setters.setRuntimeSessions((currentRuntimeSessions) => ({
         ...currentRuntimeSessions,
-        [projectId]: runtimeResult.runtime,
+        [projectId]: nextRuntime,
       }))
       setters.setProjects((currentProjects) =>
         currentProjects.map((project) =>
-          project.id === projectId ? applyRuntimeToProjectList(project, runtimeResult.runtime) : project,
+          project.id === projectId ? applyRuntimeToProjectList(project, nextRuntime) : project,
         ),
       )
     }
 
     if (runtimeRunResult.ok) {
       setters.setRuntimeRuns((currentRuntimeRuns) => {
-        if (!runtimeRunResult.runtimeRun) {
+        const nextRuntimeRun = runtimeRunResult.runtimeRun
+        if (!nextRuntimeRun) {
           return removeProjectRecord(currentRuntimeRuns, projectId)
         }
 
         return {
           ...currentRuntimeRuns,
-          [projectId]: runtimeRunResult.runtimeRun,
+          [projectId]: nextRuntimeRun,
         }
       })
-    } else if (runtimeRunResult.runtimeRun) {
-      setters.setRuntimeRuns((currentRuntimeRuns) => ({
-        ...currentRuntimeRuns,
-        [projectId]: runtimeRunResult.runtimeRun,
-      }))
+    } else {
+      const nextRuntimeRun = runtimeRunResult.runtimeRun
+      if (nextRuntimeRun) {
+        setters.setRuntimeRuns((currentRuntimeRuns) => ({
+          ...currentRuntimeRuns,
+          [projectId]: nextRuntimeRun,
+        }))
+      }
     }
 
     applyAutonomousInspectionRecords(projectId, autonomousRunResult.inspection, setters, {

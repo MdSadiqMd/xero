@@ -9,9 +9,11 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
   openUrl: openUrlMock,
 }))
 
-import { SettingsDialog } from '@/components/cadence/settings-dialog'
+import { SettingsDialog, type SettingsDialogProps } from '@/components/cadence/settings-dialog'
 import type { AgentPaneView, OperatorActionErrorView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type { RuntimeSessionView, RuntimeSettingsDto, UpsertRuntimeSettingsRequestDto } from '@/src/lib/cadence-model'
+
+type NotificationRouteRequest = Parameters<NonNullable<SettingsDialogProps['onUpsertNotificationRoute']>>[0]
 
 function makeRuntimeSettings(overrides: Partial<RuntimeSettingsDto> = {}): RuntimeSettingsDto {
   return {
@@ -57,12 +59,24 @@ function makeNotificationRoute(
     projectId: 'project-1',
     routeId: 'ops-alerts',
     routeKind: 'telegram',
+    routeKindLabel: 'Telegram',
     routeTarget: 'telegram:@ops-room',
     enabled: true,
     metadataJson: null,
     credentialReadiness: null,
+    credentialDiagnosticCode: null,
     createdAt: '2026-04-20T00:00:00Z',
     updatedAt: '2026-04-20T00:00:00Z',
+    dispatchCount: 0,
+    pendingCount: 0,
+    sentCount: 0,
+    failedCount: 0,
+    claimedCount: 0,
+    latestDispatchAt: null,
+    latestFailureCode: null,
+    latestFailureMessage: null,
+    health: 'healthy',
+    healthLabel: 'Ready',
     ...overrides,
   }
 }
@@ -182,7 +196,9 @@ describe('SettingsDialog', () => {
     )
 
     await waitFor(() => expect(onRefreshRuntimeSettings).toHaveBeenCalledWith({ force: true }))
-    expect(screen.getByText('Configure AI model providers for Cadence')).toBeVisible()
+    expect(screen.getByText('Manage provider credentials and models. Projects are not assigned to a provider here.')).toBeVisible()
+    expect(screen.queryByText('Saved API key and model for runtime sessions.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Browser sign-in for runtime sessions.')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
 
@@ -195,7 +211,7 @@ describe('SettingsDialog', () => {
   })
 
   it('shows route target validation errors and omits project metadata when creating routes', async () => {
-    const onUpsertNotificationRoute = vi.fn(async () => ({ route: makeNotificationRoute() }))
+    const onUpsertNotificationRoute = vi.fn(async (_request: NotificationRouteRequest) => ({ route: makeNotificationRoute() }))
 
     render(
       <SettingsDialog
@@ -242,7 +258,7 @@ describe('SettingsDialog', () => {
   })
 
   it('keeps truthful stored targets for edit fallback and toggles existing routes', async () => {
-    const onUpsertNotificationRoute = vi.fn(async () => ({ route: makeNotificationRoute() }))
+    const onUpsertNotificationRoute = vi.fn(async (_request: NotificationRouteRequest) => ({ route: makeNotificationRoute() }))
 
     render(
       <SettingsDialog
@@ -331,7 +347,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    const configureButton = screen.getAllByRole('button', { name: 'Configure' })[0]
+    const configureButton = screen.getAllByRole('button', { name: 'Set up' })[0]
     fireEvent.click(configureButton)
 
     const modelInput = screen.getByLabelText('Model ID') as HTMLInputElement
@@ -374,10 +390,10 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    expect(screen.getByText('Configured')).toBeVisible()
-    expect(screen.getByText('Active')).toBeVisible()
+    expect(screen.getByText('Key saved')).toBeVisible()
+    expect(screen.queryByText('Active')).not.toBeInTheDocument()
 
-    const configureButtonAfter = screen.getAllByRole('button', { name: 'Configure' })[0]
+    const configureButtonAfter = screen.getAllByRole('button', { name: 'Edit setup' })[0]
     fireEvent.click(configureButtonAfter)
 
     const modelInputAfter = screen.getByLabelText('Model ID') as HTMLInputElement
@@ -415,7 +431,7 @@ describe('SettingsDialog', () => {
     expect(screen.getByText('OpenRouter')).toBeVisible()
     expect(screen.getByText('OpenAI Codex')).toBeVisible()
 
-    const configureButton = screen.getByRole('button', { name: 'Configure' })
+    const configureButton = screen.getByRole('button', { name: 'Edit setup' })
     fireEvent.click(configureButton)
 
     expect(screen.getByDisplayValue('openrouter/meta-llama/llama-3.1-8b-instruct')).toBeVisible()

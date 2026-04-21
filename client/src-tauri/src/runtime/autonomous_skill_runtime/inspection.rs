@@ -536,10 +536,7 @@ fn validate_skill_asset_path(relative_path: &str) -> CommandResult<()> {
                 ),
             )
         })?;
-    if !ALLOWED_TEXT_EXTENSIONS
-        .iter()
-        .any(|allowed| *allowed == extension.as_str())
-    {
+    if !ALLOWED_TEXT_EXTENSIONS.contains(&extension.as_str()) {
         return Err(CommandError::user_fixable(
             "autonomous_skill_layout_unsupported",
             format!(

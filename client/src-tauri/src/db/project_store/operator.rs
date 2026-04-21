@@ -88,6 +88,7 @@ struct RawResumeHistoryRow {
     created_at: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_pending_operator_approval(
     repo_root: &Path,
     project_id: &str,
@@ -111,6 +112,7 @@ pub fn upsert_pending_operator_approval(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_pending_operator_approval_with_gate_link(
     repo_root: &Path,
     project_id: &str,

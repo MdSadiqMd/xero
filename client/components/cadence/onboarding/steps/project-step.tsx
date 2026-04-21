@@ -1,82 +1,104 @@
-import { useState } from "react"
-import { Check, FolderGit2, FolderOpen, Loader2, X } from "lucide-react"
+import { Check, FolderGit2, FolderOpen, Loader2 } from "lucide-react"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { OnboardingProjectState } from "../types"
 import { StepHeader } from "./providers-step"
 
-interface ProjectStepProps {
-  project: OnboardingProjectState | null
-  onSetProject: (project: OnboardingProjectState | null) => void
+interface ImportedProjectView {
+  name: string
+  path: string
 }
 
-export function ProjectStep({ project, onSetProject }: ProjectStepProps) {
-  const [isPicking, setIsPicking] = useState(false)
+interface ProjectStepProps {
+  project: ImportedProjectView | null
+  isImporting: boolean
+  isProjectLoading: boolean
+  errorMessage: string | null
+  onImportProject: () => void
+}
 
-  function mockPick() {
-    setIsPicking(true)
-    window.setTimeout(() => {
-      onSetProject({ name: "cadence-app", path: "~/Documents/dev/cadence-app" })
-      setIsPicking(false)
-    }, 650)
-  }
+export function ProjectStep({
+  project,
+  isImporting,
+  isProjectLoading,
+  errorMessage,
+  onImportProject,
+}: ProjectStepProps) {
+  const isBusy = isImporting || isProjectLoading
 
   return (
     <div>
       <StepHeader
         title="Add a project"
-        description="Point Cadence at a local repository. Nothing leaves your machine."
+        description="Projects stay separate from provider setup. Import a local repository when you’re ready to work in it."
       />
 
+      {errorMessage ? (
+        <Alert variant="destructive" className="mt-5 py-3">
+          <AlertDescription className="text-[12px]">{errorMessage}</AlertDescription>
+        </Alert>
+      ) : null}
+
       {project ? (
-        <div className="mt-8 flex items-center gap-3 rounded-lg border border-primary/40 bg-card/60 px-4 py-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-primary/40 bg-primary/10 text-primary">
-            <FolderGit2 className="h-4 w-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <p className="truncate text-[13px] font-medium text-foreground">{project.name}</p>
-              <Check className="h-3 w-3 text-primary" strokeWidth={3} />
+        <div className="mt-7 animate-in fade-in-0 slide-in-from-bottom-1 duration-300 ease-out [animation-delay:60ms] [animation-fill-mode:both]">
+          <div className="overflow-hidden rounded-lg border border-primary/40 bg-primary/[0.03]">
+            <div className="flex items-center gap-3 px-4 py-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-primary/40 bg-primary/10 text-primary">
+                <FolderGit2 className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <p className="truncate text-[13px] font-medium text-foreground">{project.name}</p>
+                  <span className="inline-flex items-center gap-0.5 rounded-sm border border-emerald-500/30 bg-emerald-500/10 px-1 py-0 text-[9.5px] font-medium text-emerald-500 dark:text-emerald-400">
+                    <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                    Imported
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{project.path}</p>
+              </div>
             </div>
-            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{project.path}</p>
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => onSetProject(null)}
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-            aria-label="Remove project"
-          >
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="mt-2 flex items-center justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={isBusy}
+              onClick={onImportProject}
+              className="h-7 gap-1.5 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <FolderOpen className="h-3 w-3" />}
+              Pick a different folder
+            </Button>
+          </div>
         </div>
       ) : (
         <button
           type="button"
-          onClick={mockPick}
-          disabled={isPicking}
+          onClick={onImportProject}
+          disabled={isBusy}
           className={cn(
-            "mt-8 flex w-full items-center gap-3 rounded-lg border border-dashed border-border bg-card/30 px-4 py-5 text-left transition-colors",
-            "hover:border-primary/40 hover:bg-card/50",
-            isPicking && "border-primary/40 bg-card/50",
+            "group/drop mt-7 flex w-full animate-in fade-in-0 slide-in-from-bottom-1 items-center gap-3 rounded-lg border border-dashed bg-card/30 px-4 py-5 text-left transition-colors duration-300 ease-out [animation-delay:60ms] [animation-fill-mode:both]",
+            isBusy
+              ? "border-primary/40 bg-card/50"
+              : "border-border hover:border-primary/40 hover:bg-card/50",
           )}
         >
           <span
             className={cn(
-              "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors",
-              isPicking
+              "flex h-10 w-10 shrink-0 items-center justify-center rounded-md border transition-colors",
+              isBusy
                 ? "border-primary/40 bg-primary/10 text-primary"
-                : "border-border bg-secondary/50 text-muted-foreground",
+                : "border-border bg-secondary/60 text-muted-foreground group-hover/drop:text-foreground/80",
             )}
           >
-            {isPicking ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+            {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
           </span>
           <div className="flex-1">
             <p className="text-[13px] font-medium text-foreground">
-              {isPicking ? "Indexing repository…" : "Choose a folder"}
+              {isBusy ? "Importing repository…" : "Choose a folder"}
             </p>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {isPicking ? "Reading branches and project structure." : "Select a local Git repository."}
+              {isBusy ? "Loading the repository snapshot and workspace state." : "Select a local Git repository."}
             </p>
           </div>
         </button>

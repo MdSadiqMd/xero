@@ -173,7 +173,7 @@ fn write_registry(path: &Path, registry: &ProjectRegistry) -> Result<(), Command
     Ok(())
 }
 
-fn normalize_projects(projects: &mut Vec<RegistryProjectRecord>) {
+fn normalize_projects(projects: &mut [RegistryProjectRecord]) {
     projects.sort_by(|left, right| left.root_path.cmp(&right.root_path));
 }
 

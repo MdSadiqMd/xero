@@ -1,6 +1,7 @@
 use super::support::*;
 
-pub(crate) fn subscribe_runtime_stream_rejects_missing_channel_and_unsupported_kind_lists_activity() {
+pub(crate) fn subscribe_runtime_stream_rejects_missing_channel_and_unsupported_kind_lists_activity()
+{
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);

@@ -58,7 +58,8 @@ fn get_autonomous_run_recovers_stale_boundary_after_fresh_host_reload() {
 
 #[test]
 fn get_runtime_run_recovers_stale_unreachable_state_once_after_fresh_host_reload() {
-    runtime_recovery::get_runtime_run_recovers_stale_unreachable_state_once_after_fresh_host_reload();
+    runtime_recovery::get_runtime_run_recovers_stale_unreachable_state_once_after_fresh_host_reload(
+    );
 }
 
 #[test]
@@ -113,7 +114,8 @@ fn get_autonomous_run_fails_closed_when_workflow_graph_has_no_active_node() {
 
 #[test]
 fn get_autonomous_run_fails_closed_for_invalid_workflow_node_to_unit_mapping() {
-    workflow_progression::get_autonomous_run_fails_closed_for_invalid_workflow_node_to_unit_mapping();
+    workflow_progression::get_autonomous_run_fails_closed_for_invalid_workflow_node_to_unit_mapping(
+    );
 }
 
 #[test]

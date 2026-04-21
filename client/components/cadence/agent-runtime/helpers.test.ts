@@ -11,6 +11,7 @@ import { getStreamStatusMeta } from '@/components/cadence/agent-runtime/runtime-
 import { displayValue, formatSequence } from '@/components/cadence/agent-runtime/shared-helpers'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type { RuntimeSessionView } from '@/src/lib/cadence-model'
+import { createEmptyPlanningLifecycle } from '@/src/lib/cadence-model/workflow'
 
 function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
   return {
@@ -28,7 +29,7 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
       branchLabel: 'main',
       runtimeLabel: 'Runtime unavailable',
       phaseProgressPercent: 0,
-      lifecycle: null,
+      lifecycle: createEmptyPlanningLifecycle(),
       repository: null,
       repositoryStatus: null,
       approvalRequests: [],
@@ -67,6 +68,8 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     runtimeLabel: 'Runtime unavailable',
     repositoryLabel: 'Cadence',
     repositoryPath: '/tmp/Cadence',
+    autonomousHistory: [],
+    autonomousRecentArtifacts: [],
     notificationBroker: {
       dispatches: [],
       actions: [],
@@ -196,6 +199,7 @@ describe('agent-runtime helpers', () => {
           resumeStateLabel: 'Waiting on approval',
           resumeDetail: 'Waiting for operator input before this action can resume the run.',
           resumeUpdatedAt: '2026-04-16T20:05:00Z',
+          sortTimestamp: '2026-04-16T20:05:00Z',
         },
       ],
       totalCount: 3,
@@ -330,6 +334,7 @@ describe('agent-runtime helpers', () => {
         resumeStateLabel: 'Waiting',
         resumeDetail: 'No resume recorded yet for this action.',
         resumeUpdatedAt: '2026-04-13T20:03:30Z',
+        sortTimestamp: '2026-04-13T20:03:30Z',
       },
       operatorActionStatus: 'idle',
       pendingOperatorActionId: null,

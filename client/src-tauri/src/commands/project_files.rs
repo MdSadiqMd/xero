@@ -11,9 +11,8 @@ use crate::{
         validate_non_empty, CommandError, CommandResult, CreateProjectEntryRequestDto,
         CreateProjectEntryResponseDto, DeleteProjectEntryResponseDto, ListProjectFilesResponseDto,
         ProjectEntryKindDto, ProjectFileNodeDto, ProjectFileRequestDto, ProjectIdRequestDto,
-        ReadProjectFileResponseDto, RenameProjectEntryRequestDto,
-        RenameProjectEntryResponseDto, WriteProjectFileRequestDto,
-        WriteProjectFileResponseDto,
+        ReadProjectFileResponseDto, RenameProjectEntryRequestDto, RenameProjectEntryResponseDto,
+        WriteProjectFileRequestDto, WriteProjectFileResponseDto,
     },
     registry,
     state::DesktopState,
@@ -59,7 +58,8 @@ pub fn read_project_file<R: Runtime>(
     validate_non_empty(&request.path, "path")?;
 
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
-    let (resolved_path, normalized_path) = resolve_virtual_path(&project_root, &request.path, "path", false)?;
+    let (resolved_path, normalized_path) =
+        resolve_virtual_path(&project_root, &request.path, "path", false)?;
     let metadata = read_metadata(&resolved_path)?;
 
     if metadata.is_dir() {
@@ -74,9 +74,7 @@ pub fn read_project_file<R: Runtime>(
     let content = fs::read_to_string(&resolved_path).map_err(|error| match error.kind() {
         ErrorKind::InvalidData => CommandError::user_fixable(
             "project_file_not_text",
-            format!(
-                "Cadence cannot open `{normalized_path}` because it is not a UTF-8 text file."
-            ),
+            format!("Cadence cannot open `{normalized_path}` because it is not a UTF-8 text file."),
         ),
         ErrorKind::NotFound => CommandError::user_fixable(
             "project_file_not_found",
@@ -108,7 +106,8 @@ pub fn write_project_file<R: Runtime>(
     validate_non_empty(&request.path, "path")?;
 
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
-    let (resolved_path, normalized_path) = resolve_virtual_path(&project_root, &request.path, "path", false)?;
+    let (resolved_path, normalized_path) =
+        resolve_virtual_path(&project_root, &request.path, "path", false)?;
     let metadata = read_metadata(&resolved_path)?;
 
     if metadata.is_dir() {
@@ -128,9 +127,7 @@ pub fn write_project_file<R: Runtime>(
         _ => io_error(
             "project_file_write_failed",
             &resolved_path,
-            format!(
-                "Cadence could not save `{normalized_path}` in the selected project: {error}"
-            ),
+            format!("Cadence could not save `{normalized_path}` in the selected project: {error}"),
         ),
     })?;
 
@@ -207,15 +204,14 @@ pub fn rename_project_entry<R: Runtime>(
     let new_name = validate_entry_name(&request.new_name, "newName")?;
 
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
-    let (resolved_path, normalized_path) = resolve_virtual_path(&project_root, &request.path, "path", false)?;
+    let (resolved_path, normalized_path) =
+        resolve_virtual_path(&project_root, &request.path, "path", false)?;
     read_metadata(&resolved_path)?;
 
     let parent_path = resolved_path.parent().ok_or_else(|| {
         CommandError::system_fault(
             "project_entry_parent_missing",
-            format!(
-                "Cadence could not determine the parent directory for `{normalized_path}`."
-            ),
+            format!("Cadence could not determine the parent directory for `{normalized_path}`."),
         )
     })?;
 
@@ -257,7 +253,8 @@ pub fn delete_project_entry<R: Runtime>(
     validate_non_empty(&request.path, "path")?;
 
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
-    let (resolved_path, normalized_path) = resolve_virtual_path(&project_root, &request.path, "path", false)?;
+    let (resolved_path, normalized_path) =
+        resolve_virtual_path(&project_root, &request.path, "path", false)?;
     let metadata = read_metadata(&resolved_path)?;
 
     if metadata.is_dir() {
@@ -328,7 +325,10 @@ fn build_tree(project_root: &Path) -> CommandResult<ProjectFileNodeDto> {
     })
 }
 
-fn read_child_nodes(directory: &Path, parent_virtual_path: &str) -> CommandResult<Vec<ProjectFileNodeDto>> {
+fn read_child_nodes(
+    directory: &Path,
+    parent_virtual_path: &str,
+) -> CommandResult<Vec<ProjectFileNodeDto>> {
     let mut children = fs::read_dir(directory)
         .map_err(|error| {
             io_error(
@@ -392,7 +392,10 @@ fn read_metadata(path: &Path) -> CommandResult<fs::Metadata> {
     let metadata = fs::symlink_metadata(path).map_err(|error| match error.kind() {
         ErrorKind::NotFound => CommandError::user_fixable(
             "project_path_not_found",
-            format!("Cadence could not find `{}` in the selected project.", path.display()),
+            format!(
+                "Cadence could not find `{}` in the selected project.",
+                path.display()
+            ),
         ),
         _ => io_error(
             "project_path_metadata_failed",
@@ -503,7 +506,10 @@ fn child_virtual_path(parent_path: &str, child_name: &str) -> String {
 }
 
 fn parent_virtual_path(path: &str) -> String {
-    let mut segments = path.split('/').filter(|segment| !segment.is_empty()).collect::<Vec<_>>();
+    let mut segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
     segments.pop();
     if segments.is_empty() {
         "/".into()
@@ -514,7 +520,10 @@ fn parent_virtual_path(path: &str) -> String {
 
 fn io_error(code: &str, path: &Path, message: String) -> CommandError {
     let normalized_message = if message.is_empty() {
-        format!("Cadence hit an I/O error while working with {}.", path.display())
+        format!(
+            "Cadence hit an I/O error while working with {}.",
+            path.display()
+        )
     } else {
         message
     };

@@ -59,6 +59,7 @@ pub(crate) fn reconcile_runtime_session<R: Runtime>(
     reconcile_prepared_runtime_session(app, state, repo_root, original, runtime, selection)
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) fn prepare_runtime_session_for_selected_provider<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,

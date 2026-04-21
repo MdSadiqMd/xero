@@ -12,7 +12,8 @@ mod item_contracts;
 
 #[test]
 fn subscribe_runtime_stream_rejects_missing_channel_and_unsupported_kind_lists_activity() {
-    preflight::subscribe_runtime_stream_rejects_missing_channel_and_unsupported_kind_lists_activity();
+    preflight::subscribe_runtime_stream_rejects_missing_channel_and_unsupported_kind_lists_activity(
+    );
 }
 
 #[test]

@@ -124,7 +124,10 @@ pub(crate) fn subscribe_request(
     )
 }
 
-pub(crate) fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (String, PathBuf) {
+pub(crate) fn seed_project(
+    root: &TempDir,
+    app: &tauri::App<tauri::test::MockRuntime>,
+) -> (String, PathBuf) {
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let canonical_root = std::fs::canonicalize(&repo_root).expect("canonical repo root");
@@ -346,7 +349,9 @@ pub(crate) fn start_direct_runtime_stream(
     );
 }
 
-pub(crate) fn collect_until_terminal(receiver: Receiver<RuntimeStreamItemDto>) -> Vec<RuntimeStreamItemDto> {
+pub(crate) fn collect_until_terminal(
+    receiver: Receiver<RuntimeStreamItemDto>,
+) -> Vec<RuntimeStreamItemDto> {
     let mut items = Vec::new();
 
     loop {
@@ -427,7 +432,12 @@ pub(crate) fn seed_terminal_runtime_run(repo_root: &Path, project_id: &str, run_
     .expect("seed failed runtime run");
 }
 
-pub(crate) fn seed_fake_runtime_run(repo_root: &Path, project_id: &str, run_id: &str, endpoint: &str) {
+pub(crate) fn seed_fake_runtime_run(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    endpoint: &str,
+) {
     let timestamp = now_timestamp();
     project_store::upsert_runtime_run(
         repo_root,

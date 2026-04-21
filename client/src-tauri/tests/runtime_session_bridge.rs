@@ -195,19 +195,20 @@ fn current_unix_timestamp() -> i64 {
 }
 
 fn auth_config_with_token_url(token_url: String) -> OpenAiCodexAuthConfig {
-    let mut config = OpenAiCodexAuthConfig::default();
-    config.token_url = token_url;
-    config.callback_port = 0;
-    config.originator = "Cadence-tests".into();
-    config.timeout = Duration::from_secs(5);
-    config
+    OpenAiCodexAuthConfig {
+        token_url,
+        callback_port: 0,
+        originator: "Cadence-tests".into(),
+        timeout: Duration::from_secs(5),
+        ..OpenAiCodexAuthConfig::default()
+    }
 }
 
 fn openrouter_auth_config(models_url: String) -> OpenRouterAuthConfig {
-    let mut config = OpenRouterAuthConfig::default();
-    config.models_url = models_url;
-    config.timeout = Duration::from_secs(5);
-    config
+    OpenRouterAuthConfig {
+        models_url,
+        timeout: Duration::from_secs(5),
+    }
 }
 
 fn spawn_static_http_server(status: u16, body: &str) -> String {

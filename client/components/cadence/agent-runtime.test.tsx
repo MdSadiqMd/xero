@@ -1095,6 +1095,7 @@ describe('AgentRuntime current UI', () => {
       code: 'runtime_stream_subscribe_failed',
       message: 'Cadence could not subscribe to the replacement run stream yet.',
       retryable: true,
+      observedAt: '2026-04-16T20:04:10Z',
     }
 
     const { rerender } = render(
@@ -1154,7 +1155,7 @@ describe('AgentRuntime current UI', () => {
       screen.getByText('Open Settings to choose a provider and model before using the agent tab for this imported project.'),
     ).toBeVisible()
     expect(composer).toHaveAttribute('placeholder', 'Connect a provider to start.')
-    expect(composer).toHaveAttribute('rows', '4')
+    expect(composer).toHaveAttribute('rows', '3')
     expect(modelSelector).toHaveTextContent('openai_codex')
     expect(thinkingLevelSelector).toHaveTextContent('Thinking · medium')
     expect(screen.getByRole('button', { name: 'Configure' })).toBeVisible()

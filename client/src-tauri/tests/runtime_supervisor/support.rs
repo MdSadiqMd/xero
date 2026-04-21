@@ -38,7 +38,12 @@ pub(crate) fn supervisor_test_guard() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-pub(crate) fn seed_project(root: &TempDir, project_id: &str, repository_id: &str, repo_name: &str) -> PathBuf {
+pub(crate) fn seed_project(
+    root: &TempDir,
+    project_id: &str,
+    repository_id: &str,
+    repo_name: &str,
+) -> PathBuf {
     let repo_root = root.path().join(repo_name);
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let canonical_root = std::fs::canonicalize(&repo_root).expect("canonical repo root");
@@ -109,7 +114,12 @@ pub(crate) fn stop_request(project_id: &str, repo_root: &Path) -> RuntimeSupervi
     }
 }
 
-pub(crate) fn seed_running_runtime_run(repo_root: &Path, project_id: &str, run_id: &str, endpoint: &str) {
+pub(crate) fn seed_running_runtime_run(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    endpoint: &str,
+) {
     let now = cadence_desktop_lib::auth::now_timestamp();
 
     project_store::upsert_runtime_run(
@@ -210,7 +220,9 @@ pub(crate) fn seed_active_autonomous_run(repo_root: &Path, project_id: &str, run
     }
 }
 
-pub(crate) fn spawn_single_response_control_server(response_line: String) -> (String, thread::JoinHandle<()>) {
+pub(crate) fn spawn_single_response_control_server(
+    response_line: String,
+) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock control listener");
     let endpoint = listener
         .local_addr()
@@ -263,7 +275,10 @@ pub(crate) fn wait_for_runtime_run(
     }
 }
 
-pub(crate) fn attach_reader(endpoint: &str, request: SupervisorControlRequest) -> BufReader<TcpStream> {
+pub(crate) fn attach_reader(
+    endpoint: &str,
+    request: SupervisorControlRequest,
+) -> BufReader<TcpStream> {
     let mut stream = TcpStream::connect(endpoint).expect("connect attach socket");
     stream
         .set_read_timeout(Some(ATTACH_READ_TIMEOUT))
@@ -285,7 +300,9 @@ pub(crate) fn send_control_request(
     read_supervisor_response(&mut reader)
 }
 
-pub(crate) fn read_supervisor_response(reader: &mut BufReader<TcpStream>) -> SupervisorControlResponse {
+pub(crate) fn read_supervisor_response(
+    reader: &mut BufReader<TcpStream>,
+) -> SupervisorControlResponse {
     let mut line = String::new();
     let bytes = reader
         .read_line(&mut line)
@@ -329,7 +346,10 @@ pub(crate) fn read_event_frames(
         .collect()
 }
 
-pub(crate) fn assert_monotonic_sequences(frames: &[SupervisorControlResponse], expected_run_id: &str) {
+pub(crate) fn assert_monotonic_sequences(
+    frames: &[SupervisorControlResponse],
+    expected_run_id: &str,
+) {
     let mut previous = None;
     for frame in frames {
         match frame {

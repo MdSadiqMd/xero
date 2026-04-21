@@ -138,7 +138,8 @@ pub(crate) fn runtime_stream_replays_real_supervisor_events_after_fresh_host_rel
     );
 }
 
-pub(crate) fn runtime_stream_replays_first_class_skill_events_with_source_metadata_after_fresh_host_reload() {
+pub(crate) fn runtime_stream_replays_first_class_skill_events_with_source_metadata_after_fresh_host_reload(
+) {
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, auth_store_path) = create_state(&root);

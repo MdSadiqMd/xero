@@ -715,20 +715,22 @@ pub(crate) fn read_runtime_session_row(
     }
 }
 
+type RuntimeSessionRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    String,
+);
+
 fn decode_runtime_session_row(
-    row: (
-        String,
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        String,
-    ),
+    row: RuntimeSessionRow,
     database_path: &Path,
 ) -> Result<RuntimeSessionRecord, CommandError> {
     let (

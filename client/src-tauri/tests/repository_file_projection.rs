@@ -245,7 +245,11 @@ fn project_file_commands_list_read_write_create_rename_and_delete_real_repo_stat
     )
     .expect("create file succeeds");
     assert_eq!(created_file.path, "/src/editor.ts");
-    assert!(repository_root.path().join("src").join("editor.ts").is_file());
+    assert!(repository_root
+        .path()
+        .join("src")
+        .join("editor.ts")
+        .is_file());
 
     let created_folder = create_entry_with_app(
         &app,
@@ -256,7 +260,11 @@ fn project_file_commands_list_read_write_create_rename_and_delete_real_repo_stat
     )
     .expect("create folder succeeds");
     assert_eq!(created_folder.path, "/src/generated");
-    assert!(repository_root.path().join("src").join("generated").is_dir());
+    assert!(repository_root
+        .path()
+        .join("src")
+        .join("generated")
+        .is_dir());
 
     let renamed = rename_entry_with_app(&app, &project_id, "/src/editor.ts", "editor-client.ts")
         .expect("rename succeeds");
@@ -266,10 +274,18 @@ fn project_file_commands_list_read_write_create_rename_and_delete_real_repo_stat
         .join("src")
         .join("editor-client.ts")
         .is_file());
-    assert!(!repository_root.path().join("src").join("editor.ts").exists());
+    assert!(!repository_root
+        .path()
+        .join("src")
+        .join("editor.ts")
+        .exists());
 
     delete_entry_with_app(&app, &project_id, "/src/generated").expect("delete folder succeeds");
-    assert!(!repository_root.path().join("src").join("generated").exists());
+    assert!(!repository_root
+        .path()
+        .join("src")
+        .join("generated")
+        .exists());
 
     let refreshed_tree = list_files_with_app(&app, &project_id).expect("refreshed tree loads");
     assert!(find_node(&refreshed_tree.root, "/src/editor-client.ts").is_some());

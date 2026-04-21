@@ -4235,6 +4235,7 @@ fn derive_auto_dispatch_operator_scope(
     Ok((session_id, flow_id))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn upsert_pending_operator_approval_row(
     transaction: &Transaction<'_>,
     database_path: &Path,
@@ -4752,6 +4753,7 @@ fn automatic_dispatch_outcome_from_error(error: CommandError) -> WorkflowAutomat
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assert_transition_edge_exists(
     transaction: &Transaction<'_>,
     database_path: &Path,

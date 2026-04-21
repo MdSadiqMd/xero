@@ -118,7 +118,8 @@ pub(crate) fn autonomous_run_persistence_tracks_current_unit_duplicate_start_and
     );
 }
 
-pub(crate) fn autonomous_run_persistence_persists_explicit_workflow_linkage_and_replays_idempotently() {
+pub(crate) fn autonomous_run_persistence_persists_explicit_workflow_linkage_and_replays_idempotently(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-1";
     let repo_root = seed_project(&root, project_id, "repo-1", "repo");

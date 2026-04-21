@@ -28,12 +28,14 @@ pub(crate) fn require_identifier(
     Ok(value.to_string())
 }
 
+type SanitizedRouteCredentials = (Option<String>, Option<String>, Option<String>);
+
 pub(crate) fn sanitize_upsert_credentials(
     route_kind: NotificationRouteKind,
     credentials: NotificationCredentialUpsertInput,
     project_id: &str,
     route_id: &str,
-) -> Result<(Option<String>, Option<String>, Option<String>), NotificationAdapterError> {
+) -> Result<SanitizedRouteCredentials, NotificationAdapterError> {
     match (route_kind, credentials) {
         (
             NotificationRouteKind::Telegram,

@@ -98,7 +98,7 @@ pub(crate) fn autonomous_fixture_repo_parity_binds_openrouter_truth_and_replays_
         })
         .expect("fixture invoke should reuse the Cadence cache");
 
-    let skill_lines = vec![
+    let skill_lines = [
         format!(
             "{STRUCTURED_EVENT_PREFIX}{}",
             json!({
@@ -787,7 +787,7 @@ pub(crate) fn autonomous_fixture_repo_parity_replays_fixture_driven_skill_lifecy
     assert!(Path::new(&installed.cache_directory).starts_with(&cache_root));
     assert!(Path::new(&invoked.cache_directory).starts_with(&cache_root));
 
-    let skill_lines = vec![
+    let skill_lines = [
         format!(
             "{STRUCTURED_EVENT_PREFIX}{}",
             json!({

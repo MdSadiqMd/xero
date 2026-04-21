@@ -92,7 +92,8 @@ fn detached_supervisor_submit_input_routes_bytes_through_owned_writer() {
 
 #[test]
 fn submit_runtime_run_input_rejects_mismatched_ack_and_preserves_running_projection() {
-    live_boundary::submit_runtime_run_input_rejects_mismatched_ack_and_preserves_running_projection();
+    live_boundary::submit_runtime_run_input_rejects_mismatched_ack_and_preserves_running_projection(
+    );
 }
 
 #[test]

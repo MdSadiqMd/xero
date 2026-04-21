@@ -806,7 +806,8 @@ pub(crate) fn workflow_transition_auto_dispatch_replays_idempotently() {
     assert_eq!(events, reloaded_events);
 }
 
-pub(crate) fn workflow_transition_auto_dispatch_preserves_transition_when_handoff_package_build_fails() {
+pub(crate) fn workflow_transition_auto_dispatch_preserves_transition_when_handoff_package_build_fails(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-graph-auto-package-skip-redaction";
     let repo_root = seed_project(
@@ -962,7 +963,8 @@ pub(crate) fn workflow_transition_auto_dispatch_replay_surfaces_missing_handoff_
     assert_eq!(events.len(), 2);
 }
 
-pub(crate) fn workflow_transition_auto_dispatch_replay_surfaces_decode_failure_as_skipped_package() {
+pub(crate) fn workflow_transition_auto_dispatch_replay_surfaces_decode_failure_as_skipped_package()
+{
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-graph-auto-package-replay-decode";
     let repo_root = seed_project(

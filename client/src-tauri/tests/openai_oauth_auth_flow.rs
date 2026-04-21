@@ -102,12 +102,13 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
 }
 
 fn auth_config(server: &TestHttpServer) -> OpenAiCodexAuthConfig {
-    let mut config = OpenAiCodexAuthConfig::default();
-    config.token_url = server.url("/oauth/token");
-    config.callback_port = 0;
-    config.originator = "Cadence-tests".into();
-    config.timeout = Duration::from_secs(5);
-    config
+    OpenAiCodexAuthConfig {
+        token_url: server.url("/oauth/token"),
+        callback_port: 0,
+        originator: "Cadence-tests".into(),
+        timeout: Duration::from_secs(5),
+        ..OpenAiCodexAuthConfig::default()
+    }
 }
 
 fn jwt_with_account_id(account_id: &str) -> String {

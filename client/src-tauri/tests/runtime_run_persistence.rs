@@ -1,11 +1,11 @@
-#[path = "runtime_run_persistence/support.rs"]
-mod support;
-#[path = "runtime_run_persistence/runtime_rows.rs"]
-mod runtime_rows;
 #[path = "runtime_run_persistence/autonomous_runs.rs"]
 mod autonomous_runs;
+#[path = "runtime_run_persistence/runtime_rows.rs"]
+mod runtime_rows;
 #[path = "runtime_run_persistence/structured_payloads.rs"]
 mod structured_payloads;
+#[path = "runtime_run_persistence/support.rs"]
+mod support;
 
 #[test]
 fn legacy_repo_local_state_is_upgraded_before_runtime_run_reads() {
@@ -114,7 +114,8 @@ fn autonomous_run_decode_fails_closed_when_skill_lifecycle_payload_stage_is_tamp
 
 #[test]
 fn autonomous_skill_lifecycle_persistence_is_replay_safe_across_stage_upserts() {
-    structured_payloads::autonomous_skill_lifecycle_persistence_is_replay_safe_across_stage_upserts();
+    structured_payloads::autonomous_skill_lifecycle_persistence_is_replay_safe_across_stage_upserts(
+    );
 }
 
 #[test]

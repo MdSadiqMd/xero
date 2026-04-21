@@ -1,6 +1,7 @@
 use super::support::*;
 
-pub(crate) fn runtime_action_required_persistence_enqueues_notification_dispatches_once_per_route() {
+pub(crate) fn runtime_action_required_persistence_enqueues_notification_dispatches_once_per_route()
+{
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -208,7 +209,8 @@ pub(crate) fn submit_notification_reply_first_wins_and_rejects_forged_and_duplic
     }));
 }
 
-pub(crate) fn submit_notification_reply_cross_channel_race_accepts_single_winner_and_preserves_resume_truth() {
+pub(crate) fn submit_notification_reply_cross_channel_race_accepts_single_winner_and_preserves_resume_truth(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -519,7 +521,8 @@ pub(crate) fn resume_operator_run_delivers_approved_terminal_input_without_auth_
     assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
 }
 
-pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_evidence_exactly_once() {
+pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_evidence_exactly_once(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -1017,7 +1020,8 @@ pub(crate) fn resume_operator_run_records_failed_history_when_runtime_identity_s
     assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
 }
 
-pub(crate) fn resume_operator_run_records_failed_history_when_detached_control_channel_is_unreachable() {
+pub(crate) fn resume_operator_run_records_failed_history_when_detached_control_channel_is_unreachable(
+) {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let app = build_mock_app(state);

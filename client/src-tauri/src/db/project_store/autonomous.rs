@@ -1919,7 +1919,7 @@ fn build_autonomous_unit_history(
     for unit in units {
         let latest_attempt = attempts_by_unit
             .remove(&unit.unit_id)
-            .map(|mut unit_attempts| {
+            .and_then(|mut unit_attempts| {
                 unit_attempts.sort_by(|left, right| {
                     right
                         .attempt_number
@@ -1928,8 +1928,7 @@ fn build_autonomous_unit_history(
                         .then_with(|| right.attempt_id.cmp(&left.attempt_id))
                 });
                 unit_attempts.into_iter().next()
-            })
-            .flatten();
+            });
 
         if let Some(attempt) = latest_attempt.as_ref() {
             match (&unit.workflow_linkage, &attempt.workflow_linkage) {
@@ -3005,6 +3004,7 @@ fn normalize_autonomous_unit_artifact_record(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn decode_autonomous_artifact_payload_json(
     payload_json: &str,
     project_id: &str,
@@ -3212,6 +3212,7 @@ fn validate_autonomous_artifact_payload(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_autonomous_artifact_payload_linkage(
     payload_project_id: &str,
     payload_run_id: &str,

@@ -117,7 +117,7 @@ where
     }
 
     pub fn with_pending_batch_size(mut self, pending_batch_size: u32) -> Self {
-        self.pending_batch_size = pending_batch_size.max(1).min(DEFAULT_PENDING_BATCH_SIZE);
+        self.pending_batch_size = pending_batch_size.clamp(1, DEFAULT_PENDING_BATCH_SIZE);
         self
     }
 }

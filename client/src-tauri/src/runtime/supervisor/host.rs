@@ -517,14 +517,11 @@ pub fn stop_runtime_run(
             return Ok(Some(latest));
         }
 
-        match send_control_request(
+        let _ = send_control_request(
             &snapshot.run.transport.endpoint,
             request.control_timeout,
             &SupervisorControlRequest::probe(&snapshot.run.project_id, &snapshot.run.run_id),
-        ) {
-            Ok(SupervisorControlResponse::ProbeResult { .. }) => {}
-            Ok(_) | Err(_) => {}
-        }
+        );
 
         thread::sleep(Duration::from_millis(100));
     }

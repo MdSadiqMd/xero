@@ -266,6 +266,7 @@ where
         Ok(cycle)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_inbound_message<Submit>(
         &self,
         cycle: &mut NotificationReplyCycleResult,

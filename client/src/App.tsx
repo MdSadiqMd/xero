@@ -5,6 +5,7 @@ import { EmptyPanel } from '@/components/cadence/empty-panel'
 import { ExecutionView } from '@/components/cadence/execution-view'
 import { NoProjectEmptyState } from '@/components/cadence/no-project-empty-state'
 import { OnboardingFlow } from '@/components/cadence/onboarding/onboarding-flow'
+import { ProjectLoadErrorState } from '@/components/cadence/project-load-error-state'
 import { PhaseView } from '@/components/cadence/phase-view'
 import { ProjectRail } from '@/components/cadence/project-rail'
 import { CadenceShell, type PlatformVariant } from '@/components/cadence/shell'
@@ -70,6 +71,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [platformOverride, setPlatformOverride] = useState<PlatformVariant | null>(null)
   const [onboardingDismissed, setOnboardingDismissed] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(false)
   const shouldRestoreSidebarFromEditorRef = useRef(false)
   const previousViewRef = useRef<View>(activeView)
 
@@ -97,6 +99,12 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     previousViewRef.current = activeView
   }, [activeView, sidebarCollapsed])
 
+  useEffect(() => {
+    if (!onboardingDismissed && !isLoading && projects.length === 0) {
+      setOnboardingOpen(true)
+    }
+  }, [isLoading, onboardingDismissed, projects.length])
+
   const renderBody = () => {
     if (isLoading && !activeProject) {
       return (
@@ -109,22 +117,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     }
 
     if (!activeProject && errorMessage) {
-      return (
-        <EmptyPanel
-          eyebrow="Load Error"
-          title="Desktop state could not be loaded"
-          body={errorMessage}
-          action={
-            <button
-              className="rounded-md border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-secondary/60"
-              onClick={() => void retry()}
-              type="button"
-            >
-              Retry
-            </button>
-          }
-        />
-      )
+      return <ProjectLoadErrorState message={errorMessage} onRetry={() => void retry()} />
     }
 
     if (!activeProject) {
@@ -199,11 +192,13 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     return null
   }
 
-  const hasConfiguredProvider = Boolean(
-    runtimeSettings?.openrouterApiKeyConfigured || agentView?.runtimeSession?.isAuthenticated,
-  )
-  const showOnboarding =
-    !onboardingDismissed && !isLoading && projects.length === 0 && !hasConfiguredProvider
+  const onboardingProject = activeProject
+    ? {
+        name: activeProject.name,
+        path: activeProject.repository?.rootPath ?? activeProject.name,
+      }
+    : null
+  const showOnboarding = onboardingOpen && !onboardingDismissed && !isLoading
 
   if (showOnboarding) {
     return (
@@ -218,8 +213,29 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         chromeOnly
       >
         <OnboardingFlow
-          onComplete={() => setOnboardingDismissed(true)}
-          onDismiss={() => setOnboardingDismissed(true)}
+          runtimeSettings={runtimeSettings}
+          runtimeSession={agentView?.runtimeSession ?? null}
+          runtimeSettingsSaveStatus={runtimeSettingsSaveStatus}
+          runtimeSettingsSaveError={runtimeSettingsSaveError}
+          project={onboardingProject}
+          isImporting={isImporting}
+          isProjectLoading={isProjectLoading}
+          projectErrorMessage={errorMessage}
+          notificationRoutes={agentView?.notificationRoutes ?? []}
+          notificationRouteMutationStatus={agentView?.notificationRouteMutationStatus ?? 'idle'}
+          pendingNotificationRouteId={agentView?.pendingNotificationRouteId ?? null}
+          notificationRouteMutationError={agentView?.notificationRouteMutationError ?? null}
+          onImportProject={() => importProject()}
+          onUpsertRuntimeSettings={(request) => upsertRuntimeSettings(request)}
+          onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
+          onComplete={() => {
+            setOnboardingDismissed(true)
+            setOnboardingOpen(false)
+          }}
+          onDismiss={() => {
+            setOnboardingDismissed(true)
+            setOnboardingOpen(false)
+          }}
         />
       </CadenceShell>
     )
@@ -265,6 +281,11 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         onUpsertNotificationRoute={(request) => upsertNotificationRoute({ ...request, updatedAt: new Date().toISOString() })}
         platformOverride={platformOverride}
         onPlatformOverrideChange={setPlatformOverride}
+        onStartOnboarding={() => {
+          setSettingsOpen(false)
+          setOnboardingDismissed(false)
+          setOnboardingOpen(true)
+        }}
       />
     </CadenceShell>
   )

@@ -1,11 +1,11 @@
-#[path = "workflow_graph_persistence/support.rs"]
-mod support;
-#[path = "workflow_graph_persistence/projection_decode.rs"]
-mod projection_decode;
-#[path = "workflow_graph_persistence/transition_dispatch.rs"]
-mod transition_dispatch;
 #[path = "workflow_graph_persistence/handoff_packages.rs"]
 mod handoff_packages;
+#[path = "workflow_graph_persistence/projection_decode.rs"]
+mod projection_decode;
+#[path = "workflow_graph_persistence/support.rs"]
+mod support;
+#[path = "workflow_graph_persistence/transition_dispatch.rs"]
+mod transition_dispatch;
 
 #[test]
 fn workflow_graph_upsert_projects_phase_projection_in_stable_order() {
@@ -59,12 +59,14 @@ fn workflow_transition_auto_dispatch_replay_surfaces_transition_linkage_mismatch
 
 #[test]
 fn workflow_transition_rejects_secret_bearing_diagnostics_and_preserves_state() {
-    transition_dispatch::workflow_transition_rejects_secret_bearing_diagnostics_and_preserves_state();
+    transition_dispatch::workflow_transition_rejects_secret_bearing_diagnostics_and_preserves_state(
+    );
 }
 
 #[test]
 fn workflow_transition_rejects_malformed_target_gate_rows_and_preserves_state() {
-    transition_dispatch::workflow_transition_rejects_malformed_target_gate_rows_and_preserves_state();
+    transition_dispatch::workflow_transition_rejects_malformed_target_gate_rows_and_preserves_state(
+    );
 }
 
 #[test]
@@ -129,7 +131,8 @@ fn workflow_handoff_package_assembly_rejects_malformed_gate_state_rows() {
 
 #[test]
 fn workflow_handoff_package_assembly_rejects_invalid_lifecycle_projection_shape() {
-    handoff_packages::workflow_handoff_package_assembly_rejects_invalid_lifecycle_projection_shape();
+    handoff_packages::workflow_handoff_package_assembly_rejects_invalid_lifecycle_projection_shape(
+    );
 }
 
 #[test]

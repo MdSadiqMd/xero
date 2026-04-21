@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { cn } from "@/lib/utils"
 import type {
   AgentPaneView,
   OperatorActionErrorView,
@@ -43,19 +44,16 @@ type RuntimeProviderId = RuntimeSettingsDto["providerId"]
 const PROVIDERS: Array<{
   id: RuntimeProviderId
   label: string
-  description: string
   Icon: React.ElementType
 }> = [
   {
     id: "openrouter",
     label: "OpenRouter",
-    description: "App-global API key provider",
     Icon: KeyRound,
   },
   {
     id: "openai_codex",
     label: "OpenAI Codex",
-    description: "Browser-based OAuth for desktop runtime",
     Icon: OpenAIIcon,
   },
 ]
@@ -94,12 +92,12 @@ export function ProvidersSection({
 
   const hasSelectedProject = Boolean(agent?.repositoryPath?.trim())
   const runtimeSession = agent?.runtimeSession ?? null
-  const isOpenaiConnected = Boolean(runtimeSession?.isAuthenticated)
-  const isOpenaiInProgress = Boolean(runtimeSession?.isLoginInProgress)
+  const isOpenaiConnected = Boolean(runtimeSession?.providerId === "openai_codex" && runtimeSession.isAuthenticated)
+  const isOpenaiInProgress = Boolean(runtimeSession?.providerId === "openai_codex" && runtimeSession.isLoginInProgress)
   const isSaving = runtimeSettingsSaveStatus === "running"
-  const isRefreshing = runtimeSettingsLoadStatus === "running"
+  const isRefreshing = runtimeSettingsLoadStatus === "loading"
 
-  const isProviderActive = runtimeSettings?.providerId
+  const currentProviderId = runtimeSettings?.providerId ?? null
   const openrouterConfigured = runtimeSettings?.openrouterApiKeyConfigured ?? false
 
   useEffect(() => {
@@ -176,21 +174,21 @@ export function ProvidersSection({
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h3 className="text-sm font-semibold text-foreground">Providers</h3>
+        <h3 className="text-[13px] font-semibold text-foreground">Providers</h3>
         <p className="mt-1 text-[12px] text-muted-foreground">
-          Configure AI model providers for Cadence
+          Manage provider credentials and models. Projects are not assigned to a provider here.
         </p>
       </div>
 
       {runtimeSettingsLoadError && (
-        <Alert variant="destructive" className="py-3">
+        <Alert variant="destructive" className="border-destructive/30 bg-destructive/5 py-2.5">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="text-[12px]">
             {errorViewMessage(runtimeSettingsLoadError, "Failed to load provider settings.")}
             <Button
               variant="outline"
               size="sm"
-              className="mt-2 h-6 text-[10px]"
+              className="mt-2 h-6 gap-1 text-[10px]"
               disabled={isRefreshing}
               onClick={() => void onRefreshRuntimeSettings?.({ force: true }).catch(() => undefined)}
             >
@@ -202,7 +200,7 @@ export function ProvidersSection({
       )}
 
       {runtimeSettingsSaveError && (
-        <Alert variant="destructive" className="py-3">
+        <Alert variant="destructive" className="border-destructive/30 bg-destructive/5 py-2.5">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="text-[12px]">
             {errorViewMessage(runtimeSettingsSaveError, "Failed to save provider settings.")}
@@ -211,52 +209,58 @@ export function ProvidersSection({
       )}
 
       {formError && (
-        <Alert variant="destructive" className="py-3">
+        <Alert variant="destructive" className="border-destructive/30 bg-destructive/5 py-2.5">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription className="text-[12px]">{formError}</AlertDescription>
         </Alert>
       )}
 
-      <div className="grid gap-2">
-        {PROVIDERS.map(({ id, label, description, Icon }) => {
+      <div className="grid gap-2.5">
+        {PROVIDERS.map(({ id, label, Icon }) => {
           const isOpenrouter = id === "openrouter"
           const isOpenai = id === "openai_codex"
+          const hasSetup = isOpenrouter ? openrouterConfigured : isOpenaiConnected
           const configOpen = configuringId === id
-          const isConfigured = isOpenrouter ? openrouterConfigured : isOpenai ? isOpenaiConnected : false
-          const isActive = isProviderActive === id
+          const isCurrent = currentProviderId === id && hasSetup
 
           return (
-            <div key={id} className="rounded-lg border border-border bg-card px-4 py-3">
+            <div
+              key={id}
+              className={cn(
+                "rounded-lg border bg-card px-4 py-3",
+                isCurrent ? "border-primary/30 bg-primary/[0.03]" : "border-border",
+              )}
+            >
               <div className="flex items-center gap-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/60">
+                <div
+                  className={cn(
+                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-secondary/60",
+                    isCurrent ? "border-primary/40 text-primary" : "border-border",
+                  )}
+                >
                   <Icon className="h-4 w-4 text-foreground/70" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <p className="text-[13px] font-medium text-foreground">{label}</p>
-                    {isActive ? (
-                      <Badge variant="default" className="h-4 px-1 text-[9px]">
-                        Active
+                    {isOpenrouter && openrouterConfigured && !configOpen ? (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Key saved
+                      </Badge>
+                    ) : null}
+                    {isOpenai && isOpenaiConnected && !configOpen ? (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Connected
                       </Badge>
                     ) : null}
                   </div>
-                  <p className="text-[11px] text-muted-foreground">{description}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {!isConfigured && !configOpen ? (
-                    <Badge variant="outline" className="text-[10px]">
-                      Not configured
-                    </Badge>
-                  ) : !configOpen ? (
-                    <Badge variant="secondary" className="text-[10px]">
-                      Configured
-                    </Badge>
-                  ) : null}
-
                   {isOpenrouter ? (
                     !configOpen ? (
                       <Button
                         size="sm"
+                        variant={openrouterConfigured ? "secondary" : "outline"}
                         className="h-7 text-[11px]"
                         disabled={isSaving}
                         onClick={() => {
@@ -264,7 +268,7 @@ export function ProvidersSection({
                           setFormError(null)
                         }}
                       >
-                        Configure
+                        {openrouterConfigured ? "Edit setup" : "Set up"}
                       </Button>
                     ) : null
                   ) : isOpenai ? (
@@ -273,7 +277,7 @@ export function ProvidersSection({
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-7 text-[11px]"
+                          className="h-7 gap-1 text-[11px]"
                           disabled={pending !== null}
                           onClick={() => void handleOpenaiDisconnect()}
                         >
@@ -291,12 +295,12 @@ export function ProvidersSection({
                         </Badge>
                       ) : !hasSelectedProject ? (
                         <Badge variant="outline" className="text-[10px]">
-                          Select a project
+                          Open a project
                         </Badge>
                       ) : (
                         <Button
                           size="sm"
-                          className="h-7 text-[11px]"
+                          className="h-7 gap-1 text-[11px]"
                           disabled={pending !== null || !onStartLogin}
                           onClick={() => void handleOpenaiConnect()}
                         >
@@ -314,7 +318,7 @@ export function ProvidersSection({
               </div>
 
               {isOpenrouter && configOpen ? (
-                <div className="mt-3 border-t border-border pt-3">
+                <div className="mt-3 animate-in fade-in-0 slide-in-from-top-1 duration-200 ease-out">
                   <div className="grid gap-3">
                     <div className="space-y-1.5">
                       <Label htmlFor={`or-model-${id}`} className="text-[11px]">
@@ -322,7 +326,7 @@ export function ProvidersSection({
                       </Label>
                       <Input
                         id={`or-model-${id}`}
-                        className="h-8 text-[12px]"
+                        className="h-8 font-mono text-[12px]"
                         disabled={isSaving}
                         onChange={(e) => setOpenrouterModelId(e.target.value)}
                         placeholder="openai/gpt-4.1-mini"
@@ -339,7 +343,8 @@ export function ProvidersSection({
                           API Key
                         </Label>
                         {openrouterConfigured ? (
-                          <Badge variant="secondary" className="text-[10px]">
+                          <Badge variant="secondary" className="gap-1 text-[10px]">
+                            <Check className="h-2.5 w-2.5" strokeWidth={3} />
                             Key saved
                           </Badge>
                         ) : null}
@@ -350,7 +355,7 @@ export function ProvidersSection({
                           type="password"
                           autoComplete="off"
                           spellCheck={false}
-                          className="h-8 flex-1 text-[12px]"
+                          className="h-8 flex-1 font-mono text-[12px]"
                           disabled={isSaving}
                           onChange={(e) => {
                             setOpenrouterApiKey(e.target.value)
@@ -375,7 +380,12 @@ export function ProvidersSection({
                           </Button>
                         ) : null}
                       </div>
-                      <p className="text-[10px] text-muted-foreground">
+                      <p
+                        className={cn(
+                          "text-[10px]",
+                          clearOpenrouterApiKey ? "text-destructive/80" : "text-muted-foreground",
+                        )}
+                      >
                         {clearOpenrouterApiKey
                           ? "Saved key will be removed"
                           : openrouterConfigured
@@ -387,7 +397,7 @@ export function ProvidersSection({
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
-                        className="h-7 text-[11px]"
+                        className="h-7 gap-1 text-[11px]"
                         disabled={!onUpsertRuntimeSettings || isSaving}
                         onClick={() => void handleOpenrouterSave()}
                       >

@@ -1,6 +1,7 @@
 use super::support::*;
 
-pub(crate) fn detached_supervisor_live_event_redacts_secret_bearing_output_in_replay_and_checkpoint() {
+pub(crate) fn detached_supervisor_live_event_redacts_secret_bearing_output_in_replay_and_checkpoint(
+) {
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-redaction";
@@ -121,7 +122,8 @@ pub(crate) fn detached_supervisor_live_event_drops_unsupported_structured_payloa
     assert_eq!(stopped.run.status, project_store::RuntimeRunStatus::Stopped);
 }
 
-pub(crate) fn detached_supervisor_persists_redacted_interactive_boundary_and_replays_same_action_identity() {
+pub(crate) fn detached_supervisor_persists_redacted_interactive_boundary_and_replays_same_action_identity(
+) {
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-interactive";
@@ -599,7 +601,8 @@ pub(crate) fn submit_runtime_run_input_rejects_mismatched_ack_and_preserves_runn
     );
 }
 
-pub(crate) fn submit_runtime_run_input_preserves_running_projection_on_malformed_control_response() {
+pub(crate) fn submit_runtime_run_input_preserves_running_projection_on_malformed_control_response()
+{
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");
     let project_id = "project-submit-malformed-response";

@@ -26,11 +26,14 @@ use cadence_desktop_lib::{
 use tauri::Manager;
 use tempfile::TempDir;
 
+type RouteKey = (String, String);
+type CursorKey = (String, String, String);
+
 #[derive(Clone, Default)]
 struct MockCredentialStore {
-    route_credentials: HashMap<(String, String), RouteCredentials>,
-    inbound_cursors: Arc<Mutex<HashMap<(String, String, String), String>>>,
-    fail_cursor_persist: Arc<Mutex<HashSet<(String, String, String)>>>,
+    route_credentials: HashMap<RouteKey, RouteCredentials>,
+    inbound_cursors: Arc<Mutex<HashMap<CursorKey, String>>>,
+    fail_cursor_persist: Arc<Mutex<HashSet<CursorKey>>>,
 }
 
 impl MockCredentialStore {

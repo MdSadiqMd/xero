@@ -340,13 +340,13 @@ impl AutonomousToolRuntime {
             tool_name: AUTONOMOUS_TOOL_WRITE.into(),
             summary: format!(
                 "{verb} `{display_path}` with {} byte(s).",
-                request.content.as_bytes().len()
+                request.content.len()
             ),
             command_result: None,
             output: AutonomousToolOutput::Write(AutonomousWriteOutput {
                 path: display_path,
                 created,
-                bytes_written: request.content.as_bytes().len(),
+                bytes_written: request.content.len(),
             }),
         })
     }
@@ -422,7 +422,7 @@ impl AutonomousToolRuntime {
                     scope_relative,
                     scope_is_file,
                 )?;
-                if matcher.is_match(&path_to_forward_slash(&candidate))
+                if matcher.is_match(path_to_forward_slash(&candidate))
                     && !push_bounded(
                         matches,
                         path_to_forward_slash(&repo_relative),

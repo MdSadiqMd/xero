@@ -43,7 +43,7 @@ interface NotificationsSectionProps {
 
 function FieldError({ msg }: { msg?: string }) {
   if (!msg) return null
-  return <p className="text-[12px] text-destructive">{msg}</p>
+  return <p className="text-[11px] text-destructive">{msg}</p>
 }
 
 export function NotificationsSection({ agent, onUpsertNotificationRoute }: NotificationsSectionProps) {
@@ -153,11 +153,11 @@ export function NotificationsSection({ agent, onUpsertNotificationRoute }: Notif
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h3 className="text-sm font-semibold text-foreground">Notifications</h3>
+        <h3 className="text-[13px] font-semibold text-foreground">Notifications</h3>
         <p className="mt-1 text-[12px] text-muted-foreground">Route operator prompts to Telegram or Discord.</p>
       </div>
 
-      <div className="grid gap-2">
+      <div className="grid gap-2.5">
         {CHANNELS.map(({ kind, label, description, Icon }) => {
           const channelRoutes = routes.filter((route) => route.routeKind === kind)
           const formOpen = formKind === kind
@@ -200,7 +200,7 @@ export function NotificationsSection({ agent, onUpsertNotificationRoute }: Notif
               </div>
 
               {hasRoutes ? (
-                <div className="mt-2 grid gap-0.5 border-t border-border pt-2">
+                <div className="mt-3 grid gap-0.5 border-t border-border pt-2">
                   {channelRoutes.map((route) => {
                     const busy = pendingRouteId === route.routeId && (isMutating || pending === "toggle")
                     const isActiveEdit = editingId === route.routeId && formOpen
@@ -209,8 +209,8 @@ export function NotificationsSection({ agent, onUpsertNotificationRoute }: Notif
                       <div
                         key={route.routeId}
                         className={cn(
-                          "-mx-1.5 flex items-center gap-2 rounded-md px-1.5 py-1.5",
-                          isActiveEdit && "bg-secondary/40",
+                          "-mx-1.5 flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors",
+                          isActiveEdit ? "bg-secondary/50" : "hover:bg-secondary/30",
                         )}
                       >
                         <div className="min-w-0 flex-1">
@@ -219,11 +219,16 @@ export function NotificationsSection({ agent, onUpsertNotificationRoute }: Notif
                             {routeTargetDisplay(route.routeKind, route.routeTarget)}
                           </p>
                         </div>
-                        <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={() => editRoute(route)}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+                          onClick={() => editRoute(route)}
+                        >
                           Edit
                         </Button>
                         <div className="flex items-center gap-1.5">
-                          <Label htmlFor={`rt-${route.routeId}`} className="w-4 text-[10px] text-muted-foreground">
+                          <Label htmlFor={`rt-${route.routeId}`} className="w-5 text-[10px] text-muted-foreground">
                             {route.enabled ? "On" : "Off"}
                           </Label>
                           <Switch
@@ -240,7 +245,12 @@ export function NotificationsSection({ agent, onUpsertNotificationRoute }: Notif
               ) : null}
 
               {formOpen ? (
-                <div className={cn("border-t border-border pt-3", hasRoutes ? "mt-1" : "mt-3")}>
+                <div
+                  className={cn(
+                    "animate-in fade-in-0 slide-in-from-top-1 duration-200 ease-out",
+                    hasRoutes ? "mt-2" : "mt-3",
+                  )}
+                >
                   <p className="mb-2.5 text-[12px] font-medium text-foreground">
                     {editingId ? `Edit — ${editingId}` : `New ${label} route`}
                   </p>
@@ -266,7 +276,7 @@ export function NotificationsSection({ agent, onUpsertNotificationRoute }: Notif
                         </Label>
                         <Input
                           id={`s-route-target-${kind}`}
-                          className="h-8 text-[12px]"
+                          className="h-8 font-mono text-[12px]"
                           disabled={isMutating || pending === "save"}
                           onChange={(event) => setField("routeTarget", event.target.value)}
                           placeholder={kindOption.placeholder}
@@ -275,24 +285,13 @@ export function NotificationsSection({ agent, onUpsertNotificationRoute }: Notif
                         <FieldError msg={formErrors.routeTarget} />
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        id={`s-route-enabled-${kind}`}
-                        checked={form.enabled}
-                        onCheckedChange={(value) => setField("enabled", value)}
-                        disabled={isMutating || pending === "save"}
-                      />
-                      <Label htmlFor={`s-route-enabled-${kind}`} className="text-[11px] text-muted-foreground">
-                        Enable immediately
-                      </Label>
-                    </div>
                     {formErrors.form || formError ? (
-                      <p className="text-[12px] text-destructive">{formErrors.form ?? formError}</p>
+                      <p className="text-[11.5px] text-destructive">{formErrors.form ?? formError}</p>
                     ) : null}
                     <div className="flex items-center gap-2">
                       <Button
                         size="sm"
-                        className="h-7 text-[11px]"
+                        className="h-7 gap-1 text-[11px]"
                         disabled={!canMutate || isMutating || pending === "save"}
                         onClick={() => void save()}
                       >

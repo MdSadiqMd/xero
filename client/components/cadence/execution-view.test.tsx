@@ -288,7 +288,7 @@ function createWorkspaceHarness(options?: {
         folder('src', '/src', [file('main.tsx', '/src/main.tsx')]),
       ]),
   )
-  let currentFileContents = {
+  let currentFileContents: Record<string, string> = {
     '/README.md': '# Cadence\n',
     '/src/main.tsx': 'console.log("hello")\n',
     ...(options?.fileContents ?? {}),
