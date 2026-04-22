@@ -13,11 +13,13 @@ import type {
   NotificationRouteHealthView,
   NotificationRouteMutationStatus,
   OperatorActionErrorView,
+  ProviderModelCatalogLoadStatus,
   ProviderProfilesLoadStatus,
   ProviderProfilesSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import {
   getActiveProviderProfile,
+  type ProviderModelCatalogDto,
   type ProviderProfilesDto,
   type RuntimeSessionView,
   type UpsertNotificationRouteRequestDto,
@@ -80,6 +82,9 @@ export interface OnboardingFlowProps {
   providerProfilesLoadError: OperatorActionErrorView | null
   providerProfilesSaveStatus: ProviderProfilesSaveStatus
   providerProfilesSaveError: OperatorActionErrorView | null
+  providerModelCatalogs: Record<string, ProviderModelCatalogDto>
+  providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
+  providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
   runtimeSession: RuntimeSessionView | null
   project: ImportedProjectView | null
   isImporting: boolean
@@ -91,6 +96,10 @@ export interface OnboardingFlowProps {
   notificationRouteMutationError: OperatorActionErrorView | null
   onImportProject: () => Promise<void>
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
+  onRefreshProviderModelCatalog?: (
+    profileId: string,
+    options?: { force?: boolean },
+  ) => Promise<ProviderModelCatalogDto>
   onUpsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
   onStartLogin?: () => Promise<RuntimeSessionView | null>
@@ -108,6 +117,9 @@ export function OnboardingFlow({
   providerProfilesLoadError,
   providerProfilesSaveStatus,
   providerProfilesSaveError,
+  providerModelCatalogs,
+  providerModelCatalogLoadStatuses,
+  providerModelCatalogLoadErrors,
   runtimeSession,
   project,
   isImporting,
@@ -119,6 +131,7 @@ export function OnboardingFlow({
   notificationRouteMutationError,
   onImportProject,
   onRefreshProviderProfiles,
+  onRefreshProviderModelCatalog,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
   onStartLogin,
@@ -190,9 +203,13 @@ export function OnboardingFlow({
               providerProfilesLoadError={providerProfilesLoadError}
               providerProfilesSaveStatus={providerProfilesSaveStatus}
               providerProfilesSaveError={providerProfilesSaveError}
+              providerModelCatalogs={providerModelCatalogs}
+              providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
+              providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
               runtimeSession={runtimeSession}
               hasSelectedProject={Boolean(project?.path?.trim())}
               onRefreshProviderProfiles={onRefreshProviderProfiles}
+              onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
               onUpsertProviderProfile={onUpsertProviderProfile}
               onSetActiveProviderProfile={onSetActiveProviderProfile}
               onStartLogin={onStartLogin}

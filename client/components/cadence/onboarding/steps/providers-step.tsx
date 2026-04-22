@@ -1,9 +1,11 @@
 import type {
   OperatorActionErrorView,
+  ProviderModelCatalogLoadStatus,
   ProviderProfilesLoadStatus,
   ProviderProfilesSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import type {
+  ProviderModelCatalogDto,
   ProviderProfilesDto,
   RuntimeSessionView,
   UpsertProviderProfileRequestDto,
@@ -16,9 +18,16 @@ interface ProvidersStepProps {
   providerProfilesLoadError: OperatorActionErrorView | null
   providerProfilesSaveStatus: ProviderProfilesSaveStatus
   providerProfilesSaveError: OperatorActionErrorView | null
+  providerModelCatalogs: Record<string, ProviderModelCatalogDto>
+  providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
+  providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
   runtimeSession?: RuntimeSessionView | null
   hasSelectedProject?: boolean
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
+  onRefreshProviderModelCatalog?: (
+    profileId: string,
+    options?: { force?: boolean },
+  ) => Promise<ProviderModelCatalogDto>
   onUpsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
   onStartLogin?: () => Promise<RuntimeSessionView | null>
@@ -31,9 +40,13 @@ export function ProvidersStep({
   providerProfilesLoadError,
   providerProfilesSaveStatus,
   providerProfilesSaveError,
+  providerModelCatalogs,
+  providerModelCatalogLoadStatuses,
+  providerModelCatalogLoadErrors,
   runtimeSession = null,
   hasSelectedProject = false,
   onRefreshProviderProfiles,
+  onRefreshProviderModelCatalog,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
   onStartLogin,
@@ -53,7 +66,11 @@ export function ProvidersStep({
           providerProfilesLoadError={providerProfilesLoadError}
           providerProfilesSaveStatus={providerProfilesSaveStatus}
           providerProfilesSaveError={providerProfilesSaveError}
+          providerModelCatalogs={providerModelCatalogs}
+          providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
+          providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
           onRefreshProviderProfiles={onRefreshProviderProfiles}
+          onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
           onUpsertProviderProfile={onUpsertProviderProfile}
           onSetActiveProviderProfile={onSetActiveProviderProfile}
           runtimeSession={runtimeSession}

@@ -1,11 +1,11 @@
 "use client"
 
 import { useCallback, useMemo, useRef, useState } from "react"
-import { Search } from "lucide-react"
+import { ChevronLeft, Play, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const MIN_WIDTH = 200
-const MAX_WIDTH = 520
+const MAX_WIDTH = 1200
 const DEFAULT_WIDTH = 256
 
 // ---------------------------------------------------------------------------
@@ -46,14 +46,31 @@ function PixelArt({ glyph }: { glyph: PixelGlyph }) {
 }
 
 // ---------------------------------------------------------------------------
-// Catalog (mockup only)
+// Catalog (mockup only). Data is player-centric: best score, runs, session
+// history, trend — not encyclopedia metadata.
 // ---------------------------------------------------------------------------
+
+interface LeaderboardEntry {
+  name: string
+  score: string
+  you?: boolean
+}
+
+interface GameStats {
+  personalBest: string
+  runs: number
+  timePlayed: string
+  modes: string[]
+  leaderboard: LeaderboardEntry[] // pre-sorted, rank 1 first
+  trend: number[] // last 10 runs, 0–100 normalized
+}
 
 interface Game {
   id: string
   title: string
   tagline: string
   glyph: PixelGlyph
+  stats: GameStats
 }
 
 const GAMES: Game[] = [
@@ -74,6 +91,20 @@ const GAMES: Game[] = [
         "........",
       ],
     },
+    stats: {
+      personalBest: "2,480",
+      runs: 17,
+      timePlayed: "42m",
+      modes: ["Classic", "Endless", "Marathon"],
+      leaderboard: [
+        { name: "Maya", score: "2,840" },
+        { name: "Andrew", score: "2,480", you: true },
+        { name: "Joel", score: "1,980" },
+        { name: "Priya", score: "1,720" },
+        { name: "Dante", score: "1,420" },
+      ],
+      trend: [30, 45, 22, 58, 40, 62, 51, 48, 78, 100],
+    },
   },
   {
     id: "space-invaders",
@@ -91,6 +122,20 @@ const GAMES: Game[] = [
         "G.G..G.G",
         "........",
       ],
+    },
+    stats: {
+      personalBest: "9,870",
+      runs: 8,
+      timePlayed: "18m",
+      modes: ["Classic", "Waves"],
+      leaderboard: [
+        { name: "Andrew", score: "9,870", you: true },
+        { name: "Rin", score: "8,420" },
+        { name: "Maya", score: "6,980" },
+        { name: "Joel", score: "5,420" },
+        { name: "Sam", score: "4,080" },
+      ],
+      trend: [40, 30, 55, 48, 62, 70, 58, 75, 82, 100],
     },
   },
   {
@@ -110,6 +155,20 @@ const GAMES: Game[] = [
         "W......W",
       ],
     },
+    stats: {
+      personalBest: "21 – 14",
+      runs: 5,
+      timePlayed: "12m",
+      modes: ["1P vs CPU", "2P local"],
+      leaderboard: [
+        { name: "Joel", score: "21 – 8" },
+        { name: "Andrew", score: "21 – 14", you: true },
+        { name: "Maya", score: "21 – 17" },
+        { name: "Priya", score: "21 – 18" },
+        { name: "Sam", score: "21 – 19" },
+      ],
+      trend: [40, 60, 50, 45, 70, 62, 55, 80, 72, 100],
+    },
   },
   {
     id: "snake",
@@ -127,6 +186,20 @@ const GAMES: Game[] = [
         ".....GG.",
         "......GA",
       ],
+    },
+    stats: {
+      personalBest: "1,420",
+      runs: 23,
+      timePlayed: "55m",
+      modes: ["Classic", "Walls off", "Speedrun"],
+      leaderboard: [
+        { name: "Rin", score: "1,680" },
+        { name: "Priya", score: "1,520" },
+        { name: "Andrew", score: "1,420", you: true },
+        { name: "Maya", score: "1,120" },
+        { name: "Joel", score: "880" },
+      ],
+      trend: [20, 35, 45, 30, 52, 68, 48, 82, 65, 95],
     },
   },
   {
@@ -146,6 +219,20 @@ const GAMES: Game[] = [
         "P.P.P.P.",
       ],
     },
+    stats: {
+      personalBest: "24,700",
+      runs: 6,
+      timePlayed: "22m",
+      modes: ["Classic", "Championship"],
+      leaderboard: [
+        { name: "Andrew", score: "24,700", you: true },
+        { name: "Joel", score: "18,320" },
+        { name: "Maya", score: "14,810" },
+        { name: "Dante", score: "11,400" },
+        { name: "Sam", score: "9,240" },
+      ],
+      trend: [30, 45, 55, 48, 62, 70, 75, 80, 88, 100],
+    },
   },
   {
     id: "breakout",
@@ -163,6 +250,20 @@ const GAMES: Game[] = [
         "........",
         "..WWWW..",
       ],
+    },
+    stats: {
+      personalBest: "1,980",
+      runs: 9,
+      timePlayed: "16m",
+      modes: ["Classic", "Endless"],
+      leaderboard: [
+        { name: "Maya", score: "2,240" },
+        { name: "Andrew", score: "1,980", you: true },
+        { name: "Joel", score: "1,520" },
+        { name: "Priya", score: "1,240" },
+        { name: "Rin", score: "980" },
+      ],
+      trend: [25, 40, 32, 55, 48, 62, 58, 70, 85, 100],
     },
   },
   {
@@ -182,6 +283,20 @@ const GAMES: Game[] = [
         ".....WWW",
       ],
     },
+    stats: {
+      personalBest: "6,450",
+      runs: 4,
+      timePlayed: "9m",
+      modes: ["Classic"],
+      leaderboard: [
+        { name: "Andrew", score: "6,450", you: true },
+        { name: "Dante", score: "5,120" },
+        { name: "Joel", score: "4,210" },
+        { name: "Rin", score: "3,680" },
+        { name: "Maya", score: "3,080" },
+      ],
+      trend: [20, 38, 30, 45, 42, 55, 62, 70, 65, 100],
+    },
   },
   {
     id: "minesweeper",
@@ -199,6 +314,20 @@ const GAMES: Game[] = [
         "GLGLGLGL",
         "LGLGLRLG",
       ],
+    },
+    stats: {
+      personalBest: "128s",
+      runs: 31,
+      timePlayed: "1h 12m",
+      modes: ["Beginner", "Intermediate", "Expert"],
+      leaderboard: [
+        { name: "Andrew", score: "128s", you: true },
+        { name: "Joel", score: "149s" },
+        { name: "Rin", score: "167s" },
+        { name: "Maya", score: "198s" },
+        { name: "Priya", score: "212s" },
+      ],
+      trend: [50, 45, 60, 52, 68, 62, 75, 72, 88, 100],
     },
   },
   {
@@ -218,6 +347,20 @@ const GAMES: Game[] = [
         "..G..G..",
       ],
     },
+    stats: {
+      personalBest: "4,300",
+      runs: 3,
+      timePlayed: "7m",
+      modes: ["Classic"],
+      leaderboard: [
+        { name: "Andrew", score: "4,300", you: true },
+        { name: "Priya", score: "3,480" },
+        { name: "Maya", score: "2,840" },
+        { name: "Joel", score: "2,120" },
+        { name: "Sam", score: "1,920" },
+      ],
+      trend: [15, 25, 40, 35, 50, 55, 62, 70, 82, 100],
+    },
   },
   {
     id: "galaga",
@@ -235,6 +378,20 @@ const GAMES: Game[] = [
         ".M.WW.M.",
         "M......M",
       ],
+    },
+    stats: {
+      personalBest: "15,780",
+      runs: 5,
+      timePlayed: "14m",
+      modes: ["Classic", "Rapid fire"],
+      leaderboard: [
+        { name: "Maya", score: "17,420" },
+        { name: "Andrew", score: "15,780", you: true },
+        { name: "Dante", score: "12,850" },
+        { name: "Joel", score: "9,280" },
+        { name: "Rin", score: "7,940" },
+      ],
+      trend: [30, 42, 55, 48, 62, 68, 70, 82, 78, 100],
     },
   },
   {
@@ -254,6 +411,19 @@ const GAMES: Game[] = [
         "..G..G..",
       ],
     },
+    stats: {
+      personalBest: "8,200",
+      runs: 2,
+      timePlayed: "5m",
+      modes: ["Classic"],
+      leaderboard: [
+        { name: "Andrew", score: "8,200", you: true },
+        { name: "Joel", score: "6,540" },
+        { name: "Maya", score: "5,310" },
+        { name: "Rin", score: "4,180" },
+      ],
+      trend: [40, 55, 70, 60, 75, 68, 80, 90, 85, 100],
+    },
   },
   {
     id: "dig-dug",
@@ -272,6 +442,20 @@ const GAMES: Game[] = [
         "SSSSSSSS",
       ],
     },
+    stats: {
+      personalBest: "3,650",
+      runs: 4,
+      timePlayed: "11m",
+      modes: ["Classic"],
+      leaderboard: [
+        { name: "Andrew", score: "3,650", you: true },
+        { name: "Dante", score: "3,180" },
+        { name: "Maya", score: "2,940" },
+        { name: "Joel", score: "2,120" },
+        { name: "Priya", score: "1,540" },
+      ],
+      trend: [20, 35, 42, 48, 55, 60, 72, 68, 88, 100],
+    },
   },
 ]
 
@@ -283,8 +467,10 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
   const [query, setQuery] = useState("")
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
+  const [selectedGameId, setSelectedGameId] = useState<string | null>(null)
   const widthRef = useRef(width)
   widthRef.current = width
+  const widthBeforeSelectRef = useRef<number | null>(null)
 
   const handleResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -327,6 +513,30 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
     })
   }, [])
 
+  const handleSelectGame = useCallback((gameId: string) => {
+    if (typeof window !== "undefined") {
+      widthBeforeSelectRef.current = widthRef.current
+      const target = Math.round(window.innerWidth / 2)
+      const clamped = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, target))
+      setWidth(clamped)
+    }
+    setSelectedGameId(gameId)
+  }, [])
+
+  const handleBack = useCallback(() => {
+    const prev = widthBeforeSelectRef.current
+    if (prev !== null) {
+      setWidth(prev)
+      widthBeforeSelectRef.current = null
+    }
+    setSelectedGameId(null)
+  }, [])
+
+  const selectedGame = useMemo(
+    () => (selectedGameId ? GAMES.find((g) => g.id === selectedGameId) ?? null : null),
+    [selectedGameId],
+  )
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return GAMES
@@ -359,13 +569,48 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
         role="separator"
         tabIndex={0}
       />
+
+      {selectedGame ? (
+        <GameDetail game={selectedGame} onBack={handleBack} />
+      ) : (
+        <GameList
+          filtered={filtered}
+          onQueryChange={setQuery}
+          onSelect={handleSelectGame}
+          query={query}
+          total={GAMES.length}
+        />
+      )}
+    </aside>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// List view
+// ---------------------------------------------------------------------------
+
+function GameList({
+  filtered,
+  onQueryChange,
+  onSelect,
+  query,
+  total,
+}: {
+  filtered: Game[]
+  onQueryChange: (value: string) => void
+  onSelect: (gameId: string) => void
+  query: string
+  total: number
+}) {
+  return (
+    <>
       <div className="flex h-10 items-center justify-between border-b border-border/70 px-3">
         <div className="flex items-center gap-1.5">
           <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
             Arcade
           </span>
           <span className="rounded-full bg-muted/80 px-1.5 py-[1px] font-mono text-[10px] leading-none tabular-nums text-muted-foreground">
-            {GAMES.length}
+            {total}
           </span>
         </div>
       </div>
@@ -379,7 +624,7 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
           <input
             aria-label="Search games"
             className="h-7 w-full rounded-md border border-border/70 bg-background/40 pl-7 pr-2 text-[11.5px] text-foreground placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none"
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Search"
             type="search"
             value={query}
@@ -396,23 +641,24 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
           <ul className="flex flex-col">
             {filtered.map((game) => (
               <li key={game.id}>
-                <GameRow game={game} />
+                <GameRow game={game} onSelect={onSelect} />
               </li>
             ))}
           </ul>
         )}
       </div>
-    </aside>
+    </>
   )
 }
 
-function GameRow({ game }: { game: Game }) {
+function GameRow({ game, onSelect }: { game: Game; onSelect: (gameId: string) => void }) {
   return (
     <button
       className={cn(
         "group flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors",
         "hover:bg-secondary/50",
       )}
+      onClick={() => onSelect(game.id)}
       type="button"
     >
       <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border/70 bg-background/60 p-0.5">
@@ -427,5 +673,216 @@ function GameRow({ game }: { game: Game }) {
         </div>
       </div>
     </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Detail view — player dashboard
+// ---------------------------------------------------------------------------
+
+function GameDetail({ game, onBack }: { game: Game; onBack: () => void }) {
+  const [mode, setMode] = useState(game.stats.modes[0])
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 pl-1.5 pr-3">
+        <button
+          aria-label="Back to games"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+          onClick={onBack}
+          type="button"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <div className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-sm border border-border/70 bg-background/60 p-[1px]">
+          <PixelArt glyph={game.glyph} />
+        </div>
+        <span className="truncate text-[12.5px] font-medium text-foreground">{game.title}</span>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
+        <div className="flex shrink-0 items-center justify-center bg-background/40 px-6 py-7">
+          <GameCanvas glyph={game.glyph} />
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center justify-center gap-1 border-b border-border/70 px-4 py-2.5">
+          {game.stats.modes.map((m) => (
+            <button
+              className={cn(
+                "rounded-full px-3 py-1 text-[11px] font-medium transition-colors",
+                mode === m
+                  ? "bg-secondary text-foreground"
+                  : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+              )}
+              key={m}
+              onClick={() => setMode(m)}
+              type="button"
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-3 gap-px border-b border-border/70 bg-border/60">
+          <StatCell label="Personal best" value={game.stats.personalBest} highlight />
+          <StatCell label="Runs" value={String(game.stats.runs)} />
+          <StatCell label="Time played" value={game.stats.timePlayed} />
+        </div>
+
+        <section className="border-b border-border/70 px-4 py-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Leaderboard
+            </div>
+            <button
+              className="text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+              type="button"
+            >
+              Full board →
+            </button>
+          </div>
+          <ul className="flex flex-col gap-px">
+            {game.stats.leaderboard.map((entry, index) => {
+              const rank = index + 1
+              return (
+                <li
+                  className={cn(
+                    "flex items-center gap-2.5 rounded-sm px-1.5 py-1.5 transition-colors",
+                    entry.you ? "bg-primary/10" : "hover:bg-secondary/40",
+                  )}
+                  key={`${entry.name}-${index}`}
+                >
+                  <span
+                    className={cn(
+                      "w-4 shrink-0 text-center font-mono text-[11px] tabular-nums",
+                      rank === 1 ? "text-primary" : "text-muted-foreground",
+                    )}
+                  >
+                    {rank}
+                  </span>
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate text-[12px]",
+                      entry.you ? "font-medium text-foreground" : "text-foreground/85",
+                    )}
+                  >
+                    {entry.name}
+                  </span>
+                  {entry.you ? (
+                    <span className="rounded-sm bg-primary/20 px-1 py-[1px] font-mono text-[9px] uppercase tracking-[0.14em] text-primary">
+                      You
+                    </span>
+                  ) : null}
+                  <span className="font-mono text-[11.5px] tabular-nums text-foreground/90">
+                    {entry.score}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+
+        <section className="px-4 py-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Last 10 runs
+            </div>
+            <div className="font-mono text-[10px] tabular-nums text-muted-foreground">
+              trend
+            </div>
+          </div>
+          <Sparkline data={game.stats.trend} />
+        </section>
+      </div>
+    </div>
+  )
+}
+
+function GameCanvas({ glyph }: { glyph: PixelGlyph }) {
+  return (
+    <button
+      aria-label="Play"
+      className="group relative flex aspect-[4/3] w-full max-w-xl items-center justify-center overflow-hidden rounded-md border border-border bg-black transition-colors hover:border-primary/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      type="button"
+    >
+      <div className="flex h-2/3 w-2/3 items-center justify-center transition-opacity group-hover:opacity-60">
+        <PixelArt glyph={glyph} />
+      </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 animate-pulse text-center font-mono text-[10px] uppercase tracking-[0.28em] text-foreground/55 transition-opacity group-hover:opacity-0">
+        Press Start
+      </div>
+
+      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/45 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+        <div className="flex h-14 w-14 items-center justify-center rounded-full border border-white/70 bg-black/50">
+          <Play className="h-5 w-5 fill-current text-white" />
+        </div>
+        <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-white/80">
+          Click to play
+        </span>
+      </div>
+
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 opacity-25"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 3px)",
+        }}
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{ boxShadow: "inset 0 0 60px rgba(0,0,0,0.6)" }}
+      />
+    </button>
+  )
+}
+
+function StatCell({
+  label,
+  value,
+  highlight = false,
+}: {
+  label: string
+  value: string
+  highlight?: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-1 bg-sidebar px-3 py-2.5">
+      <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {label}
+      </span>
+      <span
+        className={cn(
+          "font-mono text-[14.5px] font-medium tabular-nums leading-none",
+          highlight ? "text-primary" : "text-foreground/90",
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function Sparkline({ data }: { data: number[] }) {
+  const max = Math.max(...data, 1)
+  return (
+    <div className="flex h-12 items-end gap-1">
+      {data.map((v, i) => {
+        const isLast = i === data.length - 1
+        const height = Math.max(8, Math.round((v / max) * 100))
+        return (
+          <div
+            className={cn(
+              "flex-1 rounded-sm transition-colors",
+              isLast ? "bg-primary" : "bg-primary/35 hover:bg-primary/60",
+            )}
+            key={i}
+            style={{ height: `${height}%` }}
+            title={`Run ${i + 1}`}
+          />
+        )
+      })}
+    </div>
   )
 }

@@ -38,6 +38,9 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     providerProfilesLoadError,
     providerProfilesSaveStatus,
     providerProfilesSaveError,
+    providerModelCatalogs,
+    providerModelCatalogLoadStatuses,
+    providerModelCatalogLoadErrors,
     isDesktopRuntime,
     selectProject,
     importProject,
@@ -61,6 +64,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     resolveOperatorAction,
     resumeOperatorRun,
     refreshProviderProfiles,
+    refreshProviderModelCatalog,
     upsertProviderProfile,
     setActiveProviderProfile,
     refreshNotificationRoutes,
@@ -221,6 +225,9 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           providerProfilesLoadError={providerProfilesLoadError}
           providerProfilesSaveStatus={providerProfilesSaveStatus}
           providerProfilesSaveError={providerProfilesSaveError}
+          providerModelCatalogs={providerModelCatalogs}
+          providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
+          providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
           runtimeSession={agentView?.runtimeSession ?? null}
           project={onboardingProject}
           isImporting={isImporting}
@@ -232,6 +239,9 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           notificationRouteMutationError={agentView?.notificationRouteMutationError ?? null}
           onImportProject={() => importProject()}
           onRefreshProviderProfiles={(options) => refreshProviderProfiles(options)}
+          onRefreshProviderModelCatalog={(profileId, options) =>
+            refreshProviderModelCatalog(profileId, options)
+          }
           onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
           onSetActiveProviderProfile={(profileId) => setActiveProviderProfile(profileId)}
           onStartLogin={() => startOpenAiLogin()}
@@ -286,7 +296,13 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         providerProfilesLoadError={providerProfilesLoadError}
         providerProfilesSaveStatus={providerProfilesSaveStatus}
         providerProfilesSaveError={providerProfilesSaveError}
+        providerModelCatalogs={providerModelCatalogs}
+        providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
+        providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
         onRefreshProviderProfiles={(options) => refreshProviderProfiles(options)}
+        onRefreshProviderModelCatalog={(profileId, options) =>
+          refreshProviderModelCatalog(profileId, options)
+        }
         onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
         onSetActiveProviderProfile={(profileId) => setActiveProviderProfile(profileId)}
         onStartLogin={() => startOpenAiLogin()}

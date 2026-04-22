@@ -19,9 +19,20 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import type {
   OperatorActionErrorView,
+  ProviderModelCatalogLoadStatus,
   ProviderProfilesLoadStatus,
   ProviderProfilesSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
@@ -31,8 +42,11 @@ import {
 } from "@/src/features/cadence/use-cadence-desktop-state/runtime-provider"
 import {
   getActiveProviderProfile,
-  type ProviderProfileDto,
+  getProviderModelCatalogFetchedAt,
+  type ProviderModelCatalogDto,
+  type ProviderModelDto,
   type ProviderProfilesDto,
+  type ProviderProfileDto,
   type RuntimeSessionView,
   type UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
@@ -62,6 +76,35 @@ interface ProviderProfileCard {
   key: string
   catalog: ProviderCatalogEntry
   profile: ProviderProfileDto | null
+}
+
+interface ProviderModelChoice {
+  modelId: string
+  label: string
+  groupId: string
+  groupLabel: string
+  availability: "available" | "orphaned"
+  availabilityLabel: string
+}
+
+interface ProviderModelChoiceGroup {
+  id: string
+  label: string
+  items: ProviderModelChoice[]
+}
+
+interface ProviderModelCatalogState {
+  profileId: string | null
+  catalog: ProviderModelCatalogDto | null
+  loadStatus: ProviderModelCatalogLoadStatus
+  refreshError: OperatorActionErrorView | null
+  stateLabel: string
+  detail: string
+  tone: "default" | "warning"
+  fetchedAt: string | null
+  lastSuccessAt: string | null
+  choices: ProviderModelChoice[]
+  selectedChoice: ProviderModelChoice | null
 }
 
 const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
@@ -98,6 +141,21 @@ const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
     supported: false,
   },
 ]
+
+const MODEL_GROUP_LABELS: Record<string, string> = {
+  anthropic: "Anthropic",
+  deepseek: "DeepSeek",
+  google: "Google",
+  meta: "Meta",
+  "meta-llama": "Meta Llama",
+  mistral: "Mistral",
+  moonshot: "Moonshot",
+  moonshotai: "Moonshot",
+  openai: "OpenAI",
+  openrouter: "OpenRouter",
+  "x-ai": "xAI",
+  xai: "xAI",
+}
 
 function errMsg(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim().length > 0) return error.message
@@ -225,13 +283,233 @@ function buildUpsertRequest(
   }
 }
 
+function getCatalogRefreshError(
+  catalog: ProviderModelCatalogDto | null,
+  loadError: OperatorActionErrorView | null,
+): OperatorActionErrorView | null {
+  if (catalog?.lastRefreshError) {
+    return {
+      code: catalog.lastRefreshError.code,
+      message: catalog.lastRefreshError.message,
+      retryable: catalog.lastRefreshError.retryable,
+    }
+  }
+
+  return loadError
+}
+
+function getModelGroupLabel(modelId: string, providerLabel: string): { groupId: string; groupLabel: string } {
+  const trimmedModelId = modelId.trim()
+  const namespace = trimmedModelId.includes("/") ? trimmedModelId.split("/")[0]?.trim() ?? "" : ""
+  if (namespace.length === 0) {
+    return {
+      groupId: providerLabel.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_") || "provider_models",
+      groupLabel: providerLabel,
+    }
+  }
+
+  const normalizedNamespace = namespace.toLowerCase()
+  const knownLabel = MODEL_GROUP_LABELS[normalizedNamespace]
+  if (knownLabel) {
+    return {
+      groupId: normalizedNamespace.replace(/[^a-z0-9]+/g, "_"),
+      groupLabel: knownLabel,
+    }
+  }
+
+  return {
+    groupId: normalizedNamespace.replace(/[^a-z0-9]+/g, "_"),
+    groupLabel: namespace,
+  }
+}
+
+function buildProviderModelChoice(model: ProviderModelDto, providerLabel: string): ProviderModelChoice | null {
+  const modelId = model.modelId.trim()
+  if (modelId.length === 0) {
+    return null
+  }
+
+  const displayName = model.displayName.trim() || modelId
+  const { groupId, groupLabel } = getModelGroupLabel(modelId, providerLabel)
+
+  return {
+    modelId,
+    label: displayName === modelId ? modelId : `${displayName} · ${modelId}`,
+    groupId,
+    groupLabel,
+    availability: "available",
+    availabilityLabel: "Available",
+  }
+}
+
+function buildOrphanedProviderModelChoice(modelId: string): ProviderModelChoice | null {
+  const trimmedModelId = modelId.trim()
+  if (trimmedModelId.length === 0) {
+    return null
+  }
+
+  return {
+    modelId: trimmedModelId,
+    label: `${trimmedModelId} · unavailable`,
+    groupId: "current_selection",
+    groupLabel: "Current selection",
+    availability: "orphaned",
+    availabilityLabel: "Unavailable",
+  }
+}
+
+function groupProviderModelChoices(choices: ProviderModelChoice[]): ProviderModelChoiceGroup[] {
+  const groups = new Map<string, ProviderModelChoiceGroup>()
+
+  for (const choice of choices) {
+    const existingGroup = groups.get(choice.groupId)
+    if (existingGroup) {
+      existingGroup.items.push(choice)
+      continue
+    }
+
+    groups.set(choice.groupId, {
+      id: choice.groupId,
+      label: choice.groupLabel,
+      items: [choice],
+    })
+  }
+
+  return Array.from(groups.values())
+}
+
+function getCardCatalogState(options: {
+  card: ProviderProfileCard
+  providerModelCatalogs: Record<string, ProviderModelCatalogDto>
+  providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
+  providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
+  selectedModelId: string | null
+}): ProviderModelCatalogState {
+  const profileId = options.card.profile?.profileId ?? options.card.catalog.defaultProfileId ?? null
+  const catalog = profileId ? options.providerModelCatalogs[profileId] ?? null : null
+  const loadStatus: ProviderModelCatalogLoadStatus = profileId
+    ? options.providerModelCatalogLoadStatuses[profileId] ?? "idle"
+    : "idle"
+  const refreshError = getCatalogRefreshError(
+    catalog,
+    profileId ? options.providerModelCatalogLoadErrors[profileId] ?? null : null,
+  )
+  const discoveredChoices: ProviderModelChoice[] = []
+  const seenModelIds = new Set<string>()
+
+  for (const model of catalog?.models ?? []) {
+    const nextChoice = buildProviderModelChoice(model, options.card.catalog.label)
+    if (!nextChoice || seenModelIds.has(nextChoice.modelId)) {
+      continue
+    }
+
+    seenModelIds.add(nextChoice.modelId)
+    discoveredChoices.push(nextChoice)
+  }
+
+  const selectedModelId = options.selectedModelId?.trim() ?? ""
+  const selectedDiscoveredChoice = selectedModelId
+    ? discoveredChoices.find((choice) => choice.modelId === selectedModelId) ?? null
+    : null
+  const selectedChoice =
+    selectedDiscoveredChoice ?? (selectedModelId ? buildOrphanedProviderModelChoice(selectedModelId) : null)
+  const choices =
+    selectedChoice && selectedChoice.availability === "orphaned"
+      ? [selectedChoice, ...discoveredChoices]
+      : discoveredChoices
+
+  if (catalog?.source === "live" && discoveredChoices.length > 0) {
+    return {
+      profileId,
+      catalog,
+      loadStatus,
+      refreshError,
+      stateLabel: "Live catalog",
+      detail:
+        loadStatus === "loading"
+          ? `Refreshing ${options.card.catalog.label} model discovery while keeping ${discoveredChoices.length} discovered model${
+              discoveredChoices.length === 1 ? "" : "s"
+            } visible.`
+          : `Showing ${discoveredChoices.length} discovered model${
+              discoveredChoices.length === 1 ? "" : "s"
+            } for ${options.card.profile?.label ?? options.card.catalog.label}.`,
+      tone: "default",
+      fetchedAt: getProviderModelCatalogFetchedAt(catalog),
+      lastSuccessAt: catalog.lastSuccessAt ?? null,
+      choices,
+      selectedChoice,
+    }
+  }
+
+  if (discoveredChoices.length > 0) {
+    return {
+      profileId,
+      catalog,
+      loadStatus,
+      refreshError,
+      stateLabel: catalog?.source === "cache" ? "Cached catalog" : "Stale catalog",
+      detail: refreshError?.message?.trim()
+        ? `${refreshError.message} Cadence is keeping the last successful model catalog for ${options.card.profile?.label ?? options.card.catalog.label} visible.`
+        : `Cadence is keeping the last successful model catalog for ${options.card.profile?.label ?? options.card.catalog.label} visible.`,
+      tone: "warning",
+      fetchedAt: getProviderModelCatalogFetchedAt(catalog),
+      lastSuccessAt: catalog?.lastSuccessAt ?? null,
+      choices,
+      selectedChoice,
+    }
+  }
+
+  if (loadStatus === "loading") {
+    return {
+      profileId,
+      catalog,
+      loadStatus,
+      refreshError,
+      stateLabel: "Catalog unavailable",
+      detail: `Loading the ${options.card.catalog.label} model catalog. Cadence is keeping configured model truth visible without reopening free-text editing.`,
+      tone: "default",
+      fetchedAt: getProviderModelCatalogFetchedAt(catalog),
+      lastSuccessAt: catalog?.lastSuccessAt ?? null,
+      choices,
+      selectedChoice,
+    }
+  }
+
+  const unavailableDetail = selectedChoice
+    ? `${selectedChoice.modelId} remains visible as the saved model, but discovery cannot confirm it right now.`
+    : `Cadence does not have a discovered model catalog for ${options.card.profile?.label ?? options.card.catalog.label} yet.`
+
+  return {
+    profileId,
+    catalog,
+    loadStatus,
+    refreshError,
+    stateLabel: "Catalog unavailable",
+    detail: refreshError?.message?.trim()
+      ? `${refreshError.message} ${unavailableDetail}`
+      : unavailableDetail,
+    tone: "warning",
+    fetchedAt: getProviderModelCatalogFetchedAt(catalog),
+    lastSuccessAt: catalog?.lastSuccessAt ?? null,
+    choices,
+    selectedChoice,
+  }
+}
+
 export interface ProviderProfileFormProps {
   providerProfiles: ProviderProfilesDto | null
   providerProfilesLoadStatus: ProviderProfilesLoadStatus
   providerProfilesLoadError: OperatorActionErrorView | null
   providerProfilesSaveStatus: ProviderProfilesSaveStatus
   providerProfilesSaveError: OperatorActionErrorView | null
+  providerModelCatalogs?: Record<string, ProviderModelCatalogDto>
+  providerModelCatalogLoadStatuses?: Record<string, ProviderModelCatalogLoadStatus>
+  providerModelCatalogLoadErrors?: Record<string, OperatorActionErrorView | null>
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
+  onRefreshProviderModelCatalog?: (
+    profileId: string,
+    options?: { force?: boolean },
+  ) => Promise<ProviderModelCatalogDto>
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
   runtimeSession?: RuntimeSessionView | null
@@ -249,7 +527,11 @@ export function ProviderProfileForm({
   providerProfilesLoadError,
   providerProfilesSaveStatus,
   providerProfilesSaveError,
+  providerModelCatalogs = {},
+  providerModelCatalogLoadStatuses = {},
+  providerModelCatalogLoadErrors = {},
   onRefreshProviderProfiles,
+  onRefreshProviderModelCatalog,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
   runtimeSession,
@@ -288,6 +570,25 @@ export function ProviderProfileForm({
   useEffect(() => {
     setAuthError(null)
   }, [providerProfiles?.activeProfileId])
+
+  useEffect(() => {
+    if (!onRefreshProviderModelCatalog) {
+      return
+    }
+
+    for (const card of cards) {
+      if (!card.profile) {
+        continue
+      }
+
+      const profileId = card.profile.profileId
+      const loadStatus = providerModelCatalogLoadStatuses[profileId] ?? "idle"
+      const hasCatalog = Boolean(providerModelCatalogs[profileId])
+      if (loadStatus === "idle" && !hasCatalog) {
+        void onRefreshProviderModelCatalog(profileId, { force: false }).catch(() => undefined)
+      }
+    }
+  }, [cards, onRefreshProviderModelCatalog, providerModelCatalogLoadStatuses, providerModelCatalogs])
 
   function getDraft(card: ProviderProfileCard): ProviderDraft {
     return drafts[card.key] ?? createDraft(card)
@@ -335,7 +636,7 @@ export function ProviderProfileForm({
       const isClearingKey = draft.clearOpenrouterApiKey
 
       if (!draft.modelId.trim()) {
-        setFormError("Model ID is required.")
+        setFormError("Choose a discovered model before saving.")
         return
       }
 
@@ -384,6 +685,16 @@ export function ProviderProfileForm({
     } catch {
       // Hook state surfaces the typed save error while the last truthful snapshot remains visible.
     }
+  }
+
+  async function handleRefreshCatalog(card: ProviderProfileCard) {
+    const profileId = card.profile?.profileId
+    if (!profileId || !onRefreshProviderModelCatalog) {
+      return
+    }
+
+    setFormError(null)
+    await onRefreshProviderModelCatalog(profileId, { force: true }).catch(() => undefined)
   }
 
   async function handleOpenAiConnect() {
@@ -534,6 +845,21 @@ export function ProviderProfileForm({
                     }
                   : null
             : null
+          const selectedModelId = (draft.modelId.trim() || card.profile?.modelId || card.catalog.defaultModelId || "").trim() || null
+          const cardCatalogState = getCardCatalogState({
+            card,
+            providerModelCatalogs,
+            providerModelCatalogLoadStatuses,
+            providerModelCatalogLoadErrors,
+            selectedModelId,
+          })
+          const modelChoiceGroups = groupProviderModelChoices(cardCatalogState.choices)
+          const isCatalogRefreshing = cardCatalogState.loadStatus === "loading"
+          const canRefreshCatalog = Boolean(onRefreshProviderModelCatalog && card.profile)
+          const catalogBadgeClassName =
+            cardCatalogState.tone === "warning"
+              ? "border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+              : "border border-border bg-secondary text-muted-foreground"
 
           return (
             <div
@@ -568,6 +894,9 @@ export function ProviderProfileForm({
                         {readinessBadge.label}
                       </Badge>
                     ) : null}
+                    <Badge className={cn("px-1.5 py-0 text-[10px] font-medium", catalogBadgeClassName)}>
+                      {cardCatalogState.stateLabel}
+                    </Badge>
                     {isOpenAi && isOpenAiConnected ? (
                       <Badge
                         variant="secondary"
@@ -597,6 +926,19 @@ export function ProviderProfileForm({
                     {card.profile ? <span>Profile ID: {card.profile.profileId}</span> : null}
                     {migratedAt ? <span>Migrated {migratedAt}</span> : null}
                   </div>
+
+                  <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                    <span className="font-medium text-foreground/80">{cardCatalogState.stateLabel}</span>
+                    {" · "}
+                    {cardCatalogState.detail}
+                  </p>
+
+                  {cardCatalogState.fetchedAt || cardCatalogState.lastSuccessAt ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+                      {cardCatalogState.fetchedAt ? <span>Fetched {cardCatalogState.fetchedAt}</span> : null}
+                      {cardCatalogState.lastSuccessAt ? <span>Last success {cardCatalogState.lastSuccessAt}</span> : null}
+                    </div>
+                  ) : null}
 
                   {inlineStatus ? (
                     <Alert
@@ -722,25 +1064,88 @@ export function ProviderProfileForm({
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor={`${card.key}-model`} className="text-[11px]">
-                      Model ID
-                    </Label>
-                    <Input
-                      id={`${card.key}-model`}
-                      className="h-8 font-mono text-[12px]"
-                      disabled={isSaving || isRefreshing || isOpenAi}
-                      onChange={(event) =>
-                        setDraft(card, {
-                          ...draft,
-                          modelId: event.target.value,
-                        })
-                      }
-                      placeholder={card.catalog.defaultModelId}
-                      value={isOpenAi ? card.catalog.defaultModelId ?? draft.modelId : draft.modelId}
-                    />
-                    <p className="text-[10px] text-muted-foreground">
-                      {isOpenAi ? "OpenAI Codex stays pinned to the desktop runtime model." : "Use the exact OpenRouter model slug."}
+                    <div className="flex items-center justify-between gap-3">
+                      <Label className="text-[11px]">Model</Label>
+                      {canRefreshCatalog ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-6 gap-1 px-2 text-[10px]"
+                          disabled={isSaving || isRefreshing || isCatalogRefreshing}
+                          onClick={() => void handleRefreshCatalog(card)}
+                        >
+                          {isCatalogRefreshing ? <LoaderCircle className="h-3 w-3 animate-spin" /> : null}
+                          Refresh models
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    {isOpenAi ? (
+                      <div className="rounded-md border border-border/80 bg-muted/25 p-3">
+                        <p className="text-[12px] font-medium text-foreground">OpenAI Codex</p>
+                        <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                          {card.catalog.defaultModelId ?? "openai_codex"}
+                        </p>
+                        <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+                          OpenAI Codex stays pinned to the desktop runtime model and renders as a single catalog-backed choice.
+                        </p>
+                      </div>
+                    ) : (
+                      <Select
+                        disabled={isSaving || isRefreshing || cardCatalogState.choices.length === 0}
+                        value={draft.modelId}
+                        onValueChange={(value) =>
+                          setDraft(card, {
+                            ...draft,
+                            modelId: value,
+                          })
+                        }
+                      >
+                        <SelectTrigger
+                          aria-label={`${card.catalog.label} model choice`}
+                          className="h-8 w-full text-[12px]"
+                          size="sm"
+                        >
+                          <SelectValue placeholder="No discovered model available" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {modelChoiceGroups.map((group, index) => (
+                            <div key={group.id}>
+                              {index > 0 ? <SelectSeparator /> : null}
+                              <SelectGroup>
+                                <SelectLabel>{group.label}</SelectLabel>
+                                {group.items.map((choice) => (
+                                  <SelectItem key={choice.modelId} value={choice.modelId}>
+                                    {choice.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </div>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+
+                    <p className="text-[10px] leading-relaxed text-muted-foreground">
+                      <span className="font-medium text-foreground/80">{cardCatalogState.stateLabel}</span>
+                      {" · "}
+                      {cardCatalogState.detail}
                     </p>
+                    {cardCatalogState.selectedChoice?.availability === "orphaned" ? (
+                      <Badge
+                        variant="outline"
+                        className="mt-1 border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[10px] text-amber-600 dark:text-amber-300"
+                      >
+                        {cardCatalogState.selectedChoice.availabilityLabel} choice
+                      </Badge>
+                    ) : null}
+                    {cardCatalogState.fetchedAt || cardCatalogState.lastSuccessAt ? (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+                        {cardCatalogState.fetchedAt ? <span>Fetched {cardCatalogState.fetchedAt}</span> : null}
+                        {cardCatalogState.lastSuccessAt ? <span>Last success {cardCatalogState.lastSuccessAt}</span> : null}
+                      </div>
+                    ) : null}
                   </div>
 
                   {isOpenRouter ? (
