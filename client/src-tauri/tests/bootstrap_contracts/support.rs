@@ -21,7 +21,9 @@ pub(crate) use cadence_desktop_lib::{
         NotificationRouteKindDto, OperatorApprovalDto, OperatorApprovalStatus,
         PlanningLifecycleProjectionDto, PlanningLifecycleStageDto, PlanningLifecycleStageKindDto,
         ProjectIdRequestDto, ProjectSnapshotResponseDto, ProjectSummaryDto, ProjectUpdateReason,
-        ProjectUpdatedPayloadDto, RecordNotificationDispatchOutcomeRequestDto,
+        ProjectUpdatedPayloadDto, ProviderProfileDto, ProviderProfileReadinessDto,
+        ProviderProfileReadinessStatusDto, ProviderProfilesDto, ProviderProfilesMigrationDto,
+        RecordNotificationDispatchOutcomeRequestDto,
         RecordNotificationDispatchOutcomeResponseDto, RepositoryDiffRequestDto,
         RepositoryDiffResponseDto, RepositoryDiffScope, RepositoryStatusChangedPayloadDto,
         RepositoryStatusEntryDto, RepositoryStatusResponseDto, RepositorySummaryDto,
@@ -31,14 +33,16 @@ pub(crate) use cadence_desktop_lib::{
         RuntimeRunCheckpointKindDto, RuntimeRunDiagnosticDto, RuntimeRunDto, RuntimeRunStatusDto,
         RuntimeRunTransportDto, RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto,
         RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeUpdatedPayloadDto,
-        StartAutonomousRunRequestDto, StartOpenAiLoginRequestDto, StartRuntimeRunRequestDto,
-        StopRuntimeRunRequestDto, SubmitNotificationReplyRequestDto,
-        SubmitNotificationReplyResponseDto, SubmitOpenAiCallbackRequestDto,
-        SubscribeRuntimeStreamRequestDto, SubscribeRuntimeStreamResponseDto,
+        SetActiveProviderProfileRequestDto, StartAutonomousRunRequestDto,
+        StartOpenAiLoginRequestDto, StartRuntimeRunRequestDto, StopRuntimeRunRequestDto,
+        SubmitNotificationReplyRequestDto, SubmitNotificationReplyResponseDto,
+        SubmitOpenAiCallbackRequestDto, SubscribeRuntimeStreamRequestDto,
+        SubscribeRuntimeStreamResponseDto,
         SyncNotificationAdaptersRequestDto, SyncNotificationAdaptersResponseDto,
         ToolResultSummaryDto, UpsertNotificationRouteCredentialsRequestDto,
         UpsertNotificationRouteCredentialsResponseDto, UpsertNotificationRouteRequestDto,
-        UpsertNotificationRouteResponseDto, UpsertWorkflowGraphRequestDto,
+        UpsertNotificationRouteResponseDto, UpsertProviderProfileRequestDto,
+        UpsertWorkflowGraphRequestDto,
         UpsertWorkflowGraphResponseDto, VerificationRecordDto, VerificationRecordStatus,
         WebToolResultContentKindDto, WebToolResultSummaryDto, WorkflowAutomaticDispatchOutcomeDto,
         WorkflowAutomaticDispatchPackageOutcomeDto, WorkflowAutomaticDispatchPackageStatusDto,
@@ -52,16 +56,19 @@ pub(crate) use cadence_desktop_lib::{
         GET_REPOSITORY_DIFF_COMMAND, GET_REPOSITORY_STATUS_COMMAND,
         GET_RUNTIME_AUTH_STATUS_COMMAND, GET_RUNTIME_RUN_COMMAND, IMPORT_REPOSITORY_COMMAND,
         LIST_NOTIFICATION_DISPATCHES_COMMAND, LIST_NOTIFICATION_ROUTES_COMMAND,
-        LIST_PROJECTS_COMMAND, LIST_PROJECT_FILES_COMMAND, PROJECT_UPDATED_EVENT,
+        LIST_PROJECTS_COMMAND, LIST_PROJECT_FILES_COMMAND, LIST_PROVIDER_PROFILES_COMMAND,
+        PROJECT_UPDATED_EVENT,
         READ_PROJECT_FILE_COMMAND, RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND,
         REFRESH_OPENAI_CODEX_AUTH_COMMAND, REGISTERED_COMMAND_NAMES, REMOVE_PROJECT_COMMAND,
         RENAME_PROJECT_ENTRY_COMMAND, REPOSITORY_STATUS_CHANGED_EVENT,
         RESOLVE_OPERATOR_ACTION_COMMAND, RESUME_OPERATOR_RUN_COMMAND, RUNTIME_RUN_UPDATED_EVENT,
-        RUNTIME_UPDATED_EVENT, START_AUTONOMOUS_RUN_COMMAND, START_OPENAI_CODEX_AUTH_COMMAND,
+        RUNTIME_UPDATED_EVENT, SET_ACTIVE_PROVIDER_PROFILE_COMMAND,
+        START_AUTONOMOUS_RUN_COMMAND, START_OPENAI_CODEX_AUTH_COMMAND,
         START_RUNTIME_RUN_COMMAND, STOP_RUNTIME_RUN_COMMAND, SUBMIT_NOTIFICATION_REPLY_COMMAND,
         SUBSCRIBE_RUNTIME_STREAM_COMMAND, SYNC_NOTIFICATION_ADAPTERS_COMMAND,
         UPSERT_NOTIFICATION_ROUTE_COMMAND, UPSERT_NOTIFICATION_ROUTE_CREDENTIALS_COMMAND,
-        UPSERT_WORKFLOW_GRAPH_COMMAND, WRITE_PROJECT_FILE_COMMAND,
+        UPSERT_PROVIDER_PROFILE_COMMAND, UPSERT_WORKFLOW_GRAPH_COMMAND,
+        WRITE_PROJECT_FILE_COMMAND,
     },
     configure_builder_with_state,
     state::DesktopState,
@@ -73,6 +80,11 @@ pub(crate) fn build_mock_app() -> (tauri::App<tauri::test::MockRuntime>, TempDir
     let root = tempfile::tempdir().expect("temp dir");
     let registry_path = root.path().join("app-data").join("project-registry.json");
     let auth_store_path = root.path().join("app-data").join("openai-auth.json");
+    let provider_profiles_path = root.path().join("app-data").join("provider-profiles.json");
+    let provider_profile_credentials_path = root
+        .path()
+        .join("app-data")
+        .join("provider-profile-credentials.json");
     let credential_store_path = root
         .path()
         .join("app-data")
@@ -85,6 +97,8 @@ pub(crate) fn build_mock_app() -> (tauri::App<tauri::test::MockRuntime>, TempDir
     let state = DesktopState::default()
         .with_registry_file_override(registry_path)
         .with_auth_store_file_override(auth_store_path)
+        .with_provider_profiles_file_override(provider_profiles_path)
+        .with_provider_profile_credential_store_file_override(provider_profile_credentials_path)
         .with_notification_credential_store_file_override(credential_store_path)
         .with_runtime_settings_file_override(runtime_settings_path)
         .with_openrouter_credential_file_override(openrouter_credential_path);

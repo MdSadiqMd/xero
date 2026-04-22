@@ -1,13 +1,13 @@
 use tauri::{AppHandle, Runtime, State};
 
 use crate::{
-    commands::{CommandError, CommandResult, RuntimeSettingsDto, UpsertRuntimeSettingsRequestDto},
+    commands::{provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult, RuntimeSettingsDto, UpsertRuntimeSettingsRequestDto},
     provider_profiles::{
         build_openai_default_profile, build_openrouter_default_profile,
-        load_or_migrate_provider_profiles_from_paths, persist_provider_profiles_snapshot,
-        OpenRouterProfileCredentialEntry, ProviderProfileCredentialLink,
-        ProviderProfileRecord, ProviderProfilesSnapshot, OPENAI_CODEX_DEFAULT_PROFILE_ID,
-        OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
+        persist_provider_profiles_snapshot, OpenRouterProfileCredentialEntry,
+        ProviderProfileCredentialLink, ProviderProfileRecord, ProviderProfilesSnapshot,
+        OPENAI_CODEX_DEFAULT_PROFILE_ID, OPENROUTER_DEFAULT_PROFILE_ID,
+        OPENROUTER_FALLBACK_MODEL_ID,
     },
     runtime::{OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID},
     state::DesktopState,
@@ -23,19 +23,8 @@ pub fn upsert_runtime_settings<R: Runtime>(
 ) -> CommandResult<RuntimeSettingsDto> {
     let provider_profiles_path = state.provider_profiles_file(&app)?;
     let provider_profile_credentials_path = state.provider_profile_credential_store_file(&app)?;
-    let legacy_settings_path = state.runtime_settings_file(&app)?;
-    let legacy_openrouter_credentials_path = state.openrouter_credential_file(&app)?;
-    let legacy_openai_auth_path = state
-        .auth_store_file(&app)
-        .map_err(map_auth_store_error_to_command_error)?;
 
-    let current = load_or_migrate_provider_profiles_from_paths(
-        &provider_profiles_path,
-        &provider_profile_credentials_path,
-        &legacy_settings_path,
-        &legacy_openrouter_credentials_path,
-        &legacy_openai_auth_path,
-    )?;
+    let current = load_provider_profiles_snapshot(&app, state.inner())?;
 
     let next = apply_runtime_settings_update(&current, &request)?;
     persist_provider_profiles_snapshot(

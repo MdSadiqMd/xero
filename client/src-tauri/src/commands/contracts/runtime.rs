@@ -127,6 +127,55 @@ pub struct RuntimeSettingsDto {
     pub openrouter_api_key_configured: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderProfileReadinessStatusDto {
+    Ready,
+    Missing,
+    Malformed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderProfileReadinessDto {
+    pub ready: bool,
+    pub status: ProviderProfileReadinessStatusDto,
+    pub credential_updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderProfileDto {
+    pub profile_id: String,
+    pub provider_id: String,
+    pub label: String,
+    pub model_id: String,
+    pub active: bool,
+    pub readiness: ProviderProfileReadinessDto,
+    pub migrated_from_legacy: bool,
+    pub migrated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderProfilesMigrationDto {
+    pub source: String,
+    pub migrated_at: String,
+    pub runtime_settings_updated_at: Option<String>,
+    pub openrouter_credentials_updated_at: Option<String>,
+    pub openai_auth_updated_at: Option<String>,
+    pub openrouter_model_inferred: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderProfilesDto {
+    pub active_profile_id: String,
+    pub profiles: Vec<ProviderProfileDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<ProviderProfilesMigrationDto>,
+}
+
 pub type RuntimeAuthStatusDto = RuntimeSessionDto;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -179,6 +228,25 @@ pub struct UpsertRuntimeSettingsRequestDto {
     pub model_id: String,
     #[serde(default)]
     pub openrouter_api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpsertProviderProfileRequestDto {
+    pub profile_id: String,
+    pub provider_id: String,
+    pub label: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub openrouter_api_key: Option<String>,
+    #[serde(default)]
+    pub activate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetActiveProviderProfileRequestDto {
+    pub profile_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

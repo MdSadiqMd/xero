@@ -58,6 +58,7 @@ pub fn start_runtime_session<R: Runtime>(
         selection.provider,
         current.account_id.as_deref(),
         Some(&selection.settings),
+        Some(&selection.provider_profiles),
     ) {
         Ok(RuntimeProviderBindOutcome::Ready(binding)) => {
             let authenticated = runtime_from_provider(

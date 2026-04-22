@@ -631,6 +631,88 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         })
     );
 
+    let upsert_provider_profile_request = serde_json::to_value(UpsertProviderProfileRequestDto {
+        profile_id: "openrouter-work".into(),
+        provider_id: "openrouter".into(),
+        label: "OpenRouter Work".into(),
+        model_id: "openai/gpt-4.1-mini".into(),
+        openrouter_api_key: Some("credential-value-2".into()),
+        activate: true,
+    })
+    .expect("provider profile request should serialize");
+    assert_eq!(
+        upsert_provider_profile_request,
+        json!({
+            "profileId": "openrouter-work",
+            "providerId": "openrouter",
+            "label": "OpenRouter Work",
+            "modelId": "openai/gpt-4.1-mini",
+            "openrouterApiKey": "credential-value-2",
+            "activate": true
+        })
+    );
+
+    let set_active_profile_request = serde_json::to_value(SetActiveProviderProfileRequestDto {
+        profile_id: "openrouter-work".into(),
+    })
+    .expect("active profile request should serialize");
+    assert_eq!(set_active_profile_request, json!({ "profileId": "openrouter-work" }));
+
+    let provider_profiles_response = serde_json::to_value(ProviderProfilesDto {
+        active_profile_id: "openrouter-work".into(),
+        profiles: vec![ProviderProfileDto {
+            profile_id: "openrouter-work".into(),
+            provider_id: "openrouter".into(),
+            label: "OpenRouter Work".into(),
+            model_id: "openai/gpt-4.1-mini".into(),
+            active: true,
+            readiness: ProviderProfileReadinessDto {
+                ready: true,
+                status: ProviderProfileReadinessStatusDto::Ready,
+                credential_updated_at: Some("2026-04-21T02:00:05Z".into()),
+            },
+            migrated_from_legacy: true,
+            migrated_at: Some("2026-04-21T02:00:00Z".into()),
+        }],
+        migration: Some(ProviderProfilesMigrationDto {
+            source: "legacy_runtime_settings_v1".into(),
+            migrated_at: "2026-04-21T02:00:00Z".into(),
+            runtime_settings_updated_at: Some("2026-04-21T01:59:55Z".into()),
+            openrouter_credentials_updated_at: Some("2026-04-21T02:00:05Z".into()),
+            openai_auth_updated_at: None,
+            openrouter_model_inferred: Some(false),
+        }),
+    })
+    .expect("provider profiles response should serialize");
+    assert_eq!(
+        provider_profiles_response,
+        json!({
+            "activeProfileId": "openrouter-work",
+            "profiles": [{
+                "profileId": "openrouter-work",
+                "providerId": "openrouter",
+                "label": "OpenRouter Work",
+                "modelId": "openai/gpt-4.1-mini",
+                "active": true,
+                "readiness": {
+                    "ready": true,
+                    "status": "ready",
+                    "credentialUpdatedAt": "2026-04-21T02:00:05Z"
+                },
+                "migratedFromLegacy": true,
+                "migratedAt": "2026-04-21T02:00:00Z"
+            }],
+            "migration": {
+                "source": "legacy_runtime_settings_v1",
+                "migratedAt": "2026-04-21T02:00:00Z",
+                "runtimeSettingsUpdatedAt": "2026-04-21T01:59:55Z",
+                "openrouterCredentialsUpdatedAt": "2026-04-21T02:00:05Z",
+                "openaiAuthUpdatedAt": null,
+                "openrouterModelInferred": false
+            }
+        })
+    );
+
     let runtime_status = serde_json::to_value(RuntimeAuthStatusDto {
         project_id: "project-1".into(),
         runtime_kind: "openai_codex".into(),
@@ -2185,6 +2267,18 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
     assert_eq!(
         cadence_desktop_lib::commands::GET_RUNTIME_SETTINGS_COMMAND,
         "get_runtime_settings"
+    );
+    assert_eq!(
+        cadence_desktop_lib::commands::LIST_PROVIDER_PROFILES_COMMAND,
+        "list_provider_profiles"
+    );
+    assert_eq!(
+        cadence_desktop_lib::commands::UPSERT_PROVIDER_PROFILE_COMMAND,
+        "upsert_provider_profile"
+    );
+    assert_eq!(
+        cadence_desktop_lib::commands::SET_ACTIVE_PROVIDER_PROFILE_COMMAND,
+        "set_active_provider_profile"
     );
     assert_eq!(REFRESH_OPENAI_CODEX_AUTH_COMMAND, "start_runtime_session");
     assert_eq!(START_RUNTIME_RUN_COMMAND, "start_runtime_run");

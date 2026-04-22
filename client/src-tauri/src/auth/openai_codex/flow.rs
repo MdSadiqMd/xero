@@ -346,19 +346,19 @@ pub fn complete_openai_codex_flow<R: Runtime>(
         updated_at: now_timestamp(),
     };
     let auth_store_path = state.auth_store_file_for_provider(app, openai_codex_provider())?;
-    store::persist_openai_codex_session(
-        &auth_store_path,
-        store::StoredOpenAiCodexSession {
-            provider_id: session.provider_id.clone(),
-            session_id: session.session_id.clone(),
-            account_id: session.account_id.clone(),
-            access_token: token_response.access_token,
-            refresh_token: token_response.refresh_token,
-            expires_at: session.expires_at,
-            updated_at: session.updated_at.clone(),
-        },
-    )
-    .inspect_err(|error| selected_flow.record_error(error))?;
+    let stored_session = store::StoredOpenAiCodexSession {
+        provider_id: session.provider_id.clone(),
+        session_id: session.session_id.clone(),
+        account_id: session.account_id.clone(),
+        access_token: token_response.access_token,
+        refresh_token: token_response.refresh_token,
+        expires_at: session.expires_at,
+        updated_at: session.updated_at.clone(),
+    };
+    store::persist_openai_codex_session(&auth_store_path, stored_session.clone())
+        .inspect_err(|error| selected_flow.record_error(error))?;
+    store::sync_openai_profile_link(app, state, None, Some(&stored_session))
+        .inspect_err(|error| selected_flow.record_error(error))?;
 
     selected_flow.mark_authenticated(session.session_id.clone(), session.account_id.clone());
     Ok(session)
@@ -399,18 +399,17 @@ pub fn refresh_openai_codex_session<R: Runtime>(
         updated_at: now_timestamp(),
     };
 
-    store::persist_openai_codex_session(
-        &auth_store_path,
-        store::StoredOpenAiCodexSession {
-            provider_id: updated_session.provider_id.clone(),
-            session_id: updated_session.session_id.clone(),
-            account_id: refreshed_account_id,
-            access_token: refreshed.access_token,
-            refresh_token: refreshed.refresh_token,
-            expires_at: updated_session.expires_at,
-            updated_at: updated_session.updated_at.clone(),
-        },
-    )?;
+    let stored_session = store::StoredOpenAiCodexSession {
+        provider_id: updated_session.provider_id.clone(),
+        session_id: updated_session.session_id.clone(),
+        account_id: refreshed_account_id,
+        access_token: refreshed.access_token,
+        refresh_token: refreshed.refresh_token,
+        expires_at: updated_session.expires_at,
+        updated_at: updated_session.updated_at.clone(),
+    };
+    store::persist_openai_codex_session(&auth_store_path, stored_session.clone())?;
+    store::sync_openai_profile_link(app, state, None, Some(&stored_session))?;
 
     Ok(updated_session)
 }

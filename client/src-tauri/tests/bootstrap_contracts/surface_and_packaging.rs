@@ -8,8 +8,8 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
 
     assert_eq!(
         REGISTERED_COMMAND_NAMES.len(),
-        37,
-        "expected thirty-seven desktop commands"
+        40,
+        "expected forty desktop commands"
     );
 
     tauri::test::assert_ipc_response(
@@ -165,6 +165,121 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
             provider_id: "openai_codex".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key_configured: false,
+        }),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(cadence_desktop_lib::commands::LIST_PROVIDER_PROFILES_COMMAND, json!({})),
+        Ok(cadence_desktop_lib::commands::ProviderProfilesDto {
+            active_profile_id: "openai_codex-default".into(),
+            profiles: vec![cadence_desktop_lib::commands::ProviderProfileDto {
+                profile_id: "openai_codex-default".into(),
+                provider_id: "openai_codex".into(),
+                label: "OpenAI Codex".into(),
+                model_id: "openai_codex".into(),
+                active: true,
+                readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
+                    ready: false,
+                    status: cadence_desktop_lib::commands::ProviderProfileReadinessStatusDto::Missing,
+                    credential_updated_at: None,
+                },
+                migrated_from_legacy: false,
+                migrated_at: None,
+            }],
+            migration: None,
+        }),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
+            cadence_desktop_lib::commands::UPSERT_PROVIDER_PROFILE_COMMAND,
+            json!({
+                "request": {
+                    "profileId": "zz-openai-alt",
+                    "providerId": "openai_codex",
+                    "label": "OpenAI Alt",
+                    "modelId": "openai_codex",
+                    "activate": false
+                }
+            }),
+        ),
+        Ok(cadence_desktop_lib::commands::ProviderProfilesDto {
+            active_profile_id: "openai_codex-default".into(),
+            profiles: vec![
+                cadence_desktop_lib::commands::ProviderProfileDto {
+                    profile_id: "openai_codex-default".into(),
+                    provider_id: "openai_codex".into(),
+                    label: "OpenAI Codex".into(),
+                    model_id: "openai_codex".into(),
+                    active: true,
+                    readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
+                        ready: false,
+                        status: cadence_desktop_lib::commands::ProviderProfileReadinessStatusDto::Missing,
+                        credential_updated_at: None,
+                    },
+                    migrated_from_legacy: false,
+                    migrated_at: None,
+                },
+                cadence_desktop_lib::commands::ProviderProfileDto {
+                    profile_id: "zz-openai-alt".into(),
+                    provider_id: "openai_codex".into(),
+                    label: "OpenAI Alt".into(),
+                    model_id: "openai_codex".into(),
+                    active: false,
+                    readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
+                        ready: false,
+                        status: cadence_desktop_lib::commands::ProviderProfileReadinessStatusDto::Missing,
+                        credential_updated_at: None,
+                    },
+                    migrated_from_legacy: false,
+                    migrated_at: None,
+                },
+            ],
+            migration: None,
+        }),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
+            cadence_desktop_lib::commands::SET_ACTIVE_PROVIDER_PROFILE_COMMAND,
+            json!({ "request": { "profileId": "zz-openai-alt" } }),
+        ),
+        Ok(cadence_desktop_lib::commands::ProviderProfilesDto {
+            active_profile_id: "zz-openai-alt".into(),
+            profiles: vec![
+                cadence_desktop_lib::commands::ProviderProfileDto {
+                    profile_id: "openai_codex-default".into(),
+                    provider_id: "openai_codex".into(),
+                    label: "OpenAI Codex".into(),
+                    model_id: "openai_codex".into(),
+                    active: false,
+                    readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
+                        ready: false,
+                        status: cadence_desktop_lib::commands::ProviderProfileReadinessStatusDto::Missing,
+                        credential_updated_at: None,
+                    },
+                    migrated_from_legacy: false,
+                    migrated_at: None,
+                },
+                cadence_desktop_lib::commands::ProviderProfileDto {
+                    profile_id: "zz-openai-alt".into(),
+                    provider_id: "openai_codex".into(),
+                    label: "OpenAI Alt".into(),
+                    model_id: "openai_codex".into(),
+                    active: true,
+                    readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
+                        ready: false,
+                        status: cadence_desktop_lib::commands::ProviderProfileReadinessStatusDto::Missing,
+                        credential_updated_at: None,
+                    },
+                    migrated_from_legacy: false,
+                    migrated_at: None,
+                },
+            ],
+            migration: None,
         }),
     );
 

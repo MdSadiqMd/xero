@@ -1,9 +1,19 @@
 use std::{collections::HashMap, fs, path::Path};
 
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Runtime};
 
 use super::{now_timestamp, AuthFlowError, OPENAI_CODEX_PROVIDER_ID};
-use crate::commands::RuntimeAuthPhase;
+use crate::{
+    commands::{CommandError, RuntimeAuthPhase},
+    provider_profiles::{
+        build_openai_default_profile, load_or_migrate_provider_profiles_from_paths,
+        persist_provider_profiles_snapshot, ProviderProfileCredentialLink,
+        ProviderProfilesSnapshot, OPENAI_CODEX_DEFAULT_PROFILE_ID,
+    },
+    runtime::openai_codex_provider,
+    state::DesktopState,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -30,6 +40,40 @@ pub fn load_openai_codex_session(
 ) -> Result<Option<StoredOpenAiCodexSession>, AuthFlowError> {
     let store = load_store(path)?;
     Ok(store.openai_codex_sessions.get(account_id).cloned())
+}
+
+pub fn load_openai_codex_session_for_profile_link(
+    path: &Path,
+    link: &ProviderProfileCredentialLink,
+) -> Result<Option<StoredOpenAiCodexSession>, AuthFlowError> {
+    let ProviderProfileCredentialLink::OpenAiCodex {
+        account_id,
+        session_id,
+        ..
+    } = link
+    else {
+        return Err(AuthFlowError::terminal(
+            "provider_profiles_invalid",
+            RuntimeAuthPhase::Failed,
+            "Cadence rejected the active OpenAI provider profile because it referenced a non-OpenAI credential link.",
+        ));
+    };
+
+    let Some(stored) = load_openai_codex_session(path, account_id)? else {
+        return Ok(None);
+    };
+
+    if stored.session_id != *session_id {
+        return Err(AuthFlowError::terminal(
+            "auth_session_stale",
+            RuntimeAuthPhase::Failed,
+            format!(
+                "Cadence rejected the linked OpenAI auth session for account `{account_id}` because the saved session id changed. Rebind the runtime session."
+            ),
+        ));
+    }
+
+    Ok(Some(stored))
 }
 
 pub fn load_latest_openai_codex_session(
@@ -63,6 +107,63 @@ pub fn remove_openai_codex_session(path: &Path, account_id: &str) -> Result<(), 
 
     store.updated_at = now_timestamp();
     write_store(path, &store)
+}
+
+pub fn sync_openai_profile_link<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    preferred_profile_id: Option<&str>,
+    session: Option<&StoredOpenAiCodexSession>,
+) -> Result<(), AuthFlowError> {
+    let provider_profiles_path = state
+        .provider_profiles_file(app)
+        .map_err(map_command_error_to_auth_error)?;
+    let provider_profile_credentials_path = state
+        .provider_profile_credential_store_file(app)
+        .map_err(map_command_error_to_auth_error)?;
+    let legacy_settings_path = state
+        .runtime_settings_file(app)
+        .map_err(map_command_error_to_auth_error)?;
+    let legacy_openrouter_credentials_path = state
+        .openrouter_credential_file(app)
+        .map_err(map_command_error_to_auth_error)?;
+    let legacy_openai_auth_path = state.auth_store_file_for_provider(app, openai_codex_provider())?;
+
+    let mut snapshot = load_or_migrate_provider_profiles_from_paths(
+        &provider_profiles_path,
+        &provider_profile_credentials_path,
+        &legacy_settings_path,
+        &legacy_openrouter_credentials_path,
+        &legacy_openai_auth_path,
+    )
+    .map_err(map_provider_profiles_error)?;
+
+    let next_link = session.map(openai_profile_link_from_session).transpose()?;
+    let Some(target_profile_id) = select_openai_profile_id(
+        &snapshot,
+        preferred_profile_id,
+        next_link.as_ref(),
+    )
+    .or_else(|| Some(OPENAI_CODEX_DEFAULT_PROFILE_ID.to_owned())) else {
+        return Ok(());
+    };
+
+    let updated_at = next_link
+        .as_ref()
+        .map(profile_link_updated_at)
+        .unwrap_or_else(now_timestamp);
+    let changed = upsert_openai_profile_link(&mut snapshot, &target_profile_id, next_link, &updated_at)?;
+    if !changed {
+        return Ok(());
+    }
+
+    snapshot.metadata.updated_at = updated_at;
+    persist_provider_profiles_snapshot(
+        &provider_profiles_path,
+        &provider_profile_credentials_path,
+        &snapshot,
+    )
+    .map_err(map_provider_profiles_error)
 }
 
 fn load_store(path: &Path) -> Result<AuthStoreFile, AuthFlowError> {
@@ -131,4 +232,170 @@ fn write_store(path: &Path, store: &AuthStoreFile) -> Result<(), AuthFlowError> 
             ),
         )
     })
+}
+
+fn openai_profile_link_from_session(
+    session: &StoredOpenAiCodexSession,
+) -> Result<ProviderProfileCredentialLink, AuthFlowError> {
+    let account_id = session.account_id.trim();
+    if account_id.is_empty() {
+        return Err(AuthFlowError::terminal(
+            "provider_profiles_invalid",
+            RuntimeAuthPhase::Failed,
+            "Cadence rejected the OpenAI auth session because accountId was blank while syncing the provider profile.",
+        ));
+    }
+
+    let session_id = session.session_id.trim();
+    if session_id.is_empty() {
+        return Err(AuthFlowError::terminal(
+            "provider_profiles_invalid",
+            RuntimeAuthPhase::Failed,
+            "Cadence rejected the OpenAI auth session because sessionId was blank while syncing the provider profile.",
+        ));
+    }
+
+    let provider_id = session.provider_id.trim();
+    if !provider_id.is_empty() && provider_id != OPENAI_CODEX_PROVIDER_ID {
+        return Err(AuthFlowError::terminal(
+            "provider_profiles_invalid",
+            RuntimeAuthPhase::Failed,
+            format!(
+                "Cadence rejected the OpenAI auth session because providerId `{provider_id}` was not `{OPENAI_CODEX_PROVIDER_ID}` while syncing the provider profile."
+            ),
+        ));
+    }
+
+    Ok(ProviderProfileCredentialLink::OpenAiCodex {
+        account_id: account_id.to_owned(),
+        session_id: session_id.to_owned(),
+        updated_at: normalize_updated_at(&session.updated_at),
+    })
+}
+
+fn select_openai_profile_id(
+    snapshot: &ProviderProfilesSnapshot,
+    preferred_profile_id: Option<&str>,
+    next_link: Option<&ProviderProfileCredentialLink>,
+) -> Option<String> {
+    let preferred_profile_id = preferred_profile_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(preferred_profile_id) = preferred_profile_id {
+        if snapshot
+            .profile(preferred_profile_id)
+            .is_some_and(|profile| profile.provider_id == OPENAI_CODEX_PROVIDER_ID)
+        {
+            return Some(preferred_profile_id.to_owned());
+        }
+    }
+
+    if let Some(ProviderProfileCredentialLink::OpenAiCodex {
+        account_id,
+        session_id,
+        ..
+    }) = next_link
+    {
+        if let Some(profile) = snapshot.metadata.profiles.iter().find(|profile| {
+            profile.provider_id == OPENAI_CODEX_PROVIDER_ID
+                && matches!(
+                    profile.credential_link.as_ref(),
+                    Some(ProviderProfileCredentialLink::OpenAiCodex {
+                        account_id: linked_account_id,
+                        session_id: linked_session_id,
+                        ..
+                    }) if linked_account_id == account_id || linked_session_id == session_id
+                )
+        }) {
+            return Some(profile.profile_id.clone());
+        }
+    }
+
+    snapshot
+        .active_profile()
+        .filter(|profile| profile.provider_id == OPENAI_CODEX_PROVIDER_ID)
+        .map(|profile| profile.profile_id.clone())
+        .or_else(|| {
+            snapshot
+                .profile(OPENAI_CODEX_DEFAULT_PROFILE_ID)
+                .filter(|profile| profile.provider_id == OPENAI_CODEX_PROVIDER_ID)
+                .map(|profile| profile.profile_id.clone())
+        })
+        .or_else(|| {
+            snapshot
+                .metadata
+                .profiles
+                .iter()
+                .find(|profile| profile.provider_id == OPENAI_CODEX_PROVIDER_ID)
+                .map(|profile| profile.profile_id.clone())
+        })
+}
+
+fn upsert_openai_profile_link(
+    snapshot: &mut ProviderProfilesSnapshot,
+    profile_id: &str,
+    next_link: Option<ProviderProfileCredentialLink>,
+    updated_at: &str,
+) -> Result<bool, AuthFlowError> {
+    if let Some(existing) = snapshot
+        .metadata
+        .profiles
+        .iter_mut()
+        .find(|profile| profile.profile_id == profile_id)
+    {
+        if existing.provider_id != OPENAI_CODEX_PROVIDER_ID {
+            return Err(AuthFlowError::terminal(
+                "provider_profiles_invalid",
+                RuntimeAuthPhase::Failed,
+                format!(
+                    "Cadence rejected provider profile `{profile_id}` because OpenAI auth can only sync onto `{OPENAI_CODEX_PROVIDER_ID}` profiles."
+                ),
+            ));
+        }
+
+        if existing.credential_link == next_link {
+            return Ok(false);
+        }
+
+        existing.credential_link = next_link;
+        existing.updated_at = updated_at.to_owned();
+        return Ok(true);
+    }
+
+    let mut profile = build_openai_default_profile(next_link, None, updated_at);
+    profile.profile_id = profile_id.to_owned();
+    snapshot.metadata.profiles.push(profile);
+    Ok(true)
+}
+
+fn profile_link_updated_at(link: &ProviderProfileCredentialLink) -> String {
+    match link {
+        ProviderProfileCredentialLink::OpenAiCodex { updated_at, .. }
+        | ProviderProfileCredentialLink::OpenRouter { updated_at } => normalize_updated_at(updated_at),
+    }
+}
+
+fn normalize_updated_at(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        now_timestamp()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn map_provider_profiles_error(error: CommandError) -> AuthFlowError {
+    if error.retryable {
+        AuthFlowError::retryable(error.code, RuntimeAuthPhase::Failed, error.message)
+    } else {
+        AuthFlowError::terminal(error.code, RuntimeAuthPhase::Failed, error.message)
+    }
+}
+
+fn map_command_error_to_auth_error(error: CommandError) -> AuthFlowError {
+    if error.retryable {
+        AuthFlowError::retryable(error.code, RuntimeAuthPhase::Failed, error.message)
+    } else {
+        AuthFlowError::terminal(error.code, RuntimeAuthPhase::Failed, error.message)
+    }
 }

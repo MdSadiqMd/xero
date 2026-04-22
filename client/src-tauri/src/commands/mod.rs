@@ -7,6 +7,7 @@ pub mod get_repository_status;
 pub mod get_runtime_run;
 pub mod get_runtime_session;
 pub mod get_runtime_settings;
+pub mod provider_profiles;
 pub mod import_repository;
 pub mod list_notification_dispatches;
 pub mod list_notification_routes;
@@ -43,6 +44,9 @@ pub use get_repository_status::get_repository_status;
 pub use get_runtime_run::get_runtime_run;
 pub use get_runtime_session::get_runtime_session;
 pub use get_runtime_settings::get_runtime_settings;
+pub use provider_profiles::{
+    list_provider_profiles, set_active_provider_profile, upsert_provider_profile,
+};
 pub use import_repository::import_repository;
 pub use list_notification_dispatches::list_notification_dispatches;
 pub use list_notification_routes::list_notification_routes;

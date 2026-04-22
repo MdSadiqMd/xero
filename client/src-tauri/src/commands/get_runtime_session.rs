@@ -4,10 +4,12 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::{
     commands::{
-        get_runtime_settings::{load_runtime_settings_snapshot, RuntimeSettingsSnapshot},
+        get_runtime_settings::{runtime_settings_snapshot_from_provider_profiles, RuntimeSettingsSnapshot},
+        provider_profiles::load_provider_profiles_snapshot,
         validate_non_empty, CommandResult, ProjectIdRequestDto, RuntimeAuthPhase,
         RuntimeDiagnosticDto, RuntimeSessionDto,
     },
+    provider_profiles::ProviderProfilesSnapshot,
     runtime::{
         reconcile_provider_runtime_session, resolve_runtime_provider_identity,
         ResolvedRuntimeProvider, RuntimeProviderReconcileOutcome,
@@ -24,6 +26,7 @@ use super::runtime_support::{
 pub(crate) struct RuntimeProviderSelection {
     pub provider: ResolvedRuntimeProvider,
     pub settings: RuntimeSettingsSnapshot,
+    pub provider_profiles: ProviderProfilesSnapshot,
 }
 
 #[tauri::command]
@@ -65,7 +68,19 @@ pub(crate) fn prepare_runtime_session_for_selected_provider<R: Runtime>(
     state: &DesktopState,
     runtime: RuntimeSessionDto,
 ) -> Result<(RuntimeSessionDto, RuntimeProviderSelection), RuntimeSessionDto> {
-    let settings = match load_runtime_settings_snapshot(app, state) {
+    let provider_profiles = match load_provider_profiles_snapshot(app, state) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return Err(signed_out_runtime(
+                runtime,
+                &error.code,
+                &error.message,
+                error.retryable,
+            ));
+        }
+    };
+
+    let settings = match runtime_settings_snapshot_from_provider_profiles(&provider_profiles) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return Err(signed_out_runtime(
@@ -94,7 +109,11 @@ pub(crate) fn prepare_runtime_session_for_selected_provider<R: Runtime>(
 
     Ok((
         runtime_with_selected_provider(runtime, provider),
-        RuntimeProviderSelection { provider, settings },
+        RuntimeProviderSelection {
+            provider,
+            settings,
+            provider_profiles,
+        },
     ))
 }
 
@@ -150,6 +169,7 @@ pub(crate) fn reconcile_prepared_runtime_session<R: Runtime>(
         runtime.account_id.as_deref(),
         runtime.session_id.as_deref(),
         Some(&selection.settings),
+        Some(&selection.provider_profiles),
     ) {
         Ok(RuntimeProviderReconcileOutcome::Authenticated(_binding)) => {
             if runtime != original {

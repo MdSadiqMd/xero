@@ -24,6 +24,9 @@ pub const DELETE_PROJECT_ENTRY_COMMAND: &str = "delete_project_entry";
 pub const GET_RUNTIME_RUN_COMMAND: &str = "get_runtime_run";
 pub const GET_RUNTIME_SESSION_COMMAND: &str = "get_runtime_session";
 pub const GET_RUNTIME_SETTINGS_COMMAND: &str = "get_runtime_settings";
+pub const LIST_PROVIDER_PROFILES_COMMAND: &str = "list_provider_profiles";
+pub const UPSERT_PROVIDER_PROFILE_COMMAND: &str = "upsert_provider_profile";
+pub const SET_ACTIVE_PROVIDER_PROFILE_COMMAND: &str = "set_active_provider_profile";
 pub const START_AUTONOMOUS_RUN_COMMAND: &str = "start_autonomous_run";
 pub const START_OPENAI_LOGIN_COMMAND: &str = "start_openai_login";
 pub const SUBMIT_OPENAI_CALLBACK_COMMAND: &str = "submit_openai_callback";
@@ -65,6 +68,9 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     GET_RUNTIME_RUN_COMMAND,
     GET_RUNTIME_SESSION_COMMAND,
     GET_RUNTIME_SETTINGS_COMMAND,
+    LIST_PROVIDER_PROFILES_COMMAND,
+    UPSERT_PROVIDER_PROFILE_COMMAND,
+    SET_ACTIVE_PROVIDER_PROFILE_COMMAND,
     START_AUTONOMOUS_RUN_COMMAND,
     START_OPENAI_LOGIN_COMMAND,
     SUBMIT_OPENAI_CALLBACK_COMMAND,

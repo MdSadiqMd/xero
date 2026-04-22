@@ -5,8 +5,8 @@ use tauri::{AppHandle, Runtime, State};
 use tempfile::NamedTempFile;
 
 use crate::{
-    commands::{CommandError, CommandResult, RuntimeSettingsDto},
-    provider_profiles::{load_or_migrate_provider_profiles_from_paths, ProviderProfilesSnapshot},
+    commands::{provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult, RuntimeSettingsDto},
+    provider_profiles::ProviderProfilesSnapshot,
     runtime::{
         resolve_runtime_provider_identity, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
     },
@@ -61,22 +61,7 @@ pub(crate) fn load_runtime_settings_snapshot<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
 ) -> CommandResult<RuntimeSettingsSnapshot> {
-    let provider_profiles_path = state.provider_profiles_file(app)?;
-    let provider_profile_credentials_path = state.provider_profile_credential_store_file(app)?;
-    let settings_path = state.runtime_settings_file(app)?;
-    let legacy_openrouter_credentials_path = state.openrouter_credential_file(app)?;
-    let legacy_openai_auth_path = state
-        .auth_store_file(app)
-        .map_err(map_auth_store_error_to_command_error)?;
-
-    let provider_profiles = load_or_migrate_provider_profiles_from_paths(
-        &provider_profiles_path,
-        &provider_profile_credentials_path,
-        &settings_path,
-        &legacy_openrouter_credentials_path,
-        &legacy_openai_auth_path,
-    )?;
-
+    let provider_profiles = load_provider_profiles_snapshot(app, state)?;
     runtime_settings_snapshot_from_provider_profiles(&provider_profiles)
 }
 
@@ -385,7 +370,7 @@ fn validate_runtime_settings_contract(
     })
 }
 
-fn runtime_settings_snapshot_from_provider_profiles(
+pub(crate) fn runtime_settings_snapshot_from_provider_profiles(
     provider_profiles: &ProviderProfilesSnapshot,
 ) -> CommandResult<RuntimeSettingsSnapshot> {
     let active_profile = provider_profiles.active_profile().ok_or_else(|| {
