@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 pub mod auth;
 pub mod commands;
 pub mod db;
@@ -7,6 +9,7 @@ pub mod provider_profiles;
 pub mod registry;
 pub mod runtime;
 pub mod state;
+pub mod window_state;
 
 pub mod git {
     pub mod diff;
@@ -20,6 +23,10 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
 ) -> tauri::Builder<R> {
     builder
         .manage(desktop_state)
+        .setup(|app| {
+            window_state::configure_main_window(app.handle().clone());
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![

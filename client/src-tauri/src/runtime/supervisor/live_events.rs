@@ -10,11 +10,14 @@ use crate::{
 };
 
 use super::{
-    persistence::persist_sidecar_checkpoint, BufferedSupervisorEvent, NormalizedPtyEvent,
-    PtyEventNormalizer, SidecarSharedState, SupervisorEventHub, ACTIVITY_OUTPUT_PREFIX,
-    INTERACTIVE_BOUNDARY_CHECKPOINT_SUMMARY, LIVE_EVENT_RING_LIMIT, MAX_LIVE_EVENT_FRAGMENT_BYTES,
-    MAX_LIVE_EVENT_TEXT_CHARS, REDACTED_LIVE_EVENT_DETAIL, SHELL_OUTPUT_PREFIX,
-    STRUCTURED_EVENT_PREFIX,
+    persistence::{
+        apply_pending_controls_at_boundary, persist_sidecar_checkpoint,
+        PendingControlApplyOutcome,
+    },
+    BufferedSupervisorEvent, NormalizedPtyEvent, PtyEventNormalizer, SidecarSharedState,
+    SupervisorEventHub, ACTIVITY_OUTPUT_PREFIX, INTERACTIVE_BOUNDARY_CHECKPOINT_SUMMARY,
+    LIVE_EVENT_RING_LIMIT, MAX_LIVE_EVENT_FRAGMENT_BYTES, MAX_LIVE_EVENT_TEXT_CHARS,
+    REDACTED_LIVE_EVENT_DETAIL, SHELL_OUTPUT_PREFIX, STRUCTURED_EVENT_PREFIX,
 };
 use crate::runtime::protocol::{
     CommandToolResultSummary, FileToolResultSummary, GitToolResultSummary,
@@ -22,6 +25,11 @@ use crate::runtime::protocol::{
     SupervisorSkillLifecycleResult, SupervisorSkillLifecycleStage, SupervisorSkillSourceMetadata,
     SupervisorToolCallState, ToolResultSummary, WebToolResultSummary,
 };
+
+const CONTROL_APPLY_BOUNDARY_ACTIVITY_CODE: &str = "runtime_run_controls_apply_boundary";
+const CONTROL_APPLIED_ACTIVITY_CODE: &str = "runtime_run_controls_applied";
+const CONTROL_APPLIED_ACTIVITY_TITLE: &str = "Queued runtime controls applied";
+const CONTROL_APPLY_FAILED_ACTIVITY_TITLE: &str = "Queued runtime controls still pending";
 
 impl PtyEventNormalizer {
     pub(super) fn push_chunk(&mut self, chunk: &[u8]) -> Vec<NormalizedPtyEvent> {
@@ -1003,6 +1011,94 @@ pub(super) fn emit_normalized_events(
                 &event.item,
             );
         }
+
+        maybe_apply_queued_controls_at_boundary(
+            repo_root,
+            shared,
+            event_hub,
+            persistence_lock,
+            &event.item,
+        );
+    }
+}
+
+fn maybe_apply_queued_controls_at_boundary(
+    repo_root: &Path,
+    shared: &Arc<Mutex<SidecarSharedState>>,
+    event_hub: &Arc<Mutex<SupervisorEventHub>>,
+    persistence_lock: &Arc<Mutex<()>>,
+    event: &SupervisorLiveEventPayload,
+) {
+    let SupervisorLiveEventPayload::Activity { code, .. } = event else {
+        return;
+    };
+    if code != CONTROL_APPLY_BOUNDARY_ACTIVITY_CODE {
+        return;
+    }
+
+    match apply_pending_controls_at_boundary(repo_root, shared, persistence_lock) {
+        PendingControlApplyOutcome::NoPending => {}
+        PendingControlApplyOutcome::Applied(applied) => {
+            let detail = if applied.prompt_consumed {
+                format!(
+                    "Cadence applied queued runtime-run controls and one queued prompt at model-call boundary revision {}.",
+                    applied.revision
+                )
+            } else {
+                format!(
+                    "Cadence applied queued runtime-run controls at model-call boundary revision {}.",
+                    applied.revision
+                )
+            };
+            append_checkpointed_activity(
+                repo_root,
+                shared,
+                event_hub,
+                persistence_lock,
+                CONTROL_APPLIED_ACTIVITY_CODE,
+                CONTROL_APPLIED_ACTIVITY_TITLE,
+                Some(detail),
+            );
+        }
+        PendingControlApplyOutcome::PersistFailed { code, message } => {
+            append_checkpointed_activity(
+                repo_root,
+                shared,
+                event_hub,
+                persistence_lock,
+                &code,
+                CONTROL_APPLY_FAILED_ACTIVITY_TITLE,
+                Some(message),
+            );
+        }
+    }
+}
+
+fn append_checkpointed_activity(
+    repo_root: &Path,
+    shared: &Arc<Mutex<SidecarSharedState>>,
+    event_hub: &Arc<Mutex<SupervisorEventHub>>,
+    persistence_lock: &Arc<Mutex<()>>,
+    code: &str,
+    title: &str,
+    detail: Option<String>,
+) {
+    let item = SupervisorLiveEventPayload::Activity {
+        code: code.into(),
+        title: title.into(),
+        detail,
+    };
+    let summary = activity_checkpoint_summary(code, title);
+    let buffered = append_live_event(shared, event_hub, &item);
+    if should_persist_live_event_checkpoint(&buffered, &summary) {
+        let _ = persist_sidecar_checkpoint(
+            repo_root,
+            shared,
+            persistence_lock,
+            RuntimeRunStatus::Running,
+            project_store::RuntimeRunCheckpointKind::State,
+            summary,
+        );
     }
 }
 

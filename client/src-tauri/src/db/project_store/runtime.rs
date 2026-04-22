@@ -1510,6 +1510,10 @@ fn validate_runtime_run_active_control_snapshot(
         "control_state.active.applied_at",
         "runtime_run_request_invalid",
     )?;
+    validate_runtime_run_control_timestamp(
+        &active.applied_at,
+        "control_state.active.applied_at",
+    )?;
     if active.revision == 0 {
         return Err(CommandError::system_fault(
             "runtime_run_request_invalid",
@@ -1533,6 +1537,7 @@ fn validate_runtime_run_pending_control_snapshot(
         "control_state.pending.queued_at",
         "runtime_run_request_invalid",
     )?;
+    validate_runtime_run_control_timestamp(&pending.queued_at, "control_state.pending.queued_at")?;
     if pending.revision <= active_revision {
         return Err(CommandError::system_fault(
             "runtime_run_request_invalid",
@@ -1551,6 +1556,10 @@ fn validate_runtime_run_pending_control_snapshot(
                 "control_state.pending.queued_prompt_at",
                 "runtime_run_request_invalid",
             )?;
+            validate_runtime_run_control_timestamp(
+                queued_prompt_at,
+                "control_state.pending.queued_prompt_at",
+            )?;
             if let Some(secret_hint) = find_prohibited_runtime_control_prompt_content(prompt) {
                 return Err(CommandError::user_fixable(
                     "runtime_run_request_invalid",
@@ -1568,6 +1577,16 @@ fn validate_runtime_run_pending_control_snapshot(
         }
     }
 
+    Ok(())
+}
+
+fn validate_runtime_run_control_timestamp(value: &str, field: &str) -> Result<(), CommandError> {
+    OffsetDateTime::parse(value, &Rfc3339).map_err(|error| {
+        CommandError::system_fault(
+            "runtime_run_request_invalid",
+            format!("Cadence requires {field} to be valid RFC3339 text: {error}"),
+        )
+    })?;
     Ok(())
 }
 

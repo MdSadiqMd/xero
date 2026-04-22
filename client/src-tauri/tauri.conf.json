@@ -23,7 +23,7 @@
         "decorations": false,
         "transparent": true,
         "shadow": true,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {

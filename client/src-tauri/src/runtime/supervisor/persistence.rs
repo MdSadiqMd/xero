@@ -28,6 +28,72 @@ pub(super) fn protocol_diagnostic_into_record(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AppliedPendingControlTransition {
+    pub revision: u32,
+    pub applied_at: String,
+    pub prompt_consumed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PendingControlApplyOutcome {
+    NoPending,
+    Applied(AppliedPendingControlTransition),
+    PersistFailed { code: String, message: String },
+}
+
+pub(super) fn apply_pending_controls_at_boundary(
+    repo_root: &Path,
+    shared: &Arc<Mutex<SidecarSharedState>>,
+    persistence_lock: &Arc<Mutex<()>>,
+) -> PendingControlApplyOutcome {
+    const APPLY_FAILED_CODE: &str = "runtime_run_controls_apply_failed";
+    const APPLY_FAILED_MESSAGE: &str = "Cadence kept queued runtime-run controls pending because it could not persist the model-call boundary transition.";
+
+    let snapshot = shared.lock().expect("sidecar state lock poisoned").clone();
+    let Some(pending) = snapshot.control_state.pending.clone() else {
+        return PendingControlApplyOutcome::NoPending;
+    };
+
+    let applied_at = now_timestamp();
+    let prompt_consumed = pending.queued_prompt.is_some();
+    {
+        let mut state = shared.lock().expect("sidecar state lock poisoned");
+        state.control_state.active = project_store::RuntimeRunActiveControlSnapshotRecord {
+            model_id: pending.model_id.clone(),
+            thinking_effort: pending.thinking_effort.clone(),
+            approval_mode: pending.approval_mode.clone(),
+            revision: pending.revision,
+            applied_at: applied_at.clone(),
+        };
+        state.control_state.pending = None;
+        state.last_error = None;
+    }
+
+    match persist_runtime_row_from_shared(repo_root, shared, persistence_lock) {
+        Ok(_) => PendingControlApplyOutcome::Applied(AppliedPendingControlTransition {
+            revision: pending.revision,
+            applied_at,
+            prompt_consumed,
+        }),
+        Err(_) => {
+            {
+                let mut state = shared.lock().expect("sidecar state lock poisoned");
+                state.control_state = snapshot.control_state.clone();
+                state.last_error = Some(SupervisorProtocolDiagnostic {
+                    code: APPLY_FAILED_CODE.into(),
+                    message: APPLY_FAILED_MESSAGE.into(),
+                });
+            }
+            let _ = persist_runtime_row_from_shared(repo_root, shared, persistence_lock);
+            PendingControlApplyOutcome::PersistFailed {
+                code: APPLY_FAILED_CODE.into(),
+                message: APPLY_FAILED_MESSAGE.into(),
+            }
+        }
+    }
+}
+
 pub(super) fn persist_sidecar_exit(
     repo_root: &Path,
     shared: &Arc<Mutex<SidecarSharedState>>,

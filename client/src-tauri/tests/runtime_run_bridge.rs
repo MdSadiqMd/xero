@@ -13,6 +13,9 @@ mod workflow_progression;
 #[path = "runtime_run_bridge/notification_operator.rs"]
 mod notification_operator;
 
+#[path = "runtime_run_bridge/control_contract.rs"]
+mod control_contract;
+
 // Keep this bridge target on its documented serialized rerun path when detached-supervisor
 // timing is under load; preserve the behavior contract instead of adding sleeps or retries.
 
@@ -151,6 +154,21 @@ fn start_runtime_run_replaces_stale_row_with_new_reachable_run() {
 #[test]
 fn stop_runtime_run_rejects_mismatched_run_id_and_marks_unreachable_sidecar_stale() {
     runtime_recovery::stop_runtime_run_rejects_mismatched_run_id_and_marks_unreachable_sidecar_stale();
+}
+
+#[test]
+fn queued_runtime_controls_apply_on_next_model_boundary_and_recover_reload_truth() {
+    control_contract::queued_runtime_controls_apply_on_next_model_boundary_and_recover_reload_truth();
+}
+
+#[test]
+fn queued_runtime_controls_duplicate_boundary_is_idempotent() {
+    control_contract::queued_runtime_controls_duplicate_boundary_is_idempotent();
+}
+
+#[test]
+fn get_runtime_run_fails_closed_for_malformed_control_state_without_fake_apply_transition() {
+    control_contract::get_runtime_run_fails_closed_for_malformed_control_state_without_fake_apply_transition();
 }
 
 #[test]
