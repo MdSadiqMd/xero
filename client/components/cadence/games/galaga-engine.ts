@@ -25,16 +25,16 @@ export const FORMATION_AMPLITUDE = 10
 export const FORMATION_PERIOD_MS = 3200
 
 export const PLAYER_BULLET_SPEED = 380
-export const ENEMY_BULLET_SPEED = 160
+export const ENEMY_BULLET_SPEED = 130
 export const PLAYER_BULLET_COOLDOWN = 220
 export const BULLET_HEIGHT = 6
 export const BULLET_WIDTH = 2
 export const MAX_PLAYER_BULLETS = 2
 
-export const DIVE_SPEED = 120
-export const DIVE_TURN_RATE = 2.8 // radians per second
-export const DIVE_COOLDOWN_MIN = 900
-export const DIVE_COOLDOWN_MAX = 2200
+export const DIVE_SPEED = 100
+export const DIVE_TURN_RATE = 2.6 // radians per second
+export const DIVE_COOLDOWN_MIN = 2200
+export const DIVE_COOLDOWN_MAX = 4500
 
 export const GROUND_Y = 192
 export const INVASION_Y = PLAYER_Y - 2
@@ -142,13 +142,16 @@ function makeEnemies(level: number, startId: number): { enemies: Enemy[]; nextId
         x: 0,
         y: 0,
         heading: Math.PI / 2,
+        // Grace before the first dive so the opening isn't a swarm: level 1
+        // enemies sit for 4–8s before anyone breaks ranks.
         diveTimer:
           DIVE_COOLDOWN_MIN +
           Math.random() * (DIVE_COOLDOWN_MAX - DIVE_COOLDOWN_MIN) +
-          (ENEMY_ROWS - row) * 400 -
-          Math.min(level * 120, 900),
+          (ENEMY_ROWS - row) * 500 +
+          1600 -
+          Math.min((level - 1) * 260, 2200),
         divePhase: 'plunge',
-        fireCooldown: 900 + Math.random() * 1200,
+        fireCooldown: 1200 + Math.random() * 1600,
       })
     }
   }
@@ -301,8 +304,9 @@ function tickState(state: GameState, dt: number): GameState {
     return { ...e, diveTimer: Math.max(0, e.diveTimer - dt) }
   })
 
-  // Limit active divers by level (1 -> 2 divers, scale up slowly).
-  const maxDivers = Math.min(4, 1 + Math.floor(state.level / 2) + 1)
+  // Active-diver budget. Level 1 allows a single diver so the player has
+  // time to read attack patterns; later stages ramp to a cap of 4.
+  const maxDivers = Math.min(4, state.level)
   const currentDivers = enemies.reduce((n, e) => (e.alive && e.mode === 'diving' ? n + 1 : n), 0)
   if (currentDivers < maxDivers) {
     const diver = chooseDiver(enemies)
@@ -318,7 +322,7 @@ function tickState(state: GameState, dt: number): GameState {
               y: slotY,
               heading: Math.PI / 2,
               divePhase: 'plunge',
-              fireCooldown: 350 + Math.random() * 450,
+              fireCooldown: 950 + Math.random() * 800,
             }
           : e,
       )
@@ -344,7 +348,7 @@ function tickState(state: GameState, dt: number): GameState {
         vy: (dy / len) * ENEMY_BULLET_SPEED,
         from: 'enemy',
       })
-      return { ...e, fireCooldown: 1200 + Math.random() * 1400 }
+      return { ...e, fireCooldown: 2000 + Math.random() * 1800 }
     }
     return { ...e, fireCooldown: nextCooldown }
   })
