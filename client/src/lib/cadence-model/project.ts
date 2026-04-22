@@ -129,9 +129,16 @@ export const repositoryStatusEntrySchema = z.object({
   untracked: z.boolean(),
 })
 
+export const repositoryLastCommitSchema = z.object({
+  sha: z.string().min(1),
+  summary: z.string().min(1),
+  committedAt: nullableTextSchema,
+})
+
 export const repositoryStatusResponseSchema = z.object({
   repository: repositorySummarySchema,
   branch: branchSummarySchema.nullable().optional(),
+  lastCommit: repositoryLastCommitSchema.nullable().optional(),
   entries: z.array(repositoryStatusEntrySchema),
   hasStagedChanges: z.boolean(),
   hasUnstagedChanges: z.boolean(),
@@ -256,11 +263,19 @@ export interface RepositoryStatusEntryView {
   untracked: boolean
 }
 
+export interface RepositoryLastCommitView {
+  sha: string
+  shortShaLabel: string
+  summary: string
+  committedAt: string | null
+}
+
 export interface RepositoryStatusView {
   projectId: string
   repositoryId: string
   branchLabel: string
   headShaLabel: string
+  lastCommit: RepositoryLastCommitView | null
   stagedCount: number
   unstagedCount: number
   untrackedCount: number
@@ -384,6 +399,9 @@ export function mapPhase(phase: PhaseSummaryDto): Phase {
 export function mapRepositoryStatus(status: RepositoryStatusResponseDto): RepositoryStatusView {
   const branchName = normalizeOptionalText(status.branch?.name) ?? normalizeOptionalText(status.repository.branch)
   const headSha = normalizeOptionalText(status.branch?.headSha) ?? normalizeOptionalText(status.repository.headSha)
+  const lastCommitSha = normalizeOptionalText(status.lastCommit?.sha)
+  const lastCommitSummary = normalizeOptionalText(status.lastCommit?.summary)
+  const lastCommitCommittedAt = normalizeOptionalText(status.lastCommit?.committedAt)
   const entries = status.entries.map((entry) => ({
     path: entry.path,
     staged: entry.staged ?? null,
@@ -401,6 +419,15 @@ export function mapRepositoryStatus(status: RepositoryStatusResponseDto): Reposi
     repositoryId: status.repository.id,
     branchLabel: branchName ?? 'No branch',
     headShaLabel: headSha ?? 'No HEAD',
+    lastCommit:
+      lastCommitSha && lastCommitSummary
+        ? {
+            sha: lastCommitSha,
+            shortShaLabel: lastCommitSha.slice(0, 7),
+            summary: lastCommitSummary,
+            committedAt: lastCommitCommittedAt,
+          }
+        : null,
     stagedCount,
     unstagedCount,
     untrackedCount,

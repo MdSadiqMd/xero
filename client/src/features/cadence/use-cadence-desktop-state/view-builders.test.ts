@@ -127,6 +127,7 @@ function makeRepositoryStatus(overrides: Partial<RepositoryStatusView> = {}): Re
   return {
     branchLabel: 'feature/cadence',
     headShaLabel: 'def5678',
+    lastCommit: null,
     entries: [
       {
         path: 'client/src/App.tsx',

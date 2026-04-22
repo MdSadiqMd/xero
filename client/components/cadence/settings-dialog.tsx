@@ -16,7 +16,7 @@ import type {
   UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import type { PlatformVariant } from "@/components/cadence/shell"
-import { Bell, Code2, KeyRound } from "lucide-react"
+import { Bell, Code2, KeyRound, Palette } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -28,12 +28,14 @@ import { cn } from "@/lib/utils"
 import { DevelopmentSection } from "@/components/cadence/settings-dialog/development-section"
 import { NotificationsSection } from "@/components/cadence/settings-dialog/notifications-section"
 import { ProvidersSection } from "@/components/cadence/settings-dialog/providers-section"
+import { ThemesSection } from "@/components/cadence/settings-dialog/themes-section"
 
-type SettingsSection = "providers" | "notifications" | "development"
+type SettingsSection = "providers" | "notifications" | "themes" | "development"
 
 const NAV_BASE: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = [
   { id: "providers", label: "Providers", icon: KeyRound },
   { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "themes", label: "Themes", icon: Palette },
 ]
 
 const NAV: Array<{ id: SettingsSection; label: string; icon: React.ElementType }> = import.meta.env.DEV
@@ -188,6 +190,8 @@ export function SettingsDialog({
                     body="Provider settings are app-global, but notification routes stay project-bound so Cadence never writes cross-project delivery state into the wrong repository view."
                   />
                 )
+              ) : section === "themes" ? (
+                <ThemesSection />
               ) : section === "development" ? (
                 <DevelopmentSection
                   platformOverride={platformOverride}

@@ -52,6 +52,7 @@ impl CanonicalRepository {
         RepositoryStatusResponseDto {
             repository: self.repository_summary(),
             branch: self.branch.clone(),
+            last_commit: self.last_commit.clone(),
             entries: self.status_entries.clone(),
             has_staged_changes: self.has_staged_changes,
             has_unstaged_changes: self.has_unstaged_changes,
@@ -69,6 +70,7 @@ pub struct RepositoryHandle {
     pub branch_name: Option<String>,
     pub head_sha: Option<String>,
     pub branch: Option<BranchSummaryDto>,
+    pub last_commit: Option<LastCommitSummaryDto>,
 }
 
 impl RepositoryHandle {
@@ -108,6 +110,7 @@ impl RepositoryHandle {
             branch_name: self.branch_name.clone(),
             head_sha: self.head_sha.clone(),
             branch: self.branch.clone(),
+            last_commit: self.last_commit.clone(),
             status_entries,
             has_staged_changes,
             has_unstaged_changes,
@@ -226,7 +229,7 @@ fn open_repository_internal(selected_path: &str) -> CommandResult<RepositoryHand
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| root_path_string.clone());
 
-    let (branch, branch_name, head_sha) = read_branch(&repository);
+    let head_details = read_head_details(&repository);
 
     Ok(RepositoryHandle {
         repository,
@@ -234,10 +237,18 @@ fn open_repository_internal(selected_path: &str) -> CommandResult<RepositoryHand
         root_path_string,
         common_git_dir,
         display_name,
-        branch_name,
-        head_sha,
-        branch,
+        branch_name: head_details.branch_name,
+        head_sha: head_details.head_sha,
+        branch: head_details.branch,
+        last_commit: head_details.last_commit,
     })
+}
+
+struct HeadDetails {
+    branch: Option<BranchSummaryDto>,
+    branch_name: Option<String>,
+    head_sha: Option<String>,
+    last_commit: Option<LastCommitSummaryDto>,
 }
 
 fn stable_digest(value: &str) -> String {
@@ -250,18 +261,26 @@ fn stable_digest(value: &str) -> String {
         .collect()
 }
 
-fn read_branch(
-    repository: &Repository,
-) -> (Option<BranchSummaryDto>, Option<String>, Option<String>) {
+fn read_head_details(repository: &Repository) -> HeadDetails {
     let head = match repository.head() {
         Ok(head) => head,
-        Err(_) => return (None, None, None),
+        Err(_) => {
+            return HeadDetails {
+                branch: None,
+                branch_name: None,
+                head_sha: None,
+                last_commit: None,
+            }
+        }
     };
 
     let branch_name = head.shorthand().map(ToOwned::to_owned);
-    let head_sha = head.target().map(|oid| oid.to_string());
     let detached = repository.head_detached().unwrap_or(false);
-
+    let commit = head.peel_to_commit().ok();
+    let head_sha = commit
+        .as_ref()
+        .map(|commit| commit.id().to_string())
+        .or_else(|| head.target().map(|oid| oid.to_string()));
     let branch = branch_name
         .as_ref()
         .or(head_sha.as_ref())
@@ -271,7 +290,41 @@ fn read_branch(
             detached,
         });
 
-    (branch, branch_name, head_sha)
+    HeadDetails {
+        branch,
+        branch_name,
+        head_sha,
+        last_commit: commit.as_ref().and_then(map_last_commit),
+    }
+}
+
+fn map_last_commit(commit: &git2::Commit<'_>) -> Option<LastCommitSummaryDto> {
+    let summary = commit
+        .summary()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            commit.message().and_then(|message| {
+                message
+                    .lines()
+                    .map(str::trim)
+                    .find(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+        })?;
+
+    Some(LastCommitSummaryDto {
+        sha: commit.id().to_string(),
+        summary,
+        committed_at: git_timestamp_to_rfc3339(commit.time().seconds()),
+    })
+}
+
+fn git_timestamp_to_rfc3339(unix_timestamp: i64) -> Option<String> {
+    OffsetDateTime::from_unix_timestamp(unix_timestamp)
+        .ok()
+        .and_then(|value| value.format(&Rfc3339).ok())
 }
 
 fn read_status_entries(

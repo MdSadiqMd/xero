@@ -97,10 +97,20 @@ export function ThemeProvider({ children, initialThemeId }: ThemeProviderProps) 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
 
+/**
+ * Fallback context returned when no provider is mounted. Tests that render a
+ * single component (e.g. `CodeEditor`) shouldn't be forced to wrap with a
+ * provider — they just see the default theme and a no-op setter. The real
+ * app always mounts `ThemeProvider` at the root so this branch is never hit
+ * in production.
+ */
+const FALLBACK_CONTEXT: ThemeContextValue = {
+  themes: THEMES,
+  theme: THEMES[0],
+  themeId: THEMES[0].id,
+  setThemeId: () => {},
+}
+
 export function useTheme(): ThemeContextValue {
-  const ctx = useContext(ThemeContext)
-  if (!ctx) {
-    throw new Error('useTheme must be used within a <ThemeProvider>')
-  }
-  return ctx
+  return useContext(ThemeContext) ?? FALLBACK_CONTEXT
 }

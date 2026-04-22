@@ -3,7 +3,22 @@
 
 @custom-variant dark (&:is(.dark *));
 
-:root {
+/* ---------------------------------------------------------------------------
+ * Theme palettes
+ *
+ * Each theme lives in its own selector. The active theme is applied as a
+ * `.theme-<id>` class on `<html>` by the React `ThemeProvider`. `:root`
+ * mirrors the default palette so the first paint (before React mounts) is
+ * still rendered with sensible colors.
+ *
+ * To add a new theme:
+ *   1. Append an entry to `client/src/features/theme/theme-definitions.ts`.
+ *   2. Duplicate one of the blocks below and fill in the palette — keep the
+ *      variable names identical, only the values change.
+ * ------------------------------------------------------------------------- */
+
+:root,
+.theme-dusk {
   --background: #121212;
   --foreground: #f8f9fa;
 
@@ -13,7 +28,6 @@
   --popover: #1a1a1a;
   --popover-foreground: #f8f9fa;
 
-  /* Warm gold accent */
   --primary: #d4a574;
   --primary-foreground: #0a0e12;
 
@@ -53,6 +67,114 @@
   --sidebar-accent-foreground: #f8f9fa;
   --sidebar-border: #2d2d2d;
   --sidebar-ring: #d4a574;
+
+  --shell-background: #101010;
+  --scrollbar-thumb: oklch(0.25 0 0);
+  --scrollbar-thumb-hover: oklch(0.32 0 0);
+}
+
+.theme-midnight {
+  --background: #1e1e1e;
+  --foreground: #d4d4d4;
+
+  --card: #252526;
+  --card-foreground: #d4d4d4;
+
+  --popover: #252526;
+  --popover-foreground: #d4d4d4;
+
+  --primary: #4ea1ff;
+  --primary-foreground: #0a1220;
+
+  --secondary: #2a2d2e;
+  --secondary-foreground: #d4d4d4;
+
+  --muted: #303033;
+  --muted-foreground: #9ca4b0;
+
+  --accent: #094771;
+  --accent-foreground: #ffffff;
+
+  --destructive: #f48771;
+  --destructive-foreground: #1e1e1e;
+
+  --success: #89d185;
+  --success-foreground: #0a1220;
+
+  --border: #3c3c3c;
+  --input: #3c3c3c;
+  --ring: #4ea1ff;
+
+  --chart-1: #4ea1ff;
+  --chart-2: #6fb4ff;
+  --chart-3: #3b8fe0;
+  --chart-4: #2e76bf;
+  --chart-5: #235b96;
+
+  --sidebar: #181818;
+  --sidebar-foreground: #cccccc;
+  --sidebar-primary: #4ea1ff;
+  --sidebar-primary-foreground: #0a1220;
+  --sidebar-accent: #2a2d2e;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #252526;
+  --sidebar-ring: #4ea1ff;
+
+  --shell-background: #1e1e1e;
+  --scrollbar-thumb: rgba(121, 121, 121, 0.4);
+  --scrollbar-thumb-hover: rgba(100, 100, 100, 0.7);
+}
+
+.theme-daylight {
+  --background: #ffffff;
+  --foreground: #1f2328;
+
+  --card: #ffffff;
+  --card-foreground: #1f2328;
+
+  --popover: #ffffff;
+  --popover-foreground: #1f2328;
+
+  --primary: #0969da;
+  --primary-foreground: #ffffff;
+
+  --secondary: #f3f4f6;
+  --secondary-foreground: #1f2328;
+
+  --muted: #eef1f4;
+  --muted-foreground: #596773;
+
+  --accent: #dbeafe;
+  --accent-foreground: #0f2a4a;
+
+  --destructive: #cf222e;
+  --destructive-foreground: #ffffff;
+
+  --success: #1a7f37;
+  --success-foreground: #ffffff;
+
+  --border: #d0d7de;
+  --input: #d0d7de;
+  --ring: #0969da;
+
+  --chart-1: #0969da;
+  --chart-2: #388bfd;
+  --chart-3: #2a6ac2;
+  --chart-4: #1f4d8b;
+  --chart-5: #153a6a;
+
+  --sidebar: #f6f8fa;
+  --sidebar-foreground: #1f2328;
+  --sidebar-primary: #0969da;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #dbeafe;
+  --sidebar-accent-foreground: #0f2a4a;
+  --sidebar-border: #d0d7de;
+  --sidebar-ring: #0969da;
+
+  --shell-background: #ffffff;
+  --scrollbar-thumb: rgba(100, 116, 139, 0.35);
+  --scrollbar-thumb-hover: rgba(71, 85, 105, 0.55);
 }
 
 @theme inline {
@@ -163,12 +285,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: oklch(0.25 0 0);
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.32 0 0);
+  background: var(--scrollbar-thumb-hover);
 }
 
 .scrollbar-thin::-webkit-scrollbar {

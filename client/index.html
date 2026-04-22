@@ -6,7 +6,8 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <title>Cadence</title>
     <script>
-      // Apply platform class before the app mounts so corner clipping is stable from first paint.
+      // Apply platform + theme classes before the app mounts so corner clipping
+      // and palette are stable from first paint (no flash of default theme).
       ;(() => {
         const platform = navigator.platform.toLowerCase()
 
@@ -16,6 +17,18 @@
           document.documentElement.classList.add('platform-windows')
         } else if (platform.includes('linux')) {
           document.documentElement.classList.add('platform-linux')
+        }
+
+        try {
+          var stored = window.localStorage.getItem('cadence:theme')
+          var themeId = stored || 'dusk'
+          var appearance = themeId === 'daylight' ? 'light' : 'dark'
+          document.documentElement.classList.add('theme-' + themeId)
+          document.documentElement.classList.add(appearance)
+          document.documentElement.style.colorScheme = appearance
+          document.documentElement.dataset.theme = themeId
+        } catch (_) {
+          document.documentElement.classList.add('theme-dusk', 'dark')
         }
       })()
     </script>
@@ -27,7 +40,7 @@
         height: 100%;
         margin: 0;
         overflow: hidden;
-        background: #101010;
+        background: var(--shell-background, #101010);
       }
 
       html.platform-macos {

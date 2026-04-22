@@ -104,7 +104,13 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           branch: repositoryStatus?.branchLabel ?? activeProject.repository?.branchLabel ?? activeProject.branchLabel,
           hasChanges: repositoryStatus?.hasChanges ?? activeProject.repositoryStatus?.hasChanges ?? false,
           changedFiles: repositoryStatus?.statusCount ?? activeProject.repositoryStatus?.statusCount ?? 0,
-          headSha: repositoryStatus?.headShaLabel ?? activeProject.repository?.headShaLabel ?? null,
+          lastCommit: (repositoryStatus?.lastCommit ?? activeProject.repositoryStatus?.lastCommit)
+            ? {
+                sha: (repositoryStatus?.lastCommit ?? activeProject.repositoryStatus?.lastCommit)?.sha,
+                message: (repositoryStatus?.lastCommit ?? activeProject.repositoryStatus?.lastCommit)?.summary,
+                committedAt: (repositoryStatus?.lastCommit ?? activeProject.repositoryStatus?.lastCommit)?.committedAt,
+              }
+            : null,
         }
       : null,
     runtime: agentView

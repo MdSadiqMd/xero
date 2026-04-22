@@ -1482,6 +1482,11 @@ describe('CadenceApp current UI', () => {
           headSha: '1234567890abcdef1234567890abcdef12345678',
           detached: false,
         },
+        lastCommit: {
+          sha: '1234567890abcdef1234567890abcdef12345678',
+          summary: 'fix: use live head commit metadata',
+          committedAt: '2026-04-22T17:55:00Z',
+        },
         entries: [
           {
             path: 'src/App.tsx',
@@ -1523,6 +1528,7 @@ describe('CadenceApp current UI', () => {
     expect(screen.getByText('feature/footer-live-data')).toBeVisible()
     expect(screen.getByText('2 changes')).toBeVisible()
     expect(screen.getByText('1234567')).toBeVisible()
+    expect(screen.getByText('fix: use live head commit metadata')).toBeVisible()
     expect(screen.getByText('OpenRouter')).toBeVisible()
     expect(screen.getByText('running')).toBeVisible()
   })

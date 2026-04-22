@@ -305,6 +305,11 @@ function makeStatus(overrides: Partial<RepositoryStatusResponseDto> = {}): Repos
       headSha: null,
       detached: false,
     },
+    lastCommit: {
+      sha: 'c3e529f1c4e2a7d0d4cf759f9080e7f507dc9f4a',
+      summary: 'fix: use live commit metadata in the footer',
+      committedAt: '2026-04-22T17:55:00Z',
+    },
     entries: [
       {
         path: 'client/src/App.tsx',
@@ -1915,6 +1920,8 @@ describe('cadence-model', () => {
     expect(status.stagedCount).toBe(1)
     expect(status.unstagedCount).toBe(1)
     expect(status.untrackedCount).toBe(1)
+    expect(status.lastCommit?.shortShaLabel).toBe('c3e529f')
+    expect(status.lastCommit?.summary).toBe('fix: use live commit metadata in the footer')
     expect(merged.branch).toBe('feature/live-state')
     expect(merged.repositoryStatus?.headShaLabel).toBe('No HEAD')
   })

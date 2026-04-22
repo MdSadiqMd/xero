@@ -34,6 +34,11 @@ import { less } from '@codemirror/lang-less'
 import { angular } from '@codemirror/lang-angular'
 import { cn } from '@/lib/utils'
 import { getLangFromPath } from '@/lib/shiki'
+import { useTheme } from '@/src/features/theme/theme-provider'
+import type {
+  EditorPalette,
+  ThemeDefinition,
+} from '@/src/features/theme/theme-definitions'
 
 interface CodeEditorProps {
   value: string
@@ -46,176 +51,154 @@ interface CodeEditorProps {
 }
 
 // ---------------------------------------------------------------------------
-// Theme — "Cadence Dusk": quiet, warm, low-contrast palette that matches the
-// app's warm-gold accent on near-black. Most identifiers stay in the default
-// soft off-white, with only a handful of accent tones reserved for structural
-// tokens (keywords, strings, comments, types).
+// Theme — palette is driven by the active `ThemeDefinition` from
+// `features/theme/theme-provider`. All token colors and editor chrome live
+// in the theme registry; this module only translates that palette into
+// CodeMirror extensions.
 // ---------------------------------------------------------------------------
 
-const PALETTE = {
-  background: '#121212',
-  foreground: '#e4e1d6',
-  gutter: 'rgba(168, 174, 181, 0.28)',
-  gutterActive: '#b5b0a4',
-  lineActive: 'rgba(212, 165, 116, 0.045)',
-  selection: 'rgba(212, 165, 116, 0.22)',
-  selectionMatch: 'rgba(212, 165, 116, 0.1)',
-  cursor: '#d4a574',
-  border: 'rgba(45, 45, 45, 0.9)',
+function buildSyntaxHighlight(p: EditorPalette): Extension {
+  return syntaxHighlighting(
+    HighlightStyle.define([
+      { tag: [t.keyword, t.moduleKeyword, t.definitionKeyword], color: p.keyword },
+      { tag: t.controlKeyword, color: p.control, fontStyle: 'italic' },
+      { tag: t.modifier, color: p.storage },
 
-  // syntax tones — warm dusk palette with complementary accents
-  keyword: '#d4a574', // warm gold — import/export/const/function
-  control: '#e89d5c', // amber — return/if/else/for/while
-  storage: '#c89668', // dimmer gold — modifiers, async, await
-  string: '#a5b68d', // muted sage
-  stringSpecial: '#c8a06b', // tan — template literals, escapes
-  number: '#e88e65', // warm coral
-  bool: '#e88e65', // warm coral
-  constant: '#e88e65',
-  comment: '#6e6a60', // olive-gray italic
-  function: '#e8c890', // soft cream
-  type: '#d4b678', // straw yellow
-  property: '#cbbfa8', // warm neutral
-  variable: '#e4e1d6', // off-white default
-  variableDef: '#f0dcb5', // slightly warmer for var definitions
-  operator: '#8a8780', // warm gray
-  punctuation: '#6e7278', // quiet gray
-  tagName: '#e0747c', // dusty rose — JSX/HTML tags
-  tagBracket: '#9a5a5f', // darker rose for angle brackets
-  attribute: '#a0c0cc', // muted sky — JSX/HTML attributes
-  meta: '#8fa9c4', // cool blue-gray — annotations, decorators
-  link: '#a0c0cc',
-  heading: '#e8c890',
-  invalid: '#ef4444',
+      { tag: [t.name, t.character, t.macroName], color: p.variable },
+      { tag: [t.definition(t.variableName), t.separator], color: p.variableDef },
+      { tag: [t.propertyName], color: p.property },
+      {
+        tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName],
+        color: p.function,
+      },
+
+      { tag: [t.typeName, t.className, t.namespace], color: p.type, fontStyle: 'italic' },
+
+      { tag: [t.number], color: p.number },
+      { tag: [t.bool, t.null, t.atom, t.self, t.special(t.variableName)], color: p.bool },
+      { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: p.constant },
+
+      { tag: [t.string], color: p.string },
+      { tag: [t.special(t.string), t.regexp, t.escape], color: p.stringSpecial },
+      { tag: [t.processingInstruction, t.inserted], color: p.string },
+
+      { tag: [t.operator, t.operatorKeyword], color: p.operator },
+      {
+        tag: [t.punctuation, t.bracket, t.brace, t.paren, t.derefOperator, t.squareBracket],
+        color: p.punctuation,
+      },
+      { tag: t.angleBracket, color: p.tagBracket },
+
+      { tag: [t.tagName], color: p.tagName },
+      { tag: [t.attributeName], color: p.attribute },
+      { tag: [t.attributeValue], color: p.string },
+
+      { tag: t.heading, color: p.heading, fontWeight: '600' },
+      { tag: [t.heading1, t.heading2], color: p.heading, fontWeight: '700' },
+      { tag: t.link, color: p.link, textDecoration: 'underline' },
+      { tag: t.url, color: p.link, textDecoration: 'underline' },
+      { tag: t.quote, color: p.property, fontStyle: 'italic' },
+      { tag: t.monospace, color: p.stringSpecial },
+      { tag: t.strong, color: p.control, fontWeight: '700' },
+      { tag: t.emphasis, color: p.string, fontStyle: 'italic' },
+      { tag: t.strikethrough, textDecoration: 'line-through' },
+      { tag: t.list, color: p.control },
+
+      {
+        tag: [t.comment, t.lineComment, t.blockComment, t.docComment],
+        color: p.comment,
+        fontStyle: 'italic',
+      },
+      { tag: [t.meta, t.annotation], color: p.meta },
+      { tag: t.changed, color: p.number },
+      { tag: t.invalid, color: p.invalid, textDecoration: 'underline wavy' },
+    ]),
+  )
 }
 
-const appSyntaxHighlight = HighlightStyle.define([
-  // keywords — layered warmth
-  { tag: [t.keyword, t.moduleKeyword, t.definitionKeyword], color: PALETTE.keyword },
-  { tag: t.controlKeyword, color: PALETTE.control, fontStyle: 'italic' },
-  { tag: t.modifier, color: PALETTE.storage },
+function buildEditorChrome(p: EditorPalette, dark: boolean): Extension {
+  return EditorView.theme(
+    {
+      '&': {
+        color: p.foreground,
+        backgroundColor: p.background,
+        height: '100%',
+        fontSize: '13px',
+      },
+      '&.cm-editor.cm-focused': { outline: 'none' },
+      '.cm-scroller': {
+        overflow: 'auto',
+        fontFamily:
+          "ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
+        lineHeight: '1.6',
+      },
+      '.cm-content': {
+        minHeight: '100%',
+        caretColor: p.cursor,
+        padding: '6px 0',
+      },
+      '.cm-gutters': {
+        backgroundColor: p.background,
+        borderRight: `1px solid ${p.border}`,
+        color: p.gutter,
+      },
+      '.cm-lineNumbers .cm-gutterElement': {
+        padding: '0 14px 0 10px',
+        minWidth: '28px',
+        fontVariantNumeric: 'tabular-nums',
+      },
+      '.cm-activeLineGutter': {
+        backgroundColor: 'transparent',
+        color: p.gutterActive,
+      },
+      '.cm-activeLine': { backgroundColor: p.lineActive },
+      '.cm-cursor, .cm-dropCursor': { borderLeftColor: p.cursor, borderLeftWidth: '2px' },
+      '.cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-content ::selection':
+        { backgroundColor: `${p.selection} !important` },
+      '.cm-selectionMatch': { backgroundColor: p.selectionMatch },
+      '.cm-matchingBracket, .cm-nonmatchingBracket': {
+        backgroundColor: p.matchingBracketBg,
+        color: p.foreground,
+        outline: 'none',
+      },
+      '.cm-searchMatch': {
+        backgroundColor: p.searchMatchBg,
+        outline: `1px solid ${p.searchMatchBorder}`,
+      },
+      '.cm-searchMatch.cm-searchMatch-selected': {
+        backgroundColor: p.searchMatchSelectedBg,
+      },
+      '.cm-panels': { backgroundColor: p.panelBackground, color: p.foreground },
+      '.cm-panels.cm-panels-bottom': { borderTop: `1px solid ${p.border}` },
+      '.cm-tooltip': {
+        backgroundColor: p.panelBackground,
+        borderColor: p.border,
+        color: p.foreground,
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+        backgroundColor: p.autocompleteSelectedBg,
+        color: p.foreground,
+      },
+      '.cm-foldGutter .cm-gutterElement': {
+        color: p.foldGutter,
+      },
+      '.cm-foldPlaceholder': {
+        backgroundColor: 'transparent',
+        border: `1px solid ${p.border}`,
+        color: p.foldPlaceholderText,
+        padding: '0 4px',
+      },
+    },
+    { dark },
+  )
+}
 
-  // identifiers
-  { tag: [t.name, t.character, t.macroName], color: PALETTE.variable },
-  { tag: [t.definition(t.variableName), t.separator], color: PALETTE.variableDef },
-  { tag: [t.propertyName], color: PALETTE.property },
-  { tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName], color: PALETTE.function },
-
-  // types / classes
-  { tag: [t.typeName, t.className, t.namespace], color: PALETTE.type, fontStyle: 'italic' },
-
-  // literals
-  { tag: [t.number], color: PALETTE.number },
-  { tag: [t.bool, t.null, t.atom, t.self, t.special(t.variableName)], color: PALETTE.bool },
-  { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: PALETTE.constant },
-
-  // strings
-  { tag: [t.string], color: PALETTE.string },
-  { tag: [t.special(t.string), t.regexp, t.escape], color: PALETTE.stringSpecial },
-  { tag: [t.processingInstruction, t.inserted], color: PALETTE.string },
-
-  // punctuation / operators
-  { tag: [t.operator, t.operatorKeyword], color: PALETTE.operator },
-  { tag: [t.punctuation, t.bracket, t.brace, t.paren, t.derefOperator, t.squareBracket], color: PALETTE.punctuation },
-  { tag: t.angleBracket, color: PALETTE.tagBracket },
-
-  // JSX / HTML / XML
-  { tag: [t.tagName], color: PALETTE.tagName },
-  { tag: [t.attributeName], color: PALETTE.attribute },
-  { tag: [t.attributeValue], color: PALETTE.string },
-
-  // markdown
-  { tag: t.heading, color: PALETTE.heading, fontWeight: '600' },
-  { tag: [t.heading1, t.heading2], color: PALETTE.heading, fontWeight: '700' },
-  { tag: t.link, color: PALETTE.link, textDecoration: 'underline' },
-  { tag: t.url, color: PALETTE.link, textDecoration: 'underline' },
-  { tag: t.quote, color: PALETTE.property, fontStyle: 'italic' },
-  { tag: t.monospace, color: PALETTE.stringSpecial },
-  { tag: t.strong, color: PALETTE.control, fontWeight: '700' },
-  { tag: t.emphasis, color: PALETTE.string, fontStyle: 'italic' },
-  { tag: t.strikethrough, textDecoration: 'line-through' },
-  { tag: t.list, color: PALETTE.control },
-
-  // comments / meta
-  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: PALETTE.comment, fontStyle: 'italic' },
-  { tag: [t.meta, t.annotation], color: PALETTE.meta },
-  { tag: t.changed, color: PALETTE.number },
-  { tag: t.invalid, color: PALETTE.invalid, textDecoration: 'underline wavy' },
-])
-
-const appEditorTheme = EditorView.theme(
-  {
-    '&': {
-      color: PALETTE.foreground,
-      backgroundColor: PALETTE.background,
-      height: '100%',
-      fontSize: '13px',
-    },
-    '&.cm-editor.cm-focused': { outline: 'none' },
-    '.cm-scroller': {
-      overflow: 'auto',
-      fontFamily: "ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
-      lineHeight: '1.6',
-    },
-    '.cm-content': {
-      minHeight: '100%',
-      caretColor: PALETTE.cursor,
-      padding: '6px 0',
-    },
-    '.cm-gutters': {
-      backgroundColor: PALETTE.background,
-      borderRight: `1px solid ${PALETTE.border}`,
-      color: PALETTE.gutter,
-    },
-    '.cm-lineNumbers .cm-gutterElement': {
-      padding: '0 14px 0 10px',
-      minWidth: '28px',
-      fontVariantNumeric: 'tabular-nums',
-    },
-    '.cm-activeLineGutter': {
-      backgroundColor: 'transparent',
-      color: PALETTE.gutterActive,
-    },
-    '.cm-activeLine': { backgroundColor: PALETTE.lineActive },
-    '.cm-cursor, .cm-dropCursor': { borderLeftColor: PALETTE.cursor, borderLeftWidth: '2px' },
-    '.cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-content ::selection':
-      { backgroundColor: `${PALETTE.selection} !important` },
-    '.cm-selectionMatch': { backgroundColor: PALETTE.selectionMatch },
-    '.cm-matchingBracket, .cm-nonmatchingBracket': {
-      backgroundColor: 'rgba(212, 165, 116, 0.14)',
-      color: PALETTE.foreground,
-      outline: 'none',
-    },
-    '.cm-searchMatch': {
-      backgroundColor: 'rgba(212, 165, 116, 0.22)',
-      outline: `1px solid rgba(212, 165, 116, 0.5)`,
-    },
-    '.cm-searchMatch.cm-searchMatch-selected': {
-      backgroundColor: 'rgba(212, 165, 116, 0.4)',
-    },
-    '.cm-panels': { backgroundColor: '#1a1a1a', color: PALETTE.foreground },
-    '.cm-panels.cm-panels-bottom': { borderTop: `1px solid ${PALETTE.border}` },
-    '.cm-tooltip': {
-      backgroundColor: '#1a1a1a',
-      borderColor: PALETTE.border,
-      color: PALETTE.foreground,
-    },
-    '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
-      backgroundColor: 'rgba(212, 165, 116, 0.16)',
-      color: PALETTE.foreground,
-    },
-    '.cm-foldGutter .cm-gutterElement': {
-      color: 'rgba(168, 174, 181, 0.4)',
-    },
-    '.cm-foldPlaceholder': {
-      backgroundColor: 'transparent',
-      border: `1px solid ${PALETTE.border}`,
-      color: '#a8aeb5',
-      padding: '0 4px',
-    },
-  },
-  { dark: true },
-)
+function buildThemeExtension(theme: ThemeDefinition): Extension {
+  return [
+    buildSyntaxHighlight(theme.editor),
+    buildEditorChrome(theme.editor, theme.appearance === 'dark'),
+  ]
+}
 
 // ---------------------------------------------------------------------------
 // Language resolution
@@ -396,6 +379,8 @@ export function CodeEditor({
   const onCursorChangeRef = useRef(onCursorChange)
   const langCompartment = useMemo(() => new Compartment(), [])
   const readOnlyCompartment = useMemo(() => new Compartment(), [])
+  const themeCompartment = useMemo(() => new Compartment(), [])
+  const { theme } = useTheme()
 
   onChangeRef.current = onChange
   onSaveRef.current = onSave
@@ -408,8 +393,7 @@ export function CodeEditor({
       doc: value,
       extensions: [
         basicSetup,
-        syntaxHighlighting(appSyntaxHighlight),
-        appEditorTheme,
+        themeCompartment.of(buildThemeExtension(theme)),
         highlightSelectionMatches(),
         autocompletion(),
         keymap.of([
@@ -446,7 +430,13 @@ export function CodeEditor({
       view.destroy()
       viewRef.current = null
     }
-  }, [langCompartment, readOnlyCompartment])
+  }, [langCompartment, readOnlyCompartment, themeCompartment])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({ effects: themeCompartment.reconfigure(buildThemeExtension(theme)) })
+  }, [theme, themeCompartment])
 
   useEffect(() => {
     const view = viewRef.current

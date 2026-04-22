@@ -2,13 +2,18 @@
  * Singleton shiki highlighter for diff syntax highlighting.
  *
  * Uses the JavaScript regex engine (no WASM) and loads languages on demand.
- * Themes are bundled at build time for the two we need (dark/light).
+ * All themes exported from `features/theme/theme-definitions` are bundled
+ * at build time so switching themes at runtime doesn't require a network
+ * request. New themes that reference additional Shiki themes must also be
+ * added to the `themes` array passed to `createHighlighter`.
  */
 
 import { createHighlighter, type Highlighter, type ThemedToken } from 'shiki'
+import { THEMES } from '@/src/features/theme/theme-definitions'
 
 let highlighterPromise: Promise<Highlighter> | null = null
 const loadedLangs = new Set<string>()
+const loadedThemes = new Set<string>()
 
 /** File extension → shiki/editor language id */
 const EXT_LANG_MAP: Record<string, string> = {
@@ -144,12 +149,24 @@ const BASENAME_LANG_MAP: Record<string, string> = {
   'cmakelists.txt': 'cmake',
 }
 
+function bundledShikiThemes(): string[] {
+  const ids = new Set<string>()
+  for (const theme of THEMES) {
+    ids.add(theme.shiki)
+  }
+  return Array.from(ids)
+}
+
 function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
+    const themes = bundledShikiThemes()
     highlighterPromise = createHighlighter({
-      themes: ['github-dark'],
+      themes: themes as never,
       langs: [],
     })
+    for (const theme of themes) {
+      loadedThemes.add(theme)
+    }
   }
   return highlighterPromise
 }
@@ -172,23 +189,35 @@ export type TokenizedLine = ThemedToken[]
 
 /**
  * Tokenize a block of code into per-line token arrays.
- * Returns null if the language is unsupported or loading fails.
+ *
+ * @param code   Source text to tokenize.
+ * @param lang   Shiki language id (see {@link getLangFromPath}).
+ * @param theme  Shiki theme id. Defaults to the first registered theme's
+ *               shiki id. Themes not bundled at init time will be loaded
+ *               on demand.
+ * @returns Per-line token arrays, or `null` if tokenization fails.
  */
 export async function tokenizeCode(
   code: string,
   lang: string,
+  theme: string = THEMES[0].shiki,
 ): Promise<TokenizedLine[] | null> {
   try {
     const hl = await getHighlighter()
 
     if (!loadedLangs.has(lang)) {
-      await hl.loadLanguage(lang as any)
+      await hl.loadLanguage(lang as never)
       loadedLangs.add(lang)
     }
 
+    if (!loadedThemes.has(theme)) {
+      await hl.loadTheme(theme as never)
+      loadedThemes.add(theme)
+    }
+
     const { tokens } = hl.codeToTokens(code, {
-      lang: lang as any,
-      theme: 'github-dark',
+      lang: lang as never,
+      theme,
     })
     return tokens
   } catch {

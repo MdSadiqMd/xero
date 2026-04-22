@@ -1,5 +1,6 @@
 "use client"
 
+import { formatDistanceToNow } from "date-fns"
 import {
   Bell,
   CircleDot,
@@ -18,7 +19,11 @@ export interface StatusFooterProps {
     branch?: string | null
     hasChanges?: boolean
     changedFiles?: number
-    headSha?: string | null
+    lastCommit?: {
+      sha?: string | null
+      message?: string | null
+      committedAt?: string | null
+    } | null
   } | null
   runtime?: {
     provider?: string | null
@@ -59,6 +64,11 @@ const MOCK_FOOTER = {
 // ---------------------------------------------------------------------------
 
 export function StatusFooter({ git = null, runtime = null }: StatusFooterProps) {
+  const liveLastCommit = git?.lastCommit
+  const liveLastCommitSha = formatShortSha(liveLastCommit?.sha)
+  const liveLastCommitMessage = normalizeOptionalFooterText(liveLastCommit?.message)
+  const liveLastCommitRelativeTime = formatRelativeCommitTime(liveLastCommit?.committedAt)
+
   const footer = {
     ...MOCK_FOOTER,
     branch: normalizeFooterText(git?.branch, MOCK_FOOTER.branch),
@@ -66,10 +76,20 @@ export function StatusFooter({ git = null, runtime = null }: StatusFooterProps) 
       dirty: git?.hasChanges ?? MOCK_FOOTER.workingTree.dirty,
       changedFiles: git?.changedFiles ?? MOCK_FOOTER.workingTree.changedFiles,
     },
-    lastCommit: {
-      ...MOCK_FOOTER.lastCommit,
-      shortSha: formatShortSha(git?.headSha) ?? MOCK_FOOTER.lastCommit.shortSha,
-    },
+    lastCommit:
+      liveLastCommitSha && liveLastCommitMessage
+        ? {
+            shortSha: liveLastCommitSha,
+            message: liveLastCommitMessage,
+            relativeTime: liveLastCommitRelativeTime ?? MOCK_FOOTER.lastCommit.relativeTime,
+          }
+        : git
+          ? {
+              shortSha: "—",
+              message: "No commits yet",
+              relativeTime: "",
+            }
+          : MOCK_FOOTER.lastCommit,
     runtime: {
       provider: normalizeFooterText(runtime?.provider, MOCK_FOOTER.runtime.provider),
       state: runtime?.state ?? MOCK_FOOTER.runtime.state,
@@ -118,7 +138,9 @@ export function StatusFooter({ git = null, runtime = null }: StatusFooterProps) 
           <GitCommit className="h-3 w-3 shrink-0" />
           <span className="font-mono text-foreground/70">{lastCommit.shortSha}</span>
           <span className="truncate">{truncatedCommit}</span>
-          <span className="shrink-0 text-muted-foreground/70">· {lastCommit.relativeTime}</span>
+          {lastCommit.relativeTime ? (
+            <span className="shrink-0 text-muted-foreground/70">· {lastCommit.relativeTime}</span>
+          ) : null}
         </span>
       </div>
 
@@ -174,6 +196,11 @@ function normalizeFooterText(value: string | null | undefined, fallback: string)
   return trimmed && trimmed.length > 0 ? trimmed : fallback
 }
 
+function normalizeOptionalFooterText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed && trimmed.length > 0 ? trimmed : null
+}
+
 function formatShortSha(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
   if (!trimmed || trimmed === "No HEAD") {
@@ -181,6 +208,20 @@ function formatShortSha(value: string | null | undefined): string | null {
   }
 
   return trimmed.slice(0, 7)
+}
+
+function formatRelativeCommitTime(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const parsed = new Date(trimmed)
+  if (Number.isNaN(parsed.getTime())) {
+    return null
+  }
+
+  return formatDistanceToNow(parsed, { addSuffix: true })
 }
 
 // ---------------------------------------------------------------------------
