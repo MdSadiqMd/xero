@@ -1204,6 +1204,18 @@ describe('live views', () => {
             : `/${request.newName}`,
         })}
         deleteProjectEntry={async (projectId: string, path: string) => ({ projectId, path })}
+        searchProject={async (request) => ({
+          projectId: request.projectId,
+          totalMatches: 0,
+          totalFiles: 0,
+          truncated: false,
+          files: [],
+        })}
+        replaceInProject={async (request) => ({
+          projectId: request.projectId,
+          filesChanged: 0,
+          totalReplacements: 0,
+        })}
       />,
     )
 

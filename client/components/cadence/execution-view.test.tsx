@@ -339,6 +339,18 @@ function createWorkspaceHarness(options?: {
     currentFileContents = removeContentKeys(currentFileContents, path)
     return { projectId, path }
   })
+  const searchProject = vi.fn(async ({ projectId }: { projectId: string }) => ({
+    projectId,
+    totalMatches: 0,
+    totalFiles: 0,
+    truncated: false,
+    files: [],
+  }))
+  const replaceInProject = vi.fn(async ({ projectId }: { projectId: string }) => ({
+    projectId,
+    filesChanged: 0,
+    totalReplacements: 0,
+  }))
 
   return {
     listProjectFiles,
@@ -347,6 +359,8 @@ function createWorkspaceHarness(options?: {
     createProjectEntry,
     renameProjectEntry,
     deleteProjectEntry,
+    searchProject,
+    replaceInProject,
   }
 }
 
@@ -362,6 +376,8 @@ function renderExecutionView(
     createProjectEntry: workspace.createProjectEntry,
     renameProjectEntry: workspace.renameProjectEntry,
     deleteProjectEntry: workspace.deleteProjectEntry,
+    searchProject: workspace.searchProject,
+    replaceInProject: workspace.replaceInProject,
     ...overrides,
   }
 
@@ -425,6 +441,8 @@ describe('ExecutionView', () => {
         createProjectEntry={workspace.createProjectEntry}
         renameProjectEntry={workspace.renameProjectEntry}
         deleteProjectEntry={workspace.deleteProjectEntry}
+        searchProject={workspace.searchProject}
+        replaceInProject={workspace.replaceInProject}
       />,
     )
 
@@ -522,6 +540,18 @@ describe('ExecutionView', () => {
       path: joinPath(parentPathOf(request.path), request.newName),
     }))
     const deleteProjectEntry = vi.fn(async (projectId: string, path: string) => ({ projectId, path }))
+    const searchProject = vi.fn(async ({ projectId }: { projectId: string }) => ({
+      projectId,
+      totalMatches: 0,
+      totalFiles: 0,
+      truncated: false,
+      files: [],
+    }))
+    const replaceInProject = vi.fn(async ({ projectId }: { projectId: string }) => ({
+      projectId,
+      filesChanged: 0,
+      totalReplacements: 0,
+    }))
 
     const { rerender } = render(
       <ExecutionView
@@ -532,6 +562,8 @@ describe('ExecutionView', () => {
         createProjectEntry={createProjectEntry}
         renameProjectEntry={renameProjectEntry}
         deleteProjectEntry={deleteProjectEntry}
+        searchProject={searchProject}
+        replaceInProject={replaceInProject}
       />,
     )
 
@@ -549,6 +581,8 @@ describe('ExecutionView', () => {
         createProjectEntry={createProjectEntry}
         renameProjectEntry={renameProjectEntry}
         deleteProjectEntry={deleteProjectEntry}
+        searchProject={searchProject}
+        replaceInProject={replaceInProject}
       />,
     )
 
@@ -586,6 +620,8 @@ describe('ExecutionView', () => {
         createProjectEntry={workspace.createProjectEntry}
         renameProjectEntry={workspace.renameProjectEntry}
         deleteProjectEntry={workspace.deleteProjectEntry}
+        searchProject={workspace.searchProject}
+        replaceInProject={workspace.replaceInProject}
       />,
     )
 

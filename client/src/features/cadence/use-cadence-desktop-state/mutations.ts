@@ -21,6 +21,8 @@ export function useCadenceDesktopMutations(
     createProjectEntry,
     renameProjectEntry,
     deleteProjectEntry,
+    searchProject,
+    replaceInProject,
   } = useProjectEntryMutations(args)
   const {
     startOpenAiLogin,
@@ -57,6 +59,8 @@ export function useCadenceDesktopMutations(
     createProjectEntry,
     renameProjectEntry,
     deleteProjectEntry,
+    searchProject,
+    replaceInProject,
     startOpenAiLogin,
     submitOpenAiCallback,
     startAutonomousRun,

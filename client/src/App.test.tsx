@@ -1041,6 +1041,18 @@ function createAdapter(options?: {
         : `/${request.newName}`,
     }),
     deleteProjectEntry: async (projectId, path) => ({ projectId, path }),
+    searchProject: async (request) => ({
+      projectId: request.projectId,
+      totalMatches: 0,
+      totalFiles: 0,
+      truncated: false,
+      files: [],
+    }),
+    replaceInProject: async (request) => ({
+      projectId: request.projectId,
+      filesChanged: 0,
+      totalReplacements: 0,
+    }),
     getAutonomousRun: async () => currentAutonomousState ?? { run: null, unit: null },
     getRuntimeRun: async () => currentRuntimeRun,
     getRuntimeSettings: async () => currentRuntimeSettings,

@@ -24,6 +24,7 @@ export interface SelectedRuntimeProviderView {
   modelId: string | null
   readiness: ProviderProfileReadinessDto | null
   openrouterApiKeyConfigured: boolean
+  anthropicApiKeyConfigured: boolean
   source: SelectedRuntimeProviderSource
 }
 
@@ -36,7 +37,7 @@ export interface ProviderMismatchCopyView {
 export function isKnownRuntimeProviderId(
   value: string | null | undefined,
 ): value is RuntimeSettingsDto['providerId'] {
-  return value === 'openrouter' || value === 'openai_codex'
+  return value === 'openrouter' || value === 'openai_codex' || value === 'anthropic'
 }
 
 export function getRuntimeProviderLabel(providerId: string | null | undefined): string {
@@ -46,6 +47,10 @@ export function getRuntimeProviderLabel(providerId: string | null | undefined): 
 
   if (providerId === 'openai_codex') {
     return 'OpenAI Codex'
+  }
+
+  if (providerId === 'anthropic') {
+    return 'Anthropic'
   }
 
   if (typeof providerId !== 'string' || providerId.trim().length === 0) {
@@ -61,7 +66,7 @@ export function getRuntimeProviderLabel(providerId: string | null | undefined): 
 }
 
 export function getDefaultRuntimeModelId(providerId: RuntimeSettingsDto['providerId']): string {
-  if (providerId === 'openrouter') {
+  if (providerId === 'openrouter' || providerId === 'anthropic') {
     return ''
   }
 
@@ -72,6 +77,14 @@ function hasAnyReadyOpenRouterProfile(providerProfiles: ProviderProfilesDto | nu
   return (
     providerProfiles?.profiles.some(
       (profile) => profile.providerId === 'openrouter' && profile.readiness.ready,
+    ) ?? false
+  )
+}
+
+function hasAnyReadyAnthropicProfile(providerProfiles: ProviderProfilesDto | null | undefined): boolean {
+  return (
+    providerProfiles?.profiles.some(
+      (profile) => profile.providerId === 'anthropic' && profile.readiness.ready,
     ) ?? false
   )
 }
@@ -88,6 +101,24 @@ function getSelectedOpenRouterReadinessStatus(
   selectedProvider: SelectedRuntimeProviderView,
 ): ProviderProfileReadinessDto['status'] | null {
   if (selectedProvider.providerId !== 'openrouter') {
+    return null
+  }
+
+  return selectedProvider.readiness?.status ?? null
+}
+
+function isSelectedAnthropicReady(selectedProvider: SelectedRuntimeProviderView): boolean {
+  if (selectedProvider.providerId !== 'anthropic') {
+    return false
+  }
+
+  return selectedProvider.readiness?.ready ?? selectedProvider.anthropicApiKeyConfigured
+}
+
+function getSelectedAnthropicReadinessStatus(
+  selectedProvider: SelectedRuntimeProviderView,
+): ProviderProfileReadinessDto['status'] | null {
+  if (selectedProvider.providerId !== 'anthropic') {
     return null
   }
 
@@ -123,6 +154,7 @@ export function resolveSelectedRuntimeProvider(
       modelId: activeProfile.modelId,
       readiness: activeProfile.readiness,
       openrouterApiKeyConfigured: hasAnyReadyOpenRouterProfile(providerProfiles),
+      anthropicApiKeyConfigured: hasAnyReadyAnthropicProfile(providerProfiles),
       source: 'provider_profiles',
     }
   }
@@ -136,6 +168,7 @@ export function resolveSelectedRuntimeProvider(
       modelId: runtimeSettings.modelId,
       readiness: null,
       openrouterApiKeyConfigured: runtimeSettings.openrouterApiKeyConfigured,
+      anthropicApiKeyConfigured: runtimeSettings.anthropicApiKeyConfigured,
       source: 'runtime_settings',
     }
   }
@@ -149,6 +182,7 @@ export function resolveSelectedRuntimeProvider(
       modelId: runtimeSession.runtimeKind,
       readiness: null,
       openrouterApiKeyConfigured: runtimeSession.providerId === 'openrouter',
+      anthropicApiKeyConfigured: runtimeSession.providerId === 'anthropic',
       source: 'runtime_session',
     }
   }
@@ -161,6 +195,7 @@ export function resolveSelectedRuntimeProvider(
     modelId: getDefaultRuntimeModelId(DEFAULT_RUNTIME_PROVIDER_ID),
     readiness: null,
     openrouterApiKeyConfigured: false,
+    anthropicApiKeyConfigured: false,
     source: 'default',
   }
 }
@@ -202,6 +237,8 @@ export function getAgentSessionUnavailableReason(
   const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
   const selectedOpenRouterReady = isSelectedOpenRouterReady(selectedProvider)
   const selectedOpenRouterReadinessStatus = getSelectedOpenRouterReadinessStatus(selectedProvider)
+  const selectedAnthropicReady = isSelectedAnthropicReady(selectedProvider)
+  const selectedAnthropicReadinessStatus = getSelectedAnthropicReadinessStatus(selectedProvider)
 
   if (!runtimeSession) {
     if (selectedProvider.providerId === 'openrouter') {
@@ -212,6 +249,16 @@ export function getAgentSessionUnavailableReason(
       return selectedOpenRouterReady
         ? 'Bind OpenRouter with the selected app-local provider profile to create a project runtime session.'
         : 'Configure an OpenRouter API key in Settings before Cadence can bind a project runtime session.'
+    }
+
+    if (selectedProvider.providerId === 'anthropic') {
+      if (selectedAnthropicReadinessStatus === 'malformed') {
+        return 'Repair the selected Anthropic profile credentials in Settings before Cadence can bind a project runtime session.'
+      }
+
+      return selectedAnthropicReady
+        ? 'Bind Anthropic with the selected app-local provider profile to create a project runtime session.'
+        : 'Configure an Anthropic API key in Settings before Cadence can bind a project runtime session.'
     }
 
     return 'Sign in with OpenAI to create or reuse a runtime session for this imported project.'

@@ -53,6 +53,8 @@ export type CadenceDesktopMutationActions = Pick<
   | 'createProjectEntry'
   | 'renameProjectEntry'
   | 'deleteProjectEntry'
+  | 'searchProject'
+  | 'replaceInProject'
   | 'startOpenAiLogin'
   | 'submitOpenAiCallback'
   | 'startAutonomousRun'

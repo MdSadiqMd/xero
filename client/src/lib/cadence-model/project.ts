@@ -213,9 +213,9 @@ export const searchMatchSchema = z
   .object({
     line: z.number().int().positive(),
     column: z.number().int().positive(),
-    matchStart: z.number().int().nonnegative(),
-    matchEnd: z.number().int().nonnegative(),
-    preview: z.string(),
+    previewPrefix: z.string(),
+    previewMatch: z.string(),
+    previewSuffix: z.string(),
   })
   .strict()
 

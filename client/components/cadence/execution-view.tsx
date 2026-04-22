@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useState } from 'react'
-import type { EditorView as CodeMirrorView } from '@codemirror/view'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { EditorView as CodeMirrorView } from '@codemirror/view'
 import type {
   CreateProjectEntryRequestDto,
   CreateProjectEntryResponseDto,
@@ -10,6 +10,10 @@ import type {
   ReadProjectFileResponseDto,
   RenameProjectEntryRequestDto,
   RenameProjectEntryResponseDto,
+  ReplaceInProjectRequestDto,
+  ReplaceInProjectResponseDto,
+  SearchProjectRequestDto,
+  SearchProjectResponseDto,
   WriteProjectFileResponseDto,
 } from '@/src/lib/cadence-model'
 import type { ExecutionPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
@@ -32,6 +36,8 @@ export interface ExecutionViewProps {
   createProjectEntry: (request: CreateProjectEntryRequestDto) => Promise<CreateProjectEntryResponseDto>
   renameProjectEntry: (request: RenameProjectEntryRequestDto) => Promise<RenameProjectEntryResponseDto>
   deleteProjectEntry: (projectId: string, path: string) => Promise<DeleteProjectEntryResponseDto>
+  searchProject: (request: SearchProjectRequestDto) => Promise<SearchProjectResponseDto>
+  replaceInProject: (request: ReplaceInProjectRequestDto) => Promise<ReplaceInProjectResponseDto>
 }
 
 function EditorView({
@@ -42,6 +48,8 @@ function EditorView({
   createProjectEntry,
   renameProjectEntry,
   deleteProjectEntry,
+  searchProject,
+  replaceInProject,
 }: ExecutionViewProps) {
   const projectId = execution.project.id
   const projectLabel = execution.project.repository?.displayName ?? execution.project.name
@@ -105,6 +113,7 @@ function EditorView({
     query: string
     token: number
   }>({ open: false, query: '', token: 0 })
+  const pendingJumpRef = useRef<{ path: string; line: number; column: number } | null>(null)
 
   const handleOpenFind = useCallback(
     ({ initialQuery }: { withReplace: boolean; initialQuery: string }) => {
@@ -122,12 +131,61 @@ function EditorView({
     editorView?.focus()
   }, [editorView])
 
+  const jumpEditorToCursor = useCallback(
+    (line: number, column: number) => {
+      const view = editorView
+      if (!view) return
+      const doc = view.state.doc
+      if (line < 1 || line > doc.lines) return
+      const target = doc.line(line)
+      const pos = Math.min(target.to, target.from + Math.max(0, column - 1))
+      view.dispatch({
+        selection: { anchor: pos },
+        // Scroll centered so the match isn't hidden behind the top/bottom
+        // chrome on small editor panes.
+        effects: [CodeMirrorView.scrollIntoView(pos, { y: 'center' })],
+      })
+      view.focus()
+    },
+    [editorView],
+  )
+
+  const handleOpenAtLine = useCallback(
+    (path: string, line: number, column: number) => {
+      if (activePath === path) {
+        jumpEditorToCursor(line, column)
+        return
+      }
+      pendingJumpRef.current = { path, line, column }
+      void handleSelectFile(path)
+    },
+    [activePath, handleSelectFile, jumpEditorToCursor],
+  )
+
+  // After a jump-triggered file open finishes, position the cursor once the
+  // editor state matches the requested file.
+  useEffect(() => {
+    const pending = pendingJumpRef.current
+    if (!pending) return
+    if (pending.path !== activePath) return
+    if (isActiveLoading) return
+    if (!editorView) return
+    pendingJumpRef.current = null
+    jumpEditorToCursor(pending.line, pending.column)
+  }, [activePath, isActiveLoading, editorView, jumpEditorToCursor])
+
   return (
     <div className="flex min-h-0 w-full min-w-0 flex-1">
       {findState.open ? (
         <FindReplacePane
           view={editorView}
+          projectId={projectId}
+          activePath={activePath}
+          activeContent={activeContent}
           onClose={handleCloseFind}
+          onOpenAtLine={handleOpenAtLine}
+          searchProject={searchProject}
+          replaceInProject={replaceInProject}
           initialQuery={findState.query}
           openToken={findState.token}
         />

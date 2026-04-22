@@ -22,6 +22,10 @@ import type {
   ReadProjectFileResponseDto,
   RenameProjectEntryRequestDto,
   RenameProjectEntryResponseDto,
+  ReplaceInProjectRequestDto,
+  ReplaceInProjectResponseDto,
+  SearchProjectRequestDto,
+  SearchProjectResponseDto,
   RepositoryDiffScope,
   RepositoryDiffView,
   RepositoryStatusEntryView,
@@ -419,6 +423,8 @@ export interface UseCadenceDesktopStateResult {
   createProjectEntry: (request: CreateProjectEntryRequestDto) => Promise<CreateProjectEntryResponseDto>
   renameProjectEntry: (request: RenameProjectEntryRequestDto) => Promise<RenameProjectEntryResponseDto>
   deleteProjectEntry: (projectId: string, path: string) => Promise<DeleteProjectEntryResponseDto>
+  searchProject: (request: SearchProjectRequestDto) => Promise<SearchProjectResponseDto>
+  replaceInProject: (request: ReplaceInProjectRequestDto) => Promise<ReplaceInProjectResponseDto>
   startOpenAiLogin: () => Promise<RuntimeSessionView | null>
   submitOpenAiCallback: (flowId: string, options?: { manualInput?: string | null }) => Promise<RuntimeSessionView | null>
   startAutonomousRun: () => Promise<ProjectDetailView['autonomousRun'] | null>

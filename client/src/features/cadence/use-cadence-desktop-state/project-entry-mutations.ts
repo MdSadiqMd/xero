@@ -25,6 +25,8 @@ export function useProjectEntryMutations({
   | 'createProjectEntry'
   | 'renameProjectEntry'
   | 'deleteProjectEntry'
+  | 'searchProject'
+  | 'replaceInProject'
 > {
   const {
     setProjects,
@@ -124,6 +126,20 @@ export function useProjectEntryMutations({
     [adapter],
   )
 
+  const searchProject = useCallback(
+    async (request: Parameters<CadenceDesktopMutationActions['searchProject']>[0]) => {
+      return await adapter.searchProject(request)
+    },
+    [adapter],
+  )
+
+  const replaceInProject = useCallback(
+    async (request: Parameters<CadenceDesktopMutationActions['replaceInProject']>[0]) => {
+      return await adapter.replaceInProject(request)
+    },
+    [adapter],
+  )
+
   return {
     importProject,
     removeProject,
@@ -133,5 +149,7 @@ export function useProjectEntryMutations({
     createProjectEntry,
     renameProjectEntry,
     deleteProjectEntry,
+    searchProject,
+    replaceInProject,
   }
 }

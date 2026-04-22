@@ -25,7 +25,7 @@ export const runtimeDiagnosticSchema = z.object({
   retryable: z.boolean(),
 })
 
-export const runtimeProviderIdSchema = z.enum(['openrouter', 'openai_codex'])
+export const runtimeProviderIdSchema = z.enum(['openrouter', 'openai_codex', 'anthropic'])
 
 export const runtimeRunThinkingEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'x_high'])
 export const runtimeRunApprovalModeSchema = z.enum(['suggest', 'auto_edit', 'yolo'])
@@ -49,6 +49,7 @@ export const runtimeSettingsSchema = z
     providerId: runtimeProviderIdSchema,
     modelId: z.string().trim().min(1),
     openrouterApiKeyConfigured: z.boolean(),
+    anthropicApiKeyConfigured: z.boolean().default(false),
   })
   .strict()
   .superRefine((payload, ctx) => {
@@ -60,6 +61,7 @@ export const upsertRuntimeSettingsRequestSchema = z
     providerId: runtimeProviderIdSchema,
     modelId: z.string().trim().min(1),
     openrouterApiKey: z.string().nullable().optional(),
+    anthropicApiKey: z.string().nullable().optional(),
   })
   .strict()
   .superRefine((payload, ctx) => {

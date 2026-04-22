@@ -178,6 +178,7 @@ export const upsertProviderProfileRequestSchema = z
     label: z.string().trim().min(1),
     modelId: z.string().trim().min(1),
     openrouterApiKey: z.string().nullable().optional(),
+    anthropicApiKey: z.string().nullable().optional(),
     activate: z.boolean().optional(),
   })
   .strict()
@@ -217,6 +218,13 @@ export function getActiveProviderProfile(
   )
 }
 
+function hasAnyReadyProfile(
+  providerProfiles: ProviderProfilesDto | null | undefined,
+  providerId: RuntimeSettingsDto['providerId'],
+): boolean {
+  return providerProfiles?.profiles.some((profile) => profile.providerId === providerId && profile.readiness.ready) ?? false
+}
+
 export function projectRuntimeSettingsFromProviderProfiles(
   providerProfiles: ProviderProfilesDto | null | undefined,
 ): RuntimeSettingsDto | null {
@@ -228,8 +236,7 @@ export function projectRuntimeSettingsFromProviderProfiles(
   return runtimeSettingsSchema.parse({
     providerId: activeProfile.providerId,
     modelId: activeProfile.modelId,
-    openrouterApiKeyConfigured: providerProfiles?.profiles.some(
-      (profile) => profile.providerId === 'openrouter' && profile.readiness.ready,
-    ) ?? false,
+    openrouterApiKeyConfigured: hasAnyReadyProfile(providerProfiles, 'openrouter'),
+    anthropicApiKeyConfigured: hasAnyReadyProfile(providerProfiles, 'anthropic'),
   })
 }

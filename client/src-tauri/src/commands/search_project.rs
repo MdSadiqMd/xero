@@ -114,15 +114,13 @@ pub fn search_project<R: Runtime>(
                     break;
                 }
                 let column = utf8_char_col(line, m.start());
-                let match_start = m.start() as u32;
-                let match_end = m.end() as u32;
-                let preview = build_preview(line, m.start(), m.end());
+                let (prefix, matched, suffix) = build_preview(line, m.start(), m.end());
                 matches_in_file.push(SearchMatchDto {
                     line: (line_idx as u32) + 1,
                     column,
-                    match_start,
-                    match_end,
-                    preview,
+                    preview_prefix: prefix,
+                    preview_match: matched,
+                    preview_suffix: suffix,
                 });
                 total_matches += 1;
             }
@@ -339,24 +337,37 @@ fn utf8_char_col(line: &str, byte_offset: usize) -> u32 {
     (prefix.chars().count() as u32) + 1
 }
 
-/// Build a short preview around the match. Trims leading whitespace so the
-/// UI can justify each row; truncates aggressively to keep long lines short.
-fn build_preview(line: &str, match_start: usize, match_end: usize) -> String {
+/// Build a preview split into (prefix, match, suffix). Trims leading
+/// whitespace and truncates long surrounding text so each row is compact.
+fn build_preview(line: &str, match_start: usize, match_end: usize) -> (String, String, String) {
     let trimmed_start = line.len() - line.trim_start().len();
-    let start = match_start.saturating_sub(60).max(trimmed_start);
-    let end = (match_end + 120).min(line.len());
-    let start = snap_char_boundary(line, start);
-    let end = snap_char_boundary(line, end);
-    let mut slice = line[start..end].to_string();
-    if slice.len() > PREVIEW_MAX_LEN {
-        let cut = snap_char_boundary(&slice, PREVIEW_MAX_LEN);
-        slice.truncate(cut);
-        slice.push('…');
+    let window_start = snap_char_boundary(line, match_start.saturating_sub(60).max(trimmed_start));
+    let window_end = snap_char_boundary(line, (match_end + 120).min(line.len()));
+
+    let mut prefix = line[window_start..match_start].to_string();
+    let matched = line[match_start..match_end].to_string();
+    let mut suffix = line[match_end..window_end].to_string();
+
+    if window_start > trimmed_start {
+        prefix.insert(0, '…');
     }
-    if start > trimmed_start {
-        slice = format!("…{slice}");
+    if window_end < line.len() {
+        suffix.push('…');
     }
-    slice
+
+    // Defensive cap on prefix/suffix independently so a single giant match
+    // (e.g. minified file) can't blow out the payload.
+    if prefix.len() > PREVIEW_MAX_LEN {
+        let cut = snap_char_boundary(&prefix, prefix.len() - PREVIEW_MAX_LEN);
+        prefix = format!("…{}", &prefix[cut..]);
+    }
+    if suffix.len() > PREVIEW_MAX_LEN {
+        let cut = snap_char_boundary(&suffix, PREVIEW_MAX_LEN);
+        suffix.truncate(cut);
+        suffix.push('…');
+    }
+
+    (prefix, matched, suffix)
 }
 
 fn snap_char_boundary(s: &str, mut idx: usize) -> usize {
@@ -414,8 +425,8 @@ mod tests {
     #[test]
     fn preview_keeps_match_visible() {
         let line = "    const greeting = \"hello world\";";
-        let preview = build_preview(line, 22, 27);
-        assert!(preview.contains("hello"));
+        let (_prefix, matched, _suffix) = build_preview(line, 22, 27);
+        assert_eq!(matched, "hello");
     }
 
     #[test]

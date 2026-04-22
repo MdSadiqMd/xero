@@ -377,9 +377,9 @@ pub struct SearchProjectRequestDto {
 pub struct SearchMatchDto {
     pub line: u32,
     pub column: u32,
-    pub match_start: u32,
-    pub match_end: u32,
-    pub preview: String,
+    pub preview_prefix: String,
+    pub preview_match: String,
+    pub preview_suffix: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -70,6 +70,8 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     createProjectEntry,
     renameProjectEntry,
     deleteProjectEntry,
+    searchProject,
+    replaceInProject,
     startOpenAiLogin,
     submitOpenAiCallback,
     startAutonomousRun,
@@ -256,6 +258,8 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
               createProjectEntry={createProjectEntry}
               renameProjectEntry={renameProjectEntry}
               deleteProjectEntry={deleteProjectEntry}
+              searchProject={searchProject}
+              replaceInProject={replaceInProject}
             />
           </div>
         ) : null}
