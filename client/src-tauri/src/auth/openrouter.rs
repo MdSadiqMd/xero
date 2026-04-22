@@ -70,6 +70,13 @@ pub enum OpenRouterReconcileOutcome {
     SignedOut(AuthDiagnostic),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenRouterDiscoveredModel {
+    pub id: String,
+    pub display_name: String,
+    pub supported_parameters: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ModelsResponse {
@@ -80,6 +87,9 @@ struct ModelsResponse {
 #[serde(rename_all = "camelCase")]
 struct ModelSummary {
     id: String,
+    name: Option<String>,
+    #[serde(rename = "supported_parameters")]
+    supported_parameters: Vec<String>,
 }
 
 pub(crate) fn bind_openrouter_runtime_session<R: Runtime>(
@@ -142,11 +152,10 @@ pub(crate) fn reconcile_openrouter_runtime_session<R: Runtime>(
     Ok(OpenRouterReconcileOutcome::Authenticated(expected))
 }
 
-fn validate_openrouter_models_probe(
+pub(crate) fn fetch_openrouter_models(
     api_key: &str,
-    model_id: &str,
     config: &OpenRouterAuthConfig,
-) -> Result<(), AuthFlowError> {
+) -> Result<Vec<OpenRouterDiscoveredModel>, AuthFlowError> {
     let client = config.http_client()?;
     let response = client
         .get(&config.models_url)
@@ -168,7 +177,17 @@ fn validate_openrouter_models_probe(
         )
     })?;
 
-    if !models.data.iter().any(|model| model.id.trim() == model_id) {
+    normalize_openrouter_models(models)
+}
+
+fn validate_openrouter_models_probe(
+    api_key: &str,
+    model_id: &str,
+    config: &OpenRouterAuthConfig,
+) -> Result<(), AuthFlowError> {
+    let models = fetch_openrouter_models(api_key, config)?;
+
+    if !models.iter().any(|model| model.id.trim() == model_id) {
         return Err(AuthFlowError::terminal(
             "openrouter_model_unavailable",
             RuntimeAuthPhase::Failed,
@@ -179,6 +198,53 @@ fn validate_openrouter_models_probe(
     }
 
     Ok(())
+}
+
+fn normalize_openrouter_models(
+    response: ModelsResponse,
+) -> Result<Vec<OpenRouterDiscoveredModel>, AuthFlowError> {
+    response
+        .data
+        .into_iter()
+        .map(|model| {
+            let id = model.id.trim();
+            if id.is_empty() {
+                return Err(AuthFlowError::terminal(
+                    "openrouter_models_decode_failed",
+                    RuntimeAuthPhase::Failed,
+                    "Cadence could not decode the OpenRouter models response because one model id was blank.",
+                ));
+            }
+
+            let display_name = model
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(id)
+                .to_owned();
+            let supported_parameters = model
+                .supported_parameters
+                .into_iter()
+                .map(|parameter| parameter.trim().to_owned())
+                .collect::<Vec<_>>();
+            if supported_parameters.iter().any(|parameter| parameter.is_empty()) {
+                return Err(AuthFlowError::terminal(
+                    "openrouter_models_decode_failed",
+                    RuntimeAuthPhase::Failed,
+                    format!(
+                        "Cadence could not decode the OpenRouter models response because model `{id}` declared a blank supported parameter."
+                    ),
+                ));
+            }
+
+            Ok(OpenRouterDiscoveredModel {
+                id: id.to_owned(),
+                display_name,
+                supported_parameters,
+            })
+        })
+        .collect()
 }
 
 fn map_probe_transport_error(error: reqwest::Error) -> AuthFlowError {

@@ -6,6 +6,9 @@ use crate::{
     auth::{ActiveAuthFlowRegistry, AuthFlowError, OpenAiCodexAuthConfig, OpenRouterAuthConfig},
     commands::CommandError,
     notifications::NOTIFICATION_CREDENTIAL_STORE_FILE_NAME,
+    provider_models::{
+        ProviderModelCatalogRefreshRegistry, PROVIDER_MODEL_CATALOG_CACHE_FILE_NAME,
+    },
     provider_profiles::{
         PROVIDER_PROFILE_CREDENTIAL_STORE_FILE_NAME, PROVIDER_PROFILES_FILE_NAME,
     },
@@ -41,6 +44,7 @@ pub struct DesktopState {
     notification_credential_store_file_override: Option<PathBuf>,
     provider_profiles_file_override: Option<PathBuf>,
     provider_profile_credential_store_file_override: Option<PathBuf>,
+    provider_model_catalog_cache_file_override: Option<PathBuf>,
     runtime_settings_file_override: Option<PathBuf>,
     openrouter_credential_file_override: Option<PathBuf>,
     autonomous_skill_cache_dir_override: Option<PathBuf>,
@@ -52,6 +56,7 @@ pub struct DesktopState {
     runtime_stream_failpoints: RuntimeStreamFailpoints,
     runtime_stream_controller: RuntimeStreamController,
     runtime_supervisor_controller: RuntimeSupervisorController,
+    provider_model_catalog_refresh_registry: ProviderModelCatalogRefreshRegistry,
     active_auth_flows: ActiveAuthFlowRegistry,
 }
 
@@ -81,6 +86,11 @@ impl DesktopState {
         path: PathBuf,
     ) -> Self {
         self.provider_profile_credential_store_file_override = Some(path);
+        self
+    }
+
+    pub fn with_provider_model_catalog_cache_file_override(mut self, path: PathBuf) -> Self {
+        self.provider_model_catalog_cache_file_override = Some(path);
         self
     }
 
@@ -143,6 +153,12 @@ impl DesktopState {
 
     pub fn runtime_supervisor_controller(&self) -> &RuntimeSupervisorController {
         &self.runtime_supervisor_controller
+    }
+
+    pub fn provider_model_catalog_refresh_registry(
+        &self,
+    ) -> &ProviderModelCatalogRefreshRegistry {
+        &self.provider_model_catalog_refresh_registry
     }
 
     pub fn runtime_supervisor_binary_override(&self) -> Option<&PathBuf> {
@@ -259,6 +275,19 @@ impl DesktopState {
         Ok(self
             .app_data_dir(app)?
             .join(PROVIDER_PROFILE_CREDENTIAL_STORE_FILE_NAME))
+    }
+
+    pub fn provider_model_catalog_cache_file<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> Result<PathBuf, CommandError> {
+        if let Some(path) = &self.provider_model_catalog_cache_file_override {
+            return Ok(path.clone());
+        }
+
+        Ok(self
+            .app_data_dir(app)?
+            .join(PROVIDER_MODEL_CATALOG_CACHE_FILE_NAME))
     }
 
     pub fn openrouter_credential_file<R: Runtime>(

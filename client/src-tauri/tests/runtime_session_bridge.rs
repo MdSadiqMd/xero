@@ -907,8 +907,10 @@ fn logout_runtime_session_projects_selected_openrouter_provider_from_settings() 
 
 #[test]
 fn start_runtime_session_binds_openrouter_from_global_settings_without_secret_leakage() {
-    let models_base_url =
-        spawn_static_http_server(200, r#"{"data":[{"id":"openai/gpt-4o-mini"}]}"#);
+    let models_base_url = spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"openai/gpt-4o-mini","supported_parameters":[]}]}"#,
+    );
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let state = state.with_openrouter_auth_config_override(openrouter_auth_config(format!(
@@ -1179,8 +1181,10 @@ fn start_runtime_session_maps_openrouter_validation_failures_to_typed_diagnostic
 
 #[test]
 fn get_runtime_session_rejects_stale_openrouter_binding_after_key_rotation() {
-    let models_base_url =
-        spawn_static_http_server(200, r#"{"data":[{"id":"openai/gpt-4o-mini"}]}"#);
+    let models_base_url = spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"openai/gpt-4o-mini","supported_parameters":[]}]}"#,
+    );
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let state = state.with_openrouter_auth_config_override(openrouter_auth_config(format!(
@@ -1236,8 +1240,10 @@ fn get_runtime_session_rejects_stale_openrouter_binding_after_key_rotation() {
     );
     assert!(reconciled.session_id.is_none());
 
-    let rebound_models_base_url =
-        spawn_static_http_server(200, r#"{"data":[{"id":"openai/gpt-4o-mini"}]}"#);
+    let rebound_models_base_url = spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"openai/gpt-4o-mini","supported_parameters":[]}]}"#,
+    );
     let (rebound_state, _registry_path, _auth_store_path) = create_state(&root);
     let rebound_state = rebound_state.with_openrouter_auth_config_override(openrouter_auth_config(
         format!("{rebound_models_base_url}/api/v1/models"),
@@ -1257,8 +1263,10 @@ fn get_runtime_session_rejects_stale_openrouter_binding_after_key_rotation() {
 
 #[test]
 fn get_runtime_session_rejects_blank_openrouter_session_id_as_stale_binding() {
-    let models_base_url =
-        spawn_static_http_server(200, r#"{"data":[{"id":"openai/gpt-4o-mini"}]}"#);
+    let models_base_url = spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"openai/gpt-4o-mini","supported_parameters":[]}]}"#,
+    );
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
     let state = state.with_openrouter_auth_config_override(openrouter_auth_config(format!(

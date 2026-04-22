@@ -2,6 +2,7 @@ pub mod auth;
 pub mod commands;
 pub mod db;
 pub mod notifications;
+pub mod provider_models;
 pub mod provider_profiles;
 pub mod registry;
 pub mod runtime;
@@ -38,6 +39,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::get_runtime_run::get_runtime_run,
             commands::get_runtime_session::get_runtime_session,
             commands::get_runtime_settings::get_runtime_settings,
+            commands::provider_model_catalog::get_provider_model_catalog,
             commands::provider_profiles::list_provider_profiles,
             commands::provider_profiles::upsert_provider_profile,
             commands::provider_profiles::set_active_provider_profile,

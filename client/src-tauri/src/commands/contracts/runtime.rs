@@ -176,6 +176,64 @@ pub struct ProviderProfilesDto {
     pub migration: Option<ProviderProfilesMigrationDto>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderModelCatalogSourceDto {
+    Live,
+    Cache,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderModelThinkingEffortDto {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderModelCatalogDiagnosticDto {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderModelThinkingCapabilityDto {
+    pub supported: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effort_options: Vec<ProviderModelThinkingEffortDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_effort: Option<ProviderModelThinkingEffortDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderModelDto {
+    pub model_id: String,
+    pub display_name: String,
+    pub thinking: ProviderModelThinkingCapabilityDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderModelCatalogDto {
+    pub profile_id: String,
+    pub provider_id: String,
+    pub configured_model_id: String,
+    pub source: ProviderModelCatalogSourceDto,
+    pub fetched_at: Option<String>,
+    pub last_success_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_refresh_error: Option<ProviderModelCatalogDiagnosticDto>,
+    pub models: Vec<ProviderModelDto>,
+}
+
 pub type RuntimeAuthStatusDto = RuntimeSessionDto;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -249,6 +307,14 @@ pub struct UpsertProviderProfileRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetActiveProviderProfileRequestDto {
     pub profile_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetProviderModelCatalogRequestDto {
+    pub profile_id: String,
+    #[serde(default)]
+    pub force_refresh: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
