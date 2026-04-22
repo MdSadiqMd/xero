@@ -1040,6 +1040,7 @@ describe('AgentRuntime current UI', () => {
           }),
         })}
         onStartLogin={vi.fn(async () => null)}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
         onStartRuntimeSession={vi.fn(async () => null)}
       />,
     )
@@ -1048,6 +1049,7 @@ describe('AgentRuntime current UI', () => {
     expect(screen.queryByText('Provider mismatch')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Rebind OpenRouter runtime' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Start OpenAI login' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Manual callback fallback' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
       'placeholder',
@@ -1360,7 +1362,7 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText(/Active approval remains Suggest \(revision 1 at 2026-04-20T12:00:00Z\)\./)).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Model selector' })).toBeDisabled()
     expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send message unavailable' })).toBeDisabled()
   })
 
   it('starts a run with the draft prompt and current projected controls, then clears the draft after acknowledgement', async () => {
@@ -1435,7 +1437,7 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    await waitFor(() => expect(screen.getByLabelText('Agent input')).toHaveValue(''))
+    await waitFor(() => expect(screen.getByLabelText('Agent input unavailable')).toHaveValue(''))
   })
 
   it('queues the next prompt against the active run while preserving truthful selected controls', async () => {

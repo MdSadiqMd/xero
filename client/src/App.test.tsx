@@ -28,6 +28,7 @@ import type {
   RepositoryDiffResponseDto,
   RepositoryStatusChangedPayloadDto,
   RepositoryStatusResponseDto,
+  RuntimeRunControlInputDto,
   RuntimeRunDto,
   AutonomousRunStateDto,
   RuntimeRunUpdatedPayloadDto,
@@ -207,6 +208,53 @@ function makeProviderProfilesFromRuntimeSettings(runtimeSettings: RuntimeSetting
   }
 }
 
+function buildProviderModelCatalog(profile: ProviderProfilesDto['profiles'][number]): ProviderModelCatalogDto {
+  const isOpenRouter = profile.providerId === 'openrouter'
+  const isReady = isOpenRouter ? profile.readiness.ready : true
+
+  return {
+    profileId: profile.profileId,
+    providerId: profile.providerId,
+    configuredModelId: profile.modelId,
+    source: isReady ? 'live' : 'unavailable',
+    fetchedAt: isReady ? '2026-04-21T12:00:00Z' : null,
+    lastSuccessAt: isReady ? '2026-04-21T12:00:00Z' : null,
+    lastRefreshError:
+      isOpenRouter && !isReady
+        ? {
+            code: 'openrouter_credentials_missing',
+            message: 'Configure an OpenRouter API key before refreshing provider models.',
+            retryable: false,
+          }
+        : null,
+    models: isOpenRouter
+      ? isReady
+        ? [
+            {
+              modelId: profile.modelId,
+              displayName: 'OpenRouter model',
+              thinking: {
+                supported: true,
+                effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
+                defaultEffort: 'medium',
+              },
+            },
+          ]
+        : []
+      : [
+          {
+            modelId: 'openai_codex',
+            displayName: 'OpenAI Codex',
+            thinking: {
+              supported: true,
+              effortOptions: ['low', 'medium', 'high'],
+              defaultEffort: 'medium',
+            },
+          },
+        ],
+  }
+}
+
 function makeRuntimeRun(projectId = 'project-1', overrides: Partial<RuntimeRunDto> = {}): RuntimeRunDto {
   const runtimeRun: RuntimeRunDto = {
     projectId,
@@ -369,53 +417,7 @@ function createAdapter(options?: {
   let currentRuntimeSettings = options?.runtimeSettings ?? makeRuntimeSettings()
   let currentProviderProfiles = options?.providerProfiles ?? makeProviderProfilesFromRuntimeSettings(currentRuntimeSettings)
   let currentProviderModelCatalogs: Record<string, ProviderModelCatalogDto> = Object.fromEntries(
-    currentProviderProfiles.profiles.map((profile) => [
-      profile.profileId,
-      {
-        profileId: profile.profileId,
-        providerId: profile.providerId,
-        configuredModelId: profile.modelId,
-        source: profile.providerId === 'openrouter' && !profile.readiness.ready ? 'unavailable' : 'live',
-        fetchedAt:
-          profile.providerId === 'openrouter' && !profile.readiness.ready ? null : '2026-04-21T12:00:00Z',
-        lastSuccessAt:
-          profile.providerId === 'openrouter' && !profile.readiness.ready ? null : '2026-04-21T12:00:00Z',
-        lastRefreshError:
-          profile.providerId === 'openrouter' && !profile.readiness.ready
-            ? {
-                code: 'openrouter_credentials_missing',
-                message: 'Configure an OpenRouter API key before refreshing provider models.',
-                retryable: false,
-              }
-            : null,
-        models:
-          profile.providerId === 'openrouter'
-            ? profile.readiness.ready
-              ? [
-                  {
-                    modelId: profile.modelId,
-                    displayName: 'OpenRouter model',
-                    thinking: {
-                      supported: true,
-                      effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
-                      defaultEffort: 'medium',
-                    },
-                  },
-                ]
-              : []
-            : [
-                {
-                  modelId: 'openai_codex',
-                  displayName: 'OpenAI Codex',
-                  thinking: {
-                    supported: true,
-                    effortOptions: ['low', 'medium', 'high'],
-                    defaultEffort: 'medium',
-                  },
-                },
-              ],
-      },
-    ]),
+    currentProviderProfiles.profiles.map((profile) => [profile.profileId, buildProviderModelCatalog(profile)]),
   )
   let currentRuntimeRun = options?.runtimeRun ?? null
   let currentAutonomousState = options?.autonomousState ?? null
@@ -433,6 +435,136 @@ function createAdapter(options?: {
   let runtimeUpdatedErrorHandler: ((error: CadenceDesktopError) => void) | null = null
   let runtimeRunUpdatedHandler: ((payload: RuntimeRunUpdatedPayloadDto) => void) | null = null
   let runtimeRunUpdatedErrorHandler: ((error: CadenceDesktopError) => void) | null = null
+
+  const rebuildProviderModelCatalogs = () => {
+    currentProviderModelCatalogs = Object.fromEntries(
+      currentProviderProfiles.profiles.map((profile) => [profile.profileId, buildProviderModelCatalog(profile)]),
+    )
+  }
+
+  const syncRuntimeSettingsFromActiveProfile = () => {
+    const activeProfile =
+      currentProviderProfiles.profiles.find((profile) => profile.profileId === currentProviderProfiles.activeProfileId) ??
+      currentProviderProfiles.profiles[0] ??
+      null
+
+    if (!activeProfile) {
+      return
+    }
+
+    currentRuntimeSettings = {
+      providerId: activeProfile.providerId,
+      modelId: activeProfile.modelId,
+      openrouterApiKeyConfigured: activeProfile.providerId === 'openrouter' ? activeProfile.readiness.ready : false,
+    }
+  }
+
+  const cloneRuntimeRunActiveControls = (runtimeRun: RuntimeRunDto) => ({
+    ...runtimeRun.controls.active,
+  })
+
+  const cloneRuntimeRunPendingControls = (runtimeRun: RuntimeRunDto) =>
+    runtimeRun.controls.pending ? { ...runtimeRun.controls.pending } : null
+
+  const getRuntimeKindForProvider = (providerId: RuntimeSettingsDto['providerId']) =>
+    providerId === 'openrouter' ? 'openrouter' : 'openai_codex'
+
+  const buildRuntimeRunControls = (options: {
+    base: RuntimeRunDto['controls']['active']
+    nextControls?: RuntimeRunControlInputDto | null
+    revision: number
+    appliedAt?: string
+    queuedAt?: string
+    queuedPrompt?: string | null
+    queuedPromptAt?: string | null
+  }) => {
+    const modelId = options.nextControls?.modelId ?? options.base.modelId
+    const thinkingEffort = options.nextControls?.thinkingEffort ?? options.base.thinkingEffort
+    const approvalMode = options.nextControls?.approvalMode ?? options.base.approvalMode
+
+    return {
+      active: {
+        modelId,
+        thinkingEffort,
+        approvalMode,
+        revision: options.revision,
+        appliedAt: options.appliedAt ?? options.base.appliedAt,
+      },
+      pending:
+        options.queuedAt || options.queuedPrompt != null
+          ? {
+              modelId,
+              thinkingEffort,
+              approvalMode,
+              revision: options.revision,
+              queuedAt: options.queuedAt ?? options.appliedAt ?? options.base.appliedAt,
+              queuedPrompt: options.queuedPrompt ?? null,
+              queuedPromptAt: options.queuedPromptAt ?? null,
+            }
+          : null,
+    }
+  }
+
+  const mergePendingRuntimeRunControls = (runtimeRun: RuntimeRunDto, request?: { controls?: RuntimeRunControlInputDto | null; prompt?: string | null }) => {
+    const activeControls = cloneRuntimeRunActiveControls(runtimeRun)
+    const existingPending = cloneRuntimeRunPendingControls(runtimeRun)
+    const nextRevision = existingPending?.revision ?? activeControls.revision + 1
+    const nextQueuedAt = existingPending?.queuedAt ?? '2026-04-22T12:05:00Z'
+    const nextQueuedPrompt = request?.prompt ?? existingPending?.queuedPrompt ?? null
+    const nextQueuedPromptAt = request?.prompt ? '2026-04-22T12:05:30Z' : existingPending?.queuedPromptAt ?? null
+
+    return buildRuntimeRunControls({
+      base: activeControls,
+      nextControls: request?.controls ?? existingPending,
+      revision: nextRevision,
+      queuedAt: nextQueuedAt,
+      queuedPrompt: nextQueuedPrompt,
+      queuedPromptAt: nextQueuedPromptAt,
+    })
+  }
+
+  const queuePendingRuntimeRunSnapshot = (request?: { controls?: RuntimeRunControlInputDto | null; prompt?: string | null }) => {
+    currentRuntimeRun = currentRuntimeRun
+      ? makeRuntimeRun('project-1', {
+          ...currentRuntimeRun,
+          runtimeKind: getRuntimeKindForProvider(currentRuntimeSettings.providerId),
+          providerId: currentRuntimeSettings.providerId,
+          controls: mergePendingRuntimeRunControls(currentRuntimeRun, request),
+          lastHeartbeatAt: '2026-04-22T12:05:30Z',
+          updatedAt: '2026-04-22T12:05:30Z',
+        })
+      : makeRuntimeRun('project-1')
+
+    return currentRuntimeRun
+  }
+
+  const startRuntimeRunSnapshot = (options?: { initialControls?: RuntimeRunControlInputDto | null; initialPrompt?: string | null }) => {
+    const activeControls = buildRuntimeRunControls({
+      base: makeRuntimeRun('project-1').controls.active,
+      nextControls: {
+        modelId: options?.initialControls?.modelId ?? currentRuntimeSettings.modelId,
+        thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
+        approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
+      },
+      revision: 1,
+      appliedAt: '2026-04-22T12:00:00Z',
+      queuedAt: options?.initialPrompt ? '2026-04-22T12:00:30Z' : undefined,
+      queuedPrompt: options?.initialPrompt ?? null,
+      queuedPromptAt: options?.initialPrompt ? '2026-04-22T12:00:30Z' : null,
+    })
+
+    currentRuntimeRun = makeRuntimeRun('project-1', {
+      runtimeKind: getRuntimeKindForProvider(currentRuntimeSettings.providerId),
+      providerId: currentRuntimeSettings.providerId,
+      controls: activeControls,
+      startedAt: '2026-04-22T12:00:00Z',
+      lastHeartbeatAt: '2026-04-22T12:00:05Z',
+      lastCheckpointAt: '2026-04-22T12:00:06Z',
+      updatedAt: '2026-04-22T12:00:06Z',
+    })
+
+    return currentRuntimeRun
+  }
 
   const getKnownProjectIds = () => {
     const projectIds = new Set<string>(currentProjects.map((project) => project.id))
@@ -505,55 +637,7 @@ function createAdapter(options?: {
           : false,
     }
     currentProviderProfiles = makeProviderProfilesFromRuntimeSettings(currentRuntimeSettings)
-    currentProviderModelCatalogs = Object.fromEntries(
-      currentProviderProfiles.profiles.map((profile) => [
-        profile.profileId,
-        {
-          profileId: profile.profileId,
-          providerId: profile.providerId,
-          configuredModelId: profile.modelId,
-          source: profile.providerId === 'openrouter' && !profile.readiness.ready ? 'unavailable' : 'live',
-          fetchedAt:
-            profile.providerId === 'openrouter' && !profile.readiness.ready ? null : '2026-04-21T12:00:00Z',
-          lastSuccessAt:
-            profile.providerId === 'openrouter' && !profile.readiness.ready ? null : '2026-04-21T12:00:00Z',
-          lastRefreshError:
-            profile.providerId === 'openrouter' && !profile.readiness.ready
-              ? {
-                  code: 'openrouter_credentials_missing',
-                  message: 'Configure an OpenRouter API key before refreshing provider models.',
-                  retryable: false,
-                }
-              : null,
-          models:
-            profile.providerId === 'openrouter'
-              ? profile.readiness.ready
-                ? [
-                    {
-                      modelId: profile.modelId,
-                      displayName: 'OpenRouter model',
-                      thinking: {
-                        supported: true,
-                        effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
-                        defaultEffort: 'medium',
-                      },
-                    },
-                  ]
-                : []
-              : [
-                  {
-                    modelId: 'openai_codex',
-                    displayName: 'OpenAI Codex',
-                    thinking: {
-                      supported: true,
-                      effortOptions: ['low', 'medium', 'high'],
-                      defaultEffort: 'medium',
-                    },
-                  },
-                ],
-        },
-      ]),
-    )
+    rebuildProviderModelCatalogs()
     return currentRuntimeSettings
   })
 
@@ -576,59 +660,24 @@ function createAdapter(options?: {
           : currentRuntimeSettings.openrouterApiKeyConfigured,
     }
     currentProviderProfiles = makeProviderProfilesFromRuntimeSettings(currentRuntimeSettings)
-    currentProviderModelCatalogs = Object.fromEntries(
-      currentProviderProfiles.profiles.map((profile) => [
-        profile.profileId,
-        {
-          profileId: profile.profileId,
-          providerId: profile.providerId,
-          configuredModelId: profile.modelId,
-          source: profile.providerId === 'openrouter' && !profile.readiness.ready ? 'unavailable' : 'live',
-          fetchedAt:
-            profile.providerId === 'openrouter' && !profile.readiness.ready ? null : '2026-04-21T12:00:00Z',
-          lastSuccessAt:
-            profile.providerId === 'openrouter' && !profile.readiness.ready ? null : '2026-04-21T12:00:00Z',
-          lastRefreshError:
-            profile.providerId === 'openrouter' && !profile.readiness.ready
-              ? {
-                  code: 'openrouter_credentials_missing',
-                  message: 'Configure an OpenRouter API key before refreshing provider models.',
-                  retryable: false,
-                }
-              : null,
-          models:
-            profile.providerId === 'openrouter'
-              ? profile.readiness.ready
-                ? [
-                    {
-                      modelId: profile.modelId,
-                      displayName: 'OpenRouter model',
-                      thinking: {
-                        supported: true,
-                        effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
-                        defaultEffort: 'medium',
-                      },
-                    },
-                  ]
-                : []
-              : [
-                  {
-                    modelId: 'openai_codex',
-                    displayName: 'OpenAI Codex',
-                    thinking: {
-                      supported: true,
-                      effortOptions: ['low', 'medium', 'high'],
-                      defaultEffort: 'medium',
-                    },
-                  },
-                ],
-        },
-      ]),
-    )
+    rebuildProviderModelCatalogs()
     return currentProviderProfiles
   })
 
-  const setActiveProviderProfile = vi.fn(async (_profileId: string) => currentProviderProfiles)
+  const setActiveProviderProfile = vi.fn(async (profileId: string) => {
+    const nextProfiles = currentProviderProfiles.profiles.map((profile) => ({
+      ...profile,
+      active: profile.profileId === profileId,
+    }))
+    currentProviderProfiles = {
+      ...currentProviderProfiles,
+      activeProfileId: profileId,
+      profiles: nextProfiles,
+    }
+    syncRuntimeSettingsFromActiveProfile()
+    rebuildProviderModelCatalogs()
+    return currentProviderProfiles
+  })
 
   const upsertNotificationRoute = vi.fn(async (request: UpsertNotificationRouteRequestDto) => {
     const route = {
@@ -651,12 +700,16 @@ function createAdapter(options?: {
     return { route }
   })
 
-  const startRuntimeRun = vi.fn(async () => {
-    currentRuntimeRun = makeRuntimeRun('project-1')
-    return currentRuntimeRun
-  })
+  const startRuntimeRun = vi.fn(async (_projectId: string, options?: { initialControls?: RuntimeRunControlInputDto | null; initialPrompt?: string | null }) =>
+    startRuntimeRunSnapshot(options),
+  )
 
-  const updateRuntimeRunControls = vi.fn(async () => currentRuntimeRun ?? makeRuntimeRun('project-1'))
+  const updateRuntimeRunControls = vi.fn(async (request?: {
+    projectId: string
+    runId: string
+    controls?: RuntimeRunControlInputDto | null
+    prompt?: string | null
+  }) => queuePendingRuntimeRunSnapshot(request))
 
   const startAutonomousRun = vi.fn(async () => {
     currentAutonomousState = makeAutonomousRunState('project-1')
@@ -753,51 +806,7 @@ function createAdapter(options?: {
         return currentCatalog
       }
 
-      const nextCatalog: ProviderModelCatalogDto = {
-        profileId,
-        providerId: currentProfile.providerId,
-        configuredModelId: currentProfile.modelId,
-        source: currentProfile.providerId === 'openrouter' && !currentProfile.readiness.ready ? 'unavailable' : 'live',
-        fetchedAt:
-          currentProfile.providerId === 'openrouter' && !currentProfile.readiness.ready ? null : '2026-04-21T12:00:00Z',
-        lastSuccessAt:
-          currentProfile.providerId === 'openrouter' && !currentProfile.readiness.ready ? null : '2026-04-21T12:00:00Z',
-        lastRefreshError:
-          currentProfile.providerId === 'openrouter' && !currentProfile.readiness.ready
-            ? {
-                code: 'openrouter_credentials_missing',
-                message: 'Configure an OpenRouter API key before refreshing provider models.',
-                retryable: false,
-              }
-            : null,
-        models:
-          currentProfile.providerId === 'openrouter'
-            ? currentProfile.readiness.ready
-              ? [
-                  {
-                    modelId: currentProfile.modelId,
-                    displayName: 'OpenRouter model',
-                    thinking: {
-                      supported: true,
-                      effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
-                      defaultEffort: 'medium',
-                    },
-                  },
-                ]
-              : []
-            : [
-                {
-                  modelId: 'openai_codex',
-                  displayName: 'OpenAI Codex',
-                  thinking: {
-                    supported: true,
-                    effortOptions: ['low', 'medium', 'high'],
-                    defaultEffort: 'medium',
-                  },
-                },
-              ],
-      }
-
+      const nextCatalog = buildProviderModelCatalog(currentProfile)
       currentProviderModelCatalogs[profileId] = nextCatalog
       return nextCatalog
     },
@@ -1010,9 +1019,11 @@ function createAdapter(options?: {
     upsertNotificationRoute,
     upsertRuntimeSettings,
     upsertProviderProfile,
+    setActiveProviderProfile,
     importRepository,
     pickRepositoryFolder,
     startRuntimeRun,
+    updateRuntimeRunControls,
     startAutonomousRun,
     onProjectUpdated,
     onRuntimeUpdated,
@@ -1636,6 +1647,145 @@ describe('CadenceApp current UI', () => {
     await waitFor(() =>
       expect(screen.getByText('Event runtime_run:updated returned an unexpected payload shape.')).toBeVisible(),
     )
+  })
+
+  it('proves auth, provider-backed model truth, and pending-to-active boundary application through the shipped Agent path', async () => {
+    const setup = createAdapter({
+      runtimeRun: null,
+      autonomousState: null,
+      runtimeSession: makeRuntimeSession('project-1', {
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+        lastErrorCode: 'auth_session_not_found',
+        lastError: {
+          code: 'auth_session_not_found',
+          message: 'Sign in with OpenAI to create a runtime session for this project.',
+          retryable: false,
+        },
+      }),
+    })
+
+    render(<CadenceApp adapter={setup.adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByLabelText('Settings'))
+    expect(await screen.findByRole('heading', { name: 'Providers' })).toBeVisible()
+    expect(screen.getByText('OpenAI Codex')).toBeVisible()
+    expect(screen.getByText('Active profile')).toBeVisible()
+    expect(screen.getAllByText('Live catalog').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible()
+    await waitFor(() => expect(setup.onRuntimeUpdated).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    act(() => {
+      setup.emitRuntimeUpdated({
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        providerId: 'openai_codex',
+        flowId: 'flow-1',
+        sessionId: 'session-1',
+        accountId: 'acct-1',
+        authPhase: 'authenticated',
+        lastErrorCode: null,
+        lastError: null,
+        updatedAt: '2026-04-22T12:00:00Z',
+      })
+    })
+
+    await waitFor(() => expect(screen.getByText('Connected')).toBeVisible())
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('openai_codex')
+    expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toHaveTextContent('Thinking · medium')
+    expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('Approval · suggest')
+    expect(screen.getAllByText('Live catalog').length).toBeGreaterThan(0)
+    expect(screen.getByText(/Showing 1 discovered model/)).toBeVisible()
+    expect(screen.getByText(/Thinking supports Low, Medium, High\. Default: Medium\./)).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }))
+
+    await waitFor(() =>
+      expect(setup.startRuntimeRun).toHaveBeenCalledWith('project-1', {
+        initialControls: {
+          modelId: 'openai_codex',
+          thinkingEffort: 'medium',
+          approvalMode: 'suggest',
+        },
+        initialPrompt: null,
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('Approval active · Suggest')).toBeVisible())
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Approval mode selector' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'Approval · yolo' }))
+
+    await waitFor(() =>
+      expect(setup.updateRuntimeRunControls).toHaveBeenNthCalledWith(1, {
+        projectId: 'project-1',
+        runId: 'run-1',
+        controls: {
+          modelId: 'openai_codex',
+          thinkingEffort: 'medium',
+          approvalMode: 'yolo',
+        },
+        prompt: null,
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('Approval pending · YOLO')).toBeVisible())
+    expect(screen.getByText(/Pending YOLO does not apply until the next model-call boundary\./)).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Agent input'), {
+      target: { value: 'Review the diff before continuing.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() =>
+      expect(setup.updateRuntimeRunControls).toHaveBeenNthCalledWith(2, {
+        projectId: 'project-1',
+        runId: 'run-1',
+        controls: null,
+        prompt: 'Review the diff before continuing.',
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('Queued prompt pending the next model-call boundary.')).toBeVisible())
+    await waitFor(() => expect(screen.getByLabelText('Agent input')).toHaveValue(''))
+
+    act(() => {
+      setup.emitRuntimeRunUpdated({
+        projectId: 'project-1',
+        run: makeRuntimeRun('project-1', {
+          runId: 'run-1',
+          startedAt: '2026-04-22T12:00:00Z',
+          lastHeartbeatAt: '2026-04-22T12:06:00Z',
+          lastCheckpointSequence: 2,
+          lastCheckpointAt: '2026-04-22T12:06:00Z',
+          updatedAt: '2026-04-22T12:06:00Z',
+          controls: {
+            active: {
+              modelId: 'openai_codex',
+              thinkingEffort: 'medium',
+              approvalMode: 'yolo',
+              revision: 2,
+              appliedAt: '2026-04-22T12:06:00Z',
+            },
+            pending: null,
+          },
+        }),
+      })
+    })
+
+    await waitFor(() => expect(screen.getByText('Approval active · YOLO')).toBeVisible())
+    expect(screen.queryByText('Approval pending · YOLO')).not.toBeInTheDocument()
+    expect(screen.queryByText('Queued prompt pending the next model-call boundary.')).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).not.toBeDisabled()
   })
 
   it('opens Settings and runs the current provider and notification flows', async () => {

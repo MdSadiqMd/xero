@@ -115,8 +115,12 @@ export function AgentRuntime({
   const openrouterApiKeyConfigured = agent.openrouterApiKeyConfigured ?? false
   const providerMismatch = agent.providerMismatch ?? false
   const hasRepositoryBinding = Boolean(agent.repositoryPath?.trim())
+  const canMutateRuntimeRun = !providerMismatch
   const canStartRuntimeRun = Boolean(
-    hasRepositoryBinding && typeof onStartRuntimeRun === 'function' && runtimeSession?.isAuthenticated,
+    canMutateRuntimeRun &&
+      hasRepositoryBinding &&
+      typeof onStartRuntimeRun === 'function' &&
+      runtimeSession?.isAuthenticated,
   )
   const canStopRuntimeRun = Boolean(
     hasRepositoryBinding && renderableRuntimeRun && !renderableRuntimeRun.isTerminal && typeof onStopRuntimeRun === 'function',
@@ -142,7 +146,7 @@ export function AgentRuntime({
     canStartRuntimeRun,
     canStopRuntimeRun,
     onStartRuntimeRun,
-    onUpdateRuntimeRunControls,
+    onUpdateRuntimeRunControls: canMutateRuntimeRun ? onUpdateRuntimeRunControls : undefined,
     onStopRuntimeRun,
     onResolveOperatorAction,
     onResumeOperatorRun,

@@ -120,7 +120,8 @@ export function useAgentRuntimeController({
   const trimmedDraftPrompt = draftPrompt.trim()
   const hasQueuedPrompt = selectedPrompt.hasQueuedPrompt
   const promptInputAvailable = Boolean(
-    (!renderableRuntimeRun && canStartRuntimeRun) || (renderableRuntimeRun && !renderableRuntimeRun.isTerminal),
+    (!renderableRuntimeRun && canStartRuntimeRun) ||
+      (renderableRuntimeRun && !renderableRuntimeRun.isTerminal && onUpdateRuntimeRunControls),
   )
   const isPromptDisabled = !promptInputAvailable || runtimeRunActionStatus === 'running'
   const areControlsDisabled = Boolean(
