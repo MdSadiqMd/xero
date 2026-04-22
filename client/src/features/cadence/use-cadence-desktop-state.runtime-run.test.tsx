@@ -874,8 +874,17 @@ function createMockAdapter(options?: {
     upsertRuntimeSettings: vi.fn(async () => runtimeSettings),
     upsertProviderProfile: vi.fn(async () => providerProfiles),
     setActiveProviderProfile: vi.fn(async () => providerProfiles),
-    startOpenAiLogin: vi.fn(async (projectId: string) => makeRuntimeSession(projectId)),
-    submitOpenAiCallback: vi.fn(async (projectId: string) => makeRuntimeSession(projectId)),
+    startOpenAiLogin: vi.fn(
+      async (projectId: string, _options: { selectedProfileId: string; originator?: string | null }) =>
+        makeRuntimeSession(projectId),
+    ),
+    submitOpenAiCallback: vi.fn(
+      async (
+        projectId: string,
+        _flowId: string,
+        _options: { selectedProfileId: string; manualInput?: string | null },
+      ) => makeRuntimeSession(projectId),
+    ),
     startAutonomousRun: vi.fn(async (projectId: string) => {
       const nextState = makeAutonomousRunState(projectId, {
         duplicateStartDetected: Boolean(autonomousStates[projectId]?.run),

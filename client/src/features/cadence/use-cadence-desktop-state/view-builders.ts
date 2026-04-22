@@ -35,6 +35,7 @@ import {
   getAgentMessagesUnavailableReason,
   getAgentRuntimeRunUnavailableReason,
   getAgentSessionUnavailableReason,
+  getProviderMismatchCopy,
   hasProviderMismatch,
   resolveSelectedRuntimeProvider,
 } from './runtime-provider'
@@ -63,6 +64,7 @@ const REPOSITORY_DIFF_SCOPE_LABELS = {
 interface SelectedProviderProjection {
   providerMismatch: boolean
   selectedProvider: ReturnType<typeof resolveSelectedRuntimeProvider>
+  providerMismatchCopy: ReturnType<typeof getProviderMismatchCopy>
 }
 
 export interface BuildWorkflowViewDependencies {
@@ -133,10 +135,12 @@ function getSelectedProviderProjection(
   runtimeSession: RuntimeSessionView | null,
 ): SelectedProviderProjection {
   const selectedProvider = resolveSelectedRuntimeProvider(providerProfiles, runtimeSettings, runtimeSession)
+  const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
 
   return {
     selectedProvider,
     providerMismatch: hasProviderMismatch(selectedProvider, runtimeSession),
+    providerMismatchCopy,
   }
 }
 
@@ -200,7 +204,7 @@ export function buildWorkflowView({
   }
 
   const lifecycle = getPlanningLifecycleView(project)
-  const { selectedProvider, providerMismatch } = getSelectedProviderProjection(
+  const { selectedProvider, providerMismatch, providerMismatchCopy } = getSelectedProviderProjection(
     providerProfiles,
     runtimeSettings,
     runtimeSession,
@@ -218,12 +222,16 @@ export function buildWorkflowView({
     hasPhases: project.phases.length > 0,
     runtimeSession,
     selectedProfileId: selectedProvider.profileId,
+    selectedProfileLabel: selectedProvider.profileLabel,
     selectedProviderId: selectedProvider.providerId,
     selectedProviderLabel: selectedProvider.providerLabel,
+    selectedProviderSource: selectedProvider.source,
     selectedModelId: selectedProvider.modelId,
     selectedProfileReadiness: selectedProvider.readiness,
     openrouterApiKeyConfigured: selectedProvider.openrouterApiKeyConfigured,
     providerMismatch,
+    providerMismatchReason: providerMismatchCopy?.reason ?? null,
+    providerMismatchRecoveryCopy: providerMismatchCopy?.sessionRecoveryCopy ?? null,
   }
 }
 
@@ -323,7 +331,7 @@ export function buildAgentView({
     autonomousHistory,
     autonomousRecentArtifacts,
   })
-  const { selectedProvider, providerMismatch } = getSelectedProviderProjection(
+  const { selectedProvider, providerMismatch, providerMismatchCopy } = getSelectedProviderProjection(
     providerProfiles,
     runtimeSettings,
     runtimeSession,
@@ -341,12 +349,16 @@ export function buildAgentView({
       repositoryPath: project.repository?.rootPath ?? null,
       runtimeSession,
       selectedProfileId: selectedProvider.profileId,
+      selectedProfileLabel: selectedProvider.profileLabel,
       selectedProviderId: selectedProvider.providerId,
       selectedProviderLabel: selectedProvider.providerLabel,
+      selectedProviderSource: selectedProvider.source,
       selectedModelId: selectedProvider.modelId,
       selectedProfileReadiness: selectedProvider.readiness,
       openrouterApiKeyConfigured: selectedProvider.openrouterApiKeyConfigured,
       providerMismatch,
+      providerMismatchReason: providerMismatchCopy?.reason ?? null,
+      providerMismatchRecoveryCopy: providerMismatchCopy?.sessionRecoveryCopy ?? null,
       runtimeRun,
       autonomousRun,
       autonomousUnit,

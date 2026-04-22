@@ -10,13 +10,27 @@ import { getActiveProviderProfile } from '@/src/lib/cadence-model'
 
 export const DEFAULT_RUNTIME_PROVIDER_ID: RuntimeSettingsDto['providerId'] = 'openai_codex'
 
+export type SelectedRuntimeProviderSource =
+  | 'provider_profiles'
+  | 'runtime_settings'
+  | 'runtime_session'
+  | 'default'
+
 export interface SelectedRuntimeProviderView {
   profileId: string | null
+  profileLabel: string | null
   providerId: RuntimeSettingsDto['providerId']
   providerLabel: string
   modelId: string | null
   readiness: ProviderProfileReadinessDto | null
   openrouterApiKeyConfigured: boolean
+  source: SelectedRuntimeProviderSource
+}
+
+export interface ProviderMismatchCopyView {
+  reason: string
+  sessionRecoveryCopy: string
+  streamRecoveryCopy: string
 }
 
 export function isKnownRuntimeProviderId(
@@ -80,6 +94,20 @@ function getSelectedOpenRouterReadinessStatus(
   return selectedProvider.readiness?.status ?? null
 }
 
+function getSelectedRuntimeIdentityLabel(selectedProvider: SelectedRuntimeProviderView): string {
+  const profileId = selectedProvider.profileId?.trim() ?? ''
+  if (profileId.length === 0) {
+    return selectedProvider.providerLabel
+  }
+
+  const profileLabel = selectedProvider.profileLabel?.trim() ?? ''
+  if (profileLabel.length === 0 || profileLabel === profileId) {
+    return profileId
+  }
+
+  return `${profileLabel} (${profileId})`
+}
+
 export function resolveSelectedRuntimeProvider(
   providerProfiles: ProviderProfilesDto | null,
   runtimeSettings: RuntimeSettingsDto | null,
@@ -89,43 +117,51 @@ export function resolveSelectedRuntimeProvider(
   if (activeProfile && isKnownRuntimeProviderId(activeProfile.providerId)) {
     return {
       profileId: activeProfile.profileId,
+      profileLabel: activeProfile.label,
       providerId: activeProfile.providerId,
       providerLabel: getRuntimeProviderLabel(activeProfile.providerId),
       modelId: activeProfile.modelId,
       readiness: activeProfile.readiness,
       openrouterApiKeyConfigured: hasAnyReadyOpenRouterProfile(providerProfiles),
+      source: 'provider_profiles',
     }
   }
 
   if (runtimeSettings) {
     return {
       profileId: null,
+      profileLabel: null,
       providerId: runtimeSettings.providerId,
       providerLabel: getRuntimeProviderLabel(runtimeSettings.providerId),
       modelId: runtimeSettings.modelId,
       readiness: null,
       openrouterApiKeyConfigured: runtimeSettings.openrouterApiKeyConfigured,
+      source: 'runtime_settings',
     }
   }
 
   if (isKnownRuntimeProviderId(runtimeSession?.providerId)) {
     return {
       profileId: null,
+      profileLabel: null,
       providerId: runtimeSession.providerId,
       providerLabel: getRuntimeProviderLabel(runtimeSession.providerId),
       modelId: runtimeSession.runtimeKind,
       readiness: null,
       openrouterApiKeyConfigured: runtimeSession.providerId === 'openrouter',
+      source: 'runtime_session',
     }
   }
 
   return {
     profileId: null,
+    profileLabel: null,
     providerId: DEFAULT_RUNTIME_PROVIDER_ID,
     providerLabel: getRuntimeProviderLabel(DEFAULT_RUNTIME_PROVIDER_ID),
     modelId: getDefaultRuntimeModelId(DEFAULT_RUNTIME_PROVIDER_ID),
     readiness: null,
     openrouterApiKeyConfigured: false,
+    source: 'default',
   }
 }
 
@@ -134,6 +170,24 @@ export function hasProviderMismatch(
   runtimeSession: RuntimeSessionView | null,
 ): boolean {
   return Boolean(runtimeSession && runtimeSession.providerId !== selectedProvider.providerId)
+}
+
+export function getProviderMismatchCopy(
+  selectedProvider: SelectedRuntimeProviderView,
+  runtimeSession: RuntimeSessionView | null,
+): ProviderMismatchCopyView | null {
+  if (!runtimeSession || runtimeSession.providerId === selectedProvider.providerId) {
+    return null
+  }
+
+  const selectionNoun = selectedProvider.profileId ? 'provider profile' : 'provider'
+  const selectionScope = selectedProvider.profileId ? 'profile' : 'provider'
+
+  return {
+    reason: `Settings now select ${selectionNoun} ${getSelectedRuntimeIdentityLabel(selectedProvider)}, but the persisted runtime session still reflects ${getRuntimeProviderLabel(runtimeSession.providerId)}.`,
+    sessionRecoveryCopy: `Rebind the selected ${selectionScope} so durable runtime truth matches Settings.`,
+    streamRecoveryCopy: `Rebind the selected ${selectionScope} before trusting new stream activity.`,
+  }
 }
 
 export function getAgentSessionUnavailableReason(
@@ -145,8 +199,7 @@ export function getAgentSessionUnavailableReason(
     return runtimeErrorMessage
   }
 
-  const providerLabel = selectedProvider.providerLabel
-  const providerMismatch = hasProviderMismatch(selectedProvider, runtimeSession)
+  const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
   const selectedOpenRouterReady = isSelectedOpenRouterReady(selectedProvider)
   const selectedOpenRouterReadinessStatus = getSelectedOpenRouterReadinessStatus(selectedProvider)
 
@@ -168,8 +221,8 @@ export function getAgentSessionUnavailableReason(
     return runtimeSession.lastError.message
   }
 
-  if (providerMismatch) {
-    return `Selected provider is ${providerLabel}, but the persisted runtime session still reflects ${getRuntimeProviderLabel(runtimeSession.providerId)}. Rebind the selected provider so durable runtime truth matches Settings.`
+  if (providerMismatchCopy) {
+    return `${providerMismatchCopy.reason} ${providerMismatchCopy.sessionRecoveryCopy}`
   }
 
   switch (runtimeSession.phase) {
@@ -236,12 +289,17 @@ export function getAgentRuntimeRunUnavailableReason(
     return runtimeRunErrorMessage
   }
 
+  const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
   const selectedOpenRouterReady = isSelectedOpenRouterReady(selectedProvider)
   const selectedOpenRouterReadinessStatus = getSelectedOpenRouterReadinessStatus(selectedProvider)
 
   if (!runtimeRun) {
-    if (runtimeSession?.isAuthenticated && !hasProviderMismatch(selectedProvider, runtimeSession)) {
+    if (runtimeSession?.isAuthenticated && !providerMismatchCopy) {
       return 'No durable supervised runtime run is recorded for this project yet.'
+    }
+
+    if (providerMismatchCopy) {
+      return `${providerMismatchCopy.reason} Rebind the selected ${selectedProvider.profileId ? 'profile' : 'provider'} before launching a supervised harness run for this project.`
     }
 
     if (selectedProvider.providerId === 'openrouter') {
@@ -282,7 +340,7 @@ export function getAgentMessagesUnavailableReason(
   runtimeRun: RuntimeRunView | null,
   selectedProvider: SelectedRuntimeProviderView,
 ): string {
-  const providerMismatch = hasProviderMismatch(selectedProvider, runtimeSession)
+  const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
   const selectedOpenRouterReady = isSelectedOpenRouterReady(selectedProvider)
   const selectedOpenRouterReadinessStatus = getSelectedOpenRouterReadinessStatus(selectedProvider)
 
@@ -306,8 +364,8 @@ export function getAgentMessagesUnavailableReason(
       : 'Sign in with OpenAI to establish a runtime session for this imported project.'
   }
 
-  if (providerMismatch) {
-    return `Live runtime streaming is paused because Settings now select ${selectedProvider.providerLabel}, but the recovered runtime session still reflects ${getRuntimeProviderLabel(runtimeSession.providerId)}. Rebind the selected provider before trusting new stream activity.`
+  if (providerMismatchCopy) {
+    return `Live runtime streaming is paused because ${providerMismatchCopy.reason} ${providerMismatchCopy.streamRecoveryCopy}`
   }
 
   if (!runtimeSession.isAuthenticated) {

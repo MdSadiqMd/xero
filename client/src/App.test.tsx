@@ -441,14 +441,14 @@ function createAdapter(options?: {
     getRuntimeSettings: async () => currentRuntimeSettings,
     getProviderProfiles: async () => currentProviderProfiles,
     getRuntimeSession: async () => currentRuntimeSession,
-    startOpenAiLogin: async () => {
+    startOpenAiLogin: async (_projectId, _options) => {
       currentRuntimeSession = makeRuntimeSession('project-1', {
         phase: 'awaiting_browser_callback',
         flowId: 'flow-1',
       })
       return currentRuntimeSession
     },
-    submitOpenAiCallback: async () => {
+    submitOpenAiCallback: async (_projectId, _flowId, _options) => {
       currentRuntimeSession = makeRuntimeSession('project-1')
       return currentRuntimeSession
     },

@@ -550,8 +550,11 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     repositoryLabel: project.repository?.displayName ?? project.name,
     repositoryPath: project.repository?.rootPath ?? null,
     runtimeSession,
+    selectedProfileId: overrides.selectedProfileId ?? null,
+    selectedProfileLabel: overrides.selectedProfileLabel ?? null,
     selectedProviderId: overrides.selectedProviderId ?? 'openai_codex',
     selectedProviderLabel: overrides.selectedProviderLabel ?? 'OpenAI Codex',
+    selectedProviderSource: overrides.selectedProviderSource ?? 'provider_profiles',
     selectedModelId: overrides.selectedModelId ?? 'openai_codex',
     openrouterApiKeyConfigured: overrides.openrouterApiKeyConfigured ?? false,
     providerMismatch: overrides.providerMismatch ?? false,
@@ -909,15 +912,21 @@ describe('AgentRuntime current UI', () => {
     render(
       <AgentRuntime
         agent={makeAgent({
+          selectedProfileId: 'openrouter-work',
+          selectedProfileLabel: 'OpenRouter Work',
           selectedProviderId: 'openrouter',
           selectedProviderLabel: 'OpenRouter',
           selectedModelId: 'openai/gpt-4.1-mini',
           openrouterApiKeyConfigured: true,
           providerMismatch: true,
+          providerMismatchReason:
+            'Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex.',
+          providerMismatchRecoveryCopy:
+            'Rebind the selected profile so durable runtime truth matches Settings.',
           sessionUnavailableReason:
-            'Selected provider is OpenRouter, but the persisted runtime session still reflects OpenAI Codex. Rebind the selected provider so durable runtime truth matches Settings.',
+            'Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile so durable runtime truth matches Settings.',
           messagesUnavailableReason:
-            'Live runtime streaming is paused because Settings now select OpenRouter, but the recovered runtime session still reflects OpenAI Codex. Rebind the selected provider before trusting new stream activity.',
+            'Live runtime streaming is paused because Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile before trusting new stream activity.',
           runtimeSession: makeRuntimeSession({
             providerId: 'openai_codex',
             runtimeKind: 'openai_codex',

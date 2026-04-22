@@ -1,5 +1,8 @@
 import { useCallback } from 'react'
 
+import {
+  CadenceDesktopError,
+} from '@/src/lib/cadence-desktop'
 import { mapRuntimeSession } from '@/src/lib/cadence-model/runtime'
 
 import type {
@@ -10,6 +13,20 @@ import {
   getActiveProjectId,
   getOperatorActionError,
 } from './mutation-support'
+
+function getSelectedProfileId(selectedProfileId: string | null | undefined, action: string): string {
+  const profileId = selectedProfileId?.trim() ?? ''
+  if (profileId.length > 0) {
+    return profileId
+  }
+
+  throw new CadenceDesktopError({
+    code: 'provider_profiles_missing',
+    errorClass: 'retryable',
+    message: `Cadence could not ${action} because the selected provider profile is unavailable. Refresh Settings and retry.`,
+    retryable: true,
+  })
+}
 
 export function useOperatorAuthMutations({
   adapter,
@@ -25,7 +42,7 @@ export function useOperatorAuthMutations({
   | 'resolveOperatorAction'
   | 'resumeOperatorRun'
 > {
-  const { activeProjectIdRef, activeProjectRef } = refs
+  const { activeProjectIdRef, activeProjectRef, providerProfilesRef } = refs
   const {
     setErrorMessage,
     setOperatorActionStatus,
@@ -133,9 +150,16 @@ export function useOperatorAuthMutations({
       activeProjectIdRef,
       'Select an imported project before starting OpenAI login.',
     )
+    const selectedProfileId = getSelectedProfileId(
+      providerProfilesRef.current?.activeProfileId,
+      'start OpenAI login',
+    )
 
     try {
-      const response = await adapter.startOpenAiLogin(projectId, { originator: 'agent-pane' })
+      const response = await adapter.startOpenAiLogin(projectId, {
+        selectedProfileId,
+        originator: 'agent-pane',
+      })
       return applyRuntimeSessionUpdate(mapRuntimeSession(response))
     } catch (error) {
       try {
@@ -146,7 +170,7 @@ export function useOperatorAuthMutations({
 
       throw error
     }
-  }, [activeProjectIdRef, adapter, applyRuntimeSessionUpdate, syncRuntimeSession])
+  }, [activeProjectIdRef, adapter, applyRuntimeSessionUpdate, providerProfilesRef, syncRuntimeSession])
 
   const submitOpenAiCallback = useCallback(
     async (flowId: string, options: { manualInput?: string | null } = {}) => {
@@ -154,9 +178,14 @@ export function useOperatorAuthMutations({
         activeProjectIdRef,
         'Select an imported project before completing OpenAI login.',
       )
+      const selectedProfileId = getSelectedProfileId(
+        providerProfilesRef.current?.activeProfileId,
+        'complete OpenAI login',
+      )
 
       try {
         const response = await adapter.submitOpenAiCallback(projectId, flowId, {
+          selectedProfileId,
           manualInput: options.manualInput ?? null,
         })
         return applyRuntimeSessionUpdate(mapRuntimeSession(response))
@@ -170,7 +199,7 @@ export function useOperatorAuthMutations({
         throw error
       }
     },
-    [activeProjectIdRef, adapter, applyRuntimeSessionUpdate, syncRuntimeSession],
+    [activeProjectIdRef, adapter, applyRuntimeSessionUpdate, providerProfilesRef, syncRuntimeSession],
   )
 
   const startRuntimeSession = useCallback(async () => {

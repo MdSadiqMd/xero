@@ -647,16 +647,24 @@ function createMockAdapter(options?: {
       route: nextRoute,
     }
   })
-  const startOpenAiLogin = vi.fn(async (projectId: string) =>
-    makeRuntimeSession(projectId, {
-      sessionId: null,
-      phase: 'awaiting_browser_callback',
-      lastErrorCode: null,
-      lastError: null,
-    }),
+  const startOpenAiLogin = vi.fn(
+    async (
+      projectId: string,
+      _options: { selectedProfileId: string; originator?: string | null },
+    ) =>
+      makeRuntimeSession(projectId, {
+        sessionId: null,
+        phase: 'awaiting_browser_callback',
+        lastErrorCode: null,
+        lastError: null,
+      }),
   )
-  const submitOpenAiCallback = vi.fn(async (projectId: string, flowId: string) =>
-    makeRuntimeSession(projectId, { flowId, phase: 'authenticated' }),
+  const submitOpenAiCallback = vi.fn(
+    async (
+      projectId: string,
+      flowId: string,
+      _options: { selectedProfileId: string; manualInput?: string | null },
+    ) => makeRuntimeSession(projectId, { flowId, phase: 'authenticated' }),
   )
   const startAutonomousRun = vi.fn(async (projectId: string) => {
     const nextState = makeAutonomousRunState(projectId)
@@ -1040,8 +1048,11 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="runtime-provider-id">{state.agentView?.runtimeSession?.providerId ?? 'none'}</div>
       <div data-testid="selected-provider-id">{state.agentView?.selectedProviderId ?? 'none'}</div>
       <div data-testid="selected-provider-label">{state.agentView?.selectedProviderLabel ?? 'none'}</div>
+      <div data-testid="selected-provider-source">{state.agentView?.selectedProviderSource ?? 'none'}</div>
       <div data-testid="selected-model-id">{state.agentView?.selectedModelId ?? 'none'}</div>
       <div data-testid="provider-mismatch">{String(state.agentView?.providerMismatch ?? false)}</div>
+      <div data-testid="provider-mismatch-reason">{state.agentView?.providerMismatchReason ?? 'none'}</div>
+      <div data-testid="provider-mismatch-recovery-copy">{state.agentView?.providerMismatchRecoveryCopy ?? 'none'}</div>
       <div data-testid="auth-phase">{state.agentView?.authPhase ?? 'none'}</div>
       <div data-testid="auth-phase-label">{state.agentView?.authPhaseLabel ?? 'none'}</div>
       <div data-testid="session-label">{state.agentView?.runtimeSession?.sessionLabel ?? 'none'}</div>
@@ -1078,6 +1089,7 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="provider-profiles-active-profile-id">{state.providerProfiles?.activeProfileId ?? 'none'}</div>
       <div data-testid="provider-profiles-count">{String(state.providerProfiles?.profiles.length ?? 0)}</div>
       <div data-testid="provider-profiles-selected-profile-id">{state.agentView?.selectedProfileId ?? 'none'}</div>
+      <div data-testid="provider-profiles-selected-profile-label">{state.agentView?.selectedProfileLabel ?? 'none'}</div>
       <div data-testid="provider-profiles-selected-readiness-status">{state.agentView?.selectedProfileReadiness?.status ?? 'none'}</div>
       <div data-testid="provider-profiles-load-status">{state.providerProfilesLoadStatus}</div>
       <div data-testid="provider-profiles-load-error-code">{state.providerProfilesLoadError?.code ?? 'none'}</div>
@@ -1892,7 +1904,10 @@ describe('useCadenceDesktopState', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start OpenAI login' }))
 
     await waitFor(() =>
-      expect(setup.startOpenAiLogin).toHaveBeenCalledWith('project-1', { originator: 'agent-pane' }),
+      expect(setup.startOpenAiLogin).toHaveBeenCalledWith('project-1', {
+        selectedProfileId: 'openai_codex-default',
+        originator: 'agent-pane',
+      }),
     )
     await waitFor(() => expect(screen.getByTestId('auth-phase')).toHaveTextContent('awaiting_browser_callback'))
 
@@ -1900,6 +1915,7 @@ describe('useCadenceDesktopState', () => {
 
     await waitFor(() =>
       expect(setup.submitOpenAiCallback).toHaveBeenCalledWith('project-1', 'flow-1', {
+        selectedProfileId: 'openai_codex-default',
         manualInput: 'browser-callback-token',
       }),
     )
@@ -1916,6 +1932,122 @@ describe('useCadenceDesktopState', () => {
     await waitFor(() => expect(setup.startRuntimeSession).toHaveBeenCalledWith('project-1'))
     await waitFor(() => expect(screen.getByTestId('auth-phase')).toHaveTextContent('authenticated'))
     expect(screen.getByTestId('session-label')).toHaveTextContent('session-1')
+  })
+
+  it('preserves the selected provider-profile snapshot when OpenAI callback completion refreshes a typed profile mismatch error', async () => {
+    const initialRuntimeSession = makeRuntimeSession('project-1', {
+      providerId: 'openai_codex',
+      runtimeKind: 'openai_codex',
+      flowId: 'flow-1',
+      sessionId: null,
+      accountId: null,
+      phase: 'awaiting_browser_callback',
+      callbackBound: true,
+      lastErrorCode: null,
+      lastError: null,
+    })
+    const refreshedRuntimeSession = makeRuntimeSession('project-1', {
+      providerId: 'openai_codex',
+      runtimeKind: 'openai_codex',
+      flowId: 'flow-1',
+      sessionId: null,
+      accountId: null,
+      phase: 'awaiting_browser_callback',
+      callbackBound: true,
+      lastErrorCode: 'auth_flow_profile_mismatch',
+      lastError: {
+        code: 'auth_flow_profile_mismatch',
+        message:
+          'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of the selected profile `zz-openai-alt`. Retry login for the currently selected profile.',
+        retryable: false,
+      },
+    })
+    const providerProfiles = makeProviderProfiles({
+      activeProfileId: 'zz-openai-alt',
+      profiles: [
+        {
+          profileId: 'openai_codex-default',
+          providerId: 'openai_codex',
+          label: 'OpenAI Codex',
+          modelId: 'openai_codex',
+          active: false,
+          readiness: {
+            ready: false,
+            status: 'missing',
+            credentialUpdatedAt: null,
+          },
+          migratedFromLegacy: false,
+          migratedAt: null,
+        },
+        {
+          profileId: 'zz-openai-alt',
+          providerId: 'openai_codex',
+          label: 'OpenAI Alt',
+          modelId: 'openai_codex',
+          active: true,
+          readiness: {
+            ready: false,
+            status: 'missing',
+            credentialUpdatedAt: null,
+          },
+          migratedFromLegacy: false,
+          migratedAt: null,
+        },
+      ],
+    })
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'Cadence')] },
+      runtimeSettings: makeRuntimeSettings({
+        providerId: 'openai_codex',
+        modelId: 'openai_codex',
+        openrouterApiKeyConfigured: false,
+      }),
+      providerProfiles,
+      runtimeSessions: {
+        'project-1': initialRuntimeSession,
+      },
+      runtimeRuns: {
+        'project-1': null,
+      },
+    })
+
+    setup.getRuntimeSession
+      .mockResolvedValueOnce(initialRuntimeSession)
+      .mockResolvedValueOnce(refreshedRuntimeSession)
+    setup.submitOpenAiCallback.mockRejectedValueOnce(
+      new CadenceDesktopError({
+        code: 'auth_flow_profile_mismatch',
+        errorClass: 'user_fixable',
+        message:
+          'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of the selected profile `zz-openai-alt`. Retry login for the currently selected profile.',
+        retryable: false,
+      }),
+    )
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    await waitFor(() => expect(screen.getByTestId('provider-profiles-selected-profile-id')).toHaveTextContent('zz-openai-alt'))
+    expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('OpenAI Alt')
+    expect(screen.getByTestId('selected-provider-source')).toHaveTextContent('provider_profiles')
+    expect(screen.getByTestId('auth-phase')).toHaveTextContent('awaiting_browser_callback')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit OpenAI callback' }))
+
+    await waitFor(() =>
+      expect(setup.submitOpenAiCallback).toHaveBeenCalledWith('project-1', 'flow-1', {
+        selectedProfileId: 'zz-openai-alt',
+        manualInput: 'browser-callback-token',
+      }),
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('session-reason')).toHaveTextContent('selected profile `zz-openai-alt`'),
+    )
+    expect(screen.getByTestId('auth-phase')).toHaveTextContent('awaiting_browser_callback')
+    expect(screen.getByTestId('provider-profiles-selected-profile-id')).toHaveTextContent('zz-openai-alt')
+    expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('OpenAI Alt')
+    expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openai_codex')
+    expect(setup.getRuntimeSession).toHaveBeenCalledTimes(2)
   })
 
   it('keeps the current selection intact when snapshot loading fails', async () => {
@@ -2701,6 +2833,8 @@ describe('useCadenceDesktopState', () => {
 
     await waitFor(() => expect(screen.getByTestId('provider-profiles-active-profile-id')).toHaveTextContent('openai_codex-default'))
     expect(screen.getByTestId('provider-profiles-selected-profile-id')).toHaveTextContent('openai_codex-default')
+    expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('OpenAI Codex')
+    expect(screen.getByTestId('selected-provider-source')).toHaveTextContent('provider_profiles')
     expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openai_codex')
     expect(screen.getByTestId('runtime-provider-id')).toHaveTextContent('openai_codex')
 
@@ -2719,7 +2853,9 @@ describe('useCadenceDesktopState', () => {
     await waitFor(() => expect(screen.getByTestId('provider-profiles-active-profile-id')).toHaveTextContent('openrouter-default'))
     expect(screen.getByTestId('provider-profiles-count')).toHaveTextContent('2')
     expect(screen.getByTestId('provider-profiles-selected-profile-id')).toHaveTextContent('openrouter-default')
+    expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('OpenRouter')
     expect(screen.getByTestId('provider-profiles-selected-readiness-status')).toHaveTextContent('ready')
+    expect(screen.getByTestId('selected-provider-source')).toHaveTextContent('provider_profiles')
     expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openrouter')
     expect(screen.getByTestId('selected-model-id')).toHaveTextContent('openai/gpt-4.1-mini')
     expect(screen.getByTestId('runtime-settings-provider-id')).toHaveTextContent('openrouter')
@@ -2731,6 +2867,8 @@ describe('useCadenceDesktopState', () => {
     await waitFor(() => expect(setup.setActiveProviderProfile).toHaveBeenCalledWith('openai_codex-default'))
     await waitFor(() => expect(screen.getByTestId('provider-profiles-active-profile-id')).toHaveTextContent('openai_codex-default'))
     expect(screen.getByTestId('provider-profiles-selected-profile-id')).toHaveTextContent('openai_codex-default')
+    expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('OpenAI Codex')
+    expect(screen.getByTestId('selected-provider-source')).toHaveTextContent('provider_profiles')
     expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openai_codex')
     expect(screen.getByTestId('runtime-provider-id')).toHaveTextContent('openai_codex')
   })
@@ -2810,9 +2948,22 @@ describe('useCadenceDesktopState', () => {
 
     await waitFor(() => expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openrouter'))
     expect(screen.getByTestId('selected-provider-label')).toHaveTextContent('OpenRouter')
+    expect(screen.getByTestId('selected-provider-source')).toHaveTextContent('provider_profiles')
+    expect(screen.getByTestId('provider-profiles-selected-profile-id')).toHaveTextContent('openrouter-default')
+    expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('OpenRouter')
     expect(screen.getByTestId('provider-mismatch')).toHaveTextContent('true')
-    expect(screen.getByTestId('session-reason')).toHaveTextContent('Selected provider is OpenRouter')
-    expect(screen.getByTestId('messages-reason')).toHaveTextContent('Rebind the selected provider before trusting new stream activity.')
+    expect(screen.getByTestId('provider-mismatch-reason')).toHaveTextContent(
+      'Settings now select provider profile OpenRouter (openrouter-default)',
+    )
+    expect(screen.getByTestId('provider-mismatch-recovery-copy')).toHaveTextContent(
+      'Rebind the selected profile so durable runtime truth matches Settings.',
+    )
+    expect(screen.getByTestId('session-reason')).toHaveTextContent(
+      'Settings now select provider profile OpenRouter (openrouter-default)',
+    )
+    expect(screen.getByTestId('messages-reason')).toHaveTextContent(
+      'Rebind the selected profile before trusting new stream activity.',
+    )
   })
 
   it('derives missing-key OpenRouter guidance without OpenAI login copy', async () => {

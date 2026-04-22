@@ -46,6 +46,7 @@ import type {
   CheckpointControlLoopProjectionView,
   RecentAutonomousUnitsProjectionView,
 } from '../agent-runtime-projections'
+import type { SelectedRuntimeProviderSource } from './runtime-provider'
 
 export type RefreshSource =
   | 'startup'
@@ -184,12 +185,16 @@ export interface WorkflowPaneView {
   hasPhases: boolean
   runtimeSession?: RuntimeSessionView | null
   selectedProfileId?: string | null
+  selectedProfileLabel?: string | null
   selectedProviderId?: RuntimeSettingsDto['providerId'] | null
   selectedProviderLabel?: string
+  selectedProviderSource?: SelectedRuntimeProviderSource | null
   selectedModelId?: string | null
   selectedProfileReadiness?: ProviderProfileReadinessDto | null
   openrouterApiKeyConfigured?: boolean
   providerMismatch?: boolean
+  providerMismatchReason?: string | null
+  providerMismatchRecoveryCopy?: string | null
 }
 
 export interface AgentPaneView {
@@ -202,12 +207,16 @@ export interface AgentPaneView {
   repositoryPath: string | null
   runtimeSession?: RuntimeSessionView | null
   selectedProfileId?: string | null
+  selectedProfileLabel?: string | null
   selectedProviderId?: RuntimeSettingsDto['providerId'] | null
   selectedProviderLabel?: string
+  selectedProviderSource?: SelectedRuntimeProviderSource | null
   selectedModelId?: string | null
   selectedProfileReadiness?: ProviderProfileReadinessDto | null
   openrouterApiKeyConfigured?: boolean
   providerMismatch?: boolean
+  providerMismatchReason?: string | null
+  providerMismatchRecoveryCopy?: string | null
   runtimeRun?: RuntimeRunView | null
   autonomousRun?: ProjectDetailView['autonomousRun']
   autonomousUnit?: ProjectDetailView['autonomousUnit']

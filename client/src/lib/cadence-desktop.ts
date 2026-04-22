@@ -171,6 +171,33 @@ const commandErrorSchema = z.object({
   retryable: z.boolean(),
 })
 
+const startOpenAiLoginRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    profileId: z.string().trim().min(1),
+    originator: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+
+const submitOpenAiCallbackRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    profileId: z.string().trim().min(1),
+    flowId: z.string().trim().min(1),
+    manualInput: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+
+export interface StartOpenAiLoginOptions {
+  selectedProfileId: string
+  originator?: string | null
+}
+
+export interface SubmitOpenAiCallbackOptions {
+  selectedProfileId: string
+  manualInput?: string | null
+}
+
 export class CadenceDesktopError extends Error {
   code: string
   errorClass: z.infer<typeof commandErrorSchema>['class'] | 'adapter_contract_mismatch' | 'desktop_runtime_unavailable'
@@ -219,11 +246,11 @@ export interface CadenceDesktopAdapter {
   getRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
   getRuntimeSettings(): Promise<RuntimeSettingsDto>
   getProviderProfiles(): Promise<ProviderProfilesDto>
-  startOpenAiLogin(projectId: string, options?: { originator?: string | null }): Promise<RuntimeSessionDto>
+  startOpenAiLogin(projectId: string, options: StartOpenAiLoginOptions): Promise<RuntimeSessionDto>
   submitOpenAiCallback(
     projectId: string,
     flowId: string,
-    options?: { manualInput?: string | null },
+    options: SubmitOpenAiCallbackOptions,
   ): Promise<RuntimeSessionDto>
   startAutonomousRun(projectId: string): Promise<AutonomousRunStateDto>
   startRuntimeRun(projectId: string): Promise<RuntimeRunDto>
@@ -599,20 +626,35 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
   },
 
   startOpenAiLogin(projectId, options) {
+    const request = startOpenAiLoginRequestSchema.parse({
+      projectId,
+      profileId: options.selectedProfileId,
+      originator: options.originator ?? null,
+    })
+
     return invokeTyped(COMMANDS.startOpenAiLogin, runtimeSessionSchema, {
       request: {
-        projectId,
-        originator: options?.originator ?? null,
+        projectId: request.projectId,
+        profileId: request.profileId,
+        originator: request.originator ?? null,
       },
     })
   },
 
   submitOpenAiCallback(projectId, flowId, options) {
+    const request = submitOpenAiCallbackRequestSchema.parse({
+      projectId,
+      profileId: options.selectedProfileId,
+      flowId,
+      manualInput: options.manualInput ?? null,
+    })
+
     return invokeTyped(COMMANDS.submitOpenAiCallback, runtimeSessionSchema, {
       request: {
-        projectId,
-        flowId,
-        manualInput: options?.manualInput ?? null,
+        projectId: request.projectId,
+        profileId: request.profileId,
+        flowId: request.flowId,
+        manualInput: request.manualInput ?? null,
       },
     })
   },

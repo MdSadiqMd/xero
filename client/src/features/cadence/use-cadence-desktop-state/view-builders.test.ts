@@ -4,6 +4,7 @@ import type {
   Phase,
   PlanningLifecycleView,
   ProjectDetailView,
+  ProviderProfilesDto,
   RepositoryStatusView,
   RuntimeRunView,
   RuntimeSessionView,
@@ -196,6 +197,32 @@ function makeRuntimeSettings(overrides: Partial<RuntimeSettingsDto> = {}): Runti
   }
 }
 
+function makeProviderProfiles(overrides: Partial<ProviderProfilesDto> = {}): ProviderProfilesDto {
+  const activeProfileId = overrides.activeProfileId ?? 'openrouter-work'
+  const profiles = overrides.profiles ?? [
+    {
+      profileId: 'openrouter-work',
+      providerId: 'openrouter',
+      label: 'OpenRouter Work',
+      modelId: 'openai/gpt-4.1-mini',
+      active: activeProfileId === 'openrouter-work',
+      readiness: {
+        ready: true,
+        status: 'ready',
+        credentialUpdatedAt: '2026-04-20T11:58:00Z',
+      },
+      migratedFromLegacy: false,
+      migratedAt: null,
+    },
+  ]
+
+  return {
+    activeProfileId,
+    profiles,
+    migration: overrides.migration ?? null,
+  }
+}
+
 function makeNotificationRoute(overrides: Partial<NotificationRouteDto> = {}): NotificationRouteDto {
   return {
     projectId: 'project-1',
@@ -287,11 +314,42 @@ describe('view builders', () => {
       hasPhases: true,
       selectedProviderId: 'openrouter',
       selectedProviderLabel: 'OpenRouter',
+      selectedProviderSource: 'runtime_settings',
       selectedModelId: 'openai/gpt-4.1-mini',
       openrouterApiKeyConfigured: true,
       providerMismatch: true,
+      providerMismatchReason:
+        'Settings now select provider OpenRouter, but the persisted runtime session still reflects OpenAI Codex.',
+      providerMismatchRecoveryCopy:
+        'Rebind the selected provider so durable runtime truth matches Settings.',
     })
     expect(view?.activeLifecycleStage?.stage).toBe('research')
+  })
+
+  it('buildWorkflowView exposes the selected provider-profile identity when app-local profiles are loaded', () => {
+    const project = makeProject()
+    const activePhase = project.phases[0] ?? null
+
+    const view = buildWorkflowView({
+      project,
+      activePhase,
+      providerProfiles: makeProviderProfiles(),
+      runtimeSession: makeRuntimeSession({ providerId: 'openai_codex', runtimeKind: 'openai_codex' }),
+      runtimeSettings: makeRuntimeSettings(),
+    })
+
+    expect(view).toMatchObject({
+      selectedProfileId: 'openrouter-work',
+      selectedProfileLabel: 'OpenRouter Work',
+      selectedProviderId: 'openrouter',
+      selectedProviderLabel: 'OpenRouter',
+      selectedProviderSource: 'provider_profiles',
+      providerMismatch: true,
+      providerMismatchReason:
+        'Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex.',
+      providerMismatchRecoveryCopy:
+        'Rebind the selected profile so durable runtime truth matches Settings.',
+    })
   })
 
   it('buildAgentView falls back to the last known trust snapshot when trust projection data is malformed', () => {
@@ -380,7 +438,12 @@ describe('view builders', () => {
       repositoryPath: '/tmp/cadence',
       selectedProviderId: 'openrouter',
       selectedProviderLabel: 'OpenRouter',
+      selectedProviderSource: 'runtime_settings',
       providerMismatch: true,
+      providerMismatchReason:
+        'Settings now select provider OpenRouter, but the persisted runtime session still reflects OpenAI Codex.',
+      providerMismatchRecoveryCopy:
+        'Rebind the selected provider so durable runtime truth matches Settings.',
       runtimeStreamStatus: 'live',
       runtimeStreamStatusLabel: 'Streaming live activity',
       notificationRouteLoadStatus: loadStatus,
@@ -391,7 +454,7 @@ describe('view builders', () => {
       notificationRouteMutationStatus: 'running',
       pendingNotificationRouteId: 'telegram-primary',
       sessionUnavailableReason:
-        'Selected provider is OpenRouter, but the persisted runtime session still reflects OpenAI Codex. Rebind the selected provider so durable runtime truth matches Settings.',
+        'Settings now select provider OpenRouter, but the persisted runtime session still reflects OpenAI Codex. Rebind the selected provider so durable runtime truth matches Settings.',
     })
     expect(result.view?.notificationRoutes).toHaveLength(1)
     expect(result.view?.notificationChannelHealth).toHaveLength(2)
