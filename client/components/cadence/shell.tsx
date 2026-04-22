@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 import { Gamepad2, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, Settings, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { View } from "./data"
+import { StatusFooter, type StatusFooterProps } from "./status-footer"
 
 // ---------------------------------------------------------------------------
 // Platform
@@ -38,6 +39,7 @@ interface CadenceShellProps {
   platformOverride?: PlatformVariant | null
   /** Hide app-level controls (nav, sidebar toggle, settings). Window chrome stays. */
   chromeOnly?: boolean
+  footer?: StatusFooterProps
 }
 
 type WindowAction = "close" | "minimize" | "toggle-maximize"
@@ -63,6 +65,7 @@ export function CadenceShell({
   onToggleSidebar,
   platformOverride,
   chromeOnly = false,
+  footer,
 }: CadenceShellProps) {
   const desktopRuntime = isTauri()
   const platform = platformOverride ?? detectPlatform()
@@ -328,6 +331,7 @@ export function CadenceShell({
     <div className="cadence-window-shell flex h-screen flex-col overflow-hidden bg-background text-foreground select-none">
       {titlebar}
       <main className="flex min-h-0 flex-1">{children}</main>
+      <StatusFooter git={footer?.git} runtime={footer?.runtime} />
     </div>
   )
 }

@@ -1459,6 +1459,74 @@ describe('CadenceApp current UI', () => {
     expect(screen.getByText('No milestone assigned')).toBeVisible()
   })
 
+  it('renders live git and runtime footer data from desktop state while leaving mock-only fields untouched', async () => {
+    const runtimeSettings = makeRuntimeSettings({
+      providerId: 'openrouter',
+      modelId: 'openai/gpt-4.1-mini',
+      openrouterApiKeyConfigured: true,
+    })
+    const providerProfiles = makeProviderProfilesFromRuntimeSettings(runtimeSettings)
+    const { adapter } = createAdapter({
+      status: {
+        repository: {
+          id: 'repo-project-1',
+          projectId: 'project-1',
+          rootPath: '/tmp/Cadence',
+          displayName: 'Cadence',
+          branch: 'feature/footer-live-data',
+          headSha: '1234567890abcdef1234567890abcdef12345678',
+          isGitRepo: true,
+        },
+        branch: {
+          name: 'feature/footer-live-data',
+          headSha: '1234567890abcdef1234567890abcdef12345678',
+          detached: false,
+        },
+        entries: [
+          {
+            path: 'src/App.tsx',
+            staged: 'modified',
+            unstaged: null,
+            untracked: false,
+          },
+          {
+            path: 'src-tauri/src/main.rs',
+            staged: null,
+            unstaged: 'modified',
+            untracked: false,
+          },
+        ],
+        hasStagedChanges: true,
+        hasUnstagedChanges: true,
+        hasUntrackedChanges: false,
+      },
+      runtimeSettings,
+      providerProfiles,
+      runtimeSession: makeRuntimeSession('project-1', {
+        runtimeKind: 'openrouter',
+        providerId: 'openrouter',
+      }),
+      runtimeRun: makeRuntimeRun('project-1', {
+        runtimeKind: 'openrouter',
+        providerId: 'openrouter',
+        status: 'running',
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    expect(screen.getByRole('contentinfo', { name: 'Status bar' })).toBeVisible()
+    expect(screen.getByText('feature/footer-live-data')).toBeVisible()
+    expect(screen.getByText('2 changes')).toBeVisible()
+    expect(screen.getByText('1234567')).toBeVisible()
+    expect(screen.getByText('OpenRouter')).toBeVisible()
+    expect(screen.getByText('running')).toBeVisible()
+  })
+
   it('collapses the project rail into a compact icon strip from the titlebar toggle', async () => {
     const { adapter } = createAdapter()
 
@@ -1923,7 +1991,7 @@ describe('CadenceApp current UI', () => {
 
     fireEvent.click(screen.getByLabelText('Settings'))
     expect(await screen.findByRole('heading', { name: 'Providers' })).toBeVisible()
-    expect(screen.getByText('OpenAI Codex')).toBeVisible()
+    expect(screen.getAllByText('OpenAI Codex').length).toBeGreaterThan(0)
     expect(screen.getByText('Active profile')).toBeVisible()
     expect(screen.getAllByText('Live catalog').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible()
@@ -2118,19 +2186,21 @@ describe('CadenceApp current UI', () => {
     })
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible())
-    const checkpointQueries = within(ensureCheckpointSection())
+    const checkpointQueries = () => within(ensureCheckpointSection())
 
-    expect(checkpointQueries.getByText('Review destructive shell command')).toBeVisible()
-    expect(checkpointQueries.getByText('Live + durable')).toBeVisible()
-    expect(checkpointQueries.getByText(/^Pending$/)).toBeVisible()
-    expect(checkpointQueries.getByText('Live action required')).toBeVisible()
-    expect(checkpointQueries.getByText('Waiting on approval')).toBeVisible()
+    await waitFor(() => expect(checkpointQueries().getByText('Live + durable')).toBeVisible())
+    await waitFor(() => expect(checkpointQueries().getByText('Pending approval')).toBeVisible())
+    expect(checkpointQueries().getByText('Review destructive shell command')).toBeVisible()
+    expect(checkpointQueries().getByText('Live action required')).toBeVisible()
     expect(
-      checkpointQueries.getByText(
+      checkpointQueries().getAllByText('Waiting for operator input before this action can resume the run.').length,
+    ).toBeGreaterThan(0)
+    expect(
+      checkpointQueries().getByText(
         `Action ${reviewActionId} · Boundary boundary-review-1`,
       ),
     ).toBeVisible()
-    expect(checkpointQueries.getByText(/Cadence blocked a destructive shell wrapper/)).toBeVisible()
+    expect(checkpointQueries().getAllByText(/Cadence blocked a destructive shell wrapper/).length).toBeGreaterThan(0)
   })
 
   it('keeps recovered durable policy denials understandable on the shipped Agent surface after the live row clears', async () => {

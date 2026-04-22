@@ -9,6 +9,7 @@ import { ProjectLoadErrorState } from '@/components/cadence/project-load-error-s
 import { PhaseView } from '@/components/cadence/phase-view'
 import { ProjectRail } from '@/components/cadence/project-rail'
 import { CadenceShell, type PlatformVariant } from '@/components/cadence/shell'
+import type { FooterRuntimeState, StatusFooterProps } from '@/components/cadence/status-footer'
 import { GamesSidebar } from '@/components/cadence/games-sidebar'
 import { SettingsDialog } from '@/components/cadence/settings-dialog'
 import { type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
@@ -18,12 +19,28 @@ export interface CadenceAppProps {
   adapter?: CadenceDesktopAdapter
 }
 
+function resolveFooterRuntimeState(status: {
+  isActive?: boolean
+  isStale?: boolean
+} | null | undefined): FooterRuntimeState {
+  if (status?.isActive) {
+    return 'running'
+  }
+
+  if (status?.isStale) {
+    return 'paused'
+  }
+
+  return 'idle'
+}
+
 export function CadenceApp({ adapter }: CadenceAppProps) {
   const [activeView, setActiveView] = useState<View>('phases')
   const {
     projects,
     activeProject,
     activeProjectId,
+    repositoryStatus,
     workflowView,
     agentView,
     executionView,
@@ -80,6 +97,23 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const shouldRestoreSidebarFromEditorRef = useRef(false)
   const previousViewRef = useRef<View>(activeView)
+
+  const statusFooter: StatusFooterProps = {
+    git: activeProject
+      ? {
+          branch: repositoryStatus?.branchLabel ?? activeProject.repository?.branchLabel ?? activeProject.branchLabel,
+          hasChanges: repositoryStatus?.hasChanges ?? activeProject.repositoryStatus?.hasChanges ?? false,
+          changedFiles: repositoryStatus?.statusCount ?? activeProject.repositoryStatus?.statusCount ?? 0,
+          headSha: repositoryStatus?.headShaLabel ?? activeProject.repository?.headShaLabel ?? null,
+        }
+      : null,
+    runtime: agentView
+      ? {
+          provider: agentView.selectedProviderLabel ?? null,
+          state: resolveFooterRuntimeState(agentView.runtimeRun),
+        }
+      : null,
+  }
 
   useEffect(() => {
     const previousView = previousViewRef.current
@@ -219,6 +253,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         platformOverride={platformOverride}
+        footer={statusFooter}
         chromeOnly
       >
         <OnboardingFlow
@@ -273,6 +308,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       sidebarCollapsed={sidebarCollapsed}
       onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
       platformOverride={platformOverride}
+      footer={statusFooter}
     >
       <ProjectRail
         activeProjectId={activeProjectId}
