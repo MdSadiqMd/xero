@@ -678,6 +678,26 @@ pub fn migrations() -> &'static Migrations<'static> {
                     ADD COLUMN workflow_handoff_package_hash TEXT;
                 "#,
             ),
+            M::up(
+                r#"
+                ALTER TABLE runtime_runs
+                    ADD COLUMN control_state_json TEXT;
+
+                UPDATE runtime_runs
+                SET control_state_json = json_object(
+                    'active',
+                    json_object(
+                        'modelId', runtime_kind,
+                        'thinkingEffort', NULL,
+                        'approvalMode', 'suggest',
+                        'revision', 1,
+                        'appliedAt', COALESCE(started_at, updated_at, created_at)
+                    ),
+                    'pending', NULL
+                )
+                WHERE control_state_json IS NULL;
+                "#,
+            ),
         ])
     });
 

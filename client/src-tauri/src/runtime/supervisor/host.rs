@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     auth::now_timestamp,
-    commands::{validate_non_empty, CommandError},
+    commands::{validate_non_empty, CommandError, RuntimeRunControlInputDto},
     db::project_store::{
         self, RuntimeRunControlStateRecord, RuntimeRunDiagnosticRecord, RuntimeRunRecord,
         RuntimeRunSnapshotRecord, RuntimeRunStatus, RuntimeRunTransportLiveness,
@@ -103,6 +103,29 @@ pub struct RuntimeSupervisorSubmitInputRequest {
     pub boundary_id: String,
     pub input: String,
     pub control_timeout: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSupervisorUpdateControlsRequest {
+    pub project_id: String,
+    pub repo_root: PathBuf,
+    pub run_id: String,
+    pub controls: Option<RuntimeRunControlInputDto>,
+    pub prompt: Option<String>,
+    pub control_timeout: Duration,
+}
+
+impl Default for RuntimeSupervisorUpdateControlsRequest {
+    fn default() -> Self {
+        Self {
+            project_id: String::new(),
+            repo_root: PathBuf::new(),
+            run_id: String::new(),
+            controls: None,
+            prompt: None,
+            control_timeout: DEFAULT_CONTROL_TIMEOUT,
+        }
+    }
 }
 
 impl Default for RuntimeSupervisorLaunchRequest {
@@ -749,6 +772,214 @@ pub fn submit_runtime_run_input(
     }
 }
 
+pub fn update_runtime_run_controls(
+    state: &DesktopState,
+    request: RuntimeSupervisorUpdateControlsRequest,
+) -> Result<RuntimeRunSnapshotRecord, CommandError> {
+    validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.run_id, "runId")?;
+    if request.controls.is_none() && request.prompt.is_none() {
+        return Err(CommandError::user_fixable(
+            "runtime_run_control_invalid",
+            "Cadence requires a prompt or control delta before it can queue runtime-run changes.",
+        ));
+    }
+    if request.control_timeout.is_zero() {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_request_invalid",
+            "Cadence requires a non-zero detached supervisor control timeout.",
+        ));
+    }
+
+    let Some(snapshot) = project_store::load_runtime_run(&request.repo_root, &request.project_id)?
+    else {
+        state
+            .runtime_supervisor_controller()
+            .forget(&request.project_id);
+        return Err(CommandError::retryable(
+            "runtime_run_missing",
+            format!(
+                "Cadence cannot queue runtime-run controls because project `{}` has no durable runtime run.",
+                request.project_id
+            ),
+        ));
+    };
+
+    if snapshot.run.run_id != request.run_id {
+        return Err(CommandError::retryable(
+            "runtime_run_mismatch",
+            format!(
+                "Cadence refused to queue controls for run `{}` because project `{}` is currently bound to durable run `{}`.",
+                request.run_id, request.project_id, snapshot.run.run_id
+            ),
+        ));
+    }
+
+    if let Some(active) = state
+        .runtime_supervisor_controller()
+        .snapshot(&request.project_id)
+        .filter(|active| active.run_id != request.run_id)
+    {
+        return Err(CommandError::retryable(
+            "runtime_run_mismatch",
+            format!(
+                "Cadence refused to queue controls for run `{}` because project `{}` is currently attached to run `{}` instead.",
+                request.run_id, request.project_id, active.run_id
+            ),
+        ));
+    }
+
+    if matches!(
+        snapshot.run.status,
+        RuntimeRunStatus::Stopped | RuntimeRunStatus::Failed
+    ) {
+        return Err(CommandError::retryable(
+            "runtime_run_unavailable",
+            format!(
+                "Cadence cannot queue controls because run `{}` is already terminal ({}). Refresh runtime state before retrying.",
+                request.run_id,
+                runtime_run_status_label(&snapshot.run.status)
+            ),
+        ));
+    }
+
+    let runtime_session = project_store::load_runtime_session(&request.repo_root, &request.project_id)?
+        .ok_or_else(|| {
+            CommandError::retryable(
+                "runtime_run_session_missing",
+                format!(
+                    "Cadence cannot queue runtime-run controls for project `{}` because the durable runtime session is missing.",
+                    request.project_id
+                ),
+            )
+        })?;
+    let session_id = runtime_session.session_id.clone().ok_or_else(|| {
+        CommandError::retryable(
+            "runtime_run_session_missing",
+            format!(
+                "Cadence cannot queue runtime-run controls for project `{}` until the durable runtime session exposes a stable session id.",
+                request.project_id
+            ),
+        )
+    })?;
+
+    let response = send_control_request(
+        &snapshot.run.transport.endpoint,
+        request.control_timeout,
+        &SupervisorControlRequest::queue_controls(
+            &request.project_id,
+            &request.run_id,
+            &session_id,
+            runtime_session.flow_id.clone(),
+            request.controls.clone(),
+            request.prompt.clone(),
+        ),
+    );
+
+    let persist_control_error = |code: &str, message: &str| -> Result<(), CommandError> {
+        refresh_runtime_run_after_control_response(
+            &request.repo_root,
+            &snapshot,
+            Some(RuntimeRunDiagnosticRecord {
+                code: code.to_string(),
+                message: message.to_string(),
+            }),
+        )?;
+        Ok(())
+    };
+
+    match response {
+        Ok(SupervisorControlResponse::QueueControlsAccepted {
+            protocol_version,
+            project_id,
+            run_id,
+            session_id: ack_session_id,
+            flow_id: ack_flow_id,
+            ..
+        }) => {
+            if protocol_version != SUPERVISOR_PROTOCOL_VERSION {
+                let code = "runtime_supervisor_protocol_invalid";
+                let message =
+                    "Cadence rejected a detached supervisor queued-controls acknowledgement with an unexpected protocol version.";
+                persist_control_error(code, message)?;
+                return Err(CommandError::user_fixable(code, message));
+            }
+
+            if project_id != snapshot.run.project_id
+                || run_id != snapshot.run.run_id
+                || ack_session_id != session_id
+                || ack_flow_id != runtime_session.flow_id
+            {
+                let code = "runtime_supervisor_control_ack_mismatch";
+                let message =
+                    "Cadence rejected detached supervisor queued-controls acknowledgement because its runtime identity did not match the active run session.";
+                persist_control_error(code, message)?;
+                return Err(CommandError::retryable(code, message));
+            }
+
+            let refreshed =
+                refresh_runtime_run_after_control_response(&request.repo_root, &snapshot, None)?;
+            state.runtime_supervisor_controller().remember(
+                &refreshed.run.project_id,
+                &refreshed.run.run_id,
+                &refreshed.run.transport.endpoint,
+            );
+            Ok(refreshed)
+        }
+        Ok(SupervisorControlResponse::Error {
+            protocol_version,
+            code,
+            message,
+            retryable,
+        }) => {
+            if protocol_version != SUPERVISOR_PROTOCOL_VERSION {
+                let code = "runtime_supervisor_protocol_invalid";
+                let message =
+                    "Cadence rejected a detached supervisor control error frame with an unexpected protocol version.";
+                persist_control_error(code, message)?;
+                return Err(CommandError::user_fixable(code, message));
+            }
+
+            persist_control_error(&code, &message)?;
+            Err(if retryable {
+                CommandError::retryable(code, message)
+            } else {
+                CommandError::user_fixable(code, message)
+            })
+        }
+        Ok(_) => {
+            let code = "runtime_supervisor_control_invalid";
+            let message =
+                "Cadence rejected an unsupported detached supervisor queued-controls acknowledgement.";
+            persist_control_error(code, message)?;
+            Err(CommandError::retryable(code, message))
+        }
+        Err(error) => {
+            if error.code == "runtime_supervisor_control_invalid" {
+                persist_control_error(&error.code, &error.message)?;
+                return Err(error);
+            }
+
+            upsert_runtime_run_projection(
+                &request.repo_root,
+                &snapshot,
+                RuntimeRunStatus::Stale,
+                RuntimeRunTransportLiveness::Unreachable,
+                Some(RuntimeRunDiagnosticRecord {
+                    code: error.code.clone(),
+                    message: error.message.clone(),
+                }),
+                snapshot.run.last_heartbeat_at.clone(),
+                snapshot.run.stopped_at.clone(),
+            )?;
+            state
+                .runtime_supervisor_controller()
+                .forget(&request.project_id);
+            Err(error)
+        }
+    }
+}
+
 fn validate_launch_request(request: &RuntimeSupervisorLaunchRequest) -> Result<(), CommandError> {
     validate_non_empty(&request.project_id, "projectId")?;
     validate_non_empty(&request.runtime_kind, "runtimeKind")?;
@@ -994,13 +1225,17 @@ fn refresh_runtime_run_after_control_response(
     snapshot: &RuntimeRunSnapshotRecord,
     last_error: Option<RuntimeRunDiagnosticRecord>,
 ) -> Result<RuntimeRunSnapshotRecord, CommandError> {
+    let latest = project_store::load_runtime_run(repo_root, &snapshot.run.project_id)?
+        .filter(|latest| latest.run.run_id == snapshot.run.run_id)
+        .unwrap_or_else(|| snapshot.clone());
+
     upsert_runtime_run_projection(
         repo_root,
-        snapshot,
+        &latest,
         RuntimeRunStatus::Running,
         RuntimeRunTransportLiveness::Reachable,
         last_error,
-        snapshot.run.last_heartbeat_at.clone(),
+        latest.run.last_heartbeat_at.clone(),
         None,
     )
 }
@@ -1044,7 +1279,7 @@ fn upsert_runtime_run_projection(
                 updated_at: now_timestamp(),
             },
             checkpoint: None,
-            control_state: None,
+            control_state: Some(snapshot.controls.clone()),
         },
     )
 }

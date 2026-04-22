@@ -381,6 +381,17 @@ pub struct StartRuntimeRunRequestDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateRuntimeRunControlsRequestDto {
+    pub project_id: String,
+    pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controls: Option<RuntimeRunControlInputDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StopRuntimeRunRequestDto {
     pub project_id: String,
     pub run_id: String,

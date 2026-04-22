@@ -63,7 +63,8 @@ pub use provider::{
 pub use stream::{start_runtime_stream, RuntimeStreamController, RuntimeStreamRequest};
 pub use supervisor::{
     launch_detached_runtime_supervisor, probe_runtime_run, run_supervisor_sidecar_from_env,
-    stop_runtime_run, submit_runtime_run_input, RuntimeSupervisorController,
-    RuntimeSupervisorLaunchRequest, RuntimeSupervisorProbeRequest, RuntimeSupervisorStopRequest,
-    RuntimeSupervisorSubmitInputRequest,
+    stop_runtime_run, submit_runtime_run_input, update_runtime_run_controls,
+    RuntimeSupervisorController, RuntimeSupervisorLaunchRequest,
+    RuntimeSupervisorProbeRequest, RuntimeSupervisorStopRequest,
+    RuntimeSupervisorSubmitInputRequest, RuntimeSupervisorUpdateControlsRequest,
 };

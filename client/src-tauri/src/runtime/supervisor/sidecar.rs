@@ -232,6 +232,7 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
         last_checkpoint_at: initial_snapshot.last_checkpoint_at.clone(),
         last_error: None,
         stopped_at: None,
+        control_state: initial_snapshot.controls.clone(),
         next_boundary_serial: 0,
         active_boundary: None,
     }));
@@ -241,8 +242,10 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
 
     let control_thread = spawn_control_listener(
         listener,
+        args.repo_root.clone(),
         shared.clone(),
         event_hub.clone(),
+        persistence_lock.clone(),
         writer.clone(),
         shutdown.clone(),
         killer,

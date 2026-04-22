@@ -33,6 +33,7 @@ pub const START_OPENAI_LOGIN_COMMAND: &str = "start_openai_login";
 pub const SUBMIT_OPENAI_CALLBACK_COMMAND: &str = "submit_openai_callback";
 pub const LOGOUT_RUNTIME_SESSION_COMMAND: &str = "logout_runtime_session";
 pub const START_RUNTIME_RUN_COMMAND: &str = "start_runtime_run";
+pub const UPDATE_RUNTIME_RUN_CONTROLS_COMMAND: &str = "update_runtime_run_controls";
 pub const CANCEL_AUTONOMOUS_RUN_COMMAND: &str = "cancel_autonomous_run";
 pub const START_RUNTIME_SESSION_COMMAND: &str = "start_runtime_session";
 pub const STOP_RUNTIME_RUN_COMMAND: &str = "stop_runtime_run";
@@ -78,6 +79,7 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     SUBMIT_OPENAI_CALLBACK_COMMAND,
     LOGOUT_RUNTIME_SESSION_COMMAND,
     START_RUNTIME_RUN_COMMAND,
+    UPDATE_RUNTIME_RUN_CONTROLS_COMMAND,
     CANCEL_AUTONOMOUS_RUN_COMMAND,
     START_RUNTIME_SESSION_COMMAND,
     STOP_RUNTIME_RUN_COMMAND,

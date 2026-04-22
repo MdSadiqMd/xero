@@ -18,6 +18,7 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_structured_artifact_paylo
                 "Supervisor launched and connected to the project PTY.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for structured artifact persistence");
@@ -109,6 +110,7 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_verification_evidence_pay
                 "Supervisor launched and connected to the project PTY.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for verification evidence persistence");
@@ -194,6 +196,7 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_skill_lifecycle_payloads_
                 "Supervisor launched and connected to the project PTY.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for skill lifecycle persistence");
@@ -278,6 +281,7 @@ pub(crate) fn autonomous_run_persistence_rejects_verification_evidence_action_bo
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for verification evidence linkage mismatch");
@@ -315,6 +319,7 @@ pub(crate) fn autonomous_run_persistence_rejects_structured_artifact_payload_lin
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for linkage mismatch");
@@ -352,6 +357,7 @@ pub(crate) fn autonomous_run_persistence_rejects_secret_bearing_structured_paylo
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for secret-bearing payload rejection");
@@ -391,6 +397,7 @@ pub(crate) fn autonomous_run_persistence_rejects_skill_lifecycle_payloads_withou
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for missing tree hash rejection");
@@ -428,6 +435,7 @@ pub(crate) fn autonomous_run_persistence_rejects_skill_lifecycle_kind_mismatch()
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for kind mismatch rejection");
@@ -462,6 +470,7 @@ pub(crate) fn autonomous_run_persistence_rejects_successful_skill_lifecycle_payl
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for invalid success/diagnostic rejection");
@@ -505,6 +514,7 @@ pub(crate) fn autonomous_run_persistence_rejects_policy_denied_artifacts_without
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for policy denial rejection");
@@ -565,6 +575,7 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_structured_payload_json_is
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run before payload tampering");
@@ -607,6 +618,7 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_skill_lifecycle_payload_st
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run before skill lifecycle tampering");
@@ -663,6 +675,7 @@ pub(crate) fn autonomous_skill_lifecycle_persistence_is_replay_safe_across_stage
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for replay-safe skill lifecycle persistence");

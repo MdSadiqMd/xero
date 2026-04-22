@@ -17,6 +17,7 @@ pub(crate) fn autonomous_run_persistence_tracks_current_unit_duplicate_start_and
                 "Supervisor launched and connected to the project PTY.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for autonomous projection");
@@ -137,6 +138,7 @@ pub(crate) fn autonomous_run_persistence_persists_explicit_workflow_linkage_and_
                 "Supervisor launched and connected to the project PTY.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for workflow linkage projection");
@@ -247,6 +249,7 @@ pub(crate) fn autonomous_run_persistence_rejects_blank_workflow_linkage_fields()
                 "Supervisor launched and connected to the project PTY.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run before invalid linkage request");
@@ -283,6 +286,7 @@ pub(crate) fn autonomous_run_decode_fails_closed_for_cross_project_workflow_link
                 "Supervisor launched and connected to the project PTY.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for first project");
@@ -298,6 +302,7 @@ pub(crate) fn autonomous_run_decode_fails_closed_for_cross_project_workflow_link
                 "Supervisor launched and connected to the project PTY.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for second project");
@@ -348,6 +353,7 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_unit_row_is_missing() {
                 "Bootstrap checkpoint.",
                 "2099-04-15T19:00:20Z",
             )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
         },
     )
     .expect("persist runtime run for autonomous decode failure");

@@ -1571,7 +1571,7 @@ fn validate_runtime_run_pending_control_snapshot(
     Ok(())
 }
 
-pub(crate) fn build_runtime_run_control_state(
+pub fn build_runtime_run_control_state(
     model_id: &str,
     thinking_effort: Option<ProviderModelThinkingEffortDto>,
     approval_mode: RuntimeRunApprovalModeDto,

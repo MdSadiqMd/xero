@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::commands::RuntimeRunControlInputDto;
+
 pub const SUPERVISOR_PROTOCOL_VERSION: u8 = 1;
 pub const SUPERVISOR_KIND_DETACHED_PTY: &str = "detached_pty";
 pub const SUPERVISOR_TRANSPORT_KIND_TCP: &str = "tcp";
@@ -225,6 +227,15 @@ pub enum SupervisorControlRequest {
         boundary_id: String,
         input: String,
     },
+    QueueControls {
+        protocol_version: u8,
+        project_id: String,
+        run_id: String,
+        session_id: String,
+        flow_id: Option<String>,
+        controls: Option<RuntimeRunControlInputDto>,
+        prompt: Option<String>,
+    },
 }
 
 impl SupervisorControlRequest {
@@ -277,6 +288,25 @@ impl SupervisorControlRequest {
             input: input.into(),
         }
     }
+
+    pub fn queue_controls(
+        project_id: impl Into<String>,
+        run_id: impl Into<String>,
+        session_id: impl Into<String>,
+        flow_id: Option<String>,
+        controls: Option<RuntimeRunControlInputDto>,
+        prompt: Option<String>,
+    ) -> Self {
+        Self::QueueControls {
+            protocol_version: SUPERVISOR_PROTOCOL_VERSION,
+            project_id: project_id.into(),
+            run_id: run_id.into(),
+            session_id: session_id.into(),
+            flow_id,
+            controls,
+            prompt,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -316,6 +346,16 @@ pub enum SupervisorControlResponse {
         action_id: String,
         boundary_id: String,
         delivered_at: String,
+    },
+    QueueControlsAccepted {
+        protocol_version: u8,
+        project_id: String,
+        run_id: String,
+        session_id: String,
+        flow_id: Option<String>,
+        pending_revision: u32,
+        queued_at: String,
+        prompt_queued: bool,
     },
     Event {
         protocol_version: u8,

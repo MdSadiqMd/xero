@@ -879,6 +879,8 @@ pub(crate) fn start_autonomous_run_mints_fresh_child_unit_and_attempt_identity_p
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("start autonomous run for lifecycle progression");
@@ -1342,6 +1344,8 @@ pub(crate) fn get_autonomous_run_rejects_stale_workflow_linkage_after_active_sta
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("start autonomous run before stage drift");

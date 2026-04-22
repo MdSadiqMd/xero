@@ -9,7 +9,7 @@ pub(crate) use std::{
 
 pub(crate) use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 pub(crate) use cadence_desktop_lib::{
-    auth::{persist_openai_codex_session, StoredOpenAiCodexSession},
+    auth::{persist_openai_codex_session, sync_openai_profile_link, StoredOpenAiCodexSession},
     commands::{
         apply_workflow_transition::apply_workflow_transition,
         cancel_autonomous_run::cancel_autonomous_run, get_autonomous_run::get_autonomous_run,
@@ -226,19 +226,25 @@ pub(crate) fn seed_authenticated_runtime(
     auth_store_path: &Path,
     project_id: &str,
 ) {
-    persist_openai_codex_session(
-        auth_store_path,
-        StoredOpenAiCodexSession {
-            provider_id: "openai_codex".into(),
-            session_id: "session-auth".into(),
-            account_id: "acct-1".into(),
-            access_token: jwt_with_account_id("acct-1"),
-            refresh_token: "refresh-1".into(),
-            expires_at: current_unix_timestamp() + Duration::from_secs(3600).as_secs() as i64,
-            updated_at: "2026-04-13T14:11:59Z".into(),
-        },
+    let stored_session = StoredOpenAiCodexSession {
+        provider_id: "openai_codex".into(),
+        session_id: "session-auth".into(),
+        account_id: "acct-1".into(),
+        access_token: jwt_with_account_id("acct-1"),
+        refresh_token: "refresh-1".into(),
+        expires_at: current_unix_timestamp() + Duration::from_secs(3600).as_secs() as i64,
+        updated_at: "2026-04-13T14:11:59Z".into(),
+    };
+
+    persist_openai_codex_session(auth_store_path, stored_session.clone())
+        .expect("persist auth session");
+    sync_openai_profile_link(
+        &app.handle().clone(),
+        &app.state::<DesktopState>(),
+        Some("openai_codex-default"),
+        Some(&stored_session),
     )
-    .expect("persist auth session");
+    .expect("sync active provider-profile auth link");
 
     let runtime = start_runtime_session(
         app.handle().clone(),
@@ -248,7 +254,13 @@ pub(crate) fn seed_authenticated_runtime(
         },
     )
     .expect("start runtime session");
-    assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+    assert_eq!(
+        runtime.phase,
+        RuntimeAuthPhase::Authenticated,
+        "expected authenticated runtime session after seeding auth; last_error_code={:?}, last_error={:?}",
+        runtime.last_error_code,
+        runtime.last_error,
+    );
 }
 
 pub(crate) fn seed_gate_linked_workflow_with_auto_continuation(
@@ -772,6 +784,16 @@ pub(crate) fn seed_unreachable_runtime_run(repo_root: &Path, project_id: &str, r
                 summary: "Supervisor boot recorded.".into(),
                 created_at: "2026-04-15T19:00:10Z".into(),
             }),
+            control_state: Some(
+                project_store::build_runtime_run_control_state(
+                    "openai_codex",
+                    None,
+                    cadence_desktop_lib::commands::RuntimeRunApprovalModeDto::Suggest,
+                    "2026-04-15T19:00:00Z",
+                    None,
+                )
+                .expect("seed unreachable runtime run control state"),
+            ),
         },
     )
     .expect("seed unreachable runtime run");
@@ -802,6 +824,16 @@ pub(crate) fn seed_failed_runtime_run(repo_root: &Path, project_id: &str, run_id
                 updated_at: "2026-04-15T19:00:11Z".into(),
             },
             checkpoint: None,
+            control_state: Some(
+                project_store::build_runtime_run_control_state(
+                    "openai_codex",
+                    None,
+                    cadence_desktop_lib::commands::RuntimeRunApprovalModeDto::Suggest,
+                    "2026-04-15T19:00:00Z",
+                    None,
+                )
+                .expect("seed failed runtime run control state"),
+            ),
         },
     )
     .expect("seed failed runtime run");
@@ -887,6 +919,7 @@ pub(crate) fn launch_scripted_runtime_run(
     script: &str,
 ) -> project_store::RuntimeRunSnapshotRecord {
     let shell = runtime_shell::launch_script(script);
+    let timestamp = cadence_desktop_lib::auth::now_timestamp();
 
     launch_detached_runtime_supervisor(
         state,
@@ -902,6 +935,14 @@ pub(crate) fn launch_scripted_runtime_run(
             startup_timeout: Duration::from_secs(5),
             control_timeout: Duration::from_millis(750),
             supervisor_binary: state.runtime_supervisor_binary_override().cloned(),
+            run_controls: project_store::build_runtime_run_control_state(
+                "openai_codex",
+                None,
+                cadence_desktop_lib::commands::RuntimeRunApprovalModeDto::Suggest,
+                &timestamp,
+                None,
+            )
+            .expect("build scripted runtime run controls"),
         },
     )
     .expect("launch scripted runtime supervisor")

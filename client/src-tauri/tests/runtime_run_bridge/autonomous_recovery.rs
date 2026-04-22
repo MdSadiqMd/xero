@@ -16,6 +16,8 @@ pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplica
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("start autonomous run");
@@ -37,6 +39,8 @@ pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplica
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("second autonomous start should reconnect");
@@ -109,6 +113,8 @@ pub(crate) fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("start autonomous run for reload proof");
@@ -229,6 +235,8 @@ pub(crate) fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_
         fresh_app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("duplicate autonomous start after reload should reconnect");

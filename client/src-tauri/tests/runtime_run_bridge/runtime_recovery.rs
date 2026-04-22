@@ -62,7 +62,7 @@ pub(crate) fn start_runtime_run_requires_authenticated_runtime_session() {
     let error = start_runtime_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
-        StartRuntimeRunRequestDto { project_id },
+        StartRuntimeRunRequestDto { project_id, initial_controls: None, initial_prompt: None },
     )
     .expect_err("start runtime run should require auth binding");
 
@@ -85,6 +85,8 @@ pub(crate) fn start_runtime_run_reconnects_existing_run_without_duplicate_launch
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("start runtime run");
@@ -101,6 +103,8 @@ pub(crate) fn start_runtime_run_reconnects_existing_run_without_duplicate_launch
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("second start should reconnect");
@@ -144,6 +148,8 @@ pub(crate) fn get_runtime_run_recovers_truthful_running_state_after_fresh_host_r
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("start runtime run");
@@ -262,6 +268,8 @@ pub(crate) fn start_runtime_run_replaces_stale_row_with_new_reachable_run() {
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
         },
     )
     .expect("start runtime run after stale row");

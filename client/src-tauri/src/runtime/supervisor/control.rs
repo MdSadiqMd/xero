@@ -1,6 +1,7 @@
 use std::{
     io::Write,
     net::{TcpListener, TcpStream},
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{sync_channel, RecvTimeoutError},
@@ -11,9 +12,14 @@ use std::{
 
 use portable_pty::ChildKiller;
 
-use crate::{auth::now_timestamp, commands::CommandError};
+use crate::{
+    auth::now_timestamp,
+    commands::{CommandError, RuntimeRunControlInputDto},
+    db::project_store::RuntimeRunPendingControlSnapshotRecord,
+};
 
 use super::live_events::append_live_event;
+use super::persistence::persist_runtime_row_from_shared;
 use super::{
     read_json_line_from_reader, write_json_line, BufferedSupervisorEvent, ReplayRegistration,
     SharedPtyWriter, SidecarSharedState, SupervisorEventHub, CONTROL_ACCEPT_POLL_INTERVAL,
@@ -26,8 +32,10 @@ use crate::runtime::protocol::{
 
 pub(super) fn spawn_control_listener(
     listener: TcpListener,
+    repo_root: PathBuf,
     shared: Arc<Mutex<SidecarSharedState>>,
     event_hub: Arc<Mutex<SupervisorEventHub>>,
+    persistence_lock: Arc<Mutex<()>>,
     writer: SharedPtyWriter,
     shutdown: Arc<AtomicBool>,
     killer: Box<dyn ChildKiller + Send + Sync>,
@@ -37,14 +45,23 @@ pub(super) fn spawn_control_listener(
         while !shutdown.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((stream, _)) => {
+                    let repo_root = repo_root.clone();
                     let shared = shared.clone();
                     let event_hub = event_hub.clone();
+                    let persistence_lock = persistence_lock.clone();
                     let writer = writer.clone();
                     let shutdown = shutdown.clone();
                     let killer = killer.clone();
                     thread::spawn(move || {
                         let _ = handle_control_connection(
-                            stream, &shared, &event_hub, &writer, &shutdown, &killer,
+                            stream,
+                            &repo_root,
+                            &shared,
+                            &event_hub,
+                            &persistence_lock,
+                            &writer,
+                            &shutdown,
+                            &killer,
                         );
                     });
                 }
@@ -71,8 +88,10 @@ pub(super) fn spawn_control_listener(
 
 fn handle_control_connection(
     mut stream: TcpStream,
+    repo_root: &PathBuf,
     shared: &Arc<Mutex<SidecarSharedState>>,
     event_hub: &Arc<Mutex<SupervisorEventHub>>,
+    persistence_lock: &Arc<Mutex<()>>,
     writer: &SharedPtyWriter,
     shutdown: &Arc<AtomicBool>,
     killer: &Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
@@ -250,6 +269,28 @@ fn handle_control_connection(
             action_id,
             boundary_id,
             input,
+        ),
+        Ok(SupervisorControlRequest::QueueControls {
+            protocol_version,
+            project_id,
+            run_id,
+            session_id,
+            flow_id,
+            controls,
+            prompt,
+        }) => handle_queue_controls_request(
+            &mut stream,
+            repo_root,
+            shared,
+            event_hub,
+            persistence_lock,
+            protocol_version,
+            project_id,
+            run_id,
+            session_id,
+            flow_id,
+            controls,
+            prompt,
         ),
         Err(error) => write_protocol_error(
             &mut stream,
@@ -551,6 +592,211 @@ fn handle_submit_input_request(
             "Cadence could not write the detached supervisor submit-input acknowledgement.",
         )
     })
+}
+
+fn handle_queue_controls_request(
+    stream: &mut TcpStream,
+    repo_root: &PathBuf,
+    shared: &Arc<Mutex<SidecarSharedState>>,
+    event_hub: &Arc<Mutex<SupervisorEventHub>>,
+    persistence_lock: &Arc<Mutex<()>>,
+    protocol_version: u8,
+    project_id: String,
+    run_id: String,
+    session_id: String,
+    flow_id: Option<String>,
+    controls: Option<RuntimeRunControlInputDto>,
+    prompt: Option<String>,
+) -> Result<(), CommandError> {
+    if protocol_version != SUPERVISOR_PROTOCOL_VERSION {
+        write_protocol_error(
+            stream,
+            "runtime_supervisor_protocol_invalid",
+            "Detached supervisor protocol version mismatch.",
+            false,
+        )?;
+        return Ok(());
+    }
+
+    let snapshot = shared.lock().expect("sidecar state lock poisoned").clone();
+    if project_id != snapshot.project_id || run_id != snapshot.run_id {
+        write_protocol_error(
+            stream,
+            "runtime_supervisor_identity_mismatch",
+            "Detached supervisor identity mismatch.",
+            false,
+        )?;
+        return Ok(());
+    }
+
+    if session_id != snapshot.session_id || flow_id != snapshot.flow_id {
+        write_protocol_error(
+            stream,
+            "runtime_supervisor_session_mismatch",
+            "Detached supervisor session identity mismatch.",
+            false,
+        )?;
+        return Ok(());
+    }
+
+    if controls.is_none() && prompt.is_none() {
+        write_protocol_error(
+            stream,
+            "runtime_supervisor_queue_controls_invalid",
+            "Cadence requires a prompt or control delta before it can queue runtime-run changes.",
+            false,
+        )?;
+        return Ok(());
+    }
+
+    let normalized_prompt = match prompt.as_deref() {
+        Some(prompt) => match normalize_queued_prompt(prompt) {
+            Ok(prompt) => Some(prompt),
+            Err(error) => {
+                write_protocol_error(stream, &error.code, &error.message, error.retryable)?;
+                return Ok(());
+            }
+        },
+        None => None,
+    };
+
+    let queued_at = now_timestamp();
+    let next_pending = match build_pending_control_snapshot(
+        &snapshot.control_state,
+        controls.as_ref(),
+        normalized_prompt.as_deref(),
+        &queued_at,
+    ) {
+        Ok(pending) => pending,
+        Err(error) => {
+            write_protocol_error(stream, &error.code, &error.message, error.retryable)?;
+            return Ok(());
+        }
+    };
+
+    {
+        let mut state = shared.lock().expect("sidecar state lock poisoned");
+        state.control_state.pending = Some(next_pending.clone());
+        state.last_error = None;
+    }
+
+    if let Err(error) = persist_runtime_row_from_shared(repo_root, shared, persistence_lock) {
+        let mut state = shared.lock().expect("sidecar state lock poisoned");
+        state.control_state = snapshot.control_state.clone();
+        state.last_error = snapshot.last_error.clone();
+        drop(state);
+        write_protocol_error(
+            stream,
+            "runtime_supervisor_queue_controls_failed",
+            &format!(
+                "Cadence could not persist queued runtime-run controls before acknowledging the control request: {}",
+                error.message
+            ),
+            true,
+        )?;
+        return Ok(());
+    }
+
+    append_live_event(
+        shared,
+        event_hub,
+        &SupervisorLiveEventPayload::Activity {
+            code: "runtime_run_controls_queued".into(),
+            title: "Queued runtime controls".into(),
+            detail: Some(if next_pending.queued_prompt.is_some() {
+                "Cadence queued pending runtime-run controls and one prompt for the next model-call boundary.".into()
+            } else {
+                "Cadence queued pending runtime-run controls for the next model-call boundary.".into()
+            }),
+        },
+    );
+
+    write_json_line(
+        stream,
+        &SupervisorControlResponse::QueueControlsAccepted {
+            protocol_version: SUPERVISOR_PROTOCOL_VERSION,
+            project_id: snapshot.project_id,
+            run_id: snapshot.run_id,
+            session_id: snapshot.session_id,
+            flow_id: snapshot.flow_id,
+            pending_revision: next_pending.revision,
+            queued_at,
+            prompt_queued: next_pending.queued_prompt.is_some(),
+        },
+    )
+    .map_err(|_| {
+        CommandError::retryable(
+            "runtime_supervisor_control_io_failed",
+            "Cadence could not write the detached supervisor queued-controls acknowledgement.",
+        )
+    })
+}
+
+fn build_pending_control_snapshot(
+    control_state: &crate::db::project_store::RuntimeRunControlStateRecord,
+    controls: Option<&RuntimeRunControlInputDto>,
+    prompt: Option<&str>,
+    queued_at: &str,
+) -> Result<RuntimeRunPendingControlSnapshotRecord, CommandError> {
+    let base = control_state.pending.as_ref();
+    let pending_revision = base.map_or(
+        control_state.active.revision.saturating_add(1),
+        |pending| pending.revision.saturating_add(1),
+    );
+
+    let model_id = controls
+        .map(|controls| controls.model_id.clone())
+        .or_else(|| base.map(|pending| pending.model_id.clone()))
+        .unwrap_or_else(|| control_state.active.model_id.clone());
+    let thinking_effort = controls
+        .map(|controls| controls.thinking_effort.clone())
+        .or_else(|| base.map(|pending| pending.thinking_effort.clone()))
+        .unwrap_or_else(|| control_state.active.thinking_effort.clone());
+    let approval_mode = controls
+        .map(|controls| controls.approval_mode.clone())
+        .or_else(|| base.map(|pending| pending.approval_mode.clone()))
+        .unwrap_or_else(|| control_state.active.approval_mode.clone());
+
+    let existing_prompt = base.and_then(|pending| pending.queued_prompt.clone());
+    let existing_prompt_at = base.and_then(|pending| pending.queued_prompt_at.clone());
+    let (queued_prompt, queued_prompt_at) = match prompt {
+        Some(prompt) => {
+            if existing_prompt.is_some() {
+                return Err(CommandError::user_fixable(
+                    "runtime_supervisor_prompt_already_queued",
+                    "Cadence already has one queued prompt for this run. Wait for it to apply before sending another prompt.",
+                ));
+            }
+            (Some(prompt.to_owned()), Some(queued_at.to_owned()))
+        }
+        None => (existing_prompt, existing_prompt_at),
+    };
+
+    Ok(RuntimeRunPendingControlSnapshotRecord {
+        model_id,
+        thinking_effort,
+        approval_mode,
+        revision: pending_revision,
+        queued_at: queued_at.to_owned(),
+        queued_prompt,
+        queued_prompt_at,
+    })
+}
+
+fn normalize_queued_prompt(prompt: &str) -> Result<String, CommandError> {
+    let normalized = prompt.trim_end_matches(['\r', '\n']);
+    if normalized.trim().is_empty() {
+        return Err(CommandError::invalid_request("prompt"));
+    }
+
+    if normalized.chars().count() > MAX_CONTROL_INPUT_CHARS {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_queue_controls_invalid",
+            "Cadence refused an oversized queued prompt for the detached PTY.",
+        ));
+    }
+
+    Ok(normalized.to_string())
 }
 
 fn normalize_control_input(input: &str) -> Result<String, CommandError> {

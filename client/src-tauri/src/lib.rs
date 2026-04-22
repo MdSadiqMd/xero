@@ -48,6 +48,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::logout_runtime_session::logout_runtime_session,
             commands::start_autonomous_run::start_autonomous_run,
             commands::start_runtime_run::start_runtime_run,
+            commands::update_runtime_run_controls::update_runtime_run_controls,
             commands::start_runtime_session::start_runtime_session,
             commands::cancel_autonomous_run::cancel_autonomous_run,
             commands::stop_runtime_run::stop_runtime_run,

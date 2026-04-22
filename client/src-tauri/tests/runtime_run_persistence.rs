@@ -24,7 +24,7 @@ fn runtime_run_checkpoint_writes_reject_secret_bearing_summaries_and_preserve_pr
 
 #[test]
 fn runtime_run_decode_fails_closed_for_malformed_status_transport_and_checkpoint_kind() {
-    runtime_rows::runtime_run_decode_fails_closed_for_malformed_status_transport_and_checkpoint_kind();
+    runtime_rows::runtime_run_decode_fails_closed_for_malformed_status_transport_checkpoint_kind_and_controls();
 }
 
 #[test]

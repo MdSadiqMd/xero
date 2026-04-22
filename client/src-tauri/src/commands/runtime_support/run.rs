@@ -234,6 +234,20 @@ pub(crate) fn launch_or_reconnect_runtime_run<R: Runtime>(
     })
 }
 
+pub(crate) fn normalize_requested_runtime_run_controls<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    requested_controls: &RuntimeRunControlInputDto,
+) -> CommandResult<RuntimeRunControlInputDto> {
+    let control_state =
+        resolve_initial_runtime_run_control_state(app, state, Some(requested_controls), None)?;
+    Ok(RuntimeRunControlInputDto {
+        model_id: control_state.active.model_id,
+        thinking_effort: control_state.active.thinking_effort,
+        approval_mode: control_state.active.approval_mode,
+    })
+}
+
 pub(crate) fn generate_runtime_run_id() -> String {
     let mut bytes = [0_u8; 8];
     rand::thread_rng().fill_bytes(&mut bytes);

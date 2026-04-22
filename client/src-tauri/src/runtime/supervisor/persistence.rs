@@ -128,6 +128,7 @@ pub(super) fn persist_sidecar_checkpoint(
         stopped_at,
         next_sequence,
         last_error,
+        control_state,
     ) = {
         let mut snapshot = shared.lock().expect("sidecar state lock poisoned");
         snapshot.last_checkpoint_sequence = snapshot.last_checkpoint_sequence.saturating_add(1);
@@ -145,6 +146,7 @@ pub(super) fn persist_sidecar_checkpoint(
                 .last_error
                 .clone()
                 .map(protocol_diagnostic_into_record),
+            snapshot.control_state.clone(),
         )
     };
 
@@ -180,7 +182,7 @@ pub(super) fn persist_sidecar_checkpoint(
                     summary: summary.clone(),
                     created_at: now_timestamp(),
                 }),
-                control_state: None,
+                control_state: Some(control_state.clone()),
             },
         )
     };
@@ -251,7 +253,13 @@ pub(super) fn persist_sidecar_checkpoint(
                         summary: fallback_summary,
                         created_at: now_timestamp(),
                     }),
-                    control_state: None,
+                    control_state: Some(
+                        shared
+                            .lock()
+                            .expect("sidecar state lock poisoned")
+                            .control_state
+                            .clone(),
+                    ),
                 },
             )
         }
@@ -294,7 +302,7 @@ pub(super) fn persist_runtime_row_from_shared(
                 updated_at: now_timestamp(),
             },
             checkpoint: None,
-            control_state: None,
+            control_state: Some(snapshot.control_state),
         },
     )
 }
