@@ -6,6 +6,10 @@ use super::autonomous::{
     AutonomousSkillLifecycleStageDto, ToolResultSummaryDto,
 };
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAuthPhase {
@@ -177,6 +181,8 @@ pub struct RuntimeSettingsDto {
     pub provider_id: String,
     pub model_id: String,
     pub openrouter_api_key_configured: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub anthropic_api_key_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -338,8 +344,10 @@ pub struct GetRuntimeRunRequestDto {
 pub struct UpsertRuntimeSettingsRequestDto {
     pub provider_id: String,
     pub model_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openrouter_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -349,8 +357,10 @@ pub struct UpsertProviderProfileRequestDto {
     pub provider_id: String,
     pub label: String,
     pub model_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openrouter_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic_api_key: Option<String>,
     #[serde(default)]
     pub activate: bool,
 }

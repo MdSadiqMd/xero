@@ -77,6 +77,7 @@ fn get_runtime_settings_returns_redacted_default_when_no_files_exist() {
             provider_id: "openai_codex".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key_configured: false,
+            anthropic_api_key_configured: false,
         }
     );
     assert!(!paths.provider_profiles_path.exists());
@@ -98,6 +99,7 @@ fn upsert_runtime_settings_persists_redacted_provider_profile_metadata() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4.1-mini".into(),
             openrouter_api_key: Some("credential-value-1".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("save runtime settings");
@@ -108,6 +110,7 @@ fn upsert_runtime_settings_persists_redacted_provider_profile_metadata() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4.1-mini".into(),
             openrouter_api_key_configured: true,
+            anthropic_api_key_configured: false,
         }
     );
 
@@ -137,6 +140,7 @@ fn upsert_runtime_settings_preserves_existing_openrouter_key_when_request_omits_
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("credential-value-1".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("seed runtime settings");
@@ -148,6 +152,7 @@ fn upsert_runtime_settings_preserves_existing_openrouter_key_when_request_omits_
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4.1-mini".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
         },
     )
     .expect("preserve runtime credential");
@@ -159,6 +164,93 @@ fn upsert_runtime_settings_preserves_existing_openrouter_key_when_request_omits_
     let credential_file = std::fs::read_to_string(&paths.provider_profile_credentials_path)
         .expect("read credential file");
     assert!(credential_file.contains("credential-value-1"));
+}
+
+#[test]
+fn upsert_runtime_settings_persists_redacted_anthropic_provider_profile_metadata() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, paths) = create_state(&root);
+    let app = build_mock_app(state);
+
+    let response = upsert_runtime_settings(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertRuntimeSettingsRequestDto {
+            provider_id: "anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key: None,
+            anthropic_api_key: Some("anthropic-secret-value-1".into()),
+        },
+    )
+    .expect("save anthropic runtime settings");
+
+    assert_eq!(
+        response,
+        RuntimeSettingsDto {
+            provider_id: "anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key_configured: false,
+            anthropic_api_key_configured: true,
+        }
+    );
+
+    let metadata_file =
+        std::fs::read_to_string(&paths.provider_profiles_path).expect("read provider profiles");
+    assert!(metadata_file.contains("\"activeProfileId\": \"anthropic-default\""));
+    assert!(metadata_file.contains("\"profileId\": \"anthropic-default\""));
+    assert!(!metadata_file.contains("anthropic-secret-value-1"));
+
+    let credential_file = std::fs::read_to_string(&paths.provider_profile_credentials_path)
+        .expect("read provider profile credentials");
+    assert!(credential_file.contains("\"anthropicApiKeys\""));
+    assert!(credential_file.contains("\"apiKey\": \"anthropic-secret-value-1\""));
+
+    let reloaded = get_runtime_settings(app.handle().clone(), app.state::<DesktopState>())
+        .expect("reload anthropic runtime settings");
+    assert_eq!(reloaded, response);
+}
+
+#[test]
+fn upsert_runtime_settings_clears_anthropic_key_when_request_uses_empty_string() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, paths) = create_state(&root);
+    let app = build_mock_app(state);
+
+    upsert_runtime_settings(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertRuntimeSettingsRequestDto {
+            provider_id: "anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key: None,
+            anthropic_api_key: Some("anthropic-secret-value-1".into()),
+        },
+    )
+    .expect("seed anthropic runtime settings");
+
+    let response = upsert_runtime_settings(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertRuntimeSettingsRequestDto {
+            provider_id: "anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key: None,
+            anthropic_api_key: Some("   ".into()),
+        },
+    )
+    .expect("clear anthropic credential");
+
+    assert_eq!(
+        response,
+        RuntimeSettingsDto {
+            provider_id: "anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key_configured: false,
+            anthropic_api_key_configured: false,
+        }
+    );
+
+    assert!(!paths.provider_profile_credentials_path.exists());
 }
 
 #[test]
@@ -174,6 +266,7 @@ fn upsert_runtime_settings_clears_openrouter_key_when_request_uses_empty_string(
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("credential-value-1".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("seed runtime settings");
@@ -185,6 +278,7 @@ fn upsert_runtime_settings_clears_openrouter_key_when_request_uses_empty_string(
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("   ".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("clear runtime credential");
@@ -195,6 +289,7 @@ fn upsert_runtime_settings_clears_openrouter_key_when_request_uses_empty_string(
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key_configured: false,
+            anthropic_api_key_configured: false,
         }
     );
     assert!(!paths.provider_profile_credentials_path.exists());
@@ -230,6 +325,7 @@ fn upsert_runtime_settings_rolls_back_metadata_when_profile_credential_write_fai
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4.1-mini".into(),
             openrouter_api_key: Some("credential-value-rollback".into()),
+            anthropic_api_key: None,
         },
     )
     .expect_err("credential write failure should roll back metadata");
@@ -247,6 +343,7 @@ fn upsert_runtime_settings_rolls_back_metadata_when_profile_credential_write_fai
             provider_id: "openai_codex".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key_configured: false,
+            anthropic_api_key_configured: false,
         }
     );
     assert!(!provider_profiles_path.exists());
@@ -413,6 +510,7 @@ fn upsert_runtime_settings_rejects_blank_provider_id() {
             provider_id: "   ".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
         },
     )
     .expect_err("blank provider id should fail");
@@ -433,6 +531,7 @@ fn upsert_runtime_settings_rejects_blank_model_id() {
             provider_id: "openai_codex".into(),
             model_id: "   ".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
         },
     )
     .expect_err("blank model id should fail");
@@ -453,6 +552,7 @@ fn upsert_runtime_settings_rejects_unsupported_provider_id() {
             provider_id: "azure_openai".into(),
             model_id: "azure_openai".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
         },
     )
     .expect_err("unsupported provider should fail closed");
@@ -461,7 +561,7 @@ fn upsert_runtime_settings_rejects_unsupported_provider_id() {
 }
 
 #[test]
-fn upsert_runtime_settings_rejects_mismatched_provider_profile_store_on_preserve() {
+fn upsert_runtime_settings_treats_missing_api_key_linkage_as_unconfigured() {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, paths) = create_state(&root);
     let app = build_mock_app(state);
@@ -502,16 +602,25 @@ fn upsert_runtime_settings_rejects_mismatched_provider_profile_store_on_preserve
     )
     .expect("write provider profiles file");
 
-    let error = upsert_runtime_settings(
+    let response = upsert_runtime_settings(
         app.handle().clone(),
         app.state::<DesktopState>(),
         UpsertRuntimeSettingsRequestDto {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4.1-mini".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
         },
     )
-    .expect_err("preserve should fail when credential linkage is missing");
+    .expect("preserve should tolerate missing credential linkage");
 
-    assert_eq!(error.code, "provider_profiles_contract_failed");
+    assert_eq!(
+        response,
+        RuntimeSettingsDto {
+            provider_id: "openrouter".into(),
+            model_id: "openai/gpt-4.1-mini".into(),
+            openrouter_api_key_configured: false,
+            anthropic_api_key_configured: false,
+        }
+    );
 }

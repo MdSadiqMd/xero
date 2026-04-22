@@ -6,8 +6,9 @@ use cadence_desktop_lib::{
     git::repository::CanonicalRepository,
     provider_profiles::{
         load_or_migrate_provider_profiles_from_paths, ProviderProfileCredentialLink,
-        ProviderProfileReadinessStatus, OPENAI_CODEX_DEFAULT_PROFILE_ID,
-        OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
+        ProviderProfileReadinessStatus, ANTHROPIC_DEFAULT_PROFILE_ID,
+        OPENAI_CODEX_DEFAULT_PROFILE_ID, OPENROUTER_DEFAULT_PROFILE_ID,
+        OPENROUTER_FALLBACK_MODEL_ID,
     },
     state::ImportFailpoints,
 };
@@ -404,4 +405,112 @@ fn migration_rejects_blank_openai_account_or_session_ids() {
     );
     assert!(!paths.provider_profiles_path.exists());
     assert!(!paths.provider_profile_credentials_path.exists());
+}
+
+#[test]
+fn anthropic_profile_store_keeps_api_keys_out_of_metadata() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let paths = create_paths(&root);
+    let secret = "sk-ant-api03-provider-profile";
+
+    write_json(
+        &paths.provider_profiles_path,
+        serde_json::json!({
+            "version": 1,
+            "activeProfileId": ANTHROPIC_DEFAULT_PROFILE_ID,
+            "profiles": [{
+                "profileId": ANTHROPIC_DEFAULT_PROFILE_ID,
+                "providerId": "anthropic",
+                "label": "Anthropic",
+                "modelId": "claude-3-5-sonnet-latest",
+                "credentialLink": {
+                    "kind": "anthropic",
+                    "updated_at": "2026-04-21T05:00:00Z"
+                },
+                "updatedAt": "2026-04-21T05:00:00Z"
+            }],
+            "updatedAt": "2026-04-21T05:00:00Z"
+        }),
+    );
+    write_json(
+        &paths.provider_profile_credentials_path,
+        serde_json::json!({
+            "anthropicApiKeys": [{
+                "profileId": ANTHROPIC_DEFAULT_PROFILE_ID,
+                "apiKey": secret,
+                "updatedAt": "2026-04-21T05:00:00Z"
+            }]
+        }),
+    );
+
+    let metadata_file =
+        std::fs::read_to_string(&paths.provider_profiles_path).expect("read metadata file");
+    assert!(!metadata_file.contains(secret));
+    let credentials_file = std::fs::read_to_string(&paths.provider_profile_credentials_path)
+        .expect("read credentials file");
+    assert!(credentials_file.contains(secret));
+
+    let snapshot = load_or_migrate_provider_profiles_from_paths(
+        &paths.provider_profiles_path,
+        &paths.provider_profile_credentials_path,
+        &paths.legacy_settings_path,
+        &paths.legacy_openrouter_credentials_path,
+        &paths.legacy_openai_auth_path,
+    )
+    .expect("load anthropic provider profiles");
+
+    let anthropic_profile = snapshot
+        .profile(ANTHROPIC_DEFAULT_PROFILE_ID)
+        .expect("anthropic profile");
+    assert!(matches!(
+        anthropic_profile.credential_link,
+        Some(ProviderProfileCredentialLink::Anthropic { .. })
+    ));
+    assert_eq!(
+        anthropic_profile.readiness(&snapshot.credentials).status,
+        ProviderProfileReadinessStatus::Ready
+    );
+}
+
+#[test]
+fn anthropic_profile_readiness_becomes_malformed_when_secret_link_stales() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let paths = create_paths(&root);
+
+    write_json(
+        &paths.provider_profiles_path,
+        serde_json::json!({
+            "version": 1,
+            "activeProfileId": ANTHROPIC_DEFAULT_PROFILE_ID,
+            "profiles": [{
+                "profileId": ANTHROPIC_DEFAULT_PROFILE_ID,
+                "providerId": "anthropic",
+                "label": "Anthropic",
+                "modelId": "claude-3-5-sonnet-latest",
+                "credentialLink": {
+                    "kind": "anthropic",
+                    "updated_at": "2026-04-21T05:10:00Z"
+                },
+                "updatedAt": "2026-04-21T05:10:00Z"
+            }],
+            "updatedAt": "2026-04-21T05:10:00Z"
+        }),
+    );
+
+    let snapshot = load_or_migrate_provider_profiles_from_paths(
+        &paths.provider_profiles_path,
+        &paths.provider_profile_credentials_path,
+        &paths.legacy_settings_path,
+        &paths.legacy_openrouter_credentials_path,
+        &paths.legacy_openai_auth_path,
+    )
+    .expect("load anthropic provider profiles with missing secret");
+
+    let anthropic_profile = snapshot
+        .profile(ANTHROPIC_DEFAULT_PROFILE_ID)
+        .expect("anthropic profile");
+    assert_eq!(
+        anthropic_profile.readiness(&snapshot.credentials).status,
+        ProviderProfileReadinessStatus::Malformed
+    );
 }

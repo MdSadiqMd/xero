@@ -11,7 +11,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cadence_desktop_lib::{
     auth::{
         now_timestamp, persist_openai_codex_session, remove_openai_codex_session,
-        OpenAiCodexAuthConfig, OpenRouterAuthConfig, StoredOpenAiCodexSession,
+        AnthropicAuthConfig, OpenAiCodexAuthConfig, OpenRouterAuthConfig, StoredOpenAiCodexSession,
     },
     commands::{
         get_runtime_session::get_runtime_session,
@@ -229,6 +229,14 @@ fn openrouter_auth_config(models_url: String) -> OpenRouterAuthConfig {
     }
 }
 
+fn anthropic_auth_config(models_url: String) -> AnthropicAuthConfig {
+    AnthropicAuthConfig {
+        models_url,
+        anthropic_version: "2023-06-01".into(),
+        timeout: Duration::from_secs(5),
+    }
+}
+
 fn spawn_static_http_server(status: u16, body: &str) -> String {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test http server");
     let address = listener.local_addr().expect("test http server addr");
@@ -395,6 +403,7 @@ fn runtime_session_bridge_profile_commands_expose_redacted_profile_state() {
             label: "OpenAI Alt".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
             activate: false,
         },
     )
@@ -459,6 +468,7 @@ fn runtime_session_bridge_signs_out_when_active_openai_profile_changes() {
             label: "OpenAI Alt".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
             activate: false,
         },
     )
@@ -500,6 +510,7 @@ fn runtime_session_bridge_profile_commands_reject_invalid_requests_and_metadata(
             label: "OpenAI".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
             activate: false,
         },
     )
@@ -515,6 +526,7 @@ fn runtime_session_bridge_profile_commands_reject_invalid_requests_and_metadata(
             label: "   ".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
             activate: false,
         },
     )
@@ -526,10 +538,11 @@ fn runtime_session_bridge_profile_commands_reject_invalid_requests_and_metadata(
         app.state::<DesktopState>(),
         UpsertProviderProfileRequestDto {
             profile_id: "bogus".into(),
-            provider_id: "anthropic".into(),
+            provider_id: "azure_openai".into(),
             label: "Bogus".into(),
             model_id: "claude".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
             activate: false,
         },
     )
@@ -883,6 +896,7 @@ fn logout_runtime_session_projects_selected_openrouter_provider_from_settings() 
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("sk-or-v1-openrouter-secret".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("save openrouter runtime settings");
@@ -934,6 +948,7 @@ fn start_runtime_session_binds_openrouter_from_global_settings_without_secret_le
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some(secret.into()),
+            anthropic_api_key: None,
         },
     )
     .expect("save openrouter runtime settings");
@@ -981,6 +996,7 @@ fn start_runtime_session_accepts_documented_openrouter_models_payload_shape() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("sk-or-v1-openrouter-secret".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("save openrouter runtime settings");
@@ -1016,6 +1032,7 @@ fn start_runtime_session_returns_idle_when_openrouter_selected_without_api_key()
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: None,
+            anthropic_api_key: None,
         },
     )
     .expect("save openrouter runtime settings without api key");
@@ -1056,6 +1073,7 @@ fn start_runtime_session_maps_openrouter_network_failures_to_retryable_diagnosti
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("sk-or-v1-openrouter-secret".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("save openrouter runtime settings");
@@ -1104,6 +1122,7 @@ fn start_runtime_session_rejects_malformed_openrouter_models_payload() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("sk-or-v1-openrouter-secret".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("save openrouter runtime settings");
@@ -1159,6 +1178,7 @@ fn start_runtime_session_maps_openrouter_validation_failures_to_typed_diagnostic
                 provider_id: "openrouter".into(),
                 model_id: "openai/gpt-4o-mini".into(),
                 openrouter_api_key: Some("sk-or-v1-openrouter-secret".into()),
+                anthropic_api_key: None,
             },
         )
         .expect("save openrouter runtime settings");
@@ -1207,6 +1227,7 @@ fn get_runtime_session_rejects_stale_openrouter_binding_after_key_rotation() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("sk-or-v1-first".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("save initial openrouter settings");
@@ -1227,6 +1248,7 @@ fn get_runtime_session_rejects_stale_openrouter_binding_after_key_rotation() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("sk-or-v1-second".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("rotate openrouter key");
@@ -1289,6 +1311,7 @@ fn get_runtime_session_rejects_blank_openrouter_session_id_as_stale_binding() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("sk-or-v1-first".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("save openrouter settings");
@@ -1327,6 +1350,170 @@ fn get_runtime_session_rejects_blank_openrouter_session_id_as_stale_binding() {
         Some("openrouter_binding_stale")
     );
     assert!(runtime.session_id.is_none());
+}
+
+#[test]
+fn start_runtime_session_binds_anthropic_from_provider_profiles_without_secret_leakage() {
+    let models_base_url = spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"claude-3-5-sonnet-latest","display_name":"Claude 3.5 Sonnet"}]}"#,
+    );
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let state = state.with_anthropic_auth_config_override(anthropic_auth_config(format!(
+        "{models_base_url}/v1/models"
+    )));
+    let app = build_mock_app(state);
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let secret = "sk-ant-api03-test-secret";
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "anthropic-default".into(),
+            provider_id: "anthropic".into(),
+            label: "Anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key: None,
+            anthropic_api_key: Some(secret.into()),
+            activate: true,
+        },
+    )
+    .expect("save anthropic provider profile");
+
+    let runtime = start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind anthropic runtime session");
+
+    assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+    assert_eq!(runtime.provider_id, "anthropic");
+    assert_eq!(runtime.runtime_kind, "anthropic");
+    assert!(runtime.session_id.is_some());
+    assert!(runtime.account_id.is_some());
+    assert!(runtime.last_error.is_none());
+
+    let database_bytes =
+        std::fs::read(database_path_for_repo(&repo_root)).expect("read runtime db bytes");
+    let database_text = String::from_utf8_lossy(&database_bytes);
+    assert!(!database_text.contains(secret));
+}
+
+#[test]
+fn start_runtime_session_returns_idle_when_anthropic_selected_without_api_key() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "anthropic-default".into(),
+            provider_id: "anthropic".into(),
+            label: "Anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key: None,
+            anthropic_api_key: None,
+            activate: true,
+        },
+    )
+    .expect("save anthropic provider profile without api key");
+
+    let runtime = start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("surface missing anthropic key diagnostic");
+
+    assert_eq!(runtime.phase, RuntimeAuthPhase::Idle);
+    assert_eq!(runtime.provider_id, "anthropic");
+    assert_eq!(runtime.runtime_kind, "anthropic");
+    assert_eq!(
+        runtime.last_error_code.as_deref(),
+        Some("anthropic_api_key_missing")
+    );
+    assert!(runtime.session_id.is_none());
+}
+
+#[test]
+fn get_runtime_session_rejects_stale_anthropic_binding_after_key_rotation() {
+    let models_base_url = spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"claude-3-5-sonnet-latest","display_name":"Claude 3.5 Sonnet"}]}"#,
+    );
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let state = state.with_anthropic_auth_config_override(anthropic_auth_config(format!(
+        "{models_base_url}/v1/models"
+    )));
+    let app = build_mock_app(state);
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "anthropic-default".into(),
+            provider_id: "anthropic".into(),
+            label: "Anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key: None,
+            anthropic_api_key: Some("sk-ant-api03-first".into()),
+            activate: true,
+        },
+    )
+    .expect("save first anthropic provider profile");
+
+    start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind first anthropic runtime session");
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "anthropic-default".into(),
+            provider_id: "anthropic".into(),
+            label: "Anthropic".into(),
+            model_id: "claude-3-5-sonnet-latest".into(),
+            openrouter_api_key: None,
+            anthropic_api_key: Some("sk-ant-api03-second".into()),
+            activate: true,
+        },
+    )
+    .expect("rotate anthropic key");
+
+    let reconciled = get_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("reconcile stale anthropic binding");
+
+    assert_eq!(reconciled.phase, RuntimeAuthPhase::Idle);
+    assert_eq!(reconciled.provider_id, "anthropic");
+    assert_eq!(
+        reconciled.last_error_code.as_deref(),
+        Some("anthropic_binding_stale")
+    );
+    assert!(reconciled.session_id.is_none());
 }
 
 #[test]

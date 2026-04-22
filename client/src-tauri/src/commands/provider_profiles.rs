@@ -10,10 +10,11 @@ use crate::{
     },
     provider_profiles::{
         load_or_migrate_provider_profiles_from_paths, persist_provider_profiles_snapshot,
-        OpenRouterProfileCredentialEntry, ProviderProfileCredentialLink,
-        ProviderProfileReadinessStatus, ProviderProfileRecord, ProviderProfilesSnapshot,
+        AnthropicProfileCredentialEntry, OpenRouterProfileCredentialEntry,
+        ProviderProfileCredentialLink, ProviderProfileReadinessStatus, ProviderProfileRecord,
+        ProviderProfilesSnapshot,
     },
-    runtime::{OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID},
+    runtime::{ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID},
     state::DesktopState,
 };
 
@@ -162,6 +163,7 @@ fn apply_provider_profile_upsert(
     let now = crate::auth::now_timestamp();
     let current_profile = current.profile(profile_id).cloned();
     let current_openrouter_secret = current.openrouter_credential(profile_id).cloned();
+    let current_anthropic_secret = current.anthropic_credential(profile_id).cloned();
     let requested_openrouter_key = request
         .openrouter_api_key
         .as_deref()
@@ -169,6 +171,15 @@ fn apply_provider_profile_upsert(
         .filter(|value| !value.is_empty());
     let explicit_openrouter_clear = request
         .openrouter_api_key
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty());
+    let requested_anthropic_key = request
+        .anthropic_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let explicit_anthropic_clear = request
+        .anthropic_api_key
         .as_deref()
         .is_some_and(|value| value.trim().is_empty());
 
@@ -179,13 +190,36 @@ fn apply_provider_profile_upsert(
             Some(OpenRouterProfileCredentialEntry {
                 profile_id: profile_id.to_owned(),
                 api_key: api_key.to_owned(),
-                updated_at: openrouter_secret_updated_at(
-                    current_openrouter_secret.as_ref(),
-                    Some(api_key),
-                ),
+                updated_at: api_key_updated_at(current_openrouter_secret.as_ref(), Some(api_key)),
             })
-        } else {
+        } else if current_profile
+            .as_ref()
+            .is_some_and(|profile| profile.provider_id == OPENROUTER_PROVIDER_ID)
+        {
             current_openrouter_secret.clone()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let next_anthropic_secret = if validated.provider_id == ANTHROPIC_PROVIDER_ID {
+        if explicit_anthropic_clear {
+            None
+        } else if let Some(api_key) = requested_anthropic_key {
+            Some(AnthropicProfileCredentialEntry {
+                profile_id: profile_id.to_owned(),
+                api_key: api_key.to_owned(),
+                updated_at: api_key_updated_at(current_anthropic_secret.as_ref(), Some(api_key)),
+            })
+        } else if current_profile
+            .as_ref()
+            .is_some_and(|profile| profile.provider_id == ANTHROPIC_PROVIDER_ID)
+        {
+            current_anthropic_secret.clone()
+        } else {
+            None
         }
     } else {
         None
@@ -207,16 +241,26 @@ fn apply_provider_profile_upsert(
                     updated_at: entry.updated_at.clone(),
                 }
             }),
+            ANTHROPIC_PROVIDER_ID => next_anthropic_secret.as_ref().map(|entry| {
+                ProviderProfileCredentialLink::Anthropic {
+                    updated_at: entry.updated_at.clone(),
+                }
+            }),
             _ => None,
         };
 
     let mut next = current.clone();
+    let next_model_id = if validated.provider_id == OPENAI_CODEX_PROVIDER_ID {
+        OPENAI_CODEX_PROVIDER_ID.into()
+    } else {
+        validated.model_id.clone()
+    };
     let profile_updated_at = current_profile
         .as_ref()
         .filter(|profile| {
             profile.provider_id == validated.provider_id
                 && profile.label == label
-                && profile.model_id == validated.model_id
+                && profile.model_id == next_model_id
                 && profile.credential_link == next_credential_link
         })
         .map(|profile| profile.updated_at.clone())
@@ -228,11 +272,7 @@ fn apply_provider_profile_upsert(
             profile_id: profile_id.to_owned(),
             provider_id: validated.provider_id.clone(),
             label: label.to_owned(),
-            model_id: if validated.provider_id == OPENROUTER_PROVIDER_ID {
-                validated.model_id.clone()
-            } else {
-                OPENAI_CODEX_PROVIDER_ID.into()
-            },
+            model_id: next_model_id,
             credential_link: next_credential_link,
             migrated_from_legacy: current_profile
                 .as_ref()
@@ -249,6 +289,14 @@ fn apply_provider_profile_upsert(
     } else {
         next.credentials
             .openrouter_api_keys
+            .retain(|entry| entry.profile_id != profile_id);
+    }
+
+    if let Some(secret) = next_anthropic_secret {
+        upsert_anthropic_secret(&mut next, secret);
+    } else {
+        next.credentials
+            .anthropic_api_keys
             .retain(|entry| entry.profile_id != profile_id);
     }
 
@@ -322,8 +370,24 @@ fn upsert_openrouter_secret(
     }
 }
 
-fn openrouter_secret_updated_at(
-    current: Option<&OpenRouterProfileCredentialEntry>,
+fn upsert_anthropic_secret(
+    snapshot: &mut ProviderProfilesSnapshot,
+    next: AnthropicProfileCredentialEntry,
+) {
+    if let Some(existing) = snapshot
+        .credentials
+        .anthropic_api_keys
+        .iter_mut()
+        .find(|entry| entry.profile_id == next.profile_id)
+    {
+        *existing = next;
+    } else {
+        snapshot.credentials.anthropic_api_keys.push(next);
+    }
+}
+
+fn api_key_updated_at(
+    current: Option<&crate::provider_profiles::ProviderApiKeyCredentialEntry>,
     next_api_key: Option<&str>,
 ) -> String {
     match (current, next_api_key) {

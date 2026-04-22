@@ -2,9 +2,11 @@ use tauri::{AppHandle, Runtime};
 
 use crate::{
     auth::{
-        bind_openrouter_runtime_session, load_latest_openai_codex_session,
-        load_openai_codex_session_for_profile_link, reconcile_openrouter_runtime_session,
+        bind_anthropic_runtime_session, bind_openrouter_runtime_session,
+        load_latest_openai_codex_session, load_openai_codex_session_for_profile_link,
+        reconcile_anthropic_runtime_session, reconcile_openrouter_runtime_session,
         refresh_provider_auth_session, remove_openai_codex_session, sync_openai_profile_link,
+        AnthropicBindOutcome, AnthropicReconcileOutcome, AnthropicRuntimeSessionBinding,
         AuthDiagnostic, AuthFlowError, OpenRouterBindOutcome, OpenRouterReconcileOutcome,
         OpenRouterRuntimeSessionBinding, RuntimeAuthSession,
     },
@@ -15,13 +17,16 @@ use crate::{
 
 pub const OPENAI_CODEX_PROVIDER_ID: &str = "openai_codex";
 pub const OPENROUTER_PROVIDER_ID: &str = "openrouter";
+pub const ANTHROPIC_PROVIDER_ID: &str = "anthropic";
 pub const OPENAI_CODEX_AUTH_STORE_FILE_NAME: &str = "openai-auth.json";
 pub const OPENROUTER_AUTH_STORE_FILE_NAME: &str = "openrouter-credentials.json";
+pub const ANTHROPIC_AUTH_STORE_FILE_NAME: &str = "provider-profile-credentials.json";
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RuntimeProvider {
     OpenAiCodex,
     OpenRouter,
+    Anthropic,
 }
 
 impl RuntimeProvider {
@@ -38,6 +43,12 @@ impl RuntimeProvider {
                 provider_id: OPENROUTER_PROVIDER_ID,
                 runtime_kind: OPENROUTER_PROVIDER_ID,
                 auth_store_file_name: OPENROUTER_AUTH_STORE_FILE_NAME,
+            },
+            Self::Anthropic => ResolvedRuntimeProvider {
+                provider: Self::Anthropic,
+                provider_id: ANTHROPIC_PROVIDER_ID,
+                runtime_kind: ANTHROPIC_PROVIDER_ID,
+                auth_store_file_name: ANTHROPIC_AUTH_STORE_FILE_NAME,
             },
         }
     }
@@ -78,6 +89,10 @@ pub const fn openai_codex_provider() -> ResolvedRuntimeProvider {
 
 pub const fn openrouter_provider() -> ResolvedRuntimeProvider {
     RuntimeProvider::OpenRouter.resolve()
+}
+
+pub const fn anthropic_provider() -> ResolvedRuntimeProvider {
+    RuntimeProvider::Anthropic.resolve()
 }
 
 pub const fn default_runtime_provider() -> ResolvedRuntimeProvider {
@@ -145,6 +160,24 @@ pub(crate) fn bind_provider_runtime_session<R: Runtime>(
                 }
             }
         }
+        RuntimeProvider::Anthropic => {
+            let settings = settings.ok_or_else(|| {
+                AuthFlowError::terminal(
+                    "runtime_settings_missing",
+                    RuntimeAuthPhase::Failed,
+                    "Cadence could not bind the selected Anthropic runtime because the app-global runtime settings snapshot was missing.",
+                )
+            })?;
+
+            match bind_anthropic_runtime_session(app, state, settings)? {
+                AnthropicBindOutcome::Ready(binding) => {
+                    Ok(RuntimeProviderBindOutcome::Ready(binding.into()))
+                }
+                AnthropicBindOutcome::SignedOut(diagnostic) => {
+                    Ok(RuntimeProviderBindOutcome::SignedOut(diagnostic))
+                }
+            }
+        }
     }
 }
 
@@ -186,6 +219,25 @@ pub(crate) fn reconcile_provider_runtime_session<R: Runtime>(
                 }
             }
         }
+        RuntimeProvider::Anthropic => {
+            let settings = settings.ok_or_else(|| {
+                AuthFlowError::terminal(
+                    "runtime_settings_missing",
+                    RuntimeAuthPhase::Failed,
+                    "Cadence could not reconcile the selected Anthropic runtime because the app-global runtime settings snapshot was missing.",
+                )
+            })?;
+
+            match reconcile_anthropic_runtime_session(app, state, account_id, session_id, settings)?
+            {
+                AnthropicReconcileOutcome::Authenticated(binding) => Ok(
+                    RuntimeProviderReconcileOutcome::Authenticated(binding.into()),
+                ),
+                AnthropicReconcileOutcome::SignedOut(diagnostic) => {
+                    Ok(RuntimeProviderReconcileOutcome::SignedOut(diagnostic))
+                }
+            }
+        }
     }
 }
 
@@ -217,7 +269,7 @@ pub fn logout_provider_runtime_session<R: Runtime>(
             let latest = load_latest_openai_codex_session(&auth_store_path)?;
             sync_openai_profile_link(app, state, None, latest.as_ref())
         }
-        RuntimeProvider::OpenRouter => Ok(()),
+        RuntimeProvider::OpenRouter | RuntimeProvider::Anthropic => Ok(()),
     }
 }
 
@@ -415,10 +467,11 @@ fn parse_provider(value: &str) -> Result<RuntimeProvider, AuthDiagnostic> {
     match value {
         OPENAI_CODEX_PROVIDER_ID => Ok(RuntimeProvider::OpenAiCodex),
         OPENROUTER_PROVIDER_ID => Ok(RuntimeProvider::OpenRouter),
+        ANTHROPIC_PROVIDER_ID => Ok(RuntimeProvider::Anthropic),
         other => Err(AuthDiagnostic {
             code: "runtime_provider_unknown".into(),
             message: format!(
-                "Cadence does not support runtime provider `{other}`. Allowed providers: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}."
+                "Cadence does not support runtime provider `{other}`. Allowed providers: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}, {ANTHROPIC_PROVIDER_ID}."
             ),
             retryable: false,
         }),
@@ -447,6 +500,17 @@ impl From<OpenRouterRuntimeSessionBinding> for RuntimeProviderSessionBinding {
     fn from(binding: OpenRouterRuntimeSessionBinding) -> Self {
         Self {
             provider: openrouter_provider(),
+            session_id: binding.session_id,
+            account_id: binding.account_id,
+            updated_at: binding.updated_at,
+        }
+    }
+}
+
+impl From<AnthropicRuntimeSessionBinding> for RuntimeProviderSessionBinding {
+    fn from(binding: AnthropicRuntimeSessionBinding) -> Self {
+        Self {
+            provider: anthropic_provider(),
             session_id: binding.session_id,
             account_id: binding.account_id,
             updated_at: binding.updated_at,

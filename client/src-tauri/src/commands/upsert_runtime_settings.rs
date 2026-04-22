@@ -6,13 +6,14 @@ use crate::{
         RuntimeSettingsDto, UpsertRuntimeSettingsRequestDto,
     },
     provider_profiles::{
-        build_openai_default_profile, build_openrouter_default_profile,
-        persist_provider_profiles_snapshot, OpenRouterProfileCredentialEntry,
-        ProviderProfileCredentialLink, ProviderProfileRecord, ProviderProfilesSnapshot,
-        OPENAI_CODEX_DEFAULT_PROFILE_ID, OPENROUTER_DEFAULT_PROFILE_ID,
-        OPENROUTER_FALLBACK_MODEL_ID,
+        build_anthropic_default_profile, build_openai_default_profile,
+        build_openrouter_default_profile, persist_provider_profiles_snapshot,
+        AnthropicProfileCredentialEntry, OpenRouterProfileCredentialEntry,
+        ProviderApiKeyCredentialEntry, ProviderProfileCredentialLink, ProviderProfileRecord,
+        ProviderProfilesSnapshot, ANTHROPIC_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
     },
-    runtime::OPENROUTER_PROVIDER_ID,
+    runtime::{ANTHROPIC_PROVIDER_ID, OPENROUTER_PROVIDER_ID},
     state::DesktopState,
 };
 
@@ -46,32 +47,42 @@ fn apply_runtime_settings_update(
     let validated_request =
         runtime_settings_file_from_request(&request.provider_id, &request.model_id, false)?;
     let now = crate::auth::now_timestamp();
-    let requested_key = request
+    let requested_openrouter_key = request
         .openrouter_api_key
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let explicit_clear = request
+    let explicit_openrouter_clear = request
         .openrouter_api_key
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty());
+    let requested_anthropic_key = request
+        .anthropic_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let explicit_anthropic_clear = request
+        .anthropic_api_key
         .as_deref()
         .is_some_and(|value| value.trim().is_empty());
 
     let current_openai = current.profile(OPENAI_CODEX_DEFAULT_PROFILE_ID).cloned();
     let current_openrouter = current.profile(OPENROUTER_DEFAULT_PROFILE_ID).cloned();
+    let current_anthropic = current.profile(ANTHROPIC_DEFAULT_PROFILE_ID).cloned();
     let current_openrouter_secret = current
         .openrouter_credential(OPENROUTER_DEFAULT_PROFILE_ID)
         .cloned();
+    let current_anthropic_secret = current
+        .anthropic_credential(ANTHROPIC_DEFAULT_PROFILE_ID)
+        .cloned();
 
-    let next_openrouter_secret = if explicit_clear {
+    let next_openrouter_secret = if explicit_openrouter_clear {
         None
-    } else if let Some(api_key) = requested_key {
+    } else if let Some(api_key) = requested_openrouter_key {
         Some(OpenRouterProfileCredentialEntry {
             profile_id: OPENROUTER_DEFAULT_PROFILE_ID.into(),
             api_key: api_key.to_owned(),
-            updated_at: openrouter_secret_updated_at(
-                current_openrouter_secret.as_ref(),
-                Some(api_key),
-            ),
+            updated_at: api_key_updated_at(current_openrouter_secret.as_ref(), Some(api_key)),
         })
     } else {
         current_openrouter_secret.clone()
@@ -80,6 +91,24 @@ fn apply_runtime_settings_update(
         next_openrouter_secret
             .as_ref()
             .map(|entry| ProviderProfileCredentialLink::OpenRouter {
+                updated_at: entry.updated_at.clone(),
+            });
+
+    let next_anthropic_secret = if explicit_anthropic_clear {
+        None
+    } else if let Some(api_key) = requested_anthropic_key {
+        Some(AnthropicProfileCredentialEntry {
+            profile_id: ANTHROPIC_DEFAULT_PROFILE_ID.into(),
+            api_key: api_key.to_owned(),
+            updated_at: api_key_updated_at(current_anthropic_secret.as_ref(), Some(api_key)),
+        })
+    } else {
+        current_anthropic_secret.clone()
+    };
+    let next_anthropic_link =
+        next_anthropic_secret
+            .as_ref()
+            .map(|entry| ProviderProfileCredentialLink::Anthropic {
                 updated_at: entry.updated_at.clone(),
             });
 
@@ -97,6 +126,8 @@ fn apply_runtime_settings_update(
     let include_openrouter_profile = current_openrouter.is_some()
         || validated_request.provider_id == OPENROUTER_PROVIDER_ID
         || next_openrouter_link.is_some();
+    let include_anthropic_profile =
+        current_anthropic.is_some() || validated_request.provider_id == ANTHROPIC_PROVIDER_ID;
 
     let openrouter_model_id = if validated_request.provider_id == OPENROUTER_PROVIDER_ID {
         validated_request.model_id.clone()
@@ -105,6 +136,14 @@ fn apply_runtime_settings_update(
             .as_ref()
             .map(|profile| profile.model_id.clone())
             .unwrap_or_else(|| OPENROUTER_FALLBACK_MODEL_ID.into())
+    };
+    let anthropic_model_id = if validated_request.provider_id == ANTHROPIC_PROVIDER_ID {
+        validated_request.model_id.clone()
+    } else {
+        current_anthropic
+            .as_ref()
+            .map(|profile| profile.model_id.clone())
+            .unwrap_or_default()
     };
 
     let openrouter_profile = include_openrouter_profile.then(|| {
@@ -118,17 +157,31 @@ fn apply_runtime_settings_update(
             ),
         )
     });
+    let anthropic_profile = include_anthropic_profile.then(|| {
+        merge_profile(
+            current_anthropic.as_ref(),
+            build_anthropic_default_profile(
+                &anthropic_model_id,
+                next_anthropic_link.clone(),
+                None,
+                &now,
+            ),
+        )
+    });
 
     let mut next = current.clone();
     upsert_profile(&mut next.metadata.profiles, openai_profile);
     if let Some(openrouter_profile) = openrouter_profile {
         upsert_profile(&mut next.metadata.profiles, openrouter_profile);
     }
+    if let Some(anthropic_profile) = anthropic_profile {
+        upsert_profile(&mut next.metadata.profiles, anthropic_profile);
+    }
 
-    next.metadata.active_profile_id = if validated_request.provider_id == OPENROUTER_PROVIDER_ID {
-        OPENROUTER_DEFAULT_PROFILE_ID.into()
-    } else {
-        OPENAI_CODEX_DEFAULT_PROFILE_ID.into()
+    next.metadata.active_profile_id = match validated_request.provider_id.as_str() {
+        OPENROUTER_PROVIDER_ID => OPENROUTER_DEFAULT_PROFILE_ID.into(),
+        ANTHROPIC_PROVIDER_ID => ANTHROPIC_DEFAULT_PROFILE_ID.into(),
+        _ => OPENAI_CODEX_DEFAULT_PROFILE_ID.into(),
     };
 
     if let Some(secret) = next_openrouter_secret {
@@ -137,6 +190,14 @@ fn apply_runtime_settings_update(
         next.credentials
             .openrouter_api_keys
             .retain(|entry| entry.profile_id != OPENROUTER_DEFAULT_PROFILE_ID);
+    }
+
+    if let Some(secret) = next_anthropic_secret {
+        upsert_anthropic_secret(&mut next, secret);
+    } else {
+        next.credentials
+            .anthropic_api_keys
+            .retain(|entry| entry.profile_id != ANTHROPIC_DEFAULT_PROFILE_ID);
     }
 
     if next == *current {
@@ -161,6 +222,7 @@ fn runtime_settings_dto_from_provider_profiles(
         provider_id: active_profile.provider_id.clone(),
         model_id: active_profile.model_id.clone(),
         openrouter_api_key_configured: provider_profiles.any_openrouter_api_key_configured(),
+        anthropic_api_key_configured: provider_profiles.any_anthropic_api_key_configured(),
     })
 }
 
@@ -210,8 +272,24 @@ fn upsert_openrouter_secret(
     }
 }
 
-fn openrouter_secret_updated_at(
-    current: Option<&OpenRouterProfileCredentialEntry>,
+fn upsert_anthropic_secret(
+    snapshot: &mut ProviderProfilesSnapshot,
+    next: AnthropicProfileCredentialEntry,
+) {
+    if let Some(existing) = snapshot
+        .credentials
+        .anthropic_api_keys
+        .iter_mut()
+        .find(|entry| entry.profile_id == next.profile_id)
+    {
+        *existing = next;
+    } else {
+        snapshot.credentials.anthropic_api_keys.push(next);
+    }
+}
+
+fn api_key_updated_at(
+    current: Option<&ProviderApiKeyCredentialEntry>,
     next_api_key: Option<&str>,
 ) -> String {
     match (current, next_api_key) {

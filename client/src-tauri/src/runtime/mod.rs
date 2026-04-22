@@ -52,15 +52,15 @@ pub use platform_adapter::{
     OpenAiCallbackBindResult, OpenAiCallbackPolicy, RuntimeAdapterDiagnostic, RuntimePlatform,
     RuntimeShellSelection, RuntimeShellSource, RuntimeSupervisorBinaryResolution,
 };
-pub(crate) use provider::{bind_provider_runtime_session, reconcile_provider_runtime_session};
 pub use provider::{
-    default_runtime_provider, logout_provider_runtime_session, openai_codex_provider,
-    openrouter_provider, refresh_provider_runtime_session, resolve_runtime_provider_identity,
-    ResolvedRuntimeProvider, RuntimeProvider, RuntimeProviderBindOutcome,
-    RuntimeProviderReconcileOutcome, RuntimeProviderSessionBinding,
-    OPENAI_CODEX_AUTH_STORE_FILE_NAME, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_AUTH_STORE_FILE_NAME,
-    OPENROUTER_PROVIDER_ID,
+    anthropic_provider, default_runtime_provider, logout_provider_runtime_session,
+    openai_codex_provider, openrouter_provider, refresh_provider_runtime_session,
+    resolve_runtime_provider_identity, ResolvedRuntimeProvider, RuntimeProvider,
+    RuntimeProviderBindOutcome, RuntimeProviderReconcileOutcome, RuntimeProviderSessionBinding,
+    ANTHROPIC_AUTH_STORE_FILE_NAME, ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_AUTH_STORE_FILE_NAME,
+    OPENAI_CODEX_PROVIDER_ID, OPENROUTER_AUTH_STORE_FILE_NAME, OPENROUTER_PROVIDER_ID,
 };
+pub(crate) use provider::{bind_provider_runtime_session, reconcile_provider_runtime_session};
 pub use stream::{start_runtime_stream, RuntimeStreamController, RuntimeStreamRequest};
 pub use supervisor::{
     launch_detached_runtime_supervisor, probe_runtime_run, run_supervisor_sidecar_from_env,

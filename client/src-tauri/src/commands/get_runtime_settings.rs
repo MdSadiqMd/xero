@@ -40,6 +40,8 @@ pub(crate) struct RuntimeSettingsSnapshot {
     pub settings: RuntimeSettingsFile,
     pub openrouter_api_key: Option<String>,
     pub openrouter_credentials_updated_at: Option<String>,
+    pub anthropic_api_key: Option<String>,
+    pub anthropic_credentials_updated_at: Option<String>,
 }
 
 impl RuntimeSettingsSnapshot {
@@ -48,6 +50,7 @@ impl RuntimeSettingsSnapshot {
             provider_id: self.settings.provider_id.clone(),
             model_id: self.settings.model_id.clone(),
             openrouter_api_key_configured: self.settings.openrouter_api_key_configured,
+            anthropic_api_key_configured: self.anthropic_api_key.is_some(),
         }
     }
 }
@@ -330,6 +333,8 @@ pub(crate) fn default_runtime_settings_snapshot() -> RuntimeSettingsSnapshot {
         },
         openrouter_api_key: None,
         openrouter_credentials_updated_at: None,
+        anthropic_api_key: None,
+        anthropic_credentials_updated_at: None,
     }
 }
 
@@ -370,6 +375,8 @@ fn validate_runtime_settings_contract(
             .as_ref()
             .map(|credentials| credentials.api_key.clone()),
         openrouter_credentials_updated_at: credentials.map(|credentials| credentials.updated_at),
+        anthropic_api_key: None,
+        anthropic_credentials_updated_at: None,
     })
 }
 
@@ -384,6 +391,7 @@ pub(crate) fn runtime_settings_snapshot_from_provider_profiles(
     })?;
 
     let preferred_openrouter_credential = provider_profiles.preferred_openrouter_credential();
+    let preferred_anthropic_credential = provider_profiles.preferred_anthropic_credential();
 
     Ok(RuntimeSettingsSnapshot {
         settings: RuntimeSettingsFile {
@@ -394,6 +402,9 @@ pub(crate) fn runtime_settings_snapshot_from_provider_profiles(
         },
         openrouter_api_key: preferred_openrouter_credential.map(|entry| entry.api_key.clone()),
         openrouter_credentials_updated_at: preferred_openrouter_credential
+            .map(|entry| entry.updated_at.clone()),
+        anthropic_api_key: preferred_anthropic_credential.map(|entry| entry.api_key.clone()),
+        anthropic_credentials_updated_at: preferred_anthropic_credential
             .map(|entry| entry.updated_at.clone()),
     })
 }

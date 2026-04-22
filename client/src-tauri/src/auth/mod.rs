@@ -1,10 +1,17 @@
+pub mod anthropic;
 pub mod openai_codex;
 pub mod openrouter;
 pub mod store;
 
 pub use crate::runtime::{
-    openai_codex_provider, openrouter_provider, ResolvedRuntimeProvider, RuntimeProvider,
-    OPENAI_CODEX_AUTH_STORE_FILE_NAME, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
+    anthropic_provider, openai_codex_provider, openrouter_provider, ResolvedRuntimeProvider,
+    RuntimeProvider, ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_AUTH_STORE_FILE_NAME,
+    OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
+};
+pub(crate) use anthropic::{bind_anthropic_runtime_session, reconcile_anthropic_runtime_session};
+pub use anthropic::{
+    AnthropicAuthConfig, AnthropicBindOutcome, AnthropicDiscoveredModel, AnthropicReconcileOutcome,
+    AnthropicRuntimeSessionBinding,
 };
 pub use openai_codex::{
     cancel_openai_codex_flow, complete_openai_codex_flow, refresh_openai_codex_session,
@@ -260,6 +267,11 @@ pub fn start_provider_auth_flow(
             RuntimeAuthPhase::Failed,
             "Cadence binds OpenRouter runtime sessions from the saved app-global API key and does not support a browser login flow for that provider.",
         )),
+        RuntimeProvider::Anthropic => Err(AuthFlowError::terminal(
+            "auth_flow_unavailable",
+            RuntimeAuthPhase::Failed,
+            "Cadence binds Anthropic runtime sessions from the saved app-local provider-profile API key and does not support a browser login flow for that provider.",
+        )),
     }
 }
 
@@ -316,6 +328,11 @@ pub fn complete_provider_auth_flow<R: Runtime>(
             RuntimeAuthPhase::Failed,
             "Cadence does not complete an OpenRouter browser login flow because OpenRouter runtime sessions bind from the saved app-global API key instead.",
         )),
+        RuntimeProvider::Anthropic => Err(AuthFlowError::terminal(
+            "auth_flow_unavailable",
+            RuntimeAuthPhase::Failed,
+            "Cadence does not complete an Anthropic browser login flow because Anthropic runtime sessions bind from the saved app-local provider-profile API key instead.",
+        )),
     }
 }
 
@@ -337,6 +354,11 @@ pub fn refresh_provider_auth_session<R: Runtime>(
             "auth_refresh_unavailable",
             RuntimeAuthPhase::Failed,
             "Cadence does not refresh OpenRouter runtime sessions through a browser auth store. Rebind from the saved app-global API key instead.",
+        )),
+        RuntimeProvider::Anthropic => Err(AuthFlowError::terminal(
+            "auth_refresh_unavailable",
+            RuntimeAuthPhase::Failed,
+            "Cadence does not refresh Anthropic runtime sessions through a browser auth store. Rebind from the saved app-local provider-profile API key instead.",
         )),
     }
 }

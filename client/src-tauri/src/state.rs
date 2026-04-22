@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
-    auth::{ActiveAuthFlowRegistry, AuthFlowError, OpenAiCodexAuthConfig, OpenRouterAuthConfig},
+    auth::{
+        ActiveAuthFlowRegistry, AnthropicAuthConfig, AuthFlowError, OpenAiCodexAuthConfig,
+        OpenRouterAuthConfig,
+    },
     commands::CommandError,
     notifications::NOTIFICATION_CREDENTIAL_STORE_FILE_NAME,
     provider_models::{
@@ -49,6 +52,7 @@ pub struct DesktopState {
     runtime_supervisor_binary_override: Option<PathBuf>,
     openai_auth_config_override: Option<OpenAiCodexAuthConfig>,
     openrouter_auth_config_override: Option<OpenRouterAuthConfig>,
+    anthropic_auth_config_override: Option<AnthropicAuthConfig>,
     autonomous_web_config_override: Option<AutonomousWebConfig>,
     import_failpoints: ImportFailpoints,
     runtime_stream_failpoints: RuntimeStreamFailpoints,
@@ -119,6 +123,11 @@ impl DesktopState {
         self
     }
 
+    pub fn with_anthropic_auth_config_override(mut self, config: AnthropicAuthConfig) -> Self {
+        self.anthropic_auth_config_override = Some(config);
+        self
+    }
+
     pub fn with_autonomous_web_config_override(mut self, config: AutonomousWebConfig) -> Self {
         self.autonomous_web_config_override = Some(config);
         self
@@ -168,6 +177,12 @@ impl DesktopState {
         self.openrouter_auth_config_override
             .clone()
             .unwrap_or_else(OpenRouterAuthConfig::for_platform)
+    }
+
+    pub fn anthropic_auth_config(&self) -> AnthropicAuthConfig {
+        self.anthropic_auth_config_override
+            .clone()
+            .unwrap_or_else(AnthropicAuthConfig::for_platform)
     }
 
     pub fn autonomous_web_config(&self) -> AutonomousWebConfig {
