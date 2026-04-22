@@ -274,12 +274,19 @@ function appendCheckpointEvidence(card: CheckpointControlLoopCardAccumulator, ar
   )
 }
 
+function getLatestPolicyDeniedArtifact(
+  card: CheckpointControlLoopCardAccumulator,
+): AutonomousUnitArtifactView | null {
+  return card.evidence.find((artifact) => artifact.isPolicyDenied) ?? null
+}
+
 function getCheckpointTruthSource(card: CheckpointControlLoopCardAccumulator): {
   truthSource: CheckpointControlLoopTruthSource
   truthSourceLabel: string
   truthSourceDetail: string
 } {
   const hasDurableState = Boolean(card.approval || card.latestResume || card.evidence.length > 0)
+  const latestPolicyDenied = getLatestPolicyDeniedArtifact(card)
 
   if (card.liveActionRequired && hasDurableState) {
     return {
@@ -308,6 +315,15 @@ function getCheckpointTruthSource(card: CheckpointControlLoopCardAccumulator): {
     }
   }
 
+  if (latestPolicyDenied) {
+    return {
+      truthSource: 'recovered_durable',
+      truthSourceLabel: 'Recovered durable denial',
+      truthSourceDetail:
+        'No resumable live review row remains, so this card is anchored to the durable shell-policy denial that Cadence persisted for the command.',
+    }
+  }
+
   return {
     truthSource: 'recovered_durable',
     truthSourceLabel: 'Recovered durable state',
@@ -321,6 +337,8 @@ function getCheckpointLiveState(card: CheckpointControlLoopCardAccumulator): {
   liveStateDetail: string
   liveUpdatedAt: string | null
 } {
+  const latestPolicyDenied = getLatestPolicyDeniedArtifact(card)
+
   if (card.liveActionRequired) {
     return {
       liveStateLabel: 'Live action required',
@@ -349,6 +367,15 @@ function getCheckpointLiveState(card: CheckpointControlLoopCardAccumulator): {
     }
   }
 
+  if (latestPolicyDenied) {
+    return {
+      liveStateLabel: 'No live review row',
+      liveStateDetail:
+        'Hard-denied shell-policy outcomes do not create a resumable live action-required row, so Cadence is anchoring this card to durable denial evidence.',
+      liveUpdatedAt: null,
+    }
+  }
+
   return {
     liveStateLabel: 'No live row',
     liveStateDetail:
@@ -362,11 +389,24 @@ function getCheckpointDurableState(card: CheckpointControlLoopCardAccumulator): 
   durableStateDetail: string
   durableUpdatedAt: string | null
 } {
+  const latestPolicyDenied = getLatestPolicyDeniedArtifact(card)
+
   if (card.approval) {
     return {
       durableStateLabel: card.approval.statusLabel,
       durableStateDetail: normalizeText(card.approval.detail) ?? 'Durable approval state is persisted for this action.',
       durableUpdatedAt: card.approval.updatedAt || card.approval.createdAt,
+    }
+  }
+
+  if (latestPolicyDenied) {
+    return {
+      durableStateLabel: 'Policy denied',
+      durableStateDetail:
+        normalizeText(latestPolicyDenied.detail) ??
+        normalizeText(latestPolicyDenied.summary) ??
+        'Cadence recorded a durable shell-policy denial for this command.',
+      durableUpdatedAt: latestPolicyDenied.updatedAt || latestPolicyDenied.createdAt,
     }
   }
 
@@ -401,6 +441,8 @@ function getCheckpointResumeState(card: CheckpointControlLoopCardAccumulator): {
   resumeDetail: string
   resumeUpdatedAt: string | null
 } {
+  const latestPolicyDenied = getLatestPolicyDeniedArtifact(card)
+
   if (card.latestResume?.status === 'failed') {
     return {
       resumeStateLabel: card.latestResume.statusLabel,
@@ -430,6 +472,14 @@ function getCheckpointResumeState(card: CheckpointControlLoopCardAccumulator): {
       resumeStateLabel: 'Ready to resume',
       resumeDetail: 'The durable approval is resolved, but no matching resume history row has been recorded yet.',
       resumeUpdatedAt: card.approval.updatedAt || card.approval.createdAt,
+    }
+  }
+
+  if (latestPolicyDenied) {
+    return {
+      resumeStateLabel: 'Not resumable',
+      resumeDetail: 'Hard-denied shell-policy outcomes do not create an operator approval or resume path.',
+      resumeUpdatedAt: latestPolicyDenied.updatedAt || latestPolicyDenied.createdAt,
     }
   }
 

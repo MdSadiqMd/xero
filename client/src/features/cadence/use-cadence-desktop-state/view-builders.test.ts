@@ -686,8 +686,8 @@ describe('view builders', () => {
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
-            approvalMode: 'auto_edit',
-            approvalModeLabel: 'Auto edit',
+            approvalMode: 'yolo',
+            approvalModeLabel: 'YOLO',
             revision: 2,
             queuedAt: '2026-04-20T12:05:00Z',
             queuedPrompt: 'Review the diff before continuing.',
@@ -699,8 +699,8 @@ describe('view builders', () => {
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
-            approvalMode: 'auto_edit',
-            approvalModeLabel: 'Auto edit',
+            approvalMode: 'yolo',
+            approvalModeLabel: 'YOLO',
             revision: 2,
             effectiveAt: '2026-04-20T12:05:00Z',
             queuedPrompt: 'Review the diff before continuing.',
@@ -744,7 +744,7 @@ describe('view builders', () => {
       controlTruthSource: 'runtime_run',
       selectedModelId: 'anthropic/claude-3.5-haiku',
       selectedThinkingEffort: 'low',
-      selectedApprovalMode: 'auto_edit',
+      selectedApprovalMode: 'yolo',
       selectedPrompt: {
         text: 'Review the diff before continuing.',
         queuedAt: '2026-04-20T12:05:00Z',
@@ -752,10 +752,12 @@ describe('view builders', () => {
       },
       runtimeRunActiveControls: {
         modelId: 'openai/gpt-4.1-mini',
+        approvalMode: 'suggest',
         revision: 1,
       },
       runtimeRunPendingControls: {
         modelId: 'anthropic/claude-3.5-haiku',
+        approvalMode: 'yolo',
         revision: 2,
       },
     })

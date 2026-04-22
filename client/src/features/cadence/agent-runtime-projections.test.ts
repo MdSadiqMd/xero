@@ -778,4 +778,78 @@ describe('projectCheckpointControlLoops', () => {
     expect(projection.missingEvidenceCount).toBe(1)
     expect(projection.windowLabel).toContain('Showing 1 checkpoint action')
   })
+
+  it('keeps recovered durable policy denials understandable without inventing approval or resume state', () => {
+    const actionId = 'flow:flow-1:run:run-1:boundary:boundary-4:review_command'
+
+    const projection = projectCheckpointControlLoops({
+      actionRequiredItems: [],
+      approvalRequests: [],
+      resumeHistory: [],
+      notificationBroker: makeBrokerView(),
+      autonomousHistory: [
+        makeHistoryEntry({
+          unit: makeUnit({
+            unitId: 'unit-boundary-4',
+            boundaryId: 'boundary-4',
+            updatedAt: '2026-04-16T12:06:00Z',
+          }),
+          latestAttempt: makeAttempt({
+            unitId: 'unit-boundary-4',
+            attemptId: 'unit-boundary-4:attempt-1',
+            boundaryId: 'boundary-4',
+            updatedAt: '2026-04-16T12:06:00Z',
+          }),
+          artifacts: [
+            makeArtifact({
+              artifactId: 'artifact-policy-denied',
+              unitId: 'unit-boundary-4',
+              attemptId: 'unit-boundary-4:attempt-1',
+              artifactKind: 'policy_denied',
+              artifactKindLabel: 'Policy denied',
+              summary: 'Cadence denied the autonomous shell command because its cwd escapes the imported repository root.',
+              detail: 'Cadence denied the autonomous shell command because its cwd escapes the imported repository root.',
+              diagnosticCode: 'policy_denied_command_cwd_outside_repo',
+              actionId,
+              boundaryId: 'boundary-4',
+              isToolResult: false,
+              isVerificationEvidence: false,
+              isPolicyDenied: true,
+              updatedAt: '2026-04-16T12:06:30Z',
+            }),
+            makeArtifact({
+              artifactId: 'artifact-policy-denied-verification',
+              unitId: 'unit-boundary-4',
+              attemptId: 'unit-boundary-4:attempt-1',
+              artifactKind: 'verification_evidence',
+              artifactKindLabel: 'Verification evidence',
+              summary: 'Autonomous attempt recorded stable policy denial `policy_denied_command_cwd_outside_repo`.',
+              verificationOutcome: 'failed',
+              verificationOutcomeLabel: 'Failed',
+              actionId,
+              boundaryId: 'boundary-4',
+              isToolResult: false,
+              isVerificationEvidence: true,
+              isPolicyDenied: false,
+              updatedAt: '2026-04-16T12:06:20Z',
+            }),
+          ],
+        }),
+      ],
+      autonomousRecentArtifacts: [],
+    })
+
+    expect(projection.items).toHaveLength(1)
+    expect(projection.items[0]).toMatchObject({
+      actionId,
+      truthSource: 'recovered_durable',
+      truthSourceLabel: 'Recovered durable denial',
+      liveStateLabel: 'No live review row',
+      durableStateLabel: 'Policy denied',
+      resumeStateLabel: 'Not resumable',
+      evidenceCount: 2,
+    })
+    expect(projection.items[0].durableStateDetail).toContain('cwd escapes the imported repository root')
+    expect(projection.recoveredCount).toBe(1)
+  })
 })

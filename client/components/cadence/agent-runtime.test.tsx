@@ -1293,7 +1293,7 @@ describe('AgentRuntime current UI', () => {
           controlTruthSource: 'runtime_run',
           selectedModelId: 'anthropic/claude-3.5-haiku',
           selectedThinkingEffort: 'low',
-          selectedApprovalMode: 'auto_edit',
+          selectedApprovalMode: 'yolo',
           selectedPrompt: {
             text: 'Review the diff before continuing.',
             queuedAt: '2026-04-20T12:05:00Z',
@@ -1312,8 +1312,8 @@ describe('AgentRuntime current UI', () => {
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
-            approvalMode: 'auto_edit',
-            approvalModeLabel: 'Auto edit',
+            approvalMode: 'yolo',
+            approvalModeLabel: 'YOLO',
             revision: 2,
             queuedAt: '2026-04-20T12:05:00Z',
             queuedPrompt: 'Review the diff before continuing.',
@@ -1355,7 +1355,9 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('Queued prompt pending the next model-call boundary.')).toBeVisible()
     expect(screen.getByText('Model pending · anthropic/claude-3.5-haiku')).toBeVisible()
     expect(screen.getByText('Thinking pending · Low')).toBeVisible()
-    expect(screen.getByText('Approval pending · Auto edit')).toBeVisible()
+    expect(screen.getByText('Approval pending · YOLO')).toBeVisible()
+    expect(screen.getByText(/Pending YOLO does not apply until the next model-call boundary\./)).toBeVisible()
+    expect(screen.getByText(/Active approval remains Suggest \(revision 1 at 2026-04-20T12:00:00Z\)\./)).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Model selector' })).toBeDisabled()
     expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()

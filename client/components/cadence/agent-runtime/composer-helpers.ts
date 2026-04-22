@@ -236,11 +236,22 @@ export function getComposerControlStatusCopy(options: {
   pendingAt: string | null
 }): ComposerStatusCopy {
   if (options.pendingLabel && options.pendingRevision && options.pendingAt) {
+    const activeDetail = `${displayValue(options.activeLabel, 'Unavailable')} (${formatComposerRevision(options.activeRevision)} at ${formatComposerTimestamp(options.activeAt, 'an unknown time')})`
+
+    if (options.label === 'Approval' && options.pendingLabel === 'YOLO') {
+      return {
+        tone: 'pending',
+        badgeLabel: 'Pending',
+        summary: `${options.label} pending · ${options.pendingLabel}`,
+        detail: `Queued ${formatComposerRevision(options.pendingRevision)} at ${formatComposerTimestamp(options.pendingAt, 'an unknown time')}. Pending YOLO does not apply until the next model-call boundary. Active approval remains ${activeDetail}.`,
+      }
+    }
+
     return {
       tone: 'pending',
       badgeLabel: 'Pending',
       summary: `${options.label} pending · ${options.pendingLabel}`,
-      detail: `Queued ${formatComposerRevision(options.pendingRevision)} at ${formatComposerTimestamp(options.pendingAt, 'an unknown time')}. Active ${options.label.toLowerCase()}: ${displayValue(options.activeLabel, 'Unavailable')} (${formatComposerRevision(options.activeRevision)} at ${formatComposerTimestamp(options.activeAt, 'an unknown time')}).`,
+      detail: `Queued ${formatComposerRevision(options.pendingRevision)} at ${formatComposerTimestamp(options.pendingAt, 'an unknown time')}. Active ${options.label.toLowerCase()}: ${activeDetail}.`,
     }
   }
 

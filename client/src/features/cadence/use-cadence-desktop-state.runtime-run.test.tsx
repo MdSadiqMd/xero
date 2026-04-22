@@ -1511,6 +1511,41 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(setup.updateRuntimeRunControls).toHaveBeenCalledTimes(1)
   })
 
+  it('hydrates pending YOLO selection without treating it as already active', async () => {
+    const setup = createMockAdapter({
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', {
+          controls: {
+            active: {
+              modelId: 'openai_codex',
+              thinkingEffort: 'medium',
+              approvalMode: 'suggest',
+              revision: 1,
+              appliedAt: '2026-04-15T20:00:00Z',
+            },
+            pending: {
+              modelId: 'openai_codex',
+              thinkingEffort: 'medium',
+              approvalMode: 'yolo',
+              revision: 2,
+              queuedAt: '2026-04-15T20:00:07Z',
+              queuedPrompt: null,
+              queuedPromptAt: null,
+            },
+          },
+        }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1'))
+    expect(screen.getByTestId('control-truth-source')).toHaveTextContent('runtime_run')
+    expect(screen.getByTestId('selected-approval-mode')).toHaveTextContent('yolo')
+    expect(screen.getByTestId('active-control-approval-mode')).toHaveTextContent('suggest')
+    expect(screen.getByTestId('pending-control-approval-mode')).toHaveTextContent('yolo')
+  })
+
   it('preserves the last truthful runtime-run control projection when queueing controls fails and refreshes only runtime-run metadata', async () => {
     const setup = createMockAdapter({
       runtimeRuns: {
