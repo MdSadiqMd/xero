@@ -1046,6 +1046,18 @@ function createMockAdapter(options?: {
       : `/${request.newName}`,
   }))
   const deleteProjectEntry = vi.fn(async (projectId: string, path: string) => ({ projectId, path }))
+  const searchProject = vi.fn(async (request: { projectId: string }) => ({
+    projectId: request.projectId,
+    totalMatches: 0,
+    totalFiles: 0,
+    truncated: false,
+    files: [],
+  }))
+  const replaceInProject = vi.fn(async (request: { projectId: string }) => ({
+    projectId: request.projectId,
+    filesChanged: 0,
+    totalReplacements: 0,
+  }))
 
   const adapter: CadenceDesktopAdapter = {
     isDesktopRuntime: () => true,
@@ -1062,6 +1074,8 @@ function createMockAdapter(options?: {
     createProjectEntry,
     renameProjectEntry,
     deleteProjectEntry,
+    searchProject,
+    replaceInProject,
     getAutonomousRun,
     getRuntimeRun,
     getRuntimeSession,
@@ -1154,6 +1168,8 @@ function createMockAdapter(options?: {
     createProjectEntry,
     renameProjectEntry,
     deleteProjectEntry,
+    searchProject,
+    replaceInProject,
     upsertRuntimeSettings,
     upsertProviderProfile,
     setActiveProviderProfile,

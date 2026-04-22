@@ -35,6 +35,7 @@ import type {
   SearchProjectRequestDto,
   SearchProjectResponseDto,
 } from '@/src/lib/cadence-model'
+import { getFileIcon } from '../file-tree'
 
 export type SearchScope = 'file' | 'project'
 
@@ -847,6 +848,9 @@ function FileResultGroup({
         ) : (
           <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground/70" />
         )}
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+          {getFileIcon(displayFileName(file.path))}
+        </span>
         <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground/90">
           {displayFileName(file.path)}
         </span>
@@ -855,7 +859,7 @@ function FileResultGroup({
         </span>
       </button>
       {file.path.includes('/') ? (
-        <div className="truncate px-7 pb-0.5 text-[10px] text-muted-foreground/70">
+        <div className="truncate pb-0.5 pl-[2.25rem] pr-2 text-[10px] text-muted-foreground/70">
           {file.path}
         </div>
       ) : null}
