@@ -23,9 +23,9 @@ use crate::{
     runtime::{
         platform_adapter::resolve_runtime_supervisor_binary,
         protocol::{
-            SupervisorControlRequest, SupervisorControlResponse, SupervisorProcessStatus,
-            SupervisorStartupMessage, SUPERVISOR_KIND_DETACHED_PTY, SUPERVISOR_PROTOCOL_VERSION,
-            SUPERVISOR_TRANSPORT_KIND_TCP,
+            RuntimeSupervisorLaunchContext, SupervisorControlRequest, SupervisorControlResponse,
+            SupervisorProcessStatus, SupervisorStartupMessage, SUPERVISOR_KIND_DETACHED_PTY,
+            SUPERVISOR_PROTOCOL_VERSION, SUPERVISOR_TRANSPORT_KIND_TCP,
         },
     },
     state::DesktopState,
@@ -33,8 +33,12 @@ use crate::{
 
 use super::persistence::protocol_diagnostic_into_record;
 use super::{
-    read_json_line_from_reader, write_json_line, DEFAULT_CONTROL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT,
-    DEFAULT_STOP_TIMEOUT,
+    runtime_supervisor_thinking_effort_env_value, validate_runtime_supervisor_launch_context,
+    ANTHROPIC_API_KEY_ENV, CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
+    CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
+    CADENCE_RUNTIME_THINKING_EFFORT_ENV, RuntimeSupervisorLaunchEnv,
+    read_json_line_from_reader, write_json_line, DEFAULT_CONTROL_TIMEOUT,
+    DEFAULT_STARTUP_TIMEOUT, DEFAULT_STOP_TIMEOUT,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -69,6 +73,8 @@ pub struct RuntimeSupervisorLaunchRequest {
     pub run_id: String,
     pub session_id: String,
     pub flow_id: Option<String>,
+    pub launch_context: RuntimeSupervisorLaunchContext,
+    pub launch_env: RuntimeSupervisorLaunchEnv,
     pub program: String,
     pub args: Vec<String>,
     pub startup_timeout: Duration,
@@ -137,6 +143,14 @@ impl Default for RuntimeSupervisorLaunchRequest {
             run_id: String::new(),
             session_id: String::new(),
             flow_id: None,
+            launch_context: RuntimeSupervisorLaunchContext {
+                provider_id: "openai_codex".into(),
+                session_id: String::new(),
+                flow_id: None,
+                model_id: "openai_codex".into(),
+                thinking_effort: None,
+            },
+            launch_env: RuntimeSupervisorLaunchEnv::default(),
             program: String::new(),
             args: Vec::new(),
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
@@ -269,6 +283,16 @@ pub fn launch_detached_runtime_supervisor(
         sidecar.arg("--flow-id").arg(flow_id);
     }
 
+    let launch_context_json = serde_json::to_string(&request.launch_context).map_err(|error| {
+        CommandError::system_fault(
+            "runtime_supervisor_request_invalid",
+            format!(
+                "Cadence could not serialize the detached runtime supervisor launch context: {error}"
+            ),
+        )
+    })?;
+    sidecar.arg("--launch-context-json").arg(launch_context_json);
+
     let control_state_json = serde_json::to_string(&request.run_controls).map_err(|error| {
         CommandError::system_fault(
             "runtime_supervisor_request_invalid",
@@ -278,6 +302,8 @@ pub fn launch_detached_runtime_supervisor(
         )
     })?;
     sidecar.arg("--control-state-json").arg(control_state_json);
+
+    apply_sidecar_launch_environment(&mut sidecar, &request.launch_context, &request.launch_env);
 
     for arg in &request.args {
         sidecar.arg("--command-arg").arg(arg);
@@ -344,6 +370,7 @@ pub fn launch_detached_runtime_supervisor(
             transport_kind,
             endpoint,
             status,
+            launch_context,
             ..
         } => {
             if protocol_version != SUPERVISOR_PROTOCOL_VERSION {
@@ -394,6 +421,23 @@ pub fn launch_detached_runtime_supervisor(
                 return Err(CommandError::retryable(
                     "runtime_supervisor_handshake_invalid",
                     "Cadence rejected the detached PTY supervisor handshake because it omitted a valid control endpoint.",
+                ));
+            }
+
+            if launch_context != request.launch_context {
+                let _ = child.kill();
+                let _ = persist_failed_launch(
+                    &request.repo_root,
+                    &request.project_id,
+                    &request.run_id,
+                    &request.runtime_kind,
+                    &request.run_controls,
+                    "runtime_supervisor_launch_context_invalid",
+                    "Cadence rejected the detached PTY supervisor handshake because provider/session/model launch context did not match the approved request.",
+                );
+                return Err(CommandError::retryable(
+                    "runtime_supervisor_launch_context_invalid",
+                    "Cadence rejected the detached PTY supervisor handshake because provider/session/model launch context did not match the approved request.",
                 ));
             }
 
@@ -978,6 +1022,39 @@ pub fn update_runtime_run_controls(
     }
 }
 
+fn apply_sidecar_launch_environment(
+    sidecar: &mut Command,
+    launch_context: &RuntimeSupervisorLaunchContext,
+    launch_env: &RuntimeSupervisorLaunchEnv,
+) {
+    sidecar
+        .env_remove(CADENCE_RUNTIME_PROVIDER_ID_ENV)
+        .env_remove(CADENCE_RUNTIME_SESSION_ID_ENV)
+        .env_remove(CADENCE_RUNTIME_FLOW_ID_ENV)
+        .env_remove(CADENCE_RUNTIME_MODEL_ID_ENV)
+        .env_remove(CADENCE_RUNTIME_THINKING_EFFORT_ENV)
+        .env_remove(ANTHROPIC_API_KEY_ENV);
+
+    sidecar.env(CADENCE_RUNTIME_PROVIDER_ID_ENV, &launch_context.provider_id);
+    sidecar.env(CADENCE_RUNTIME_SESSION_ID_ENV, &launch_context.session_id);
+    sidecar.env(CADENCE_RUNTIME_MODEL_ID_ENV, &launch_context.model_id);
+
+    if let Some(flow_id) = launch_context.flow_id.as_deref() {
+        sidecar.env(CADENCE_RUNTIME_FLOW_ID_ENV, flow_id);
+    }
+
+    if let Some(thinking_effort) = launch_context.thinking_effort.as_ref() {
+        sidecar.env(
+            CADENCE_RUNTIME_THINKING_EFFORT_ENV,
+            runtime_supervisor_thinking_effort_env_value(thinking_effort),
+        );
+    }
+
+    for (key, value) in launch_env.iter() {
+        sidecar.env(key, value);
+    }
+}
+
 fn validate_launch_request(request: &RuntimeSupervisorLaunchRequest) -> Result<(), CommandError> {
     validate_non_empty(&request.project_id, "projectId")?;
     validate_non_empty(&request.runtime_kind, "runtimeKind")?;
@@ -1001,6 +1078,14 @@ fn validate_launch_request(request: &RuntimeSupervisorLaunchRequest) -> Result<(
             "Cadence requires a non-zero detached supervisor control timeout.",
         ));
     }
+
+    validate_runtime_supervisor_launch_context(
+        &request.runtime_kind,
+        &request.session_id,
+        request.flow_id.as_deref(),
+        &request.run_controls,
+        &request.launch_context,
+    )?;
 
     Ok(())
 }

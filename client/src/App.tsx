@@ -11,6 +11,7 @@ import { ProjectRail } from '@/components/cadence/project-rail'
 import { CadenceShell, type PlatformVariant } from '@/components/cadence/shell'
 import type { FooterRuntimeState, StatusFooterProps } from '@/components/cadence/status-footer'
 import { GamesSidebar } from '@/components/cadence/games-sidebar'
+import { BrowserSidebar } from '@/components/cadence/browser-sidebar'
 import { SettingsDialog } from '@/components/cadence/settings-dialog'
 import { type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import { useCadenceDesktopState } from '@/src/features/cadence/use-cadence-desktop-state'
@@ -94,6 +95,23 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
 
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [gamesOpen, setGamesOpen] = useState(false)
+  const [browserOpen, setBrowserOpen] = useState(false)
+
+  const toggleGames = () => {
+    setGamesOpen((current) => {
+      const next = !current
+      if (next) setBrowserOpen(false)
+      return next
+    })
+  }
+
+  const toggleBrowser = () => {
+    setBrowserOpen((current) => {
+      const next = !current
+      if (next) setGamesOpen(false)
+      return next
+    })
+  }
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [platformOverride, setPlatformOverride] = useState<PlatformVariant | null>(null)
   const [onboardingDismissed, setOnboardingDismissed] = useState(false)
@@ -283,8 +301,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         onViewChange={setActiveView}
         projectName={activeProject?.name}
         onOpenSettings={() => setSettingsOpen(true)}
-        onToggleGames={() => setGamesOpen((current) => !current)}
+        onToggleGames={toggleGames}
         gamesOpen={gamesOpen}
+        onToggleBrowser={toggleBrowser}
+        browserOpen={browserOpen}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         platformOverride={platformOverride}
@@ -338,8 +358,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       onViewChange={setActiveView}
       projectName={activeProject?.name}
       onOpenSettings={() => setSettingsOpen(true)}
-      onToggleGames={() => setGamesOpen((current) => !current)}
+      onToggleGames={toggleGames}
       gamesOpen={gamesOpen}
+      onToggleBrowser={toggleBrowser}
+      browserOpen={browserOpen}
       sidebarCollapsed={sidebarCollapsed}
       onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
       platformOverride={platformOverride}
@@ -360,6 +382,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       />
       {renderBody()}
       <GamesSidebar open={gamesOpen} />
+      <BrowserSidebar open={browserOpen} />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

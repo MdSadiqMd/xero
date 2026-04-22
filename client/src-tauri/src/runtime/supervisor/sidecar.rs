@@ -25,18 +25,24 @@ use super::persistence::{
     persist_runtime_row_from_shared, persist_sidecar_exit, persist_sidecar_runtime_error,
 };
 use super::{
-    control::spawn_control_listener, write_json_line, PtyEventNormalizer,
-    RuntimeSupervisorSidecarArgs, SharedPtyWriter, SidecarSharedState, SupervisorEventHub,
-    HEARTBEAT_INTERVAL, TERMINAL_ATTACH_GRACE_PERIOD,
+    control::spawn_control_listener, runtime_supervisor_thinking_effort_env_value,
+    validate_runtime_supervisor_launch_context, write_json_line, ANTHROPIC_API_KEY_ENV,
+    CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
+    CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
+    CADENCE_RUNTIME_THINKING_EFFORT_ENV, PtyEventNormalizer, RuntimeSupervisorSidecarArgs,
+    SharedPtyWriter, SidecarSharedState, SupervisorEventHub, HEARTBEAT_INTERVAL,
+    TERMINAL_ATTACH_GRACE_PERIOD,
 };
 use crate::runtime::protocol::{
-    SupervisorProcessStatus, SupervisorStartupMessage, SUPERVISOR_KIND_DETACHED_PTY,
-    SUPERVISOR_PROTOCOL_VERSION, SUPERVISOR_TRANSPORT_KIND_TCP,
+    RuntimeSupervisorLaunchContext, SupervisorProcessStatus, SupervisorStartupMessage,
+    SUPERVISOR_KIND_DETACHED_PTY, SUPERVISOR_PROTOCOL_VERSION, SUPERVISOR_TRANSPORT_KIND_TCP,
 };
 
 pub(super) fn run_supervisor_sidecar_from_env() -> Result<(), CommandError> {
-    let args = parse_sidecar_args(std::env::args().skip(1))?;
-    run_supervisor_sidecar(args)
+    match parse_sidecar_args(std::env::args().skip(1)) {
+        Ok(args) => run_supervisor_sidecar(args),
+        Err(error) => emit_startup_error(error),
+    }
 }
 
 fn parse_sidecar_args(
@@ -48,6 +54,7 @@ fn parse_sidecar_args(
     let mut run_id = None;
     let mut session_id = None;
     let mut flow_id = None;
+    let mut launch_context_json = None;
     let mut control_state_json = None;
     let mut program = None;
     let mut command_args = Vec::new();
@@ -61,6 +68,7 @@ fn parse_sidecar_args(
             "--run-id" => run_id = args.next(),
             "--session-id" => session_id = args.next(),
             "--flow-id" => flow_id = args.next(),
+            "--launch-context-json" => launch_context_json = args.next(),
             "--control-state-json" => control_state_json = args.next(),
             "--program" => program = args.next(),
             "--command-arg" => {
@@ -88,6 +96,18 @@ fn parse_sidecar_args(
         run_id: run_id.ok_or_else(|| CommandError::invalid_request("runId"))?,
         session_id: session_id.ok_or_else(|| CommandError::invalid_request("sessionId"))?,
         flow_id,
+        launch_context: serde_json::from_str::<RuntimeSupervisorLaunchContext>(
+            &launch_context_json
+                .ok_or_else(|| CommandError::invalid_request("launchContextJson"))?,
+        )
+        .map_err(|error| {
+            CommandError::user_fixable(
+                "runtime_supervisor_request_invalid",
+                format!(
+                    "Cadence could not decode the detached runtime supervisor launch context JSON: {error}"
+                ),
+            )
+        })?,
         program: program.ok_or_else(|| CommandError::invalid_request("program"))?,
         args: command_args,
         run_controls: serde_json::from_str(
@@ -111,11 +131,83 @@ fn parse_sidecar_args(
         validate_non_empty(flow_id, "flowId")?;
     }
     validate_non_empty(&args.program, "program")?;
+    validate_runtime_supervisor_launch_context(
+        &args.runtime_kind,
+        &args.session_id,
+        args.flow_id.as_deref(),
+        &args.run_controls,
+        &args.launch_context,
+    )?;
 
     Ok(args)
 }
 
+fn emit_startup_error(error: CommandError) -> Result<(), CommandError> {
+    emit_startup_message(&SupervisorStartupMessage::Error {
+        protocol_version: SUPERVISOR_PROTOCOL_VERSION,
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+    })
+}
+
+fn validate_inherited_launch_environment(
+    launch_context: &RuntimeSupervisorLaunchContext,
+) -> Result<(), CommandError> {
+    if launch_context.provider_id == crate::runtime::ANTHROPIC_PROVIDER_ID {
+        let anthropic_api_key = std::env::var(ANTHROPIC_API_KEY_ENV)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        if anthropic_api_key.is_none() {
+            return Err(CommandError::user_fixable(
+                "anthropic_api_key_missing",
+                "Cadence cannot launch the detached Anthropic runtime because the app-local API key was not injected into the launch environment.",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_launch_context_to_child_environment(
+    builder: &mut CommandBuilder,
+    launch_context: &RuntimeSupervisorLaunchContext,
+) {
+    builder.env_remove(CADENCE_RUNTIME_PROVIDER_ID_ENV);
+    builder.env_remove(CADENCE_RUNTIME_SESSION_ID_ENV);
+    builder.env_remove(CADENCE_RUNTIME_FLOW_ID_ENV);
+    builder.env_remove(CADENCE_RUNTIME_MODEL_ID_ENV);
+    builder.env_remove(CADENCE_RUNTIME_THINKING_EFFORT_ENV);
+    builder.env_remove(ANTHROPIC_API_KEY_ENV);
+
+    builder.env(CADENCE_RUNTIME_PROVIDER_ID_ENV, &launch_context.provider_id);
+    builder.env(CADENCE_RUNTIME_SESSION_ID_ENV, &launch_context.session_id);
+    builder.env(CADENCE_RUNTIME_MODEL_ID_ENV, &launch_context.model_id);
+
+    if let Some(flow_id) = launch_context.flow_id.as_deref() {
+        builder.env(CADENCE_RUNTIME_FLOW_ID_ENV, flow_id);
+    }
+
+    if let Some(thinking_effort) = launch_context.thinking_effort.as_ref() {
+        builder.env(
+            CADENCE_RUNTIME_THINKING_EFFORT_ENV,
+            runtime_supervisor_thinking_effort_env_value(thinking_effort),
+        );
+    }
+
+    if launch_context.provider_id == crate::runtime::ANTHROPIC_PROVIDER_ID {
+        if let Ok(api_key) = std::env::var(ANTHROPIC_API_KEY_ENV) {
+            builder.env(ANTHROPIC_API_KEY_ENV, api_key);
+        }
+    }
+}
+
 fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), CommandError> {
+    if let Err(error) = validate_inherited_launch_environment(&args.launch_context) {
+        return emit_startup_error(error);
+    }
+
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|_| {
         CommandError::retryable(
             "runtime_supervisor_bind_failed",
@@ -148,6 +240,7 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
     let mut builder = CommandBuilder::new(&args.program);
     builder.args(&args.args);
     builder.cwd(&args.repo_root);
+    apply_launch_context_to_child_environment(&mut builder, &args.launch_context);
 
     let mut child = match pair.slave.spawn_command(builder) {
         Ok(child) => child,
@@ -220,8 +313,8 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
         project_id: args.project_id.clone(),
         run_id: args.run_id.clone(),
         runtime_kind: args.runtime_kind.clone(),
-        session_id: args.session_id.clone(),
-        flow_id: args.flow_id.clone(),
+        session_id: args.launch_context.session_id.clone(),
+        flow_id: args.launch_context.flow_id.clone(),
         endpoint: endpoint.clone(),
         started_at: initial_snapshot.run.started_at.clone(),
         child_pid,
@@ -264,6 +357,7 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
         supervisor_pid: std::process::id(),
         child_pid,
         status: SupervisorProcessStatus::Running,
+        launch_context: args.launch_context.clone(),
     })?;
 
     let reader_thread = spawn_pty_reader(

@@ -23,9 +23,11 @@ use crate::{
         load_provider_model_catalog, ProviderModelCatalog, ProviderModelCatalogSource,
         ProviderModelRecord, ProviderModelThinkingEffort,
     },
+    provider_profiles::ProviderProfileReadinessStatus,
     runtime::{
         launch_detached_runtime_supervisor, probe_runtime_run, resolve_runtime_shell_selection,
-        RuntimeSupervisorLaunchRequest, RuntimeSupervisorProbeRequest,
+        RuntimeSupervisorLaunchContext, RuntimeSupervisorLaunchEnv,
+        RuntimeSupervisorLaunchRequest, RuntimeSupervisorProbeRequest, ANTHROPIC_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -40,6 +42,11 @@ pub(crate) struct RuntimeRunLaunchOutcome {
     pub repo_root: PathBuf,
     pub snapshot: RuntimeRunSnapshotRecord,
     pub reconnected: bool,
+}
+
+struct PreparedRuntimeSupervisorLaunch {
+    launch_context: RuntimeSupervisorLaunchContext,
+    launch_env: RuntimeSupervisorLaunchEnv,
 }
 
 pub(crate) fn load_persisted_runtime_run(
@@ -204,6 +211,13 @@ pub(crate) fn launch_or_reconnect_runtime_run<R: Runtime>(
         requested_controls.as_ref(),
         initial_prompt.as_deref(),
     )?;
+    let prepared_launch = prepare_runtime_supervisor_launch(
+        app,
+        state,
+        &runtime,
+        &session_id,
+        &run_controls,
+    )?;
 
     let launched = launch_detached_runtime_supervisor(
         state,
@@ -214,6 +228,8 @@ pub(crate) fn launch_or_reconnect_runtime_run<R: Runtime>(
             run_id: generate_runtime_run_id(),
             session_id,
             flow_id: runtime.flow_id.clone(),
+            launch_context: prepared_launch.launch_context,
+            launch_env: prepared_launch.launch_env,
             program: shell.program,
             args: shell.args,
             startup_timeout: DEFAULT_RUNTIME_RUN_STARTUP_TIMEOUT,
@@ -347,6 +363,82 @@ fn resolve_initial_runtime_run_control_state<R: Runtime>(
         &timestamp,
         initial_prompt,
     )
+}
+
+fn prepare_runtime_supervisor_launch<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    runtime: &crate::commands::RuntimeSessionDto,
+    session_id: &str,
+    run_controls: &RuntimeRunControlStateRecord,
+) -> CommandResult<PreparedRuntimeSupervisorLaunch> {
+    let provider_profiles = load_provider_profiles_snapshot(app, state)?;
+    let active_profile = provider_profiles.active_profile().ok_or_else(|| {
+        CommandError::user_fixable(
+            "provider_profiles_invalid",
+            "Cadence could not launch a runtime run because the active provider profile is missing.",
+        )
+    })?;
+
+    if active_profile.provider_id != runtime.provider_id {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_provider_mismatch",
+            format!(
+                "Cadence cannot launch runtime run `{}` because the active provider profile targets `{}` while the authenticated runtime session is bound to `{}`.",
+                run_controls.active.model_id, active_profile.provider_id, runtime.provider_id
+            ),
+        ));
+    }
+
+    let mut launch_env = RuntimeSupervisorLaunchEnv::default();
+    if runtime.provider_id == ANTHROPIC_PROVIDER_ID {
+        let readiness = active_profile.readiness(&provider_profiles.credentials);
+        match readiness.status {
+            ProviderProfileReadinessStatus::Ready => {
+                let secret = provider_profiles
+                    .anthropic_credential(&active_profile.profile_id)
+                    .ok_or_else(|| {
+                        CommandError::user_fixable(
+                            "provider_profile_credentials_unavailable",
+                            format!(
+                                "Cadence cannot launch the detached Anthropic runtime because provider profile `{}` no longer matches the saved app-local secret state.",
+                                active_profile.profile_id
+                            ),
+                        )
+                    })?;
+                launch_env.insert("ANTHROPIC_API_KEY", secret.api_key.clone());
+            }
+            ProviderProfileReadinessStatus::Missing => {
+                return Err(CommandError::user_fixable(
+                    "anthropic_api_key_missing",
+                    format!(
+                        "Cadence cannot launch the detached Anthropic runtime because provider profile `{}` has no app-local API key configured.",
+                        active_profile.profile_id
+                    ),
+                ));
+            }
+            ProviderProfileReadinessStatus::Malformed => {
+                return Err(CommandError::user_fixable(
+                    "provider_profile_credentials_unavailable",
+                    format!(
+                        "Cadence cannot launch the detached Anthropic runtime because provider profile `{}` no longer matches the saved app-local secret state.",
+                        active_profile.profile_id
+                    ),
+                ));
+            }
+        }
+    }
+
+    Ok(PreparedRuntimeSupervisorLaunch {
+        launch_context: RuntimeSupervisorLaunchContext {
+            provider_id: runtime.provider_id.clone(),
+            session_id: session_id.to_owned(),
+            flow_id: runtime.flow_id.clone(),
+            model_id: run_controls.active.model_id.clone(),
+            thinking_effort: run_controls.active.thinking_effort.clone(),
+        },
+        launch_env,
+    })
 }
 
 fn resolve_initial_runtime_run_model_id(

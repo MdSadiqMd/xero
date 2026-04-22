@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     sync::{mpsc::SyncSender, Arc, Mutex},
@@ -11,8 +11,8 @@ use serde::{de::DeserializeOwned, Serialize};
 use crate::commands::CommandError;
 
 use super::protocol::{
-    SupervisorControlResponse, SupervisorLiveEventPayload, SupervisorProcessStatus,
-    SupervisorProtocolDiagnostic,
+    RuntimeSupervisorLaunchContext, SupervisorControlResponse, SupervisorLiveEventPayload,
+    SupervisorProcessStatus, SupervisorProtocolDiagnostic,
 };
 
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -38,6 +38,12 @@ const INTERACTIVE_BOUNDARY_CHECKPOINT_SUMMARY: &str =
 const REDACTED_SHELL_OUTPUT_SUMMARY: &str = "Shell output was redacted before durable persistence.";
 const REDACTED_LIVE_EVENT_DETAIL: &str =
     "Cadence redacted secret-bearing live output before replay and persistence.";
+pub(crate) const CADENCE_RUNTIME_PROVIDER_ID_ENV: &str = "CADENCE_RUNTIME_PROVIDER_ID";
+pub(crate) const CADENCE_RUNTIME_SESSION_ID_ENV: &str = "CADENCE_RUNTIME_SESSION_ID";
+pub(crate) const CADENCE_RUNTIME_FLOW_ID_ENV: &str = "CADENCE_RUNTIME_FLOW_ID";
+pub(crate) const CADENCE_RUNTIME_MODEL_ID_ENV: &str = "CADENCE_RUNTIME_MODEL_ID";
+pub(crate) const CADENCE_RUNTIME_THINKING_EFFORT_ENV: &str = "CADENCE_RUNTIME_THINKING_EFFORT";
+pub(crate) const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 
 mod boundary;
 mod control;
@@ -56,6 +62,30 @@ pub use host::{
     RuntimeSupervisorUpdateControlsRequest,
 };
 
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct RuntimeSupervisorLaunchEnv {
+    vars: BTreeMap<String, String>,
+}
+
+impl RuntimeSupervisorLaunchEnv {
+    pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.vars.insert(key.into(), value.into());
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.vars.iter().map(|(key, value)| (key.as_str(), value.as_str()))
+    }
+}
+
+impl std::fmt::Debug for RuntimeSupervisorLaunchEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let keys = self.vars.keys().cloned().collect::<Vec<_>>();
+        f.debug_struct("RuntimeSupervisorLaunchEnv")
+            .field("keys", &keys)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeSupervisorSidecarArgs {
     project_id: String,
@@ -64,6 +94,7 @@ struct RuntimeSupervisorSidecarArgs {
     run_id: String,
     session_id: String,
     flow_id: Option<String>,
+    launch_context: RuntimeSupervisorLaunchContext,
     program: String,
     args: Vec<String>,
     run_controls: crate::db::project_store::RuntimeRunControlStateRecord,
@@ -126,6 +157,80 @@ struct ReplayRegistration {
     subscriber_id: u64,
     attach_response: SupervisorControlResponse,
     replay_events: Vec<BufferedSupervisorEvent>,
+}
+
+fn validate_runtime_supervisor_launch_context(
+    runtime_kind: &str,
+    session_id: &str,
+    flow_id: Option<&str>,
+    control_state: &crate::db::project_store::RuntimeRunControlStateRecord,
+    launch_context: &RuntimeSupervisorLaunchContext,
+) -> Result<(), CommandError> {
+    crate::commands::validate_non_empty(&launch_context.provider_id, "launchContext.providerId")?;
+    crate::commands::validate_non_empty(&launch_context.session_id, "launchContext.sessionId")?;
+    crate::commands::validate_non_empty(&launch_context.model_id, "launchContext.modelId")?;
+    if let Some(flow_id) = launch_context.flow_id.as_deref() {
+        crate::commands::validate_non_empty(flow_id, "launchContext.flowId")?;
+    }
+
+    let expected_provider_id = crate::runtime::resolve_runtime_provider_identity(
+        Some(runtime_kind),
+        Some(runtime_kind),
+    )
+    .map(|provider| provider.provider_id.to_string())
+    .unwrap_or_else(|_| runtime_kind.trim().to_string());
+
+    if launch_context.provider_id != expected_provider_id {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_provider_mismatch",
+            format!(
+                "Cadence rejected detached runtime launch context because providerId `{}` did not match runtime kind `{}`.",
+                launch_context.provider_id, runtime_kind
+            ),
+        ));
+    }
+
+    if launch_context.session_id != session_id {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_launch_context_invalid",
+            "Cadence rejected detached runtime launch context because session identity did not match the requested runtime session.",
+        ));
+    }
+
+    if launch_context.flow_id.as_deref() != flow_id {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_launch_context_invalid",
+            "Cadence rejected detached runtime launch context because flow identity did not match the requested runtime session.",
+        ));
+    }
+
+    if launch_context.model_id != control_state.active.model_id {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_launch_context_invalid",
+            "Cadence rejected detached runtime launch context because model identity did not match the approved control state.",
+        ));
+    }
+
+    if launch_context.thinking_effort != control_state.active.thinking_effort {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_launch_context_invalid",
+            "Cadence rejected detached runtime launch context because thinking effort did not match the approved control state.",
+        ));
+    }
+
+    Ok(())
+}
+
+fn runtime_supervisor_thinking_effort_env_value(
+    effort: &crate::commands::ProviderModelThinkingEffortDto,
+) -> &'static str {
+    match effort {
+        crate::commands::ProviderModelThinkingEffortDto::Minimal => "minimal",
+        crate::commands::ProviderModelThinkingEffortDto::Low => "low",
+        crate::commands::ProviderModelThinkingEffortDto::Medium => "medium",
+        crate::commands::ProviderModelThinkingEffortDto::High => "high",
+        crate::commands::ProviderModelThinkingEffortDto::XHigh => "xhigh",
+    }
 }
 
 pub fn run_supervisor_sidecar_from_env() -> Result<(), CommandError> {

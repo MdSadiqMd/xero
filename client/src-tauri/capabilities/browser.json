@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browser-webview",
+  "description": "Sandbox for the in-app browser webview. No backend command access; arbitrary http(s) navigation only.",
+  "webviews": ["cadence-browser"],
+  "remote": {
+    "urls": ["https://**", "http://**"]
+  },
+  "permissions": []
+}

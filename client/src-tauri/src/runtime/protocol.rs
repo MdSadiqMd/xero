@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::commands::RuntimeRunControlInputDto;
+use crate::commands::{ProviderModelThinkingEffortDto, RuntimeRunControlInputDto};
 
 pub const SUPERVISOR_PROTOCOL_VERSION: u8 = 1;
 pub const SUPERVISOR_KIND_DETACHED_PTY: &str = "detached_pty";
@@ -175,6 +175,18 @@ pub enum SupervisorLiveEventPayload {
     },
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeSupervisorLaunchContext {
+    pub provider_id: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_id: Option<String>,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SupervisorStartupMessage {
@@ -189,6 +201,7 @@ pub enum SupervisorStartupMessage {
         supervisor_pid: u32,
         child_pid: Option<u32>,
         status: SupervisorProcessStatus,
+        launch_context: RuntimeSupervisorLaunchContext,
     },
     Error {
         protocol_version: u8,

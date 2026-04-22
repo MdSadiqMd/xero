@@ -165,6 +165,7 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
             provider_id: "openai_codex".into(),
             model_id: "openai_codex".into(),
             openrouter_api_key_configured: false,
+            anthropic_api_key_configured: false,
         }),
     );
 
@@ -303,6 +304,7 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key_configured: true,
+            anthropic_api_key_configured: false,
         }),
     );
 

@@ -26,6 +26,8 @@ tauri-build = { version = "2", features = [] }
 base64 = "0.22"
 git2 = "0.20"
 globset = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+xcap = "0.6"
 ignore = "0.4"
 rand = "0.8"
 regex = "1"
@@ -36,7 +38,7 @@ rusqlite_migration = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tauri = { version = "2", features = ["macos-private-api", "test"] }
+tauri = { version = "2", features = ["macos-private-api", "test", "unstable"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2.5.3"
 tempfile = "3"

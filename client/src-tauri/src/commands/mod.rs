@@ -1,4 +1,5 @@
 pub mod apply_workflow_transition;
+pub mod browser;
 pub mod cancel_autonomous_run;
 pub mod get_autonomous_run;
 pub mod get_project_snapshot;
@@ -39,6 +40,10 @@ mod contracts;
 pub(crate) mod runtime_support;
 
 pub use apply_workflow_transition::apply_workflow_transition;
+pub use browser::{
+    browser_current_url, browser_eval, browser_hide, browser_resize, browser_screenshot,
+    browser_show, BrowserState,
+};
 pub use cancel_autonomous_run::cancel_autonomous_run;
 pub use get_autonomous_run::get_autonomous_run;
 pub use get_project_snapshot::get_project_snapshot;

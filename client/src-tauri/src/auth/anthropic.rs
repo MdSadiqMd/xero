@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use reqwest::blocking::Client;
 use serde::Deserialize;
@@ -73,10 +73,20 @@ pub enum AnthropicReconcileOutcome {
     SignedOut(AuthDiagnostic),
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AnthropicDiscoveredThinkingEffort {
+    Low,
+    Medium,
+    High,
+    XHigh,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnthropicDiscoveredModel {
     pub id: String,
     pub display_name: String,
+    pub thinking_supported: bool,
+    pub effort_levels: Vec<AnthropicDiscoveredThinkingEffort>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,6 +100,58 @@ struct ModelsResponse {
 struct ModelSummary {
     id: String,
     display_name: Option<String>,
+    #[serde(default)]
+    capabilities: ModelCapabilities,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelCapabilities {
+    #[serde(default)]
+    effort: AnthropicEffortCapability,
+    #[serde(default)]
+    thinking: AnthropicThinkingCapability,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AnthropicCapabilitySupport {
+    #[serde(default)]
+    supported: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnthropicEffortCapability {
+    #[serde(default)]
+    supported: bool,
+    #[serde(default)]
+    low: AnthropicCapabilitySupport,
+    #[serde(default)]
+    medium: AnthropicCapabilitySupport,
+    #[serde(default)]
+    high: AnthropicCapabilitySupport,
+    #[serde(default)]
+    xhigh: AnthropicCapabilitySupport,
+    #[serde(default, rename = "max")]
+    _max: AnthropicCapabilitySupport,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnthropicThinkingCapability {
+    #[serde(default)]
+    supported: bool,
+    #[serde(default)]
+    types: AnthropicThinkingTypes,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AnthropicThinkingTypes {
+    #[serde(default)]
+    adaptive: AnthropicCapabilitySupport,
+    #[serde(default)]
+    enabled: AnthropicCapabilitySupport,
 }
 
 pub(crate) fn bind_anthropic_runtime_session<R: Runtime>(
@@ -204,33 +266,106 @@ fn validate_anthropic_models_probe(
 fn normalize_anthropic_models(
     response: ModelsResponse,
 ) -> Result<Vec<AnthropicDiscoveredModel>, AuthFlowError> {
-    response
-        .data
-        .into_iter()
-        .map(|model| {
-            let id = model.id.trim();
-            if id.is_empty() {
-                return Err(AuthFlowError::terminal(
-                    "anthropic_models_decode_failed",
-                    RuntimeAuthPhase::Failed,
-                    "Cadence could not decode the Anthropic models response because one model id was blank.",
-                ));
-            }
+    let mut seen_ids = BTreeSet::new();
+    let mut normalized = Vec::with_capacity(response.data.len());
 
-            let display_name = model
-                .display_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(id)
-                .to_owned();
+    for model in response.data {
+        let id = model.id.trim();
+        if id.is_empty() {
+            return Err(AuthFlowError::terminal(
+                "anthropic_models_decode_failed",
+                RuntimeAuthPhase::Failed,
+                "Cadence could not decode the Anthropic models response because one model id was blank.",
+            ));
+        }
 
-            Ok(AnthropicDiscoveredModel {
-                id: id.to_owned(),
-                display_name,
-            })
-        })
-        .collect()
+        if !seen_ids.insert(id.to_owned()) {
+            return Err(AuthFlowError::terminal(
+                "anthropic_models_decode_failed",
+                RuntimeAuthPhase::Failed,
+                format!(
+                    "Cadence rejected the Anthropic models response because model `{id}` appeared more than once."
+                ),
+            ));
+        }
+
+        let display_name = model
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(id)
+            .to_owned();
+        let (thinking_supported, effort_levels) =
+            normalize_anthropic_model_thinking(id, &model.capabilities)?;
+
+        normalized.push(AnthropicDiscoveredModel {
+            id: id.to_owned(),
+            display_name,
+            thinking_supported,
+            effort_levels,
+        });
+    }
+
+    Ok(normalized)
+}
+
+fn normalize_anthropic_model_thinking(
+    model_id: &str,
+    capabilities: &ModelCapabilities,
+) -> Result<(bool, Vec<AnthropicDiscoveredThinkingEffort>), AuthFlowError> {
+    let effort_levels = [
+        (
+            capabilities.effort.low.supported,
+            AnthropicDiscoveredThinkingEffort::Low,
+        ),
+        (
+            capabilities.effort.medium.supported,
+            AnthropicDiscoveredThinkingEffort::Medium,
+        ),
+        (
+            capabilities.effort.high.supported,
+            AnthropicDiscoveredThinkingEffort::High,
+        ),
+        (
+            capabilities.effort.xhigh.supported,
+            AnthropicDiscoveredThinkingEffort::XHigh,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(supported, effort)| supported.then_some(effort))
+    .collect::<Vec<_>>();
+
+    if capabilities.effort.supported {
+        if effort_levels.is_empty() {
+            return Err(AuthFlowError::terminal(
+                "anthropic_models_decode_failed",
+                RuntimeAuthPhase::Failed,
+                format!(
+                    "Cadence rejected the Anthropic models response because model `{model_id}` declared only unsupported effort levels."
+                ),
+            ));
+        }
+        return Ok((true, effort_levels));
+    }
+
+    if capabilities.thinking.supported {
+        if capabilities.thinking.types.enabled.supported
+            || capabilities.thinking.types.adaptive.supported
+        {
+            return Ok((true, Vec::new()));
+        }
+
+        return Err(AuthFlowError::terminal(
+            "anthropic_models_decode_failed",
+            RuntimeAuthPhase::Failed,
+            format!(
+                "Cadence rejected the Anthropic models response because model `{model_id}` declared thinking support without any supported thinking type."
+            ),
+        ));
+    }
+
+    Ok((false, Vec::new()))
 }
 
 fn map_probe_transport_error(error: reqwest::Error) -> AuthFlowError {

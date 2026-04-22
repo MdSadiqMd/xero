@@ -21,6 +21,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
 ) -> tauri::Builder<R> {
     builder
         .manage(desktop_state)
+        .manage(commands::BrowserState::default())
         .setup(|app| {
             window_state::configure_main_window(app.handle().clone());
             Ok(())
@@ -72,6 +73,12 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::sync_notification_adapters::sync_notification_adapters,
             commands::upsert_workflow_graph::upsert_workflow_graph,
             commands::apply_workflow_transition::apply_workflow_transition,
+            commands::browser::browser_show,
+            commands::browser::browser_resize,
+            commands::browser::browser_hide,
+            commands::browser::browser_eval,
+            commands::browser::browser_current_url,
+            commands::browser::browser_screenshot,
         ])
 }
 

@@ -2,7 +2,7 @@
 
 import { isTauri } from "@tauri-apps/api/core"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import { Gamepad2, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, Settings, X } from "lucide-react"
+import { Gamepad2, Globe, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, Settings, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { View } from "./data"
 import { StatusFooter, type StatusFooterProps } from "./status-footer"
@@ -33,6 +33,8 @@ interface CadenceShellProps {
   onOpenSettings?: () => void
   onToggleGames?: () => void
   gamesOpen?: boolean
+  onToggleBrowser?: () => void
+  browserOpen?: boolean
   sidebarCollapsed?: boolean
   onToggleSidebar?: () => void
   /** Dev override — null means auto-detect */
@@ -61,6 +63,8 @@ export function CadenceShell({
   onOpenSettings,
   onToggleGames,
   gamesOpen = false,
+  onToggleBrowser,
+  browserOpen = false,
   sidebarCollapsed = false,
   onToggleSidebar,
   platformOverride,
@@ -157,6 +161,23 @@ export function CadenceShell({
       type="button"
     >
       <Gamepad2 className="h-4 w-4" />
+    </button>
+  )
+
+  const BrowserBtn = (
+    <button
+      aria-label={browserOpen ? "Close browser" : "Open browser"}
+      aria-pressed={browserOpen}
+      className={cn(
+        "rounded-md p-1.5 transition-colors",
+        browserOpen
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+      )}
+      onClick={onToggleBrowser}
+      type="button"
+    >
+      <Globe className="h-4 w-4" />
     </button>
   )
 
@@ -303,6 +324,7 @@ export function CadenceShell({
           >
             {NavButtons}
             <div className="mx-1.5 h-4 w-px bg-border" />
+            {BrowserBtn}
             {GamesBtn}
             {SettingsBtn}
           </div>
@@ -338,6 +360,7 @@ export function CadenceShell({
         >
           {!chromeOnly ? (
             <>
+              {BrowserBtn}
               {GamesBtn}
               {SettingsBtn}
               <div className="mx-2 h-4 w-px bg-border" />

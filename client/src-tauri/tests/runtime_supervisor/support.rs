@@ -17,6 +17,7 @@ pub(crate) use cadence_desktop_lib::{
     runtime::{
         autonomous_orchestrator::persist_supervisor_event, launch_detached_runtime_supervisor,
         probe_runtime_run, stop_runtime_run, submit_runtime_run_input,
+        RuntimeSupervisorLaunchContext, RuntimeSupervisorLaunchEnv,
         RuntimeSupervisorLaunchRequest, RuntimeSupervisorProbeRequest,
         RuntimeSupervisorStopRequest, RuntimeSupervisorSubmitInputRequest,
     },
@@ -89,6 +90,22 @@ pub(crate) fn sample_runtime_run_controls(
     .expect("build runtime run controls")
 }
 
+pub(crate) fn sample_launch_context(
+    provider_id: &str,
+    session_id: &str,
+    flow_id: Option<&str>,
+    model_id: &str,
+    thinking_effort: Option<cadence_desktop_lib::commands::ProviderModelThinkingEffortDto>,
+) -> RuntimeSupervisorLaunchContext {
+    RuntimeSupervisorLaunchContext {
+        provider_id: provider_id.into(),
+        session_id: session_id.into(),
+        flow_id: flow_id.map(str::to_string),
+        model_id: model_id.into(),
+        thinking_effort,
+    }
+}
+
 pub(crate) fn launch_request(
     project_id: &str,
     repo_root: &Path,
@@ -104,6 +121,14 @@ pub(crate) fn launch_request(
         run_id: run_id.into(),
         session_id: "session-1".into(),
         flow_id: Some("flow-1".into()),
+        launch_context: sample_launch_context(
+            "openai_codex",
+            "session-1",
+            Some("flow-1"),
+            "openai_codex",
+            Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+        ),
+        launch_env: RuntimeSupervisorLaunchEnv::default(),
         program: shell.program,
         args: shell.args,
         startup_timeout: Duration::from_secs(5),

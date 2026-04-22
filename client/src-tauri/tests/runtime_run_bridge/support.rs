@@ -9,12 +9,17 @@ pub(crate) use std::{
 
 pub(crate) use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 pub(crate) use cadence_desktop_lib::{
-    auth::{persist_openai_codex_session, sync_openai_profile_link, StoredOpenAiCodexSession},
+    auth::{
+        anthropic::AnthropicAuthConfig, persist_openai_codex_session, sync_openai_profile_link,
+        StoredOpenAiCodexSession,
+    },
     commands::{
         apply_workflow_transition::apply_workflow_transition,
         cancel_autonomous_run::cancel_autonomous_run, get_autonomous_run::get_autonomous_run,
         get_project_snapshot::get_project_snapshot, get_runtime_run::get_runtime_run,
-        get_runtime_session::get_runtime_session, resolve_operator_action::resolve_operator_action,
+        get_runtime_session::get_runtime_session,
+        provider_profiles::upsert_provider_profile,
+        resolve_operator_action::resolve_operator_action,
         resume_operator_run::resume_operator_run, start_autonomous_run::start_autonomous_run,
         start_runtime_run::start_runtime_run, start_runtime_session::start_runtime_session,
         stop_runtime_run::stop_runtime_run, submit_notification_reply::submit_notification_reply,
@@ -30,8 +35,8 @@ pub(crate) use cadence_desktop_lib::{
         RuntimeRunTransportLivenessDto, RuntimeRunUpdatedPayloadDto, RuntimeUpdatedPayloadDto,
         StartAutonomousRunRequestDto, StartRuntimeRunRequestDto, StopRuntimeRunRequestDto,
         SubmitNotificationReplyRequestDto, UpdateRuntimeRunControlsRequestDto,
-        WorkflowAutomaticDispatchStatusDto, PROJECT_UPDATED_EVENT, RUNTIME_RUN_UPDATED_EVENT,
-        RUNTIME_UPDATED_EVENT,
+        UpsertProviderProfileRequestDto, WorkflowAutomaticDispatchStatusDto,
+        PROJECT_UPDATED_EVENT, RUNTIME_RUN_UPDATED_EVENT, RUNTIME_UPDATED_EVENT,
     },
     configure_builder_with_state,
     db::{self, database_path_for_repo, project_store},
@@ -146,6 +151,65 @@ pub(crate) fn create_state(root: &TempDir) -> (DesktopState, PathBuf, PathBuf) {
         registry_path,
         auth_store_path,
     )
+}
+
+pub(crate) fn anthropic_auth_config(models_url: String) -> AnthropicAuthConfig {
+    AnthropicAuthConfig {
+        models_url,
+        timeout: Duration::from_secs(5),
+        ..AnthropicAuthConfig::default()
+    }
+}
+
+pub(crate) fn spawn_static_http_server(status: u16, body: &str) -> String {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind test http server");
+    let address = listener.local_addr().expect("test http server addr");
+    let body = body.to_owned();
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept test http request");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone tcp stream"));
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let bytes = reader.read_line(&mut line).expect("read request line");
+            if bytes == 0 || line == "\r\n" {
+                break;
+            }
+        }
+
+        write!(
+            stream,
+            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body,
+        )
+        .expect("write test http response");
+    });
+
+    format!("http://{address}")
+}
+
+pub(crate) fn seed_anthropic_profile(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    profile_id: &str,
+    model_id: &str,
+    api_key: &str,
+) {
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: profile_id.into(),
+            provider_id: "anthropic".into(),
+            label: "Anthropic Work".into(),
+            model_id: model_id.into(),
+            openrouter_api_key: None,
+            anthropic_api_key: Some(api_key.into()),
+            activate: true,
+        },
+    )
+    .expect("seed anthropic profile");
 }
 
 pub(crate) fn attach_event_recorders(app: &tauri::App<tauri::test::MockRuntime>) -> EventRecorder {
@@ -956,6 +1020,14 @@ pub(crate) fn launch_scripted_runtime_run(
             run_id: run_id.into(),
             session_id: session_id.into(),
             flow_id: flow_id.map(str::to_string),
+            launch_context: cadence_desktop_lib::runtime::RuntimeSupervisorLaunchContext {
+                provider_id: "openai_codex".into(),
+                session_id: session_id.into(),
+                flow_id: flow_id.map(str::to_string),
+                model_id: "openai_codex".into(),
+                thinking_effort: None,
+            },
+            launch_env: cadence_desktop_lib::runtime::RuntimeSupervisorLaunchEnv::default(),
             program: shell.program,
             args: shell.args,
             startup_timeout: Duration::from_secs(5),

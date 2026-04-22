@@ -609,6 +609,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key: Some("credential-value-1".into()),
+            anthropic_api_key: None,
         },
     )
     .expect("runtime settings request should serialize");
@@ -626,6 +627,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             provider_id: "openrouter".into(),
             model_id: "openai/gpt-4o-mini".into(),
             openrouter_api_key_configured: true,
+            anthropic_api_key_configured: false,
         })
         .expect("runtime settings response should serialize");
     assert_eq!(

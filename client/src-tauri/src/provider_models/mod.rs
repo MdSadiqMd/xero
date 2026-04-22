@@ -9,7 +9,12 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
 use crate::{
-    auth::openrouter::{fetch_openrouter_models, OpenRouterDiscoveredModel},
+    auth::{
+        anthropic::{
+            fetch_anthropic_models, AnthropicDiscoveredModel, AnthropicDiscoveredThinkingEffort,
+        },
+        openrouter::{fetch_openrouter_models, OpenRouterDiscoveredModel},
+    },
     commands::{
         get_runtime_settings::write_json_file_atomically,
         provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult,
@@ -17,7 +22,7 @@ use crate::{
     provider_profiles::{
         ProviderProfileReadinessStatus, ProviderProfileRecord, ProviderProfilesSnapshot,
     },
-    runtime::{OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID},
+    runtime::{ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID},
     state::DesktopState,
 };
 
@@ -291,6 +296,19 @@ fn refresh_provider_model_catalog(
                 .map(normalize_openrouter_models)
                 .map_err(diagnostic_from_auth_error)
         }
+        ANTHROPIC_PROVIDER_ID => {
+            let Some(secret) = provider_profiles.anthropic_credential(&profile.profile_id) else {
+                let diagnostic = missing_anthropic_credential_diagnostic(profile);
+                return match refresh_context.cached_row.as_ref() {
+                    Some(cached) => catalog_from_cached_row(profile, cached, Some(diagnostic)),
+                    None => unavailable_catalog(profile, Some(diagnostic)),
+                };
+            };
+
+            fetch_anthropic_models(&secret.api_key, &state.anthropic_auth_config())
+                .map(normalize_anthropic_models)
+                .map_err(diagnostic_from_auth_error)
+        }
         other => Err(ProviderModelCatalogDiagnostic {
             code: "provider_model_provider_unsupported".into(),
             message: format!(
@@ -379,6 +397,48 @@ fn normalize_openrouter_models(models: Vec<OpenRouterDiscoveredModel>) -> Vec<Pr
     });
     normalized.dedup_by(|left, right| left.model_id == right.model_id);
     normalized
+}
+
+fn normalize_anthropic_models(models: Vec<AnthropicDiscoveredModel>) -> Vec<ProviderModelRecord> {
+    let mut normalized = models
+        .into_iter()
+        .map(|model| {
+            let thinking = anthropic_thinking_capability(&model);
+            ProviderModelRecord {
+                model_id: model.id,
+                display_name: model.display_name,
+                thinking,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    normalized.sort_by(|left, right| {
+        left.display_name
+            .cmp(&right.display_name)
+            .then(left.model_id.cmp(&right.model_id))
+    });
+    normalized
+}
+
+fn anthropic_thinking_capability(
+    model: &AnthropicDiscoveredModel,
+) -> ProviderModelThinkingCapability {
+    if !model.thinking_supported {
+        return unsupported_thinking_capability();
+    }
+
+    supported_thinking_capability(
+        model
+            .effort_levels
+            .iter()
+            .map(|effort| match effort {
+                AnthropicDiscoveredThinkingEffort::Low => ProviderModelThinkingEffort::Low,
+                AnthropicDiscoveredThinkingEffort::Medium => ProviderModelThinkingEffort::Medium,
+                AnthropicDiscoveredThinkingEffort::High => ProviderModelThinkingEffort::High,
+                AnthropicDiscoveredThinkingEffort::XHigh => ProviderModelThinkingEffort::XHigh,
+            })
+            .collect(),
+    )
 }
 
 fn openrouter_thinking_capability(
@@ -656,21 +716,37 @@ fn readiness_diagnostic(
     profile: &ProviderProfileRecord,
     provider_profiles: &ProviderProfilesSnapshot,
 ) -> Option<ProviderModelCatalogDiagnostic> {
-    if profile.provider_id != OPENROUTER_PROVIDER_ID {
+    if profile.provider_id != OPENROUTER_PROVIDER_ID && profile.provider_id != ANTHROPIC_PROVIDER_ID
+    {
         return None;
     }
 
     let readiness = profile.readiness(&provider_profiles.credentials);
     match readiness.status {
         ProviderProfileReadinessStatus::Ready => None,
-        ProviderProfileReadinessStatus::Missing => Some(missing_openrouter_credential_diagnostic(profile)),
-        ProviderProfileReadinessStatus::Malformed => Some(ProviderModelCatalogDiagnostic {
-            code: "provider_profile_credentials_unavailable".into(),
-            message: format!(
-                "Cadence cannot discover OpenRouter models for provider profile `{}` because the redacted credential metadata no longer matches the saved app-local secret state.",
-                profile.profile_id
-            ),
-            retryable: false,
+        ProviderProfileReadinessStatus::Missing => Some(match profile.provider_id.as_str() {
+            OPENROUTER_PROVIDER_ID => missing_openrouter_credential_diagnostic(profile),
+            ANTHROPIC_PROVIDER_ID => missing_anthropic_credential_diagnostic(profile),
+            _ => return None,
+        }),
+        ProviderProfileReadinessStatus::Malformed => Some(match profile.provider_id.as_str() {
+            OPENROUTER_PROVIDER_ID => ProviderModelCatalogDiagnostic {
+                code: "provider_profile_credentials_unavailable".into(),
+                message: format!(
+                    "Cadence cannot discover OpenRouter models for provider profile `{}` because the redacted credential metadata no longer matches the saved app-local secret state.",
+                    profile.profile_id
+                ),
+                retryable: false,
+            },
+            ANTHROPIC_PROVIDER_ID => ProviderModelCatalogDiagnostic {
+                code: "provider_profile_credentials_unavailable".into(),
+                message: format!(
+                    "Cadence cannot discover Anthropic models for provider profile `{}` because the redacted credential metadata no longer matches the saved app-local secret state.",
+                    profile.profile_id
+                ),
+                retryable: false,
+            },
+            _ => return None,
         }),
     }
 }
@@ -682,6 +758,19 @@ fn missing_openrouter_credential_diagnostic(
         code: "openrouter_api_key_missing".into(),
         message: format!(
             "Cadence cannot discover OpenRouter models for provider profile `{}` because no app-local API key is configured for that profile.",
+            profile.profile_id
+        ),
+        retryable: false,
+    }
+}
+
+fn missing_anthropic_credential_diagnostic(
+    profile: &ProviderProfileRecord,
+) -> ProviderModelCatalogDiagnostic {
+    ProviderModelCatalogDiagnostic {
+        code: "anthropic_api_key_missing".into(),
+        message: format!(
+            "Cadence cannot discover Anthropic models for provider profile `{}` because no app-local API key is configured for that profile.",
             profile.profile_id
         ),
         retryable: false,

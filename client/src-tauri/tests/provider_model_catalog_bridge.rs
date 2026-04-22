@@ -99,6 +99,7 @@ fn seed_openrouter_profile(
             label: "OpenRouter Work".into(),
             model_id: model_id.into(),
             openrouter_api_key: Some(api_key.into()),
+            anthropic_api_key: None,
             activate: false,
         },
     )
