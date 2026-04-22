@@ -5,6 +5,7 @@ import { ChevronRight, Play, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Asteroids } from "./games/asteroids"
 import { Breakout } from "./games/breakout"
+import { Galaga } from "./games/galaga"
 import { Pacman } from "./games/pacman"
 import { Snake } from "./games/snake"
 import { SpaceInvaders } from "./games/space-invaders"
@@ -259,36 +260,6 @@ const GAMES: Game[] = [
     },
   },
   {
-    id: "frogger",
-    title: "Frogger",
-    tagline: "Cross the traffic, hop the river",
-    glyph: {
-      palette: { G: "#34d399", W: "#0ea5e9", L: "#6b7280" },
-      rows: [
-        "WWWWWWWW",
-        "LLLLLLLL",
-        "........",
-        "LLLLLLLL",
-        "........",
-        "..GG.G..",
-        ".GGGGGG.",
-        "..G..G..",
-      ],
-    },
-    stats: {
-      personalBest: "4,300",
-      runs: 3,
-      timePlayed: "7m",
-      leaderboard: [
-        { name: "Andrew", score: "4,300", you: true },
-        { name: "Priya", score: "3,480" },
-        { name: "Maya", score: "2,840" },
-        { name: "Joel", score: "2,120" },
-        { name: "Sam", score: "1,920" },
-      ],
-    },
-  },
-  {
     id: "galaga",
     title: "Galaga",
     tagline: "Squadron shooter from the arcade era",
@@ -315,65 +286,6 @@ const GAMES: Game[] = [
         { name: "Dante", score: "12,850" },
         { name: "Joel", score: "9,280" },
         { name: "Rin", score: "7,940" },
-      ],
-    },
-  },
-  {
-    id: "centipede",
-    title: "Centipede",
-    tagline: "Mushroom field, spraying legs",
-    glyph: {
-      palette: { O: "#f97316", M: "#f472b6", G: "#4ade80" },
-      rows: [
-        ".M..M.M.",
-        "........",
-        "OOOOOOO.",
-        "......O.",
-        ".OOOOOO.",
-        ".O......",
-        ".OOOOOOO",
-        "..G..G..",
-      ],
-    },
-    stats: {
-      personalBest: "8,200",
-      runs: 2,
-      timePlayed: "5m",
-      leaderboard: [
-        { name: "Andrew", score: "8,200", you: true },
-        { name: "Joel", score: "6,540" },
-        { name: "Maya", score: "5,310" },
-        { name: "Rin", score: "4,180" },
-      ],
-    },
-  },
-  {
-    id: "dig-dug",
-    title: "Dig Dug",
-    tagline: "Tunnel deep, pop the Pookas",
-    glyph: {
-      palette: { S: "#78350f", D: "#fb923c", R: "#ef4444", W: "#e5e7eb" },
-      rows: [
-        "SSSSSSSS",
-        "S......S",
-        "S.DWD..S",
-        "S.DDD..S",
-        "S......S",
-        "SR....RS",
-        "SSRRRRSS",
-        "SSSSSSSS",
-      ],
-    },
-    stats: {
-      personalBest: "3,650",
-      runs: 4,
-      timePlayed: "11m",
-      leaderboard: [
-        { name: "Andrew", score: "3,650", you: true },
-        { name: "Dante", score: "3,180" },
-        { name: "Maya", score: "2,940" },
-        { name: "Joel", score: "2,120" },
-        { name: "Priya", score: "1,540" },
       ],
     },
   },
@@ -647,6 +559,8 @@ function GameDetail({ game, onBack }: { game: Game; onBack: () => void }) {
             <Breakout active />
           ) : game.id === "asteroids" ? (
             <Asteroids active />
+          ) : game.id === "galaga" ? (
+            <Galaga active />
           ) : (
             <GameCanvas glyph={game.glyph} />
           )}

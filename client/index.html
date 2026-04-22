@@ -20,9 +20,13 @@
         }
 
         try {
+          // Keep this list in sync with any light theme ids in
+          // `client/src/features/theme/theme-definitions.ts`. Mismatch only
+          // causes a one-frame appearance flicker on cold start, not a bug.
+          var LIGHT_THEMES = ['daylight']
           var stored = window.localStorage.getItem('cadence:theme')
           var themeId = stored || 'dusk'
-          var appearance = themeId === 'daylight' ? 'light' : 'dark'
+          var appearance = LIGHT_THEMES.indexOf(themeId) >= 0 ? 'light' : 'dark'
           document.documentElement.classList.add('theme-' + themeId)
           document.documentElement.classList.add(appearance)
           document.documentElement.style.colorScheme = appearance
