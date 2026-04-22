@@ -1,4 +1,4 @@
-import { useState, type ElementType } from "react"
+import { useEffect, useState, type ElementType } from "react"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   AlertCircle,
@@ -25,11 +25,16 @@ import type {
   ProviderProfilesLoadStatus,
   ProviderProfilesSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
-import type {
-  ProviderProfileDto,
-  ProviderProfilesDto,
-  RuntimeSessionView,
-  UpsertProviderProfileRequestDto,
+import {
+  getProviderMismatchCopy,
+  resolveSelectedRuntimeProvider,
+} from "@/src/features/cadence/use-cadence-desktop-state/runtime-provider"
+import {
+  getActiveProviderProfile,
+  type ProviderProfileDto,
+  type ProviderProfilesDto,
+  type RuntimeSessionView,
+  type UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 
 type SupportedProviderId = ProviderProfileDto["providerId"]
@@ -105,15 +110,6 @@ function errorViewMessage(error: OperatorActionErrorView | null, fallback: strin
   return fallback
 }
 
-function getCatalogEntry(providerId: SupportedProviderId): ProviderCatalogEntry {
-  const catalogEntry = PROVIDER_CATALOG.find((entry) => entry.id === providerId && entry.supported)
-  if (!catalogEntry) {
-    throw new Error(`Cadence does not know how to render provider profile cards for provider \`${providerId}\`.`)
-  }
-
-  return catalogEntry
-}
-
 function createDraft(card: ProviderProfileCard): ProviderDraft {
   return {
     label: card.profile?.label ?? card.catalog.label,
@@ -125,6 +121,7 @@ function createDraft(card: ProviderProfileCard): ProviderDraft {
 
 function getProfileCards(providerProfiles: ProviderProfilesDto | null): ProviderProfileCard[] {
   const cards: ProviderProfileCard[] = []
+  const activeProfileId = providerProfiles?.activeProfileId ?? null
 
   for (const catalogEntry of PROVIDER_CATALOG) {
     if (!catalogEntry.supported) continue
@@ -132,7 +129,10 @@ function getProfileCards(providerProfiles: ProviderProfilesDto | null): Provider
     const matches = (providerProfiles?.profiles ?? [])
       .filter((profile) => profile.providerId === catalogEntry.id)
       .sort((left, right) => {
-        if (left.active !== right.active) return left.active ? -1 : 1
+        const leftActive = left.profileId === activeProfileId
+        const rightActive = right.profileId === activeProfileId
+
+        if (leftActive !== rightActive) return leftActive ? -1 : 1
         return left.label.localeCompare(right.label)
       })
 
@@ -184,16 +184,31 @@ function getProfileId(card: ProviderProfileCard): string {
   return card.profile?.profileId ?? card.catalog.defaultProfileId ?? `${card.catalog.id}-default`
 }
 
-function buildUpsertRequest(card: ProviderProfileCard, draft: ProviderDraft): UpsertProviderProfileRequestDto {
-  if (card.catalog.id !== "openai_codex" && card.catalog.id !== "openrouter") {
-    throw new Error(`Cadence cannot save unsupported provider \`${card.catalog.id}\`.`)
-  }
+function getProfileReference(profile: Pick<ProviderProfileDto, "profileId" | "label"> | null): string {
+  if (!profile) return "the selected profile"
 
-  const activate = card.profile ? card.profile.active : true
+  const profileId = profile.profileId.trim()
+  const label = profile.label.trim()
 
+  if (label.length === 0) return profileId || "the selected profile"
+  if (profileId.length === 0 || profileId === label) return label
+  return `${label} (${profileId})`
+}
+
+function isCardSelected(providerProfiles: ProviderProfilesDto | null, card: ProviderProfileCard): boolean {
+  const activeProfileId = providerProfiles?.activeProfileId?.trim() ?? ""
+  if (activeProfileId.length === 0) return false
+  return activeProfileId === getProfileId(card)
+}
+
+function buildUpsertRequest(
+  card: ProviderProfileCard,
+  draft: ProviderDraft,
+  activate: boolean,
+): UpsertProviderProfileRequestDto {
   return {
     profileId: getProfileId(card),
-    providerId: card.catalog.id,
+    providerId: card.catalog.id as SupportedProviderId,
     label: draft.label.trim(),
     modelId:
       card.catalog.id === "openai_codex"
@@ -223,6 +238,8 @@ export interface ProviderProfileFormProps {
   hasSelectedProject?: boolean
   onStartLogin?: () => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
+  openAiMissingProjectLabel?: string
+  openAiMissingProjectDescription?: string
   showUnavailableProviders?: boolean
 }
 
@@ -239,12 +256,15 @@ export function ProviderProfileForm({
   hasSelectedProject = false,
   onStartLogin,
   onLogout,
+  openAiMissingProjectLabel = "Open a project",
+  openAiMissingProjectDescription = "Select an imported project to sign in the selected OpenAI profile.",
   showUnavailableProviders = false,
 }: ProviderProfileFormProps) {
   const [editingCardKey, setEditingCardKey] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({})
   const [pendingAuth, setPendingAuth] = useState<AuthPending>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const [authError, setAuthError] = useState<string | null>(null)
 
   const cards = getProfileCards(providerProfiles)
   const unavailableProviders = showUnavailableProviders
@@ -253,12 +273,21 @@ export function ProviderProfileForm({
 
   const isRefreshing = providerProfilesLoadStatus === "loading"
   const isSaving = providerProfilesSaveStatus === "running"
-  const isOpenAiConnected = Boolean(
-    runtimeSession?.providerId === "openai_codex" && runtimeSession.isAuthenticated,
-  )
-  const isOpenAiInProgress = Boolean(
-    runtimeSession?.providerId === "openai_codex" && runtimeSession.isLoginInProgress,
-  )
+  const selectedProfile = getActiveProviderProfile(providerProfiles)
+  const selectedProfileReference = getProfileReference(selectedProfile)
+  const selectedProvider = resolveSelectedRuntimeProvider(providerProfiles, null, runtimeSession ?? null)
+  const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession ?? null)
+  const selectedProfileUnavailableMessage =
+    providerProfiles &&
+    providerProfilesLoadStatus !== "loading" &&
+    selectedProvider.providerId === "openai_codex" &&
+    (!selectedProfile || selectedProfile.providerId !== "openai_codex")
+      ? "Cadence could not start OpenAI login because the selected provider profile is unavailable. Refresh Settings and retry."
+      : null
+
+  useEffect(() => {
+    setAuthError(null)
+  }, [providerProfiles?.activeProfileId])
 
   function getDraft(card: ProviderProfileCard): ProviderDraft {
     return drafts[card.key] ?? createDraft(card)
@@ -278,6 +307,7 @@ export function ProviderProfileForm({
       [card.key]: current[card.key] ?? createDraft(card),
     }))
     setFormError(null)
+    setAuthError(null)
   }
 
   function closeEditor(cardKey: string) {
@@ -318,10 +348,12 @@ export function ProviderProfileForm({
     setFormError(null)
 
     try {
-      await onUpsertProviderProfile(buildUpsertRequest(card, draft))
+      const activate = providerProfiles?.activeProfileId?.trim()
+        ? providerProfiles.activeProfileId === getProfileId(card)
+        : card.profile?.active ?? false
+      await onUpsertProviderProfile(buildUpsertRequest(card, draft, activate))
       closeEditor(card.key)
     } catch {
-      // Hook state preserves the last truthful snapshot and surfaces the typed save error.
       setDraft(card, {
         ...draft,
         openrouterApiKey: "",
@@ -330,9 +362,10 @@ export function ProviderProfileForm({
   }
 
   async function handleActivate(card: ProviderProfileCard) {
-    if (card.profile?.active) return
+    if (isCardSelected(providerProfiles, card)) return
 
     setFormError(null)
+    setAuthError(null)
 
     try {
       if (card.profile) {
@@ -356,8 +389,17 @@ export function ProviderProfileForm({
   async function handleOpenAiConnect() {
     if (!hasSelectedProject || !onStartLogin) return
 
+    if (!selectedProfile || selectedProfile.providerId !== "openai_codex") {
+      setAuthError(
+        selectedProfileUnavailableMessage ??
+          "Cadence could not start OpenAI login because the selected provider profile is unavailable. Refresh Settings and retry.",
+      )
+      return
+    }
+
     setPendingAuth("login")
     setFormError(null)
+    setAuthError(null)
 
     try {
       const next = await onStartLogin()
@@ -369,7 +411,7 @@ export function ProviderProfileForm({
         }
       }
     } catch (error) {
-      setFormError(errMsg(error, "Could not start login."))
+      setAuthError(errMsg(error, "Could not start login."))
     } finally {
       setPendingAuth(null)
     }
@@ -380,11 +422,12 @@ export function ProviderProfileForm({
 
     setPendingAuth("logout")
     setFormError(null)
+    setAuthError(null)
 
     try {
       await onLogout()
     } catch (error) {
-      setFormError(errMsg(error, "Could not sign out."))
+      setAuthError(errMsg(error, "Could not sign out."))
     } finally {
       setPendingAuth(null)
     }
@@ -422,6 +465,13 @@ export function ProviderProfileForm({
         </Alert>
       ) : null}
 
+      {selectedProfileUnavailableMessage ? (
+        <Alert variant="destructive" className="border-destructive/30 bg-destructive/5 py-2.5">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="text-[12px]">{selectedProfileUnavailableMessage}</AlertDescription>
+        </Alert>
+      ) : null}
+
       {formError ? (
         <Alert variant="destructive" className="border-destructive/30 bg-destructive/5 py-2.5">
           <AlertCircle className="h-4 w-4" />
@@ -433,27 +483,71 @@ export function ProviderProfileForm({
         {cards.map((card) => {
           const draft = getDraft(card)
           const isEditing = editingCardKey === card.key
-          const isSupported = card.catalog.supported
           const isOpenRouter = card.catalog.id === "openrouter"
           const isOpenAi = card.catalog.id === "openai_codex"
-          const isActive = card.profile?.active ?? false
+          const isSelected = isCardSelected(providerProfiles, card)
           const readinessBadge = getOpenRouterReadinessBadge(card.profile)
           const hasSavedOpenRouterKey = Boolean(card.profile?.providerId === "openrouter" && card.profile.readiness.ready)
           const migratedAt = card.profile?.migratedAt ?? null
+          const shouldRenderOpenAiAuth = isOpenAi && isSelected && Boolean(onStartLogin && onLogout)
+          const isSelectedRuntimeProvider = runtimeSession?.providerId === selectedProvider.providerId
+          const selectedRuntimeErrorMessage = runtimeSession?.lastError?.message?.trim() || null
+          const isOpenAiConnected = Boolean(
+            shouldRenderOpenAiAuth &&
+              selectedProvider.providerId === "openai_codex" &&
+              runtimeSession?.providerId === "openai_codex" &&
+              runtimeSession.isAuthenticated,
+          )
+          const isOpenAiInProgress = Boolean(
+            shouldRenderOpenAiAuth &&
+              selectedProvider.providerId === "openai_codex" &&
+              runtimeSession?.providerId === "openai_codex" &&
+              runtimeSession.isLoginInProgress,
+          )
+          const openAiScopeCopy = isOpenAi
+            ? !selectedProfile
+              ? "Select an OpenAI provider profile before starting sign-in."
+              : isSelected
+                ? hasSelectedProject
+                  ? `OpenAI sign-in applies to the selected profile ${selectedProfileReference}.`
+                  : openAiMissingProjectDescription
+                : `OpenAI sign-in only runs against the selected profile ${selectedProfileReference}. Select this profile first to manage auth.`
+            : null
+          const inlineStatus = isSelected
+            ? providerMismatchCopy
+              ? {
+                  tone: "warning" as const,
+                  message: providerMismatchCopy.reason,
+                  recovery: providerMismatchCopy.sessionRecoveryCopy,
+                }
+              : authError && isOpenAi
+                ? {
+                    tone: "error" as const,
+                    message: authError,
+                    recovery: null,
+                  }
+                : isSelectedRuntimeProvider && selectedRuntimeErrorMessage
+                  ? {
+                      tone: "error" as const,
+                      message: selectedRuntimeErrorMessage,
+                      recovery: null,
+                    }
+                  : null
+            : null
 
           return (
             <div
               key={card.key}
               className={cn(
                 "rounded-lg border bg-card px-4 py-3 transition-colors",
-                isActive ? "border-primary/30 bg-primary/[0.03]" : "border-border",
+                isSelected ? "border-primary/30 bg-primary/[0.03]" : "border-border",
               )}
             >
               <div className="flex items-start gap-3">
                 <div
                   className={cn(
                     "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-secondary/60",
-                    isActive ? "border-primary/40 text-primary" : "border-border",
+                    isSelected ? "border-primary/40 text-primary" : "border-border",
                   )}
                 >
                   <card.catalog.Icon className="h-4 w-4 text-foreground/70" />
@@ -464,7 +558,7 @@ export function ProviderProfileForm({
                     <p className="text-[13px] font-medium text-foreground">
                       {card.profile?.label ?? card.catalog.label}
                     </p>
-                    {isActive ? (
+                    {isSelected ? (
                       <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
                         Active profile
                       </Badge>
@@ -494,15 +588,37 @@ export function ProviderProfileForm({
                     {card.catalog.description}
                   </p>
 
+                  {openAiScopeCopy ? (
+                    <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{openAiScopeCopy}</p>
+                  ) : null}
+
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
                     <span>Model: {card.profile?.modelId ?? card.catalog.defaultModelId ?? "Not configured"}</span>
                     {card.profile ? <span>Profile ID: {card.profile.profileId}</span> : null}
                     {migratedAt ? <span>Migrated {migratedAt}</span> : null}
                   </div>
+
+                  {inlineStatus ? (
+                    <Alert
+                      variant={inlineStatus.tone === "error" ? "destructive" : "default"}
+                      className={cn(
+                        "mt-2 py-2.5",
+                        inlineStatus.tone === "warning"
+                          ? "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-200"
+                          : "border-destructive/30 bg-destructive/5",
+                      )}
+                    >
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertDescription className="text-[12px] leading-relaxed">
+                        <span>{inlineStatus.message}</span>
+                        {inlineStatus.recovery ? <span className="mt-1 block">{inlineStatus.recovery}</span> : null}
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
                 </div>
 
                 <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                  {!isSupported ? null : isActive ? (
+                  {isSelected ? (
                     <Badge variant="secondary" className="text-[10px]">
                       Using this
                     </Badge>
@@ -511,19 +627,19 @@ export function ProviderProfileForm({
                       size="sm"
                       variant="outline"
                       className="h-7 text-[11px]"
-                      disabled={isSaving || !onUpsertProviderProfile}
+                      disabled={isSaving || isRefreshing || !onUpsertProviderProfile}
                       onClick={() => void handleActivate(card)}
                     >
                       Use this profile
                     </Button>
                   )}
 
-                  {!isSupported ? null : isEditing ? null : isOpenAi ? (
+                  {isEditing ? null : isOpenAi ? (
                     <Button
                       size="sm"
                       variant="secondary"
                       className="h-7 text-[11px]"
-                      disabled={isSaving}
+                      disabled={isSaving || isRefreshing}
                       onClick={() => openEditor(card)}
                     >
                       Edit label
@@ -533,20 +649,20 @@ export function ProviderProfileForm({
                       size="sm"
                       variant={hasSavedOpenRouterKey ? "secondary" : "outline"}
                       className="h-7 text-[11px]"
-                      disabled={isSaving}
+                      disabled={isSaving || isRefreshing}
                       onClick={() => openEditor(card)}
                     >
                       {hasSavedOpenRouterKey ? "Edit setup" : "Set up"}
                     </Button>
                   )}
 
-                  {isOpenAi && onStartLogin && onLogout ? (
+                  {shouldRenderOpenAiAuth ? (
                     isOpenAiConnected ? (
                       <Button
                         variant="outline"
                         size="sm"
                         className="h-7 gap-1 text-[11px]"
-                        disabled={pendingAuth !== null}
+                        disabled={pendingAuth !== null || isRefreshing || isSaving}
                         onClick={() => void handleOpenAiDisconnect()}
                       >
                         {pendingAuth === "logout" ? (
@@ -563,13 +679,13 @@ export function ProviderProfileForm({
                       </Badge>
                     ) : !hasSelectedProject ? (
                       <Badge variant="outline" className="text-[10px]">
-                        Open a project
+                        {openAiMissingProjectLabel}
                       </Badge>
                     ) : (
                       <Button
                         size="sm"
                         className="h-7 gap-1 text-[11px]"
-                        disabled={pendingAuth !== null}
+                        disabled={pendingAuth !== null || isRefreshing || isSaving}
                         onClick={() => void handleOpenAiConnect()}
                       >
                         {pendingAuth === "login" ? (
@@ -584,7 +700,7 @@ export function ProviderProfileForm({
                 </div>
               </div>
 
-              {!isSupported ? null : isEditing ? (
+              {isEditing ? (
                 <div className="mt-3 grid gap-3 rounded-md border border-dashed border-border/80 bg-background/80 p-3">
                   <div className="space-y-1.5">
                     <Label htmlFor={`${card.key}-label`} className="text-[11px]">
@@ -593,7 +709,7 @@ export function ProviderProfileForm({
                     <Input
                       id={`${card.key}-label`}
                       className="h-8 text-[12px]"
-                      disabled={isSaving}
+                      disabled={isSaving || isRefreshing}
                       onChange={(event) =>
                         setDraft(card, {
                           ...draft,
@@ -612,7 +728,7 @@ export function ProviderProfileForm({
                     <Input
                       id={`${card.key}-model`}
                       className="h-8 font-mono text-[12px]"
-                      disabled={isSaving || isOpenAi}
+                      disabled={isSaving || isRefreshing || isOpenAi}
                       onChange={(event) =>
                         setDraft(card, {
                           ...draft,
@@ -647,7 +763,7 @@ export function ProviderProfileForm({
                           autoComplete="off"
                           spellCheck={false}
                           className="h-8 flex-1 font-mono text-[12px]"
-                          disabled={isSaving}
+                          disabled={isSaving || isRefreshing}
                           onChange={(event) =>
                             setDraft(card, {
                               ...draft,
@@ -665,7 +781,7 @@ export function ProviderProfileForm({
                             variant="outline"
                             size="sm"
                             className="h-8 px-2 text-[11px]"
-                            disabled={isSaving}
+                            disabled={isSaving || isRefreshing}
                             onClick={() =>
                               setDraft(card, {
                                 ...draft,
@@ -697,7 +813,7 @@ export function ProviderProfileForm({
                     <Button
                       size="sm"
                       className="h-7 gap-1 text-[11px]"
-                      disabled={isSaving || !onUpsertProviderProfile}
+                      disabled={isSaving || isRefreshing || !onUpsertProviderProfile}
                       onClick={() => void handleSave(card)}
                     >
                       {isSaving ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
@@ -707,7 +823,7 @@ export function ProviderProfileForm({
                       size="sm"
                       variant="ghost"
                       className="h-7 text-[11px]"
-                      disabled={isSaving}
+                      disabled={isSaving || isRefreshing}
                       onClick={() => closeEditor(card.key)}
                     >
                       Cancel

@@ -230,6 +230,8 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           onRefreshProviderProfiles={(options) => refreshProviderProfiles(options)}
           onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
           onSetActiveProviderProfile={(profileId) => setActiveProviderProfile(profileId)}
+          onStartLogin={() => startOpenAiLogin()}
+          onLogout={() => logoutRuntimeSession()}
           onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
           onComplete={() => {
             setOnboardingDismissed(true)

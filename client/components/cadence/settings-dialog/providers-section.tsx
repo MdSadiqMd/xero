@@ -60,6 +60,8 @@ export function ProvidersSection({
         hasSelectedProject={Boolean(agent?.repositoryPath?.trim())}
         onStartLogin={onStartLogin}
         onLogout={onLogout}
+        openAiMissingProjectLabel="Open a project"
+        openAiMissingProjectDescription="Select an imported project to sign in the selected OpenAI profile."
       />
     </div>
   )

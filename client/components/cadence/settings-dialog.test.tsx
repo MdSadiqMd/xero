@@ -473,6 +473,56 @@ describe('SettingsDialog', () => {
     expect(screen.getByText('Using this')).toBeVisible()
   })
 
+  it('limits OpenAI auth controls to the selected profile and keeps typed auth failures inline', async () => {
+    const onStartLogin = vi.fn(async () => {
+      throw new Error(
+        'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of the selected profile `zz-openai-alt`. Retry login for the currently selected profile.',
+      )
+    })
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          agent: makeAgent({
+            runtimeSession: makeRuntimeSession(),
+          }),
+          providerProfiles: makeProviderProfiles({
+            activeProfileId: 'zz-openai-alt',
+            profiles: [
+              makeOpenAiProfile({ active: false }),
+              makeOpenAiProfile({
+                profileId: 'zz-openai-alt',
+                label: 'OpenAI Alt',
+                active: true,
+              }),
+              makeOpenRouterProfile({ active: false, migratedFromLegacy: false, migratedAt: null }),
+            ],
+          }),
+          onStartLogin,
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible()
+    expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(1)
+    expect(
+      screen.getByText(
+        'OpenAI sign-in only runs against the selected profile OpenAI Alt (zz-openai-alt). Select this profile first to manage auth.',
+      ),
+    ).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await waitFor(() => expect(onStartLogin).toHaveBeenCalledTimes(1))
+    expect(
+      screen.getByText(
+        'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of the selected profile `zz-openai-alt`. Retry login for the currently selected profile.',
+      ),
+    ).toBeVisible()
+    expect(screen.getByText('OpenAI Alt')).toBeVisible()
+    expect(screen.getByText('Using this')).toBeVisible()
+  })
+
   it('keeps the last truthful provider snapshot visible when a typed load error is present', () => {
     render(
       <SettingsDialog

@@ -5,6 +5,7 @@ import type {
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import type {
   ProviderProfilesDto,
+  RuntimeSessionView,
   UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import { ProviderProfileForm } from "@/components/cadence/provider-profiles/provider-profile-form"
@@ -15,9 +16,13 @@ interface ProvidersStepProps {
   providerProfilesLoadError: OperatorActionErrorView | null
   providerProfilesSaveStatus: ProviderProfilesSaveStatus
   providerProfilesSaveError: OperatorActionErrorView | null
+  runtimeSession?: RuntimeSessionView | null
+  hasSelectedProject?: boolean
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
   onUpsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
+  onStartLogin?: () => Promise<RuntimeSessionView | null>
+  onLogout?: () => Promise<RuntimeSessionView | null>
 }
 
 export function ProvidersStep({
@@ -26,9 +31,13 @@ export function ProvidersStep({
   providerProfilesLoadError,
   providerProfilesSaveStatus,
   providerProfilesSaveError,
+  runtimeSession = null,
+  hasSelectedProject = false,
   onRefreshProviderProfiles,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
+  onStartLogin,
+  onLogout,
 }: ProvidersStepProps) {
   return (
     <div>
@@ -47,6 +56,12 @@ export function ProvidersStep({
           onRefreshProviderProfiles={onRefreshProviderProfiles}
           onUpsertProviderProfile={onUpsertProviderProfile}
           onSetActiveProviderProfile={onSetActiveProviderProfile}
+          runtimeSession={runtimeSession}
+          hasSelectedProject={hasSelectedProject}
+          onStartLogin={onStartLogin}
+          onLogout={onLogout}
+          openAiMissingProjectLabel="Choose a project next"
+          openAiMissingProjectDescription="After you choose a project, Cadence can sign in the selected OpenAI profile."
           showUnavailableProviders
         />
       </div>
