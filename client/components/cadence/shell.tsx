@@ -1,7 +1,10 @@
 "use client"
 
-import { isTauri } from "@tauri-apps/api/core"
+import { useEffect, useState } from "react"
+import { invoke, isTauri } from "@tauri-apps/api/core"
+import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
+import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   Apple,
   Gamepad2,
@@ -70,6 +73,84 @@ const NAV_ITEMS: { id: View; label: string }[] = [
   { id: "execution", label: "Editor" },
 ]
 
+interface IosSdkSignal {
+  supported: boolean
+  xcodePresent: boolean
+}
+
+interface EmulatorSdkSignal {
+  ios: IosSdkSignal
+  /** `android.present` is already sufficient for the Android button —
+   * we don't hide it when absent, just let the sidebar offer provisioning. */
+  androidPresent: boolean
+}
+
+/** App Store listing for Xcode — the CTA target when the button is in
+ * "Install Xcode" mode. */
+const XCODE_STORE_URL = "https://apps.apple.com/app/xcode/id497799835"
+
+/** Poll `emulator_sdk_status` and keep it in sync with the backend
+ * `emulator:sdk_status_changed` event so the titlebar reacts to a fresh
+ * Xcode install (or an Android SDK provisioning finish) without a
+ * reload. */
+function useEmulatorSdkSignal(desktopRuntime: boolean): EmulatorSdkSignal {
+  const [signal, setSignal] = useState<EmulatorSdkSignal>({
+    ios: { supported: false, xcodePresent: false },
+    androidPresent: false,
+  })
+
+  useEffect(() => {
+    if (!desktopRuntime || !isTauri()) return
+    let cancelled = false
+    const unlisteners: UnlistenFn[] = []
+
+    const probe = async () => {
+      try {
+        const status = await invoke<{
+          android: { present: boolean }
+          ios: { present: boolean; supported: boolean }
+        }>("emulator_sdk_status")
+        if (cancelled) return
+        setSignal({
+          ios: { supported: status.ios.supported, xcodePresent: status.ios.present },
+          androidPresent: status.android.present,
+        })
+      } catch {
+        // Probe failures leave the button in its last-known state —
+        // transient errors shouldn't flicker the titlebar.
+      }
+    }
+
+    void probe()
+
+    void listen("emulator:sdk_status_changed", () => {
+      void probe()
+    }).then((fn) => {
+      if (cancelled) {
+        fn()
+      } else {
+        unlisteners.push(fn)
+      }
+    })
+
+    // Also re-probe when the window regains focus — the user might have
+    // installed Xcode (or brew-installed the Android SDK) between
+    // sessions without triggering a backend event.
+    const onFocus = () => {
+      void probe()
+    }
+    window.addEventListener("focus", onFocus)
+
+    return () => {
+      cancelled = true
+      unlisteners.forEach((fn) => fn())
+      window.removeEventListener("focus", onFocus)
+    }
+  }, [desktopRuntime])
+
+  return signal
+}
+
 // ---------------------------------------------------------------------------
 // Shell
 // ---------------------------------------------------------------------------
@@ -97,6 +178,7 @@ export function CadenceShell({
 }: CadenceShellProps) {
   const desktopRuntime = isTauri()
   const platform = platformOverride ?? detectPlatform()
+  const emulatorSdk = useEmulatorSdkSignal(desktopRuntime)
 
   const handleWindowAction = async (action: WindowAction) => {
     if (!desktopRuntime) return
@@ -205,24 +287,67 @@ export function CadenceShell({
     </button>
   )
 
-  // iOS Simulator requires Xcode — surface the button only on macOS hosts.
-  const IosBtn = platform === "macos" ? (
-    <button
-      aria-label={iosOpen ? "Close iOS simulator" : "Open iOS simulator"}
-      aria-pressed={iosOpen}
-      className={cn(
-        "rounded-md p-1.5 transition-colors",
-        iosOpen
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-      )}
-      onClick={onToggleIos}
-      type="button"
-    >
-      <Apple className="h-4 w-4" />
-    </button>
-  ) : null
+  // iOS Simulator requires Xcode. We keep the titlebar slot stable on
+  // macOS:
+  // - Xcode detected → normal toggle button.
+  // - Xcode missing → an amber-tinted CTA that opens the Xcode App Store
+  //   listing. We deliberately don't let the user open the iOS sidebar
+  //   in this state because every panel inside it would ship the same
+  //   "Install Xcode" message.
+  // - Non-macOS → nothing (Xcode can't run there).
+  const handleInstallXcode = () => {
+    if (!desktopRuntime) return
+    void openUrl(XCODE_STORE_URL).catch(() => {
+      // The opener plugin surfaces its own errors; we swallow here so
+      // the click handler stays sync and doesn't leak a rejection.
+    })
+  }
 
+  let IosBtn: React.ReactNode = null
+  if (platform === "macos") {
+    // Before the first probe completes we don't know whether Xcode is
+    // present — optimistically render the toggle. Once the probe
+    // resolves we flip to the CTA if Xcode is missing. The "supported"
+    // flag stays true on all macOS hosts per the backend contract.
+    const xcodeKnownMissing = desktopRuntime && emulatorSdk.ios.supported && !emulatorSdk.ios.xcodePresent
+    IosBtn = xcodeKnownMissing ? (
+      <button
+        aria-label="Install Xcode"
+        className={cn(
+          "rounded-md p-1.5 transition-colors",
+          "text-amber-300/80 hover:bg-amber-500/15 hover:text-amber-200",
+        )}
+        onClick={handleInstallXcode}
+        title="iOS Simulator needs Xcode. Click to install."
+        type="button"
+      >
+        <Apple className="h-4 w-4" />
+      </button>
+    ) : (
+      <button
+        aria-label={iosOpen ? "Close iOS simulator" : "Open iOS simulator"}
+        aria-pressed={iosOpen}
+        className={cn(
+          "rounded-md p-1.5 transition-colors",
+          iosOpen
+            ? "bg-primary/15 text-primary"
+            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+        )}
+        onClick={onToggleIos}
+        type="button"
+      >
+        <Apple className="h-4 w-4" />
+      </button>
+    )
+  }
+
+  // Android button stays visible on every platform — even without an
+  // SDK installed, clicking it opens the sidebar, which surfaces the
+  // one-click provisioning flow. We tint the idle state amber when the
+  // SDK is known-missing so the user can tell setup is required
+  // without having to open the panel first.
+  const androidSetupNeeded =
+    desktopRuntime && !emulatorSdk.androidPresent && !androidOpen
   const AndroidBtn = (
     <button
       aria-label={androidOpen ? "Close Android emulator" : "Open Android emulator"}
@@ -231,9 +356,16 @@ export function CadenceShell({
         "rounded-md p-1.5 transition-colors",
         androidOpen
           ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+          : androidSetupNeeded
+            ? "text-amber-300/80 hover:bg-amber-500/15 hover:text-amber-200"
+            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
       )}
       onClick={onToggleAndroid}
+      title={
+        androidSetupNeeded
+          ? "Android SDK not installed — click to set it up"
+          : undefined
+      }
       type="button"
     >
       <Smartphone className="h-4 w-4" />

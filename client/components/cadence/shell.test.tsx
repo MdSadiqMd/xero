@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { isTauriMock, tauriWindowMock } = vi.hoisted(() => ({
+const { isTauriMock, tauriWindowMock, invokeMock, listenMock, openUrlMock } = vi.hoisted(() => ({
   isTauriMock: vi.fn(() => false),
   tauriWindowMock: {
     close: vi.fn(),
@@ -9,14 +9,29 @@ const { isTauriMock, tauriWindowMock } = vi.hoisted(() => ({
     toggleMaximize: vi.fn(),
     startDragging: vi.fn(),
   },
+  invokeMock: vi.fn(async () => ({
+    android: { present: false },
+    ios: { present: false, supported: false },
+  })),
+  listenMock: vi.fn(async () => () => undefined),
+  openUrlMock: vi.fn(async () => undefined),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: isTauriMock,
+  invoke: invokeMock,
 }))
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => tauriWindowMock,
+}))
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: listenMock,
+}))
+
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openUrl: openUrlMock,
 }))
 
 import { CadenceShell } from './shell'
@@ -28,6 +43,15 @@ describe('CadenceShell', () => {
     tauriWindowMock.minimize.mockReset()
     tauriWindowMock.toggleMaximize.mockReset()
     tauriWindowMock.startDragging.mockReset()
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValue({
+      android: { present: false },
+      ios: { present: false, supported: false },
+    })
+    listenMock.mockReset()
+    listenMock.mockResolvedValue(() => undefined)
+    openUrlMock.mockReset()
+    openUrlMock.mockResolvedValue(undefined)
   })
 
   it.each(['macos', 'windows'] as const)('renders the sidebar toggle in the %s titlebar', (platform) => {
@@ -114,6 +138,60 @@ describe('CadenceShell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close Android emulator' }))
     expect(onToggleAndroid).toHaveBeenCalledTimes(2)
+  })
+
+  it('flips the iOS button to an Install Xcode CTA when Xcode is missing', async () => {
+    isTauriMock.mockReturnValue(true)
+    invokeMock.mockResolvedValue({
+      android: { present: true },
+      ios: { present: false, supported: true },
+    })
+    const onToggleIos = vi.fn()
+
+    render(
+      <CadenceShell
+        activeView="phases"
+        onToggleIos={onToggleIos}
+        onViewChange={() => undefined}
+        platformOverride="macos"
+      >
+        <div>Body</div>
+      </CadenceShell>,
+    )
+
+    const ctaBtn = await screen.findByRole('button', { name: 'Install Xcode' })
+    fireEvent.click(ctaBtn)
+    await waitFor(() =>
+      expect(openUrlMock).toHaveBeenCalledWith('https://apps.apple.com/app/xcode/id497799835'),
+    )
+    // Clicking the CTA never toggles the iOS sidebar — opening an
+    // empty panel would just repeat the same "Install Xcode" message.
+    expect(onToggleIos).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: /Open iOS simulator/ })).toBeNull()
+  })
+
+  it('tints the Android button amber when the SDK is absent', async () => {
+    isTauriMock.mockReturnValue(true)
+    invokeMock.mockResolvedValue({
+      android: { present: false },
+      ios: { present: true, supported: true },
+    })
+
+    render(
+      <CadenceShell
+        activeView="phases"
+        onToggleAndroid={vi.fn()}
+        onViewChange={() => undefined}
+        platformOverride="macos"
+      >
+        <div>Body</div>
+      </CadenceShell>,
+    )
+
+    const btn = await screen.findByRole('button', { name: 'Open Android emulator' })
+    await waitFor(() =>
+      expect(btn.getAttribute('title')).toMatch(/Android SDK not installed/),
+    )
   })
 
   it('renders the iOS button only on macOS', () => {
