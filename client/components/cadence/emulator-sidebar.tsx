@@ -501,8 +501,8 @@ function EmulatorViewport({
   return (
     <div
       className={cn(
-        "relative flex min-h-0 flex-1 items-center justify-center bg-background/60 outline-none",
-        "px-4 py-5",
+        "relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-background/60 outline-none",
+        "px-5 py-8",
         "focus-visible:ring-1 focus-visible:ring-primary/60 focus-visible:ring-offset-0",
       )}
       onKeyDown={onKeyDown}
@@ -552,9 +552,11 @@ function EmulatorViewport({
   )
 }
 
-/// iPhone-/Android-style physical bezel around the screen. Sizes itself
-/// by aspect ratio so the chassis hugs the streamed image regardless of
-/// device dimensions; max-h / max-w keep it inside the sidebar.
+/// iPhone-/Android-style physical bezel around the screen. Measures
+/// its parent and computes pixel dimensions that honour both the
+/// device's aspect ratio and the sidebar's available space — CSS
+/// `aspect-ratio` alone doesn't reliably cap in both dimensions inside
+/// a flex container, so we compute the fit in JS.
 function DeviceChassis({
   aspectRatio,
   children,
@@ -568,6 +570,47 @@ function DeviceChassis({
   isTablet: boolean
   orientation: EmulatorOrientation
 }) {
+  const nodeRef = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null)
+
+  const ratio = useMemo(() => {
+    const [a, b] = aspectRatio.split("/").map((n) => parseFloat(n))
+    if (!a || !b) return 9 / 19.5
+    return a / b
+  }, [aspectRatio])
+
+  useEffect(() => {
+    const node = nodeRef.current
+    const parent = node?.parentElement
+    if (!parent) return
+    const fit = () => {
+      const rect = parent.getBoundingClientRect()
+      if (!rect.width || !rect.height) {
+        setSize(null)
+        return
+      }
+      // In landscape the chassis is rotated 90°, so the rendered
+      // footprint swaps width and height. Compute layout against the
+      // *rendered* bounds — width of the rotated chassis maps to
+      // layout height, and vice versa.
+      const [containerW, containerH] =
+        orientation === "landscape" ? [rect.height, rect.width] : [rect.width, rect.height]
+      // Fit by whichever dimension clamps first.
+      const byHeight = { width: containerH * ratio, height: containerH }
+      const byWidth = { width: containerW, height: containerW / ratio }
+      const fit =
+        byHeight.width <= containerW ? byHeight : byWidth
+      setSize({
+        width: Math.floor(fit.width),
+        height: Math.floor(fit.height),
+      })
+    }
+    fit()
+    const observer = new ResizeObserver(fit)
+    observer.observe(parent)
+    return () => observer.disconnect()
+  }, [ratio, orientation])
+
   // Bezel thickness + outer corner radius mimic real-hardware
   // proportions at a UI-friendly size. iPad uses a shallower curve
   // since its physical corners are less aggressive than a Face ID
@@ -581,6 +624,7 @@ function DeviceChassis({
   return (
     <div
       aria-hidden="true"
+      ref={nodeRef}
       className={cn(
         "relative flex items-stretch justify-stretch",
         "bg-gradient-to-b from-neutral-700/90 via-neutral-900 to-neutral-800/90",
@@ -593,12 +637,15 @@ function DeviceChassis({
         // matching what the user would see on a physical device held
         // horizontally.
         orientation === "landscape" && "rotate-90",
+        // Hide until first measurement so the unstyled chassis doesn't
+        // flash at its intrinsic size before the observer fires.
+        !size && "invisible",
       )}
-      style={{
-        aspectRatio,
-        maxHeight: "100%",
-        maxWidth: "100%",
-      }}
+      style={
+        size
+          ? { width: `${size.width}px`, height: `${size.height}px` }
+          : undefined
+      }
     >
       {children}
     </div>
