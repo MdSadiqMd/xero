@@ -135,6 +135,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::browser::cookie_import::browser_list_cookie_sources,
             commands::browser::cookie_import::browser_import_cookies,
             commands::emulator::emulator_sdk_status,
+            commands::emulator::emulator_ios_request_ax_permission,
+            commands::emulator::emulator_ios_open_accessibility_settings,
             commands::emulator::android::provision::emulator_android_provision,
             commands::emulator::android::provision::emulator_android_provision_status,
             commands::emulator::emulator_list_devices,

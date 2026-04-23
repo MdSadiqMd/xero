@@ -21,6 +21,7 @@ interface SdkStatus {
     simctlPath: string | null
     idbCompanionPresent: boolean
     supported: boolean
+    axPermissionGranted: boolean
   }
 }
 
@@ -191,6 +192,15 @@ export function EmulatorMissingSdk({ platform, onDismiss }: Props) {
     )
   }
 
+  // AX-permission case takes precedence when Xcode is fine but macOS
+  // hasn't granted us the Accessibility right. We render a dedicated
+  // card because it needs invoke-backed action buttons, not just hrefs.
+  if (status.ios.present && !status.ios.axPermissionGranted) {
+    return (
+      <IosAxPermissionCard isProbing={isProbing} onDismiss={onDismiss} onProbe={probe} />
+    )
+  }
+
   const panel = iosPanel(status)
   if (!panel) return null
   return (
@@ -202,6 +212,112 @@ export function EmulatorMissingSdk({ platform, onDismiss }: Props) {
       onProbe={probe}
       title={panel.title}
     />
+  )
+}
+
+function IosAxPermissionCard({
+  isProbing,
+  onDismiss,
+  onProbe,
+}: {
+  isProbing: boolean
+  onDismiss?: () => void
+  onProbe: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+
+  // macOS doesn't notify processes when their Accessibility trust state
+  // flips — a user toggling the switch in System Settings happens
+  // out-of-band. Poll while this banner is mounted so it disappears
+  // within a second or two of approval, without the user having to click
+  // Re-check.
+  useEffect(() => {
+    if (!isTauri()) return
+    const handle = window.setInterval(() => {
+      onProbe()
+    }, 1500)
+    return () => window.clearInterval(handle)
+  }, [onProbe])
+
+  const handlePrompt = useCallback(async () => {
+    if (!isTauri()) return
+    setBusy(true)
+    try {
+      // Triggers macOS's "wants to control this computer" system prompt
+      // if Cadence isn't yet listed in Accessibility, else no-ops. Either
+      // way we re-probe right after so the banner clears the moment the
+      // user flips the toggle.
+      await invoke("emulator_ios_request_ax_permission")
+    } finally {
+      setBusy(false)
+      onProbe()
+    }
+  }, [onProbe])
+
+  const handleOpenSettings = useCallback(async () => {
+    if (!isTauri()) return
+    await invoke("emulator_ios_open_accessibility_settings")
+  }, [])
+
+  return (
+    <div
+      aria-live="polite"
+      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed"
+      role="region"
+    >
+      <div className="font-medium text-amber-200">Accessibility permission needed</div>
+      <div className="text-muted-foreground">
+        Cadence taps the iOS Simulator by posting synthetic mouse events — macOS
+        requires Accessibility permission for that to work. Without it, taps
+        silently do nothing. Enable Cadence in System Settings → Privacy &
+        Security → Accessibility, then re-check.
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border border-amber-500/60 bg-amber-500/20 px-2 py-0.5",
+            "font-medium text-[11px] text-amber-100 transition-colors hover:border-amber-400 hover:bg-amber-500/30 disabled:opacity-60",
+          )}
+          disabled={busy}
+          onClick={handleOpenSettings}
+          type="button"
+        >
+          <ExternalLink className="h-3 w-3" />
+          Open Accessibility settings
+        </button>
+        <button
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border border-border/70 bg-background/60 px-2 py-0.5",
+            "text-[11px] text-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:opacity-60",
+          )}
+          disabled={busy}
+          onClick={handlePrompt}
+          type="button"
+        >
+          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          Prompt macOS
+        </button>
+        <button
+          aria-label="Re-detect permission"
+          className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-background/60 px-2 py-0.5 text-[11px] text-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:opacity-60"
+          disabled={isProbing}
+          onClick={onProbe}
+          type="button"
+        >
+          <RefreshCw className={cn("h-3 w-3", isProbing && "animate-spin")} />
+          Re-check
+        </button>
+        {onDismiss ? (
+          <button
+            className="ml-auto text-[11px] text-muted-foreground/80 underline-offset-2 hover:text-foreground hover:underline"
+            onClick={onDismiss}
+            type="button"
+          >
+            Dismiss
+          </button>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -238,25 +354,17 @@ function androidPanel(status: SdkStatus): AndroidPanel | null {
 
 function iosPanel(status: SdkStatus): AndroidPanel | null {
   if (!status.ios.supported) return null
-  if (status.ios.present && status.ios.idbCompanionPresent) return null
-
-  if (!status.ios.present) {
-    return {
-      title: "Xcode command-line tools not found",
-      detail:
-        "Cadence needs Xcode installed so the iOS Simulator framework is available. Run `xcode-select --install` after installing Xcode to finish the setup.",
-      actions: [
-        { label: "Install Xcode", href: "https://apps.apple.com/app/xcode/id497799835" },
-      ],
-    }
-  }
+  // idb_companion is optional — the sidebar streams screenshots and routes
+  // input through Core Graphics events regardless. Only surface a panel
+  // when Xcode / xcrun itself is missing.
+  if (status.ios.present) return null
 
   return {
-    title: "idb_companion sidecar missing",
+    title: "Xcode command-line tools not found",
     detail:
-      "The bundled idb_companion helper is not present in this build. Packaged installers include it automatically; for a dev build, rebuild without CADENCE_SKIP_SIDECAR_FETCH, or install it via Homebrew so it resolves from PATH.",
+      "Cadence needs Xcode installed so the iOS Simulator framework is available. Run `xcode-select --install` after installing Xcode to finish the setup. Interaction also requires granting Cadence Accessibility permission in System Settings → Privacy & Security → Accessibility.",
     actions: [
-      { label: "Install via Homebrew", href: "https://github.com/facebook/idb" },
+      { label: "Install Xcode", href: "https://apps.apple.com/app/xcode/id497799835" },
     ],
   }
 }

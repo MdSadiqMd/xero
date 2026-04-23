@@ -80,9 +80,10 @@ impl IdbClient {
         }
     }
 
-    /// Send a single HID event over the bidirectional HID RPC. We open
-    /// one short-lived stream per event; idb accepts this pattern and
-    /// it keeps the call signature synchronous.
+    /// Push a HID event into idb's client-streaming `hid` RPC. The RPC is
+    /// opened once per session and kept open for its lifetime — every
+    /// Touch Down / Move / Up shares one CoreSimulator HID session, which
+    /// is what iOS needs to correlate a down/up pair into a tap.
     ///
     /// When the `ios-grpc` feature is off we route the common button /
     /// text events through an AppleScript fallback against Simulator.app
@@ -222,7 +223,7 @@ fn send_hid_applescript(udid: &str, event: HidEvent) -> Result<(), CommandError>
 
 #[cfg(feature = "ios-grpc")]
 mod grpc_impl {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use tokio::sync::mpsc;
@@ -259,6 +260,16 @@ mod grpc_impl {
     pub struct Runtime {
         rt: Arc<tokio::runtime::Runtime>,
         channel: Channel,
+        /// Long-lived sender feeding events into the single open `hid` RPC.
+        /// The `hid` call is client-streaming: idb_companion holds its
+        /// CoreSimulator HID session open for the lifetime of the stream,
+        /// which is the only way a Touch Down + Touch Up pair are seen by
+        /// the simulator as one continuous touch. Opening a fresh stream
+        /// per event caused every gesture to land in its own disposable
+        /// HID session — the simulator would see the Down get cancelled
+        /// and the Up arrive with nothing to release, so no tap
+        /// registered.
+        hid_tx: Mutex<Option<mpsc::Sender<WireHidEvent>>>,
     }
 
     impl Runtime {
@@ -276,11 +287,39 @@ mod grpc_impl {
                 .timeout(Duration::from_secs(5))
                 .tcp_keepalive(Some(Duration::from_secs(30)));
             let channel = rt.block_on(async { endpoint.connect_lazy() });
-            Self { rt, channel }
+            Self {
+                rt,
+                channel,
+                hid_tx: Mutex::new(None),
+            }
         }
 
         fn client(&self) -> CompanionServiceClient<Channel> {
             CompanionServiceClient::new(self.channel.clone())
+        }
+
+        /// Return a sender into the long-lived HID stream, opening one if
+        /// the previous stream died (e.g. idb_companion restarted). The
+        /// background task drives the client-streaming RPC until the
+        /// receiver is dropped or the server ends the call.
+        fn ensure_hid_stream(&self) -> mpsc::Sender<WireHidEvent> {
+            let mut guard = self.hid_tx.lock().expect("idb hid sender mutex");
+            if let Some(existing) = guard.as_ref() {
+                if !existing.is_closed() {
+                    return existing.clone();
+                }
+            }
+            // 64 slots leaves plenty of headroom for a burst of `touch_move`
+            // events during a drag without the sync-context sender blocking
+            // on backpressure.
+            let (tx, rx) = mpsc::channel::<WireHidEvent>(64);
+            let mut client = self.client();
+            self.rt.spawn(async move {
+                let _ = client.hid(ReceiverStream::new(rx)).await;
+            });
+            let sender = tx.clone();
+            *guard = Some(tx);
+            sender
         }
 
         pub fn accessibility_tree(&self) -> Result<serde_json::Value, CommandError> {
@@ -312,27 +351,45 @@ mod grpc_impl {
         }
 
         pub fn send_hid(&self, event: HidEvent) -> Result<(), CommandError> {
-            let mut client = self.client();
-            let rt = Arc::clone(&self.rt);
             let wire_events = translate_hid_event(event);
+            let rt = Arc::clone(&self.rt);
 
-            rt.block_on(async move {
-                let (tx, rx) = mpsc::channel::<WireHidEvent>(4);
-                for ev in wire_events {
-                    let _ = tx.send(ev).await;
-                }
-                drop(tx);
-                client
-                    .hid(ReceiverStream::new(rx))
-                    .await
-                    .map(|_| ())
-                    .map_err(|status| {
-                        CommandError::system_fault(
+            // Try once with the existing stream; if the sender has been
+            // closed (server ended the RPC, connection died), reopen and
+            // retry a single time. Anything beyond that is a hard failure
+            // — surface as `ios_idb_hid_failed` so the caller can fall
+            // back to the Core Graphics path.
+            let mut attempts = 0;
+            loop {
+                let tx = self.ensure_hid_stream();
+                let events = wire_events.clone();
+                let send_result: Result<(), mpsc::error::SendError<WireHidEvent>> = rt
+                    .block_on(async {
+                        for ev in events {
+                            tx.send(ev).await?;
+                        }
+                        Ok(())
+                    });
+
+                match send_result {
+                    Ok(()) => return Ok(()),
+                    Err(_) if attempts == 0 => {
+                        // Stream died mid-send — drop the stale sender so
+                        // `ensure_hid_stream` opens a fresh RPC next pass.
+                        self.hid_tx
+                            .lock()
+                            .expect("idb hid sender mutex")
+                            .take();
+                        attempts += 1;
+                    }
+                    Err(_) => {
+                        return Err(CommandError::system_fault(
                             "ios_idb_hid_failed",
-                            format!("idb hid: {status}"),
-                        )
-                    })
-            })
+                            "idb hid stream closed; reconnect attempt failed".to_string(),
+                        ));
+                    }
+                }
+            }
         }
 
         pub fn start_video_stream(

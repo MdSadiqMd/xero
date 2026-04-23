@@ -232,6 +232,56 @@ pub fn emulator_sdk_status<R: Runtime>(app: AppHandle<R>) -> CommandResult<SdkSt
     Ok(probe_sdks(&app))
 }
 
+/// macOS only — trigger the system Accessibility-permission prompt.
+/// Returns the current permission state after the call. On non-macOS
+/// hosts always returns `false` (iOS isn't reachable there anyway).
+#[tauri::command]
+pub fn emulator_ios_request_ax_permission<R: Runtime>(app: AppHandle<R>) -> CommandResult<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let granted = ios::cg_input::request_ax_permission();
+        // Fire the sdk-status-changed event so the frontend re-probes and
+        // hides its banner the moment the user flips the Accessibility
+        // toggle — without this, the panel would sit stale until the next
+        // manual probe.
+        let _ = app.emit(EMULATOR_SDK_STATUS_CHANGED_EVENT, ());
+        Ok(granted)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(false)
+    }
+}
+
+/// Open the Privacy & Security → Accessibility pane in System Settings so
+/// the user can enable Cadence. macOS-only; on other hosts this is a
+/// no-op.
+#[tauri::command]
+pub fn emulator_ios_open_accessibility_settings() -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        // `x-apple.systempreferences:` is the documented URL scheme for
+        // deep-linking to a specific settings pane. The pane anchor is
+        // the preference bundle id + a `Privacy_*` query parameter.
+        Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .status()
+            .map_err(|e| {
+                CommandError::system_fault(
+                    "ios_open_accessibility_failed",
+                    format!("could not launch System Settings: {e}"),
+                )
+            })?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub fn emulator_list_devices<R: Runtime>(
     app: AppHandle<R>,
@@ -740,7 +790,15 @@ pub fn emulator_ui_dump(state: State<'_, EmulatorState>) -> CommandResult<UiTree
             }),
         #[cfg(target_os = "macos")]
         Some(ActiveDevice::Ios { session, .. }) => {
-            let client = session.client();
+            let client = session.client().ok_or_else(|| {
+                CommandError::user_fixable(
+                    "ios_idb_companion_unavailable",
+                    "The idb_companion sidecar isn't installed, so UI dumps aren't \
+                     available in this session. Install it via Homebrew \
+                     (`brew install facebook/fb/idb-companion`) and restart the \
+                     session — input still works without it.",
+                )
+            })?;
             automation::ios_ui::dump(&client)
         }
         #[cfg(feature = "emulator-synthetic")]
@@ -820,22 +878,7 @@ fn synthetic_down_up(state: &State<'_, EmulatorState>, x: f32, y: f32) -> Comman
             Ok(())
         }
         #[cfg(target_os = "macos")]
-        ActiveDevice::Ios { session, .. } => {
-            use ios::input::{HidEvent, TouchPhase};
-            let (width, height) = (session.width().max(1), session.height().max(1));
-            let (px, py) = ios::input::denormalize(x, y, width, height);
-            session.client().send_hid(HidEvent::Touch {
-                phase: TouchPhase::Began,
-                x: px,
-                y: py,
-            })?;
-            session.client().send_hid(HidEvent::Touch {
-                phase: TouchPhase::Ended,
-                x: px,
-                y: py,
-            })?;
-            Ok(())
-        }
+        ActiveDevice::Ios { session, .. } => session.tap(x, y),
         #[cfg(feature = "emulator-synthetic")]
         ActiveDevice::Synthetic { .. } => Ok(()),
     }
@@ -862,21 +905,13 @@ pub fn emulator_swipe(state: State<'_, EmulatorState>, request: SwipeRequest) ->
             Ok(())
         }
         #[cfg(target_os = "macos")]
-        ActiveDevice::Ios { session, .. } => {
-            use ios::input::HidEvent;
-            let width = session.width().max(1);
-            let height = session.height().max(1);
-            let (from_x, from_y) =
-                ios::input::denormalize(request.from_x, request.from_y, width, height);
-            let (to_x, to_y) = ios::input::denormalize(request.to_x, request.to_y, width, height);
-            session.client().send_hid(HidEvent::Swipe {
-                from_x,
-                from_y,
-                to_x,
-                to_y,
-                duration_ms: request.duration_ms.unwrap_or(200),
-            })
-        }
+        ActiveDevice::Ios { session, .. } => session.swipe(
+            request.from_x,
+            request.from_y,
+            request.to_x,
+            request.to_y,
+            request.duration_ms.unwrap_or(200),
+        ),
         #[cfg(feature = "emulator-synthetic")]
         ActiveDevice::Synthetic { .. } => Ok(()),
     }
@@ -912,12 +947,7 @@ pub fn emulator_type(state: State<'_, EmulatorState>, request: TypeRequest) -> C
     match device {
         ActiveDevice::Android { session, .. } => session.send_text(&request.text),
         #[cfg(target_os = "macos")]
-        ActiveDevice::Ios { session, .. } => {
-            use ios::input::HidEvent;
-            session.client().send_hid(HidEvent::Text {
-                text: request.text.clone(),
-            })
-        }
+        ActiveDevice::Ios { session, .. } => session.send_text(&request.text),
         #[cfg(feature = "emulator-synthetic")]
         ActiveDevice::Synthetic { .. } => Ok(()),
     }
@@ -941,19 +971,7 @@ pub fn emulator_press_key(
             session.send_key(keycode)
         }
         #[cfg(target_os = "macos")]
-        ActiveDevice::Ios { session, .. } => {
-            use ios::input::HidEvent;
-            if request.key == "home" {
-                return session.client().send_hid(HidEvent::Home);
-            }
-            let button = ios::input::parse_hardware_button(&request.key).ok_or_else(|| {
-                CommandError::user_fixable(
-                    "emulator_unknown_key",
-                    format!("Unknown iOS hardware key: {}", request.key),
-                )
-            })?;
-            session.client().send_hid(HidEvent::Button { button })
-        }
+        ActiveDevice::Ios { session, .. } => session.press_hardware_key(&request.key),
         #[cfg(feature = "emulator-synthetic")]
         ActiveDevice::Synthetic { .. } => Ok(()),
     }

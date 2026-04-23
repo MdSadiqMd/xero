@@ -88,5 +88,9 @@ tokio-stream = { version = "0.1", optional = true }
 tonic = { version = "0.12", optional = true }
 url = "2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = { version = "0.23", features = ["elcapitan"] }
+core-foundation = "0.9"
+
 [dev-dependencies]
 tempfile = "3"

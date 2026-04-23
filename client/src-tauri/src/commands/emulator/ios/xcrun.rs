@@ -328,7 +328,14 @@ pub mod hid_fallback {
 /// focus.
 pub fn focus_simulator(udid: &str) -> Result<()> {
     let status = Command::new("open")
-        .args(["-g", "-a", "Simulator", "--args", "-CurrentDeviceUDID", udid])
+        .args([
+            "-g",
+            "-a",
+            "Simulator",
+            "--args",
+            "-CurrentDeviceUDID",
+            udid,
+        ])
         .status()?;
     if !status.success() {
         return Err(io_other(format!(
@@ -397,12 +404,38 @@ pub fn set_orientation(udid: &str, value: &str) -> Result<()> {
         "landscapeLeft" | "landscape" => 123,
         "landscapeRight" => 124,
         other => {
-            return Err(io_other(format!(
-                "unsupported orientation value: {other}"
-            )));
+            return Err(io_other(format!("unsupported orientation value: {other}")));
         }
     };
     simulator_applescript(&format!("key code {key_code} using command down"))
+}
+
+/// Look up the bare device name (e.g. "iPhone 17 Pro") for a UDID. Used by
+/// the CGEvent input path to match Simulator.app's window title, which
+/// embeds the device name but not the UDID.
+pub fn device_name(udid: &str) -> Result<String> {
+    let output = Command::new("xcrun")
+        .args(["simctl", "list", "devices", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()?;
+    if !output.status.success() {
+        return Err(io_other(format!(
+            "xcrun simctl list (for name) failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let dump: SimctlListDevicesDump = serde_json::from_slice(&output.stdout)
+        .map_err(|e| io_other(format!("failed to parse simctl name JSON: {e}")))?;
+
+    for devices in dump.devices.values() {
+        for d in devices {
+            if d.udid == udid {
+                return Ok(d.name.clone());
+            }
+        }
+    }
+    Err(io_other(format!("udid {udid} not found in simctl list")))
 }
 
 fn device_state(udid: &str) -> Result<String> {

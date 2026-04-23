@@ -26,6 +26,7 @@ use crate::commands::emulator::frame_bus::{publish_and_emit, FrameBus};
 use crate::commands::emulator::{EmulatorInputRequest, InputKind, Orientation};
 use crate::commands::CommandError;
 
+use super::cg_input;
 use super::idb_client::{IdbClient, VideoStreamHandle};
 use super::idb_companion::{self, Companion};
 use super::input::{self, HidEvent, TouchPhase};
@@ -54,19 +55,29 @@ pub struct SpawnArgs<R: Runtime> {
 /// Owns the simulator + companion for the lifetime of a session.
 pub struct IosSession {
     device_id: String,
+    /// Bare device name ("iPhone 17 Pro"), used to locate the matching
+    /// Simulator.app window by title when dispatching CGEvent input.
+    device_name: String,
     width: u32,
     height: u32,
-    client: Arc<IdbClient>,
+    /// Present only when `idb_companion` was found on disk and spawned
+    /// successfully. Preferred for HID input and required for automation
+    /// commands that need idb data (UI dump, log stream).
+    client: Option<Arc<IdbClient>>,
     video: Option<VideoStreamHandle>,
     shutdown_flag: Arc<AtomicBool>,
     fallback_thread: Option<JoinHandle<()>>,
-    companion: Companion,
+    companion: Option<Companion>,
     booted_by_us: bool,
 }
 
 impl IosSession {
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    pub fn device_name(&self) -> &str {
+        &self.device_name
     }
 
     pub fn width(&self) -> u32 {
@@ -78,67 +89,38 @@ impl IosSession {
     }
 
     /// Dispatch an input event from the unified `emulator_input` command.
+    /// Prefer idb's HID surface when `idb_companion` is available. The
+    /// screenshot frame pump can run without idb, so Core Graphics remains a
+    /// fallback for dev builds or machines where the sidecar failed to start.
     pub fn dispatch(&self, request: &EmulatorInputRequest) -> Result<(), CommandError> {
-        let (width, height) = (self.width.max(1), self.height.max(1));
         match request.kind {
-            InputKind::TouchDown => {
-                let (x, y) = input::denormalize(
-                    request.x.unwrap_or(0.0),
-                    request.y.unwrap_or(0.0),
-                    width,
-                    height,
-                );
-                self.client.send_hid(HidEvent::Touch {
-                    phase: TouchPhase::Began,
-                    x,
-                    y,
-                })
-            }
-            InputKind::TouchMove => {
-                let (x, y) = input::denormalize(
-                    request.x.unwrap_or(0.0),
-                    request.y.unwrap_or(0.0),
-                    width,
-                    height,
-                );
-                self.client.send_hid(HidEvent::Touch {
-                    phase: TouchPhase::Moved,
-                    x,
-                    y,
-                })
-            }
-            InputKind::TouchUp => {
-                let (x, y) = input::denormalize(
-                    request.x.unwrap_or(0.0),
-                    request.y.unwrap_or(0.0),
-                    width,
-                    height,
-                );
-                self.client.send_hid(HidEvent::Touch {
-                    phase: TouchPhase::Ended,
-                    x,
-                    y,
-                })
-            }
+            InputKind::TouchDown => self.send_touch(
+                TouchPhase::Began,
+                request.x.unwrap_or(0.0),
+                request.y.unwrap_or(0.0),
+            ),
+            InputKind::TouchMove => self.send_touch(
+                TouchPhase::Moved,
+                request.x.unwrap_or(0.0),
+                request.y.unwrap_or(0.0),
+            ),
+            InputKind::TouchUp => self.send_touch(
+                TouchPhase::Ended,
+                request.x.unwrap_or(0.0),
+                request.y.unwrap_or(0.0),
+            ),
             InputKind::Scroll => {
                 let ax = request.x.unwrap_or(0.5);
                 let ay = request.y.unwrap_or(0.5);
                 let dx = request.dx.unwrap_or(0.0);
                 let dy = request.dy.unwrap_or(0.0);
-                let (from_x, from_y) = input::denormalize(ax, ay, width, height);
-                let (to_x, to_y) = input::denormalize(
+                self.send_swipe(
+                    ax,
+                    ay,
                     (ax + dx).clamp(0.0, 1.0),
                     (ay + dy).clamp(0.0, 1.0),
-                    width,
-                    height,
-                );
-                self.client.send_hid(HidEvent::Swipe {
-                    from_x,
-                    from_y,
-                    to_x,
-                    to_y,
-                    duration_ms: 200,
-                })
+                    200,
+                )
             }
             InputKind::Key | InputKind::HwButton => {
                 let name = request
@@ -146,24 +128,122 @@ impl IosSession {
                     .as_deref()
                     .or(request.key.as_deref())
                     .unwrap_or("");
-                if name == "home" {
-                    return self.client.send_hid(HidEvent::Home);
-                }
-                let button = input::parse_hardware_button(name).ok_or_else(|| {
-                    CommandError::user_fixable(
-                        "emulator_unknown_key",
-                        format!("Unknown iOS hardware key: {name}"),
-                    )
-                })?;
-                self.client.send_hid(HidEvent::Button { button })
+                self.press_hardware_key(name)
             }
-            InputKind::Text => {
-                let text = request.text.as_deref().unwrap_or("");
-                self.client.send_hid(HidEvent::Text {
-                    text: text.to_string(),
-                })
+            InputKind::Text => self.send_text(request.text.as_deref().unwrap_or("")),
+        }
+    }
+
+    fn send_touch(&self, phase: TouchPhase, nx: f32, ny: f32) -> Result<(), CommandError> {
+        // Taps route through `cg_input::send_touch`, which on current
+        // macOS actually dispatches via AppleScript's AX `click at` (see
+        // the doc on that function — CGEventPostToPid is silently dropped
+        // on macOS 26, and the bundled idb_companion's CoreSim HID
+        // bridge is broken for Xcode 26). idb is kept as a last resort
+        // for the day a working companion ships.
+        let cg_result = cg_input::send_touch(&self.device_name, phase, nx, ny);
+        if cg_result.is_ok() || !should_try_idb_after_cg(cg_result.as_ref().unwrap_err()) {
+            return cg_result;
+        }
+
+        if let Some(client) = self.client.as_ref() {
+            let (x, y) = input::denormalize(nx, ny, self.width.max(1), self.height.max(1));
+            return client.send_hid(HidEvent::Touch { phase, x, y });
+        }
+
+        cg_result
+    }
+
+    fn send_swipe(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        to_x: f32,
+        to_y: f32,
+        duration_ms: u32,
+    ) -> Result<(), CommandError> {
+        let cg_result =
+            cg_input::send_swipe(&self.device_name, from_x, from_y, to_x, to_y, duration_ms);
+        if cg_result.is_ok() || !should_try_idb_after_cg(cg_result.as_ref().unwrap_err()) {
+            return cg_result;
+        }
+
+        if let Some(client) = self.client.as_ref() {
+            let width = self.width.max(1);
+            let height = self.height.max(1);
+            let (from_x_px, from_y_px) = input::denormalize(from_x, from_y, width, height);
+            let (to_x_px, to_y_px) = input::denormalize(to_x, to_y, width, height);
+            return client.send_hid(HidEvent::Swipe {
+                from_x: from_x_px,
+                from_y: from_y_px,
+                to_x: to_x_px,
+                to_y: to_y_px,
+                duration_ms,
+            });
+        }
+
+        cg_result
+    }
+
+    fn send_hid_or_cg(
+        &self,
+        event: HidEvent,
+        fallback: impl FnOnce(&str) -> Result<(), CommandError>,
+    ) -> Result<(), CommandError> {
+        if let Some(client) = self.client.as_ref() {
+            let result = client.send_hid(event);
+            if result.is_ok() || !should_try_cg_fallback(result.as_ref().unwrap_err()) {
+                return result;
             }
         }
+        fallback(&self.device_name)
+    }
+
+    /// Semantic hardware-key press shared with the automation surface.
+    pub fn press_hardware_key(&self, name: &str) -> Result<(), CommandError> {
+        if name == "home" {
+            return self.send_hid_or_cg(HidEvent::Home, cg_input::send_home);
+        }
+        let button = super::input::parse_hardware_button(name).ok_or_else(|| {
+            CommandError::user_fixable(
+                "emulator_unknown_key",
+                format!("Unknown iOS hardware key: {name}"),
+            )
+        })?;
+        self.send_hid_or_cg(HidEvent::Button { button }, |device_name| {
+            cg_input::send_hardware_button(device_name, button)
+        })
+    }
+
+    /// Swipe helper used by the automation `emulator_swipe` command so it
+    /// shares the exact code path the sidebar uses.
+    pub fn swipe(
+        &self,
+        from_x: f32,
+        from_y: f32,
+        to_x: f32,
+        to_y: f32,
+        duration_ms: u32,
+    ) -> Result<(), CommandError> {
+        self.send_swipe(from_x, from_y, to_x, to_y, duration_ms)
+    }
+
+    /// Type helper used by the automation `emulator_type` command.
+    pub fn send_text(&self, text: &str) -> Result<(), CommandError> {
+        self.send_hid_or_cg(
+            HidEvent::Text {
+                text: text.to_string(),
+            },
+            |device_name| cg_input::send_text(device_name, text),
+        )
+    }
+
+    /// Single-point tap helper (down + up) used by the automation
+    /// `emulator_tap` command; matches the sidebar's two-event gesture so
+    /// selectors behave identically to the user's click.
+    pub fn tap(&self, nx: f32, ny: f32) -> Result<(), CommandError> {
+        self.send_touch(TouchPhase::Began, nx, ny)?;
+        self.send_touch(TouchPhase::Ended, nx, ny)
     }
 
     pub fn set_orientation(&self, orientation: Orientation) -> Result<(), CommandError> {
@@ -179,10 +259,12 @@ impl IosSession {
         })
     }
 
-    /// Expose the underlying gRPC client so automation commands can issue
-    /// their own calls against it.
-    pub fn client(&self) -> Arc<IdbClient> {
-        Arc::clone(&self.client)
+    /// Expose the underlying gRPC client so automation commands (UI dump,
+    /// log streaming) can issue their own calls. Returns `None` when
+    /// `idb_companion` wasn't available at session start — callers should
+    /// surface a typed error in that case.
+    pub fn client(&self) -> Option<Arc<IdbClient>> {
+        self.client.as_ref().map(Arc::clone)
     }
 
     pub fn shutdown(&mut self) {
@@ -193,11 +275,32 @@ impl IosSession {
         if let Some(handle) = self.fallback_thread.take() {
             let _ = handle.join();
         }
-        let _ = self.companion.guard.shutdown(Duration::from_millis(500));
+        if let Some(mut companion) = self.companion.take() {
+            let _ = companion.guard.shutdown(Duration::from_millis(500));
+        }
         if self.booted_by_us {
             let _ = xcrun::shutdown(&self.device_id);
         }
+        cg_input::invalidate_cache();
     }
+}
+
+fn should_try_cg_fallback(err: &CommandError) -> bool {
+    matches!(
+        err.code.as_str(),
+        "ios_input_unsupported" | "ios_idb_proto_missing"
+    )
+}
+
+/// After a CGEvent send fails, only fall through to idb's HID path for
+/// errors that mean "CG can't reach the Simulator window" — missing AX
+/// permission or the Simulator window being absent. Other errors are bugs
+/// in the CG path itself and retrying via idb won't help.
+fn should_try_idb_after_cg(err: &CommandError) -> bool {
+    matches!(
+        err.code.as_str(),
+        "ios_ax_permission_denied" | "ios_simulator_window_not_found"
+    )
 }
 
 impl Drop for IosSession {
@@ -231,41 +334,62 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         )
     })?;
 
+    // Look up the bare device name now so the CGEvent input path can match
+    // the Simulator.app window by title even after the window is reopened
+    // or repositioned. Fall back to the UDID only if simctl refuses to
+    // answer — a poor key for title matching, but a valid session handle.
+    let device_name = xcrun::device_name(&device_id).unwrap_or_else(|_| device_id.clone());
+
+    // Make sure Simulator.app is running so its window exists for CGEvent
+    // dispatch. `open -g` keeps Cadence frontmost on most recent macOS
+    // releases; brief sleep gives the window server time to register the
+    // new window before we hand control back to the frontend.
+    let _ = xcrun::focus_simulator(&device_id);
+    std::thread::sleep(Duration::from_millis(400));
+
     emit_status(
         &app,
         StatusPhase::Connecting,
         &device_id,
-        Some("launching idb_companion".to_string()),
+        Some("attaching input pipeline".to_string()),
     );
 
-    let companion_path = xcrun::resolve_idb_companion(&app).ok_or_else(|| {
-        CommandError::user_fixable(
-            "ios_idb_companion_missing",
-            "idb_companion is not bundled with Cadence and could not be found on PATH. Install \
-             it via `brew install facebook/fb/idb-companion` or drop the binary into \
-             client/src-tauri/resources/binaries/.",
-        )
-    })?;
-    let _ = idb_companion::ensure_executable(&companion_path);
+    // `idb_companion` is best-effort: when it starts, HID input uses idb's
+    // real simulator surface; when it does not, the session can still render
+    // via screenshots and attempt Core Graphics input.
+    let companion = match xcrun::resolve_idb_companion(&app) {
+        Some(path) => {
+            let _ = idb_companion::ensure_executable(&path);
+            match idb_companion::Launch::new(path, device_id.clone())
+                .and_then(|launch| idb_companion::spawn(launch, COMPANION_TIMEOUT))
+            {
+                Ok(companion) => Some(companion),
+                Err(err) => {
+                    // Surface as informational status rather than an error —
+                    // the sidebar still works without it.
+                    emit_status(
+                        &app,
+                        StatusPhase::Connecting,
+                        &device_id,
+                        Some(format!(
+                            "idb_companion unavailable (automation commands disabled): {err}"
+                        )),
+                    );
+                    None
+                }
+            }
+        }
+        None => None,
+    };
 
-    let launch = idb_companion::Launch::new(companion_path, device_id.clone()).map_err(|err| {
-        CommandError::system_fault(
-            "ios_idb_launch_setup_failed",
-            format!("failed to build idb_companion launch: {err}"),
-        )
-    })?;
-    let companion = idb_companion::spawn(launch, COMPANION_TIMEOUT).map_err(|err| {
-        CommandError::system_fault(
-            "ios_idb_companion_spawn_failed",
-            format!("failed to spawn idb_companion: {err}"),
-        )
-    })?;
+    let client = companion
+        .as_ref()
+        .map(|c| Arc::new(IdbClient::new(c.grpc_port, device_id.clone())));
 
-    let client = Arc::new(IdbClient::new(companion.grpc_port, device_id.clone()));
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let (width, height, video_handle, fallback_thread) = start_frame_pump(
         &app,
-        &client,
+        client.as_ref(),
         &frame_bus,
         &device_id,
         Arc::clone(&shutdown_flag),
@@ -280,6 +404,7 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
 
     Ok(IosSession {
         device_id,
+        device_name,
         width,
         height,
         client,
@@ -293,7 +418,7 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
 
 fn start_frame_pump<R: Runtime + 'static>(
     app: &AppHandle<R>,
-    client: &Arc<IdbClient>,
+    client: Option<&Arc<IdbClient>>,
     bus: &Arc<FrameBus>,
     device_id: &str,
     shutdown: Arc<AtomicBool>,
@@ -307,16 +432,24 @@ fn start_frame_pump<R: Runtime + 'static>(
     let width_state_clone = Arc::clone(&width_state);
     let decoder_clone = Arc::clone(&decoder);
 
-    // Skip the H.264 path entirely when no decoder is linked. Opening
-    // idb's VideoStream would succeed but every NAL would error with
-    // DecodeError::Unavailable, so no frames would ever reach the
-    // canvas. The screenshot poll gives the user a functional (though
-    // lower-FPS) viewport instead.
+    // Skip the H.264 path whenever either the decoder isn't linked
+    // (no `emulator-live` feature) or idb_companion didn't start (so
+    // there's nobody to pull frames from). The screenshot poll gives
+    // the user a functional — if lower-FPS — viewport in both cases.
     let decoder_live = decoder
         .lock()
         .ok()
         .map(|d| d.name() != "unavailable")
         .unwrap_or(false);
+    let Some(client) = client else {
+        let (w, h, thread_handle) = spawn_screenshot_fallback(
+            app.clone(),
+            Arc::clone(bus),
+            device_id.to_string(),
+            shutdown,
+        )?;
+        return Ok((w, h, None, Some(thread_handle)));
+    };
     if !decoder_live {
         let (w, h, thread_handle) = spawn_screenshot_fallback(
             app.clone(),

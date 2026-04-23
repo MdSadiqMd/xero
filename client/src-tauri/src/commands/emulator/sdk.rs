@@ -34,6 +34,10 @@ pub struct IosSdkStatus {
     pub idb_companion_present: bool,
     /// Host OS supports iOS Simulator (only macOS does).
     pub supported: bool,
+    /// Cadence has been granted Accessibility permission (macOS) — required
+    /// for `CGEventPostToPid` to deliver taps to Simulator.app. Always `false`
+    /// on non-macOS hosts.
+    pub ax_permission_granted: bool,
 }
 
 pub fn probe_sdks<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> SdkStatus {
@@ -64,6 +68,7 @@ fn probe_ios_status<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> IosSdkStatu
             simctl_path: ios.simctl.map(path_to_string),
             idb_companion_present: ios.idb_companion.is_some(),
             supported: true,
+            ax_permission_granted: super::ios::cg_input::ax_permission_granted(),
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -75,6 +80,7 @@ fn probe_ios_status<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> IosSdkStatu
             simctl_path: None,
             idb_companion_present: false,
             supported: false,
+            ax_permission_granted: false,
         }
     }
 }
