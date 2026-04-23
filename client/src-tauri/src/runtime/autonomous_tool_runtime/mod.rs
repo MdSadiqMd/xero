@@ -1,3 +1,4 @@
+pub mod browser;
 mod filesystem;
 mod git;
 mod policy;
@@ -26,6 +27,10 @@ use crate::{
     state::DesktopState,
 };
 
+pub use browser::{
+    AutonomousBrowserAction, AutonomousBrowserOutput, AutonomousBrowserRequest, BrowserExecutor,
+    UnavailableBrowserExecutor, AUTONOMOUS_TOOL_BROWSER,
+};
 pub use repo_scope::{resolve_imported_repo_root, resolve_imported_repo_root_from_registry};
 
 pub const AUTONOMOUS_TOOL_READ: &str = "read";
@@ -85,6 +90,7 @@ pub struct AutonomousToolRuntime {
     pub(super) limits: AutonomousToolRuntimeLimits,
     pub(super) web_runtime: AutonomousWebRuntime,
     pub(super) command_controls: Option<RuntimeRunControlStateDto>,
+    pub(super) browser_executor: Option<std::sync::Arc<dyn BrowserExecutor>>,
 }
 
 impl AutonomousToolRuntime {
@@ -135,7 +141,20 @@ impl AutonomousToolRuntime {
             limits,
             web_runtime: AutonomousWebRuntime::new(web_config),
             command_controls: None,
+            browser_executor: None,
         })
+    }
+
+    pub fn with_browser_executor(
+        mut self,
+        executor: std::sync::Arc<dyn BrowserExecutor>,
+    ) -> Self {
+        self.browser_executor = Some(executor);
+        self
+    }
+
+    pub fn browser_executor(&self) -> Option<&std::sync::Arc<dyn BrowserExecutor>> {
+        self.browser_executor.as_ref()
     }
 
     pub fn for_project<R: Runtime>(
@@ -144,11 +163,13 @@ impl AutonomousToolRuntime {
         project_id: &str,
     ) -> CommandResult<Self> {
         let repo_root = resolve_imported_repo_root(app, state, project_id)?;
-        Self::with_limits_and_web_config(
+        let executor = browser::tauri_browser_executor(app.clone(), state.clone());
+        Ok(Self::with_limits_and_web_config(
             repo_root,
             AutonomousToolRuntimeLimits::default(),
             state.autonomous_web_config(),
-        )
+        )?
+        .with_browser_executor(executor))
     }
 
     pub fn repo_root(&self) -> &Path {
@@ -180,7 +201,35 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::Edit(request) => self.edit(request),
             AutonomousToolRequest::Write(request) => self.write(request),
             AutonomousToolRequest::Command(request) => self.command(request),
+            AutonomousToolRequest::Browser(request) => self.browser(request),
         }
+    }
+
+    pub fn browser(
+        &self,
+        request: AutonomousBrowserRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        let executor = self.browser_executor.as_ref().ok_or_else(|| {
+            CommandError::policy_denied(
+                "Browser actions require the desktop runtime; no executor is wired.",
+            )
+        })?;
+        let action_summary = format!("Browser action {:?}", request.action);
+        let output = executor.execute(request.action)?;
+        let summary = if let Some(url) = &output.url {
+            format!(
+                "Executed browser action `{}` on `{}`.",
+                output.action, url
+            )
+        } else {
+            format!("Executed browser action `{}` ({action_summary}).", output.action)
+        };
+        Ok(AutonomousToolResult {
+            tool_name: AUTONOMOUS_TOOL_BROWSER.into(),
+            summary,
+            command_result: None,
+            output: AutonomousToolOutput::Browser(output),
+        })
     }
 
     pub fn web_search(
@@ -254,6 +303,7 @@ pub enum AutonomousToolRequest {
     Edit(AutonomousEditRequest),
     Write(AutonomousWriteRequest),
     Command(AutonomousCommandRequest),
+    Browser(AutonomousBrowserRequest),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -360,6 +410,7 @@ pub enum AutonomousToolOutput {
     Edit(AutonomousEditOutput),
     Write(AutonomousWriteOutput),
     Command(AutonomousCommandOutput),
+    Browser(AutonomousBrowserOutput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

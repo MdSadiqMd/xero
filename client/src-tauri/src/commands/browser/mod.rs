@@ -1,9 +1,9 @@
-mod actions;
-mod bridge;
+pub mod actions;
+pub(crate) mod bridge;
 mod events;
 mod screenshot;
 mod script;
-mod tabs;
+pub mod tabs;
 
 use std::sync::{Arc, Mutex};
 
@@ -17,6 +17,7 @@ use tauri::{
 use crate::commands::{CommandError, CommandResult};
 
 pub use actions::{StorageArea, TypingMode};
+pub use screenshot::capture_webview as screenshot_webview;
 pub use events::{
     BrowserConsolePayload, BrowserDialogPayload, BrowserDownloadPayload, BrowserLoadStatePayload,
     BrowserTabUpdatedPayload, BrowserUrlChangedPayload, BROWSER_CONSOLE_EVENT,
@@ -58,7 +59,7 @@ impl BrowserState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrowserShowRequest {
     pub url: String,
@@ -125,8 +126,12 @@ pub fn browser_show<R: Runtime>(
                 (active, label)
             } else {
                 let (id, label) = tabs.new_tab_label();
-                // First tab gets the legacy label so existing screenshot code keeps working.
-                let label = if id.ends_with("-1") { BROWSER_LEGACY_LABEL.to_string() } else { label };
+                // First tab gets the legacy label so existing screenshot/capability code keeps working.
+                let label = if id == "tab-1" {
+                    BROWSER_LEGACY_LABEL.to_string()
+                } else {
+                    label
+                };
                 tabs.insert(id.clone(), label.clone())?;
                 (id, label)
             }

@@ -177,9 +177,34 @@ const COMMANDS = {
   subscribeRuntimeStream: 'subscribe_runtime_stream',
   upsertWorkflowGraph: 'upsert_workflow_graph',
   applyWorkflowTransition: 'apply_workflow_transition',
+  browserShow: 'browser_show',
+  browserResize: 'browser_resize',
+  browserHide: 'browser_hide',
   browserEval: 'browser_eval',
   browserCurrentUrl: 'browser_current_url',
   browserScreenshot: 'browser_screenshot',
+  browserNavigate: 'browser_navigate',
+  browserBack: 'browser_back',
+  browserForward: 'browser_forward',
+  browserReload: 'browser_reload',
+  browserStop: 'browser_stop',
+  browserClick: 'browser_click',
+  browserType: 'browser_type',
+  browserScroll: 'browser_scroll',
+  browserPressKey: 'browser_press_key',
+  browserReadText: 'browser_read_text',
+  browserQuery: 'browser_query',
+  browserWaitForSelector: 'browser_wait_for_selector',
+  browserWaitForLoad: 'browser_wait_for_load',
+  browserHistoryState: 'browser_history_state',
+  browserCookiesGet: 'browser_cookies_get',
+  browserCookiesSet: 'browser_cookies_set',
+  browserStorageRead: 'browser_storage_read',
+  browserStorageWrite: 'browser_storage_write',
+  browserStorageClear: 'browser_storage_clear',
+  browserTabList: 'browser_tab_list',
+  browserTabFocus: 'browser_tab_focus',
+  browserTabClose: 'browser_tab_close',
 } as const
 
 const EVENTS = {
@@ -187,6 +212,10 @@ const EVENTS = {
   repositoryStatusChanged: 'repository:status_changed',
   runtimeUpdated: 'runtime:updated',
   runtimeRunUpdated: 'runtime_run:updated',
+  browserUrlChanged: 'browser:url_changed',
+  browserLoadState: 'browser:load_state',
+  browserConsole: 'browser:console',
+  browserTabUpdated: 'browser:tab_updated',
 } as const
 
 const commandErrorSchema = z.object({
@@ -196,9 +225,64 @@ const commandErrorSchema = z.object({
   retryable: z.boolean(),
 })
 
-const browserEvalResponseSchema = z.null()
+const browserEvalResponseSchema = z.unknown()
 const browserCurrentUrlResponseSchema = z.string().nullable()
 const browserScreenshotResponseSchema = z.string()
+const browserVoidSchema = z.null().optional().transform(() => undefined)
+const browserJsonSchema = z.unknown()
+
+export const browserTabMetadataSchema = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    title: z.string().nullable(),
+    url: z.string().nullable(),
+    loading: z.boolean(),
+    canGoBack: z.boolean(),
+    canGoForward: z.boolean(),
+    active: z.boolean(),
+  })
+  .strict()
+export type BrowserTabMetadataDto = z.infer<typeof browserTabMetadataSchema>
+
+const browserTabListSchema = z.array(browserTabMetadataSchema)
+
+export const browserUrlChangedPayloadSchema = z
+  .object({
+    tabId: z.string(),
+    url: z.string(),
+    title: z.string().nullable(),
+    canGoBack: z.boolean(),
+    canGoForward: z.boolean(),
+  })
+  .strict()
+export type BrowserUrlChangedPayload = z.infer<typeof browserUrlChangedPayloadSchema>
+
+export const browserLoadStatePayloadSchema = z
+  .object({
+    tabId: z.string(),
+    loading: z.boolean(),
+    url: z.string().nullable(),
+    error: z.string().nullable(),
+  })
+  .strict()
+export type BrowserLoadStatePayload = z.infer<typeof browserLoadStatePayloadSchema>
+
+export const browserConsolePayloadSchema = z
+  .object({
+    tabId: z.string(),
+    level: z.string(),
+    message: z.string(),
+  })
+  .strict()
+export type BrowserConsolePayload = z.infer<typeof browserConsolePayloadSchema>
+
+export const browserTabUpdatedPayloadSchema = z
+  .object({
+    tabs: browserTabListSchema,
+  })
+  .strict()
+export type BrowserTabUpdatedPayload = z.infer<typeof browserTabUpdatedPayloadSchema>
 
 const startOpenAiLoginRequestSchema = z
   .object({
@@ -331,9 +415,65 @@ export interface CadenceDesktopAdapter {
   syncNotificationAdapters(projectId: string): Promise<SyncNotificationAdaptersResponseDto>
   upsertWorkflowGraph(request: UpsertWorkflowGraphRequestDto): Promise<UpsertWorkflowGraphResponseDto>
   applyWorkflowTransition(request: ApplyWorkflowTransitionRequestDto): Promise<ApplyWorkflowTransitionResponseDto>
-  browserEval(js: string): Promise<void>
+  browserEval(js: string, options?: { timeoutMs?: number }): Promise<unknown>
   browserCurrentUrl(): Promise<string | null>
   browserScreenshot(): Promise<string>
+  browserNavigate(url: string, options?: { tabId?: string }): Promise<void>
+  browserBack(): Promise<unknown>
+  browserForward(): Promise<unknown>
+  browserReload(options?: { tabId?: string }): Promise<void>
+  browserStop(): Promise<unknown>
+  browserClick(selector: string, options?: { timeoutMs?: number }): Promise<unknown>
+  browserType(
+    selector: string,
+    text: string,
+    options?: { append?: boolean; timeoutMs?: number },
+  ): Promise<unknown>
+  browserScroll(options?: {
+    selector?: string
+    x?: number
+    y?: number
+    timeoutMs?: number
+  }): Promise<unknown>
+  browserPressKey(
+    key: string,
+    options?: { selector?: string; timeoutMs?: number },
+  ): Promise<unknown>
+  browserReadText(options?: { selector?: string; timeoutMs?: number }): Promise<unknown>
+  browserQuery(
+    selector: string,
+    options?: { limit?: number; timeoutMs?: number },
+  ): Promise<unknown>
+  browserWaitForSelector(
+    selector: string,
+    options?: { timeoutMs?: number; visible?: boolean },
+  ): Promise<unknown>
+  browserWaitForLoad(options?: { timeoutMs?: number }): Promise<unknown>
+  browserHistoryState(): Promise<unknown>
+  browserCookiesGet(): Promise<unknown>
+  browserCookiesSet(cookie: string): Promise<unknown>
+  browserStorageRead(area: 'local' | 'session', key?: string): Promise<unknown>
+  browserStorageWrite(area: 'local' | 'session', key: string, value: string | null): Promise<unknown>
+  browserStorageClear(area: 'local' | 'session'): Promise<unknown>
+  browserTabList(): Promise<BrowserTabMetadataDto[]>
+  browserTabFocus(tabId: string): Promise<BrowserTabMetadataDto>
+  browserTabClose(tabId: string): Promise<BrowserTabMetadataDto[]>
+  onBrowserUrlChanged(
+    handler: (payload: BrowserUrlChangedPayload) => void,
+    onError?: (error: CadenceDesktopError) => void,
+  ): Promise<UnlistenFn>
+  onBrowserLoadState(
+    handler: (payload: BrowserLoadStatePayload) => void,
+    onError?: (error: CadenceDesktopError) => void,
+  ): Promise<UnlistenFn>
+  onBrowserConsole(
+    handler: (payload: BrowserConsolePayload) => void,
+    onError?: (error: CadenceDesktopError) => void,
+  ): Promise<UnlistenFn>
+  onBrowserTabUpdated(
+    handler: (payload: BrowserTabUpdatedPayload) => void,
+    onError?: (error: CadenceDesktopError) => void,
+  ): Promise<UnlistenFn>
   subscribeRuntimeStream(
     projectId: string,
     itemKinds: RuntimeStreamItemKindDto[],
@@ -896,7 +1036,7 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
   },
 
-  async browserEval(js) {
+  async browserEval(js, options) {
     if (typeof js !== 'string' || js.trim().length === 0) {
       throw new CadenceDesktopError({
         code: 'invalid_request',
@@ -904,7 +1044,10 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
         message: 'browserEval requires a non-empty `js` string.',
       })
     }
-    await invokeTyped(COMMANDS.browserEval, browserEvalResponseSchema, { js })
+    return invokeTyped(COMMANDS.browserEval, browserEvalResponseSchema, {
+      js,
+      timeout_ms: options?.timeoutMs ?? null,
+    })
   },
 
   browserCurrentUrl() {
@@ -913,6 +1056,152 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
 
   browserScreenshot() {
     return invokeTyped(COMMANDS.browserScreenshot, browserScreenshotResponseSchema)
+  },
+
+  async browserNavigate(url, options) {
+    await invokeTyped(COMMANDS.browserNavigate, browserVoidSchema, {
+      url,
+      tab_id: options?.tabId ?? null,
+    })
+  },
+
+  browserBack() {
+    return invokeTyped(COMMANDS.browserBack, browserJsonSchema)
+  },
+
+  browserForward() {
+    return invokeTyped(COMMANDS.browserForward, browserJsonSchema)
+  },
+
+  async browserReload(options) {
+    await invokeTyped(COMMANDS.browserReload, browserVoidSchema, {
+      tab_id: options?.tabId ?? null,
+    })
+  },
+
+  browserStop() {
+    return invokeTyped(COMMANDS.browserStop, browserJsonSchema)
+  },
+
+  browserClick(selector, options) {
+    return invokeTyped(COMMANDS.browserClick, browserJsonSchema, {
+      selector,
+      timeout_ms: options?.timeoutMs ?? null,
+    })
+  },
+
+  browserType(selector, text, options) {
+    return invokeTyped(COMMANDS.browserType, browserJsonSchema, {
+      selector,
+      text,
+      append: options?.append ?? null,
+      timeout_ms: options?.timeoutMs ?? null,
+    })
+  },
+
+  browserScroll(options) {
+    return invokeTyped(COMMANDS.browserScroll, browserJsonSchema, {
+      selector: options?.selector ?? null,
+      x: options?.x ?? null,
+      y: options?.y ?? null,
+      timeout_ms: options?.timeoutMs ?? null,
+    })
+  },
+
+  browserPressKey(key, options) {
+    return invokeTyped(COMMANDS.browserPressKey, browserJsonSchema, {
+      key,
+      selector: options?.selector ?? null,
+      timeout_ms: options?.timeoutMs ?? null,
+    })
+  },
+
+  browserReadText(options) {
+    return invokeTyped(COMMANDS.browserReadText, browserJsonSchema, {
+      selector: options?.selector ?? null,
+      timeout_ms: options?.timeoutMs ?? null,
+    })
+  },
+
+  browserQuery(selector, options) {
+    return invokeTyped(COMMANDS.browserQuery, browserJsonSchema, {
+      selector,
+      limit: options?.limit ?? null,
+      timeout_ms: options?.timeoutMs ?? null,
+    })
+  },
+
+  browserWaitForSelector(selector, options) {
+    return invokeTyped(COMMANDS.browserWaitForSelector, browserJsonSchema, {
+      selector,
+      timeout_ms: options?.timeoutMs ?? null,
+      visible: options?.visible ?? null,
+    })
+  },
+
+  browserWaitForLoad(options) {
+    return invokeTyped(COMMANDS.browserWaitForLoad, browserJsonSchema, {
+      timeout_ms: options?.timeoutMs ?? null,
+    })
+  },
+
+  browserHistoryState() {
+    return invokeTyped(COMMANDS.browserHistoryState, browserJsonSchema)
+  },
+
+  browserCookiesGet() {
+    return invokeTyped(COMMANDS.browserCookiesGet, browserJsonSchema)
+  },
+
+  browserCookiesSet(cookie) {
+    return invokeTyped(COMMANDS.browserCookiesSet, browserJsonSchema, { cookie })
+  },
+
+  browserStorageRead(area, key) {
+    return invokeTyped(COMMANDS.browserStorageRead, browserJsonSchema, {
+      area,
+      key: key ?? null,
+    })
+  },
+
+  browserStorageWrite(area, key, value) {
+    return invokeTyped(COMMANDS.browserStorageWrite, browserJsonSchema, {
+      area,
+      key,
+      value,
+    })
+  },
+
+  browserStorageClear(area) {
+    return invokeTyped(COMMANDS.browserStorageClear, browserJsonSchema, { area })
+  },
+
+  browserTabList() {
+    return invokeTyped(COMMANDS.browserTabList, browserTabListSchema)
+  },
+
+  browserTabFocus(tabId) {
+    return invokeTyped(COMMANDS.browserTabFocus, browserTabMetadataSchema, { tab_id: tabId })
+  },
+
+  browserTabClose(tabId) {
+    return invokeTyped(COMMANDS.browserTabClose, browserTabListSchema, { tab_id: tabId })
+  },
+
+  onBrowserUrlChanged(handler, onError) {
+    return listenTyped(EVENTS.browserUrlChanged, browserUrlChangedPayloadSchema, handler, onError)
+  },
+
+  onBrowserLoadState(handler, onError) {
+    return listenTyped(EVENTS.browserLoadState, browserLoadStatePayloadSchema, handler, onError)
+  },
+
+  onBrowserConsole(handler, onError) {
+    return listenTyped(EVENTS.browserConsole, browserConsolePayloadSchema, handler, onError)
+  },
+
+  onBrowserTabUpdated(handler, onError) {
+    return listenTyped(EVENTS.browserTabUpdated, browserTabUpdatedPayloadSchema, handler, onError)
   },
 
   subscribeRuntimeStream(projectId, itemKinds, handler, onError) {
