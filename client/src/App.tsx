@@ -14,6 +14,7 @@ import { GamesSidebar } from '@/components/cadence/games-sidebar'
 import { BrowserSidebar } from '@/components/cadence/browser-sidebar'
 import { IosEmulatorSidebar } from '@/components/cadence/ios-emulator-sidebar'
 import { AndroidEmulatorSidebar } from '@/components/cadence/android-emulator-sidebar'
+import { SolanaWorkbenchSidebar } from '@/components/cadence/solana-workbench-sidebar'
 import { SettingsDialog } from '@/components/cadence/settings-dialog'
 import { type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import { useCadenceDesktopState } from '@/src/features/cadence/use-cadence-desktop-state'
@@ -100,6 +101,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [browserOpen, setBrowserOpen] = useState(false)
   const [iosOpen, setIosOpen] = useState(false)
   const [androidOpen, setAndroidOpen] = useState(false)
+  const [solanaOpen, setSolanaOpen] = useState(false)
 
   const toggleGames = () => {
     setGamesOpen((current) => {
@@ -108,6 +110,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setBrowserOpen(false)
         setIosOpen(false)
         setAndroidOpen(false)
+        setSolanaOpen(false)
       }
       return next
     })
@@ -120,6 +123,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setGamesOpen(false)
         setIosOpen(false)
         setAndroidOpen(false)
+        setSolanaOpen(false)
       }
       return next
     })
@@ -132,6 +136,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setGamesOpen(false)
         setBrowserOpen(false)
         setAndroidOpen(false)
+        setSolanaOpen(false)
       }
       return next
     })
@@ -144,6 +149,20 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setGamesOpen(false)
         setBrowserOpen(false)
         setIosOpen(false)
+        setSolanaOpen(false)
+      }
+      return next
+    })
+  }
+
+  const toggleSolana = () => {
+    setSolanaOpen((current) => {
+      const next = !current
+      if (next) {
+        setGamesOpen(false)
+        setBrowserOpen(false)
+        setIosOpen(false)
+        setAndroidOpen(false)
       }
       return next
     })
@@ -345,6 +364,8 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         iosOpen={iosOpen}
         onToggleAndroid={toggleAndroid}
         androidOpen={androidOpen}
+        onToggleSolana={toggleSolana}
+        solanaOpen={solanaOpen}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         platformOverride={platformOverride}
@@ -429,6 +450,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       <BrowserSidebar open={browserOpen} />
       <IosEmulatorSidebar open={iosOpen} />
       <AndroidEmulatorSidebar open={androidOpen} />
+      <SolanaWorkbenchSidebar open={solanaOpen} />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

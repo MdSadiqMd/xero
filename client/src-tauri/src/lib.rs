@@ -23,6 +23,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
         .manage(desktop_state)
         .manage(commands::BrowserState::default())
         .manage(commands::EmulatorState::default())
+        .manage(commands::SolanaState::default())
         .register_asynchronous_uri_scheme_protocol(
             commands::emulator::URI_SCHEME,
             commands::emulator::handle_uri_scheme,
@@ -157,6 +158,18 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::emulator::emulator_logs_subscribe,
             commands::emulator::emulator_logs_unsubscribe,
             commands::emulator::emulator_logs_get_recent,
+            commands::solana::solana_toolchain_status,
+            commands::solana::solana_cluster_list,
+            commands::solana::solana_cluster_start,
+            commands::solana::solana_cluster_stop,
+            commands::solana::solana_cluster_status,
+            commands::solana::solana_snapshot_create,
+            commands::solana::solana_snapshot_list,
+            commands::solana::solana_snapshot_restore,
+            commands::solana::solana_snapshot_delete,
+            commands::solana::solana_rpc_health,
+            commands::solana::solana_rpc_endpoints_set,
+            commands::solana::solana_subscribe_ready,
         ])
 }
 

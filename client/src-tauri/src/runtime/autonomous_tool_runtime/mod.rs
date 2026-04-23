@@ -4,6 +4,7 @@ mod git;
 mod policy;
 mod process;
 mod repo_scope;
+pub mod solana;
 
 use std::{
     fs,
@@ -32,6 +33,11 @@ pub use browser::{
     UnavailableBrowserExecutor, AUTONOMOUS_TOOL_BROWSER,
 };
 pub use repo_scope::{resolve_imported_repo_root, resolve_imported_repo_root_from_registry};
+pub use solana::{
+    AutonomousSolanaClusterAction, AutonomousSolanaClusterRequest, AutonomousSolanaLogsRequest,
+    AutonomousSolanaOutput, SolanaExecutor, StateSolanaExecutor, UnavailableSolanaExecutor,
+    AUTONOMOUS_TOOL_SOLANA_CLUSTER, AUTONOMOUS_TOOL_SOLANA_LOGS,
+};
 
 pub const AUTONOMOUS_TOOL_READ: &str = "read";
 pub const AUTONOMOUS_TOOL_SEARCH: &str = "search";

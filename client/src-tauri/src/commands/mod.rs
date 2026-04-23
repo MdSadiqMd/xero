@@ -2,6 +2,7 @@ pub mod apply_workflow_transition;
 pub mod browser;
 pub mod cancel_autonomous_run;
 pub mod emulator;
+pub mod solana;
 pub mod get_autonomous_run;
 pub mod get_project_snapshot;
 pub mod get_repository_diff;
@@ -57,6 +58,12 @@ pub use cancel_autonomous_run::cancel_autonomous_run;
 pub use emulator::{
     emulator_input, emulator_list_devices, emulator_rotate, emulator_sdk_status, emulator_start,
     emulator_stop, emulator_subscribe_ready, EmulatorState,
+};
+pub use solana::{
+    solana_cluster_list, solana_cluster_start, solana_cluster_status, solana_cluster_stop,
+    solana_rpc_endpoints_set, solana_rpc_health, solana_snapshot_create, solana_snapshot_delete,
+    solana_snapshot_list, solana_snapshot_restore, solana_subscribe_ready,
+    solana_toolchain_status, SolanaState,
 };
 pub use get_autonomous_run::get_autonomous_run;
 pub use get_project_snapshot::get_project_snapshot;

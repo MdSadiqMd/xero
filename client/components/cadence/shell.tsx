@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   Settings,
   Smartphone,
+  Waves,
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -50,6 +51,8 @@ interface CadenceShellProps {
   iosOpen?: boolean
   onToggleAndroid?: () => void
   androidOpen?: boolean
+  onToggleSolana?: () => void
+  solanaOpen?: boolean
   sidebarCollapsed?: boolean
   onToggleSidebar?: () => void
   /** Dev override — null means auto-detect */
@@ -84,6 +87,8 @@ export function CadenceShell({
   iosOpen = false,
   onToggleAndroid,
   androidOpen = false,
+  onToggleSolana,
+  solanaOpen = false,
   sidebarCollapsed = false,
   onToggleSidebar,
   platformOverride,
@@ -235,6 +240,23 @@ export function CadenceShell({
     </button>
   )
 
+  const SolanaBtn = (
+    <button
+      aria-label={solanaOpen ? "Close Solana workbench" : "Open Solana workbench"}
+      aria-pressed={solanaOpen}
+      className={cn(
+        "rounded-md p-1.5 transition-colors",
+        solanaOpen
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+      )}
+      onClick={onToggleSolana}
+      type="button"
+    >
+      <Waves className="h-4 w-4" />
+    </button>
+  )
+
   const SidebarToggleBtn = (
     <button
       aria-label={sidebarCollapsed ? "Expand project sidebar" : "Collapse project sidebar"}
@@ -381,6 +403,7 @@ export function CadenceShell({
             {IosBtn}
             {AndroidBtn}
             {BrowserBtn}
+            {SolanaBtn}
             {GamesBtn}
             {SettingsBtn}
           </div>
@@ -419,6 +442,7 @@ export function CadenceShell({
               {IosBtn}
               {AndroidBtn}
               {BrowserBtn}
+              {SolanaBtn}
               {GamesBtn}
               {SettingsBtn}
               <div className="mx-2 h-4 w-px bg-border" />
