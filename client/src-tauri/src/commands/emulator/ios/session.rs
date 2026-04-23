@@ -174,9 +174,9 @@ impl IosSession {
             Orientation::Landscape => "landscapeLeft",
         };
         xcrun::set_orientation(&self.device_id, value).map_err(|err| {
-            CommandError::system_fault(
+            CommandError::user_fixable(
                 "ios_set_orientation_failed",
-                format!("simctl ui orientation failed: {err}"),
+                format!("iOS Simulator rotation failed: {err}"),
             )
         })
     }

@@ -253,16 +253,80 @@ pub fn push_notification(udid: &str, bundle_id: &str, payload: &str) -> Result<(
 }
 
 /// Set the simulator's UI orientation.
+///
+/// iOS Simulator has never exposed a stable `simctl ui orientation`
+/// subcommand — recent Xcode releases only accept `appearance`,
+/// `increase_contrast`, and `content_size`. The standard interactive
+/// path for rotation is the Simulator.app Device menu (Cmd+Left /
+/// Cmd+Right), which triggers the same UIDevice orientation
+/// notifications a real device would fire. We drive that via
+/// AppleScript.
+///
+/// This requires the user to grant Accessibility permission to Cadence
+/// (System Settings → Privacy & Security → Accessibility). If it's
+/// denied we surface a typed error pointing at the setting.
 pub fn set_orientation(udid: &str, value: &str) -> Result<()> {
-    let output = Command::new("xcrun")
-        .args(["simctl", "ui", udid, "orientation", value])
+    // Ensure Simulator.app is running and pointed at our UDID. This is
+    // a no-op when it's already up — `open -a` just brings the
+    // existing instance forward. We still target the specific device
+    // so the keystroke doesn't rotate the wrong simulator window.
+    if let Err(err) = Command::new("open")
+        .args(["-g", "-a", "Simulator", "--args", "-CurrentDeviceUDID", udid])
+        .status()
+    {
+        return Err(io_other(format!(
+            "could not launch Simulator.app for rotation: {err}"
+        )));
+    }
+
+    // Give Simulator.app a brief moment to bring the window up if it
+    // was just launched — System Events can't target a process that
+    // isn't registered yet.
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Key codes: 123 = Left Arrow, 124 = Right Arrow. Cmd+Left rotates
+    // the window counter-clockwise (portrait → landscapeLeft), Cmd+Right
+    // rotates clockwise (portrait → landscapeRight).
+    let key_code = match value {
+        "portrait" | "portraitUpsideDown" => "124",
+        "landscapeLeft" | "landscape" => "123",
+        "landscapeRight" => "124",
+        other => {
+            return Err(io_other(format!(
+                "unsupported orientation value: {other}"
+            )));
+        }
+    };
+
+    let script = format!(
+        r#"tell application "Simulator" to activate
+tell application "System Events"
+  tell process "Simulator"
+    key code {key_code} using command down
+  end tell
+end tell"#
+    );
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
         .stderr(Stdio::piped())
         .output()?;
+
     if !output.status.success() {
-        return Err(io_other(format!(
-            "simctl ui orientation failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        // osascript error -1743 = "not authorized to send keystrokes",
+        // i.e. Accessibility permission is missing. Rewrite to a
+        // user-actionable message; otherwise pass the stderr through.
+        let message = if stderr.contains("1743") || stderr.contains("not authorized") {
+            "Cadence is not allowed to rotate the iOS Simulator. Grant Accessibility \
+             permission in System Settings → Privacy & Security → Accessibility, \
+             then try again."
+                .to_string()
+        } else {
+            format!("Simulator rotation via AppleScript failed: {stderr}")
+        };
+        return Err(io_other(message));
     }
     Ok(())
 }
