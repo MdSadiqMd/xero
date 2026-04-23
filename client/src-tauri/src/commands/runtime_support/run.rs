@@ -5,8 +5,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
     auth::openai_compatible::{
-        missing_openai_compatible_api_key_error, resolve_openai_compatible_endpoint_for_profile,
-        resolve_openai_compatible_launch_env,
+        resolve_openai_compatible_endpoint_for_profile, resolve_openai_compatible_launch_env,
     },
     commands::{
         get_runtime_session::reconcile_runtime_session,
@@ -32,7 +31,8 @@ use crate::{
         launch_detached_runtime_supervisor, probe_runtime_run, resolve_runtime_shell_selection,
         RuntimeSupervisorLaunchContext, RuntimeSupervisorLaunchEnv, RuntimeSupervisorLaunchRequest,
         RuntimeSupervisorProbeRequest, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID,
-        GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
+        GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
+        OPENAI_API_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -427,30 +427,22 @@ fn prepare_runtime_supervisor_launch<R: Runtime>(
     } else if matches!(
         runtime.provider_id.as_str(),
         OPENAI_API_PROVIDER_ID
+            | OLLAMA_PROVIDER_ID
             | AZURE_OPENAI_PROVIDER_ID
             | GITHUB_MODELS_PROVIDER_ID
             | GEMINI_AI_STUDIO_PROVIDER_ID
     ) {
+        let endpoint = resolve_openai_compatible_endpoint_for_profile(
+            active_profile,
+            &state.openai_compatible_auth_config(),
+        )
+        .map_err(command_error_from_auth)?;
         let readiness = active_profile.readiness(&provider_profiles.credentials);
         let api_key = match readiness.status {
             ProviderProfileReadinessStatus::Ready => provider_profiles
                 .matched_api_key_credential_for_profile(&active_profile.profile_id)
-                .ok_or_else(|| {
-                    CommandError::user_fixable(
-                        "provider_profile_credentials_unavailable",
-                        format!(
-                            "Cadence cannot launch the detached {} runtime because provider profile `{}` no longer matches the saved app-local secret state.",
-                            runtime.provider_id, active_profile.profile_id
-                        ),
-                    )
-                })?
-                .api_key
-                .clone(),
-            ProviderProfileReadinessStatus::Missing => {
-                return Err(command_error_from_auth(
-                    missing_openai_compatible_api_key_error(runtime.provider_id.as_str(), "launch"),
-                ));
-            }
+                .map(|secret| secret.api_key.as_str()),
+            ProviderProfileReadinessStatus::Missing => None,
             ProviderProfileReadinessStatus::Malformed => {
                 return Err(CommandError::user_fixable(
                     "provider_profile_credentials_unavailable",
@@ -462,14 +454,11 @@ fn prepare_runtime_supervisor_launch<R: Runtime>(
             }
         };
 
-        let endpoint = resolve_openai_compatible_endpoint_for_profile(
-            active_profile,
-            &state.openai_compatible_auth_config(),
-        )
-        .map_err(command_error_from_auth)?;
-        let env = resolve_openai_compatible_launch_env(&api_key, &endpoint)
+        let env = resolve_openai_compatible_launch_env(api_key, &endpoint)
             .map_err(command_error_from_auth)?;
-        launch_env.insert("OPENAI_API_KEY", env.api_key);
+        if let Some(api_key) = env.api_key {
+            launch_env.insert("OPENAI_API_KEY", api_key);
+        }
         launch_env.insert("OPENAI_BASE_URL", env.base_url);
         if let Some(api_version) = env.api_version {
             launch_env.insert("OPENAI_API_VERSION", api_version);

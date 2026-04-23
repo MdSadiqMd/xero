@@ -11,12 +11,13 @@ use crate::{
     provider_profiles::ProviderProfileRecord,
     runtime::{
         ResolvedRuntimeProvider, AZURE_OPENAI_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
-        GEMINI_RUNTIME_KIND, GITHUB_MODELS_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
-        OPENAI_COMPATIBLE_RUNTIME_KIND,
+        GEMINI_RUNTIME_KIND, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
+        OPENAI_API_PROVIDER_ID, OPENAI_COMPATIBLE_RUNTIME_KIND,
     },
 };
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434/v1";
 const DEFAULT_GITHUB_MODELS_BASE_URL: &str = "https://models.inference.ai.azure.com";
 const DEFAULT_GITHUB_MODELS_CATALOG_URL: &str = "https://models.github.ai/catalog/models";
 const DEFAULT_GEMINI_AI_STUDIO_BASE_URL: &str =
@@ -142,7 +143,7 @@ pub struct OpenAiCompatibleDiscoveredModel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiCompatibleLaunchEnv {
-    pub api_key: String,
+    pub api_key: Option<String>,
     pub base_url: String,
     pub api_version: Option<String>,
 }
@@ -243,11 +244,11 @@ pub(crate) fn resolve_openai_compatible_endpoint_for_settings(
 }
 
 pub(crate) fn resolve_openai_compatible_launch_env(
-    api_key: &str,
+    api_key: Option<&str>,
     endpoint: &ResolvedOpenAiCompatibleEndpoint,
 ) -> Result<OpenAiCompatibleLaunchEnv, AuthFlowError> {
-    let api_key = api_key.trim();
-    if api_key.is_empty() {
+    let api_key = normalize_optional(api_key).map(str::to_owned);
+    if api_key_required_for_endpoint(endpoint) && api_key.is_none() {
         return Err(missing_openai_compatible_api_key_error(
             endpoint.provider_id.as_str(),
             "prepare",
@@ -266,7 +267,7 @@ pub(crate) fn resolve_openai_compatible_launch_env(
     })?;
 
     Ok(OpenAiCompatibleLaunchEnv {
-        api_key: api_key.to_owned(),
+        api_key,
         base_url,
         api_version: endpoint.api_version.clone(),
     })
@@ -288,17 +289,18 @@ pub(crate) fn bind_openai_compatible_runtime_session(
     settings: &RuntimeSettingsSnapshot,
     config: &OpenAiCompatibleAuthConfig,
 ) -> Result<OpenAiCompatibleBindOutcome, AuthFlowError> {
-    let Some(api_key) = settings.provider_api_key.as_deref() else {
+    let endpoint = resolve_openai_compatible_endpoint_for_settings(provider, settings, config)?;
+    let api_key = normalize_optional(settings.provider_api_key.as_deref());
+    if api_key_required_for_endpoint(&endpoint) && api_key.is_none() {
         return Ok(OpenAiCompatibleBindOutcome::SignedOut(AuthDiagnostic {
             code: missing_api_key_code(provider.provider_id).into(),
             message: missing_api_key_message(provider.provider_id, "bind"),
             retryable: false,
         }));
-    };
+    }
 
-    resolve_openai_compatible_endpoint_for_settings(provider, settings, config)?;
     Ok(OpenAiCompatibleBindOutcome::Ready(synthetic_binding(
-        provider, settings, api_key,
+        provider, settings, &endpoint, api_key,
     )))
 }
 
@@ -309,7 +311,9 @@ pub(crate) fn reconcile_openai_compatible_runtime_session(
     settings: &RuntimeSettingsSnapshot,
     config: &OpenAiCompatibleAuthConfig,
 ) -> Result<OpenAiCompatibleReconcileOutcome, AuthFlowError> {
-    let Some(api_key) = settings.provider_api_key.as_deref() else {
+    let endpoint = resolve_openai_compatible_endpoint_for_settings(provider, settings, config)?;
+    let api_key = normalize_optional(settings.provider_api_key.as_deref());
+    if api_key_required_for_endpoint(&endpoint) && api_key.is_none() {
         return Ok(OpenAiCompatibleReconcileOutcome::SignedOut(
             AuthDiagnostic {
                 code: missing_api_key_code(provider.provider_id).into(),
@@ -317,11 +321,9 @@ pub(crate) fn reconcile_openai_compatible_runtime_session(
                 retryable: false,
             },
         ));
-    };
+    }
 
-    resolve_openai_compatible_endpoint_for_settings(provider, settings, config)?;
-
-    let expected = synthetic_binding(provider, settings, api_key);
+    let expected = synthetic_binding(provider, settings, &endpoint, api_key);
     let account_id = normalized(account_id);
     let session_id = normalized(session_id);
     if account_id != Some(expected.account_id.as_str())
@@ -341,25 +343,31 @@ pub(crate) fn reconcile_openai_compatible_runtime_session(
 }
 
 pub(crate) fn fetch_openai_compatible_models(
-    api_key: &str,
+    api_key: Option<&str>,
     endpoint: &ResolvedOpenAiCompatibleEndpoint,
     config: &OpenAiCompatibleAuthConfig,
 ) -> Result<Vec<OpenAiCompatibleDiscoveredModel>, AuthFlowError> {
+    let api_key = normalize_optional(api_key);
+    if api_key_required_for_endpoint(endpoint) && api_key.is_none() {
+        return Err(missing_openai_compatible_api_key_error(
+            endpoint.provider_id.as_str(),
+            "discover",
+        ));
+    }
+
     let client = config.http_client()?;
-    let response = client
-        .get(endpoint.models_url()?)
-        .header("Authorization", format!("Bearer {api_key}"))
+    let mut request = client.get(endpoint.models_url()?);
+    if let Some(api_key) = api_key {
+        request = request.header("Authorization", format!("Bearer {api_key}"));
+    }
+    let response = request
         .send()
         .map_err(|error| map_probe_transport_error(endpoint.provider_id.as_str(), error))?;
 
     let status = response.status();
     if !status.is_success() {
         let body = response.text().unwrap_or_default();
-        return Err(map_probe_status_error(
-            endpoint.provider_id.as_str(),
-            status.as_u16(),
-            body.trim(),
-        ));
+        return Err(map_probe_status_error(endpoint, status.as_u16(), body.trim()));
     }
 
     let body = response.text().map_err(|error| {
@@ -431,6 +439,12 @@ fn resolve_openai_compatible_endpoint(
                 OpenAiCompatibleModelListStrategy::Live,
                 None,
             ),
+            OLLAMA_PROVIDER_ID => (
+                OPENAI_COMPATIBLE_RUNTIME_KIND,
+                Some(DEFAULT_OLLAMA_BASE_URL),
+                OpenAiCompatibleModelListStrategy::Live,
+                None,
+            ),
             AZURE_OPENAI_PROVIDER_ID => (
                 OPENAI_COMPATIBLE_RUNTIME_KIND,
                 None,
@@ -465,7 +479,7 @@ fn resolve_openai_compatible_endpoint(
     }
 
     let effective_base_url = match provider_id {
-        GITHUB_MODELS_PROVIDER_ID | OPENAI_API_PROVIDER_ID => base_url
+        GITHUB_MODELS_PROVIDER_ID | OPENAI_API_PROVIDER_ID | OLLAMA_PROVIDER_ID => base_url
             .or(default_base_url)
             .ok_or_else(|| {
                 AuthFlowError::terminal(
@@ -803,16 +817,26 @@ fn parse_thinking_effort(
 fn synthetic_binding(
     provider: ResolvedRuntimeProvider,
     settings: &RuntimeSettingsSnapshot,
-    api_key: &str,
+    endpoint: &ResolvedOpenAiCompatibleEndpoint,
+    api_key: Option<&str>,
 ) -> OpenAiCompatibleRuntimeSessionBinding {
-    let key_fingerprint = sha256_hex(format!("{}:{api_key}", provider.provider_id));
+    let auth_fingerprint = normalize_optional(api_key)
+        .map(|api_key| sha256_hex(format!("secret:{}:{api_key}", provider.provider_id)))
+        .unwrap_or_else(|| {
+            sha256_hex(format!(
+                "local:{}:{}:{}",
+                provider.provider_id,
+                endpoint.effective_base_url,
+                endpoint.api_version.as_deref().unwrap_or("none"),
+            ))
+        });
     let effective_timestamp = settings
         .provider_api_key_updated_at
         .as_deref()
         .unwrap_or(settings.settings.updated_at.as_str());
     let session_fingerprint = sha256_hex(format!(
         "{}:{}:{}:{}:{}:{}:{}:{}",
-        key_fingerprint,
+        auth_fingerprint,
         settings.settings.provider_id,
         settings.runtime_kind,
         settings.settings.model_id,
@@ -824,7 +848,7 @@ fn synthetic_binding(
 
     OpenAiCompatibleRuntimeSessionBinding {
         provider_id: provider.provider_id.into(),
-        account_id: format!("{}-acct-{}", provider.provider_id, &key_fingerprint[..16]),
+        account_id: format!("{}-acct-{}", provider.provider_id, &auth_fingerprint[..16]),
         session_id: format!(
             "{}-session-{}",
             provider.provider_id,
@@ -832,6 +856,21 @@ fn synthetic_binding(
         ),
         updated_at: crate::auth::now_timestamp(),
     }
+}
+
+fn api_key_required_for_endpoint(endpoint: &ResolvedOpenAiCompatibleEndpoint) -> bool {
+    !endpoint_uses_local_optional_auth(endpoint)
+}
+
+fn endpoint_uses_local_optional_auth(endpoint: &ResolvedOpenAiCompatibleEndpoint) -> bool {
+    endpoint.provider_id == OLLAMA_PROVIDER_ID || is_local_base_url(&endpoint.effective_base_url)
+}
+
+fn is_local_base_url(base_url: &str) -> bool {
+    Url::parse(&normalize_base_url(base_url))
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
 }
 
 fn map_probe_transport_error(provider_id: &str, error: reqwest::Error) -> AuthFlowError {
@@ -856,19 +895,32 @@ fn map_probe_transport_error(provider_id: &str, error: reqwest::Error) -> AuthFl
     )
 }
 
-fn map_probe_status_error(provider_id: &str, status: u16, body: &str) -> AuthFlowError {
+fn map_probe_status_error(
+    endpoint: &ResolvedOpenAiCompatibleEndpoint,
+    status: u16,
+    body: &str,
+) -> AuthFlowError {
     let context = if body.is_empty() {
         String::new()
     } else {
         format!(" Provider said: {body}")
     };
+    let provider_id = endpoint.provider_id.as_str();
 
     match status {
-        401 | 403 => AuthFlowError::terminal(
+        401 | 403 if api_key_required_for_endpoint(endpoint) => AuthFlowError::terminal(
             missing_api_key_code(provider_id),
             RuntimeAuthPhase::Failed,
             format!(
                 "Cadence rejected the {} models probe because the API key was unauthorized.{context}",
+                provider_display_label(provider_id)
+            ),
+        ),
+        401 | 403 => AuthFlowError::terminal(
+            provider_unavailable_code(provider_id),
+            RuntimeAuthPhase::Failed,
+            format!(
+                "Cadence rejected the {} models probe because the local endpoint returned HTTP {status}.{context}",
                 provider_display_label(provider_id)
             ),
         ),
@@ -903,6 +955,7 @@ fn provider_display_label(provider_id: &str) -> &'static str {
     match provider_id {
         GITHUB_MODELS_PROVIDER_ID => "GitHub Models",
         OPENAI_API_PROVIDER_ID => "OpenAI-compatible",
+        OLLAMA_PROVIDER_ID => "Ollama",
         AZURE_OPENAI_PROVIDER_ID => "Azure OpenAI",
         GEMINI_AI_STUDIO_PROVIDER_ID => "Gemini AI Studio",
         _ => "OpenAI-compatible",
@@ -913,6 +966,7 @@ fn missing_api_key_code(provider_id: &str) -> &'static str {
     match provider_id {
         GITHUB_MODELS_PROVIDER_ID => "github_models_token_missing",
         OPENAI_API_PROVIDER_ID => "openai_api_key_missing",
+        OLLAMA_PROVIDER_ID => "ollama_api_key_missing",
         AZURE_OPENAI_PROVIDER_ID => "azure_openai_api_key_missing",
         GEMINI_AI_STUDIO_PROVIDER_ID => "gemini_ai_studio_api_key_missing",
         _ => "provider_api_key_missing",
@@ -935,6 +989,7 @@ fn cloud_binding_stale_code(provider_id: &str) -> &'static str {
     match provider_id {
         GITHUB_MODELS_PROVIDER_ID => "github_models_binding_stale",
         OPENAI_API_PROVIDER_ID => "openai_binding_stale",
+        OLLAMA_PROVIDER_ID => "ollama_binding_stale",
         AZURE_OPENAI_PROVIDER_ID => "azure_openai_binding_stale",
         GEMINI_AI_STUDIO_PROVIDER_ID => "gemini_ai_studio_binding_stale",
         _ => "runtime_provider_binding_stale",
@@ -945,6 +1000,7 @@ fn provider_unavailable_code(provider_id: &str) -> &'static str {
     match provider_id {
         GITHUB_MODELS_PROVIDER_ID => "github_models_provider_unavailable",
         OPENAI_API_PROVIDER_ID => "openai_provider_unavailable",
+        OLLAMA_PROVIDER_ID => "ollama_provider_unavailable",
         AZURE_OPENAI_PROVIDER_ID => "azure_openai_provider_unavailable",
         GEMINI_AI_STUDIO_PROVIDER_ID => "gemini_ai_studio_provider_unavailable",
         _ => "openai_compatible_provider_unavailable",
@@ -955,6 +1011,7 @@ fn models_decode_failed_code(provider_id: &str) -> &'static str {
     match provider_id {
         GITHUB_MODELS_PROVIDER_ID => "github_models_models_decode_failed",
         OPENAI_API_PROVIDER_ID => "openai_models_decode_failed",
+        OLLAMA_PROVIDER_ID => "ollama_models_decode_failed",
         AZURE_OPENAI_PROVIDER_ID => "azure_openai_models_decode_failed",
         GEMINI_AI_STUDIO_PROVIDER_ID => "gemini_ai_studio_models_decode_failed",
         _ => "openai_compatible_models_decode_failed",

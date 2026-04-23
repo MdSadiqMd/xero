@@ -427,6 +427,8 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       iosOpen={iosOpen}
       onToggleAndroid={toggleAndroid}
       androidOpen={androidOpen}
+      onToggleSolana={toggleSolana}
+      solanaOpen={solanaOpen}
       sidebarCollapsed={sidebarCollapsed}
       onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
       platformOverride={platformOverride}

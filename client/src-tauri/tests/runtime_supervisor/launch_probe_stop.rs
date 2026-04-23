@@ -578,6 +578,69 @@ pub(crate) fn detached_supervisor_launches_github_models_child_with_context_env_
     assert_eq!(stopped.run.status, project_store::RuntimeRunStatus::Stopped);
 }
 
+pub(crate) fn detached_supervisor_launches_ollama_child_without_api_key_env() {
+    let _guard = supervisor_test_guard();
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-ollama";
+    let repo_root = seed_project(&root, project_id, "repo-ollama", "repo");
+    let state = DesktopState::default();
+
+    let launched = launch_detached_runtime_supervisor(
+        &state,
+        openai_compatible_launch_request(
+            project_id,
+            &repo_root,
+            "run-ollama",
+            "ollama",
+            "openai_compatible",
+            "llama3.2",
+            None,
+            None,
+            Some("http://127.0.0.1:11434/v1"),
+            None,
+            &openai_compatible_environment_report_script(),
+        ),
+    )
+    .expect("launch ollama detached runtime supervisor");
+
+    assert_eq!(launched.run.provider_id, "ollama");
+    assert_eq!(launched.run.runtime_kind, "openai_compatible");
+
+    let running = wait_for_runtime_run(&state, &repo_root, project_id, |snapshot| {
+        snapshot.run.status == project_store::RuntimeRunStatus::Running
+            && snapshot.run.transport.liveness
+                == project_store::RuntimeRunTransportLiveness::Reachable
+            && snapshot.last_checkpoint_sequence >= 1
+    });
+
+    let mut reader = attach_reader(
+        &running.run.transport.endpoint,
+        SupervisorControlRequest::attach(project_id, "run-ollama", None),
+    );
+    let attached = expect_attach_ack(read_supervisor_response(&mut reader));
+    let frames = read_event_frames(&mut reader, attached.replayed_count);
+    assert_monotonic_sequences(&frames, "run-ollama");
+    let transcripts = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            SupervisorControlResponse::Event {
+                item: SupervisorLiveEventPayload::Transcript { text },
+                ..
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(transcripts.iter().any(|text| *text == "key-missing"));
+    assert!(transcripts.iter().any(|text| *text == "provider:ollama"));
+    assert!(transcripts.iter().any(|text| *text == "model:llama3.2"));
+
+    let stopped = stop_runtime_run(&state, stop_request(project_id, &repo_root))
+        .expect("stop ollama detached runtime supervisor")
+        .expect("ollama runtime run should exist after stop");
+    assert_eq!(stopped.run.status, project_store::RuntimeRunStatus::Stopped);
+}
+
 pub(crate) fn detached_supervisor_rejects_openai_compatible_launch_without_api_key_env() {
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");

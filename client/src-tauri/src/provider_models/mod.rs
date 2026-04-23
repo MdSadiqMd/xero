@@ -7,6 +7,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
+use url::Url;
 
 use crate::{
     auth::{
@@ -30,8 +31,8 @@ use crate::{
     },
     runtime::{
         ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
-        GITHUB_MODELS_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
-        OPENROUTER_PROVIDER_ID,
+        GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
+        OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -379,25 +380,31 @@ fn refresh_provider_model_catalog(
                 .map_err(diagnostic_from_auth_error)
         }
         ProviderModelCatalogRefreshTarget::OpenAiCompatible(endpoint) => {
-            let Some(secret) =
-                provider_profiles.matched_api_key_credential_for_profile(&profile.profile_id)
-            else {
-                let diagnostic =
-                    diagnostic_from_auth_error(missing_openai_compatible_api_key_error(
-                        profile.provider_id.as_str(),
-                        "discover",
-                    ));
+            let readiness = profile.readiness(&provider_profiles.credentials);
+            if matches!(readiness.status, ProviderProfileReadinessStatus::Malformed) {
+                let diagnostic = ProviderModelCatalogDiagnostic {
+                    code: "provider_profile_credentials_unavailable".into(),
+                    message: format!(
+                        "Cadence cannot discover models for provider profile `{}` because the redacted credential metadata no longer matches the saved app-local secret state.",
+                        profile.profile_id
+                    ),
+                    retryable: false,
+                };
                 return match refresh_context.cached_row.as_ref() {
                     Some(cached) => catalog_from_cached_row(profile, cached, Some(diagnostic)),
                     None => {
                         unavailable_or_manual_catalog(profile, refresh_target, Some(diagnostic))
                     }
                 };
-            };
+            }
+
+            let api_key = provider_profiles
+                .matched_api_key_credential_for_profile(&profile.profile_id)
+                .map(|secret| secret.api_key.as_str());
 
             match endpoint.model_list_strategy {
                 OpenAiCompatibleModelListStrategy::Live => fetch_openai_compatible_models(
-                    &secret.api_key,
+                    api_key,
                     endpoint,
                     &state.openai_compatible_auth_config(),
                 )
@@ -735,6 +742,7 @@ fn resolve_provider_model_catalog_refresh_target(
         OPENROUTER_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::OpenRouter),
         ANTHROPIC_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::Anthropic),
         OPENAI_API_PROVIDER_ID
+        | OLLAMA_PROVIDER_ID
         | AZURE_OPENAI_PROVIDER_ID
         | GITHUB_MODELS_PROVIDER_ID
         | GEMINI_AI_STUDIO_PROVIDER_ID => {
@@ -973,6 +981,7 @@ fn readiness_diagnostic(
         OPENROUTER_PROVIDER_ID
             | ANTHROPIC_PROVIDER_ID
             | OPENAI_API_PROVIDER_ID
+            | OLLAMA_PROVIDER_ID
             | AZURE_OPENAI_PROVIDER_ID
             | GITHUB_MODELS_PROVIDER_ID
             | GEMINI_AI_STUDIO_PROVIDER_ID
@@ -983,10 +992,14 @@ fn readiness_diagnostic(
     let readiness = profile.readiness(&provider_profiles.credentials);
     match readiness.status {
         ProviderProfileReadinessStatus::Ready => None,
+        ProviderProfileReadinessStatus::Missing if openai_compatible_profile_uses_local_auth(profile) => {
+            None
+        }
         ProviderProfileReadinessStatus::Missing => Some(match profile.provider_id.as_str() {
             OPENROUTER_PROVIDER_ID => missing_openrouter_credential_diagnostic(profile),
             ANTHROPIC_PROVIDER_ID => missing_anthropic_credential_diagnostic(profile),
             OPENAI_API_PROVIDER_ID
+            | OLLAMA_PROVIDER_ID
             | AZURE_OPENAI_PROVIDER_ID
             | GITHUB_MODELS_PROVIDER_ID
             | GEMINI_AI_STUDIO_PROVIDER_ID => {
@@ -1015,6 +1028,7 @@ fn readiness_diagnostic(
                 retryable: false,
             },
             OPENAI_API_PROVIDER_ID
+            | OLLAMA_PROVIDER_ID
             | AZURE_OPENAI_PROVIDER_ID
             | GITHUB_MODELS_PROVIDER_ID
             | GEMINI_AI_STUDIO_PROVIDER_ID => {
@@ -1030,6 +1044,22 @@ fn readiness_diagnostic(
             _ => return None,
         }),
     }
+}
+
+fn openai_compatible_profile_uses_local_auth(profile: &ProviderProfileRecord) -> bool {
+    profile.provider_id == OLLAMA_PROVIDER_ID
+        || (profile.provider_id == OPENAI_API_PROVIDER_ID
+            && profile
+                .base_url
+                .as_deref()
+                .is_some_and(is_local_openai_compatible_base_url))
+}
+
+fn is_local_openai_compatible_base_url(base_url: &str) -> bool {
+    Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
 }
 
 fn missing_openrouter_credential_diagnostic(

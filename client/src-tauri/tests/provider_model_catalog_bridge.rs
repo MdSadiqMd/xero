@@ -100,6 +100,13 @@ fn spawn_static_http_server(status: u16, body: &str) -> String {
     format!("http://{address}")
 }
 
+fn unused_local_openai_base_url() -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind unused local port");
+    let address = listener.local_addr().expect("unused local port addr");
+    drop(listener);
+    format!("http://{address}/v1")
+}
+
 fn seed_openrouter_profile(
     app: &tauri::App<tauri::test::MockRuntime>,
     profile_id: &str,
@@ -857,6 +864,88 @@ fn get_provider_model_catalog_discovers_openai_compatible_profile_with_live_mode
 
     let cache = std::fs::read_to_string(catalog_cache_path(&root)).expect("read catalog cache");
     assert!(!cache.contains(secret));
+}
+
+#[test]
+fn get_provider_model_catalog_discovers_localhost_openai_compatible_profile_without_api_key() {
+    let base_url = format!("{}/v1", spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"llama3.2","display_name":"Llama 3.2"}]}"#,
+    ));
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    seed_openai_compatible_profile(
+        &app,
+        "localhost-openai-work",
+        "openai_api",
+        "openai_compatible",
+        "llama3.2",
+        Some("openai_api"),
+        Some(&base_url),
+        None,
+        None,
+    );
+
+    let catalog = get_provider_model_catalog(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetProviderModelCatalogRequestDto {
+            profile_id: "localhost-openai-work".into(),
+            force_refresh: true,
+        },
+    )
+    .expect("discover localhost openai-compatible profile catalog");
+
+    assert_eq!(catalog.source, ProviderModelCatalogSourceDto::Live);
+    assert_eq!(catalog.provider_id, "openai_api");
+    assert_eq!(catalog.models.len(), 1);
+    assert_eq!(catalog.models[0].model_id, "llama3.2");
+    assert!(catalog.last_refresh_error.is_none());
+}
+
+#[test]
+fn get_provider_model_catalog_returns_typed_unreachable_error_for_ollama_without_api_key_copy() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    seed_openai_compatible_profile(
+        &app,
+        "ollama-work",
+        "ollama",
+        "openai_compatible",
+        "llama3.2",
+        Some("ollama"),
+        Some(&unused_local_openai_base_url()),
+        None,
+        None,
+    );
+
+    let catalog = get_provider_model_catalog(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetProviderModelCatalogRequestDto {
+            profile_id: "ollama-work".into(),
+            force_refresh: true,
+        },
+    )
+    .expect("return typed unreachable ollama catalog diagnostic");
+
+    assert_eq!(catalog.source, ProviderModelCatalogSourceDto::Unavailable);
+    assert_eq!(catalog.provider_id, "ollama");
+    assert_eq!(
+        catalog
+            .last_refresh_error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("ollama_provider_unavailable")
+    );
+    assert!(
+        !catalog
+            .last_refresh_error
+            .as_ref()
+            .expect("ollama refresh error")
+            .message
+            .contains("API key")
+    );
 }
 
 #[test]

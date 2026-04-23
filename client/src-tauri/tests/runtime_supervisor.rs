@@ -57,6 +57,11 @@ fn detached_supervisor_launches_github_models_child_with_context_env_and_secret_
 }
 
 #[test]
+fn detached_supervisor_launches_ollama_child_without_api_key_env() {
+    launch_probe_stop::detached_supervisor_launches_ollama_child_without_api_key_env();
+}
+
+#[test]
 fn detached_supervisor_rejects_openai_compatible_launch_without_api_key_env() {
     launch_probe_stop::detached_supervisor_rejects_openai_compatible_launch_without_api_key_env();
 }

@@ -169,30 +169,10 @@ fn validate_inherited_launch_environment(
             }
         }
         crate::runtime::OPENAI_API_PROVIDER_ID
+        | crate::runtime::OLLAMA_PROVIDER_ID
         | crate::runtime::AZURE_OPENAI_PROVIDER_ID
         | crate::runtime::GITHUB_MODELS_PROVIDER_ID
         | crate::runtime::GEMINI_AI_STUDIO_PROVIDER_ID => {
-            let openai_api_key = std::env::var(OPENAI_API_KEY_ENV)
-                .ok()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty());
-            if openai_api_key.is_none() {
-                return Err(CommandError::user_fixable(
-                    match launch_context.provider_id.as_str() {
-                        crate::runtime::OPENAI_API_PROVIDER_ID => "openai_api_key_missing",
-                        crate::runtime::AZURE_OPENAI_PROVIDER_ID => "azure_openai_api_key_missing",
-                        crate::runtime::GITHUB_MODELS_PROVIDER_ID => {
-                            "github_models_token_missing"
-                        }
-                        crate::runtime::GEMINI_AI_STUDIO_PROVIDER_ID => {
-                            "gemini_ai_studio_api_key_missing"
-                        }
-                        _ => "provider_api_key_missing",
-                    },
-                    "Cadence cannot launch the detached OpenAI-compatible runtime because the app-local API key was not injected into the launch environment.",
-                ));
-            }
-
             let openai_base_url = std::env::var(OPENAI_BASE_URL_ENV)
                 .ok()
                 .map(|value| value.trim().to_owned())
@@ -212,6 +192,29 @@ fn validate_inherited_launch_environment(
                 )
             })?;
 
+            let local_base_url = is_local_openai_compatible_base_url(&openai_base_url);
+            let openai_api_key = std::env::var(OPENAI_API_KEY_ENV)
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+            if !local_base_url && openai_api_key.is_none() {
+                return Err(CommandError::user_fixable(
+                    match launch_context.provider_id.as_str() {
+                        crate::runtime::OPENAI_API_PROVIDER_ID => "openai_api_key_missing",
+                        crate::runtime::OLLAMA_PROVIDER_ID => "ollama_api_key_missing",
+                        crate::runtime::AZURE_OPENAI_PROVIDER_ID => "azure_openai_api_key_missing",
+                        crate::runtime::GITHUB_MODELS_PROVIDER_ID => {
+                            "github_models_token_missing"
+                        }
+                        crate::runtime::GEMINI_AI_STUDIO_PROVIDER_ID => {
+                            "gemini_ai_studio_api_key_missing"
+                        }
+                        _ => "provider_api_key_missing",
+                    },
+                    "Cadence cannot launch the detached OpenAI-compatible runtime because the app-local API key was not injected into the launch environment.",
+                ));
+            }
+
             if launch_context.provider_id == crate::runtime::AZURE_OPENAI_PROVIDER_ID {
                 let api_version = std::env::var(OPENAI_API_VERSION_ENV)
                     .ok()
@@ -229,6 +232,13 @@ fn validate_inherited_launch_environment(
     }
 
     Ok(())
+}
+
+fn is_local_openai_compatible_base_url(base_url: &str) -> bool {
+    Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
 }
 
 fn apply_launch_context_to_child_environment(
@@ -270,12 +280,20 @@ fn apply_launch_context_to_child_environment(
     if matches!(
         launch_context.provider_id.as_str(),
         crate::runtime::OPENAI_API_PROVIDER_ID
+            | crate::runtime::OLLAMA_PROVIDER_ID
             | crate::runtime::AZURE_OPENAI_PROVIDER_ID
             | crate::runtime::GITHUB_MODELS_PROVIDER_ID
             | crate::runtime::GEMINI_AI_STUDIO_PROVIDER_ID
     ) {
-        if let Ok(api_key) = std::env::var(OPENAI_API_KEY_ENV) {
-            builder.env(OPENAI_API_KEY_ENV, api_key);
+        let local_base_url = std::env::var(OPENAI_BASE_URL_ENV)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .is_some_and(|base_url| is_local_openai_compatible_base_url(&base_url));
+        if !local_base_url {
+            if let Ok(api_key) = std::env::var(OPENAI_API_KEY_ENV) {
+                builder.env(OPENAI_API_KEY_ENV, api_key);
+            }
         }
         if let Ok(base_url) = std::env::var(OPENAI_BASE_URL_ENV) {
             builder.env(OPENAI_BASE_URL_ENV, base_url);

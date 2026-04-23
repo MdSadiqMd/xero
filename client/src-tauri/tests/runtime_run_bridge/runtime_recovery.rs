@@ -538,6 +538,101 @@ pub(crate) fn start_runtime_run_launches_openai_compatible_with_truthful_provide
     assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
 }
 
+pub(crate) fn start_runtime_run_launches_ollama_with_truthful_provider_identity_and_secret_free_persistence(
+) {
+    let root = tempfile::tempdir().expect("temp dir");
+    let models_base_url = spawn_static_http_server_for_requests(
+        200,
+        r#"{"data":[{"id":"llama3.2","display_name":"Llama 3.2"}]}"#,
+        3,
+    );
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, repo_root) = seed_project(&root, &app);
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "ollama-work".into(),
+            provider_id: "ollama".into(),
+            runtime_kind: "openai_compatible".into(),
+            label: "Ollama".into(),
+            model_id: "llama3.2".into(),
+            preset_id: Some("ollama".into()),
+            base_url: Some(format!("{models_base_url}/v1")),
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: None,
+            activate: true,
+        },
+    )
+    .expect("save ollama provider profile");
+
+    let runtime = start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind ollama runtime session before run start");
+    assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+    assert_eq!(runtime.provider_id, "ollama");
+    assert_eq!(runtime.runtime_kind, "openai_compatible");
+
+    let launched = start_runtime_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StartRuntimeRunRequestDto {
+            project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
+        },
+    )
+    .expect("start ollama runtime run");
+    assert_eq!(launched.provider_id, "ollama");
+    assert_eq!(launched.runtime_kind, "openai_compatible");
+
+    let running = wait_for_runtime_run(&app, &project_id, |runtime_run| {
+        runtime_run.status == RuntimeRunStatusDto::Running
+            && runtime_run.transport.liveness == RuntimeRunTransportLivenessDto::Reachable
+    });
+    assert_eq!(running.run_id, launched.run_id);
+    assert_eq!(running.provider_id, "ollama");
+    assert_eq!(running.runtime_kind, "openai_compatible");
+    assert_eq!(running.controls.active.model_id, "llama3.2");
+    assert_eq!(running.controls.active.thinking_effort, None);
+
+    let database_bytes =
+        std::fs::read(database_path_for_repo(&repo_root)).expect("read runtime db bytes");
+    let database_text = String::from_utf8_lossy(&database_bytes);
+    assert!(!database_text.contains("OPENAI_API_KEY"));
+
+    let (fresh_state, _fresh_registry_path, _fresh_auth_store_path) = create_state(&root);
+    let fresh_app = build_mock_app(fresh_state);
+    let recovered = wait_for_runtime_run(&fresh_app, &project_id, |runtime_run| {
+        runtime_run.status == RuntimeRunStatusDto::Running
+            && runtime_run.transport.liveness == RuntimeRunTransportLivenessDto::Reachable
+    });
+    assert_eq!(recovered.run_id, launched.run_id);
+    assert_eq!(recovered.provider_id, "ollama");
+    assert_eq!(recovered.runtime_kind, "openai_compatible");
+
+    let stopped = stop_runtime_run(
+        fresh_app.handle().clone(),
+        fresh_app.state::<DesktopState>(),
+        StopRuntimeRunRequestDto {
+            project_id,
+            run_id: launched.run_id,
+        },
+    )
+    .expect("stop recovered ollama runtime run")
+    .expect("ollama runtime run should still exist");
+    assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
+}
+
 pub(crate) fn start_runtime_run_launches_github_models_with_truthful_provider_identity_and_secret_free_persistence(
 ) {
     let root = tempfile::tempdir().expect("temp dir");

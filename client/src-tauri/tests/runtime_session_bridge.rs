@@ -1562,6 +1562,121 @@ fn get_runtime_session_rejects_stale_anthropic_binding_after_key_rotation() {
 }
 
 #[test]
+fn start_runtime_session_binds_ollama_without_api_key_using_local_default_endpoint() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "ollama-default".into(),
+            provider_id: "ollama".into(),
+            runtime_kind: "openai_compatible".into(),
+            label: "Ollama".into(),
+            model_id: "llama3.2".into(),
+            preset_id: Some("ollama".into()),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: None,
+            activate: true,
+        },
+    )
+    .expect("save ollama provider profile");
+
+    let runtime = start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind ollama runtime session");
+
+    assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+    assert_eq!(runtime.provider_id, "ollama");
+    assert_eq!(runtime.runtime_kind, "openai_compatible");
+    assert!(runtime.session_id.is_some());
+    assert!(runtime.account_id.is_some());
+    assert!(runtime.last_error.is_none());
+}
+
+#[test]
+fn get_runtime_session_rejects_stale_ollama_binding_after_endpoint_change() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "ollama-default".into(),
+            provider_id: "ollama".into(),
+            runtime_kind: "openai_compatible".into(),
+            label: "Ollama".into(),
+            model_id: "llama3.2".into(),
+            preset_id: Some("ollama".into()),
+            base_url: Some("http://127.0.0.1:11434/v1".into()),
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: None,
+            activate: true,
+        },
+    )
+    .expect("save first ollama provider profile");
+
+    start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind first ollama runtime session");
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "ollama-default".into(),
+            provider_id: "ollama".into(),
+            runtime_kind: "openai_compatible".into(),
+            label: "Ollama".into(),
+            model_id: "llama3.2".into(),
+            preset_id: Some("ollama".into()),
+            base_url: Some("http://127.0.0.1:22434/v1".into()),
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: None,
+            activate: true,
+        },
+    )
+    .expect("update ollama endpoint");
+
+    let reconciled = get_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("reconcile stale ollama binding");
+
+    assert_eq!(reconciled.phase, RuntimeAuthPhase::Idle);
+    assert_eq!(reconciled.provider_id, "ollama");
+    assert_eq!(reconciled.last_error_code.as_deref(), Some("ollama_binding_stale"));
+    assert!(reconciled.session_id.is_none());
+}
+
+#[test]
 fn start_runtime_session_binds_github_models_from_provider_profiles_without_secret_leakage() {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);

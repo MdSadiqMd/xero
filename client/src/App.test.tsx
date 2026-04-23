@@ -1790,6 +1790,21 @@ describe('CadenceApp current UI', () => {
     expect(screen.getByRole('button', { name: /cadence/i })).toBeVisible()
   })
 
+  it('opens the Solana workbench from the titlebar in the normal app shell', async () => {
+    const { adapter } = createAdapter()
+
+    render(<CadenceApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Solana workbench' }))
+
+    expect(screen.getByRole('button', { name: 'Close Solana workbench' })).toBeVisible()
+    expect(screen.getByText('Solana Workbench')).toBeVisible()
+  })
+
   it('auto-collapses the project rail in Editor and restores it when leaving if it started expanded', async () => {
     const { adapter } = createAdapter()
 
