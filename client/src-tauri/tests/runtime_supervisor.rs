@@ -46,6 +46,17 @@ fn detached_supervisor_rejects_anthropic_launch_without_api_key_env() {
 }
 
 #[test]
+fn detached_supervisor_launches_openai_compatible_child_with_context_env_and_secret_free_persistence(
+) {
+    launch_probe_stop::detached_supervisor_launches_openai_compatible_child_with_context_env_and_secret_free_persistence();
+}
+
+#[test]
+fn detached_supervisor_rejects_openai_compatible_launch_without_base_url_env() {
+    launch_probe_stop::detached_supervisor_rejects_openai_compatible_launch_without_base_url_env();
+}
+
+#[test]
 fn detached_supervisor_attach_replays_buffered_events_after_fresh_host_probe() {
     attach_replay::detached_supervisor_attach_replays_buffered_events_after_fresh_host_probe();
 }

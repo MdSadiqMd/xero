@@ -5,6 +5,7 @@
 //! pipeline (emulator process + scrcpy). Phase 4 adds the iOS pipeline.
 
 pub mod android;
+pub mod automation;
 pub mod codec;
 pub mod decoder;
 pub mod events;
@@ -16,8 +17,10 @@ pub mod sdk;
 pub mod synthetic;
 pub mod uri_scheme;
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime, State};
 
@@ -31,11 +34,23 @@ pub use frame_bus::{Frame, FrameBus};
 pub use sdk::{probe_sdks, AndroidSdkStatus, IosSdkStatus, SdkStatus};
 pub use uri_scheme::{handle as handle_uri_scheme, URI_SCHEME};
 
+use automation::{
+    AppDescriptor, BundleIdRequest, HardwareKeyRequest, InstallAppRequest, LaunchAppRequest,
+    LocationRequest, LogSubscribeRequest, PushNotificationRequest, ScreenshotResponse, Selector,
+    SubscriptionToken, SwipeRequest, TapTarget, TypeRequest, UiTree,
+};
+
 /// Process-wide emulator state. Holds the FrameBus (shared with the URI
 /// scheme handler) and the single active device session, if any.
 pub struct EmulatorState {
     frame_bus: Arc<FrameBus>,
     active: Mutex<Option<ActiveDevice>>,
+    log_collector: automation::logs::LogCollector,
+    log_stream: Mutex<Option<LogStreamHandle>>,
+}
+
+enum LogStreamHandle {
+    Android(automation::logs::AndroidLogStream),
 }
 
 impl Default for EmulatorState {
@@ -43,6 +58,8 @@ impl Default for EmulatorState {
         Self {
             frame_bus: Arc::new(FrameBus::new()),
             active: Mutex::new(None),
+            log_collector: automation::logs::LogCollector::new(),
+            log_stream: Mutex::new(None),
         }
     }
 }

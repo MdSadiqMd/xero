@@ -214,14 +214,47 @@ pub(crate) fn seed_anthropic_profile(
         UpsertProviderProfileRequestDto {
             profile_id: profile_id.into(),
             provider_id: "anthropic".into(),
+            runtime_kind: "anthropic".into(),
             label: "Anthropic Work".into(),
             model_id: model_id.into(),
-            openrouter_api_key: None,
-            anthropic_api_key: Some(api_key.into()),
+            preset_id: Some("anthropic".into()),
+            base_url: None,
+            api_version: None,
+            api_key: Some(api_key.into()),
             activate: true,
         },
     )
     .expect("seed anthropic profile");
+}
+
+pub(crate) fn seed_openai_compatible_profile(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    profile_id: &str,
+    provider_id: &str,
+    runtime_kind: &str,
+    model_id: &str,
+    preset_id: Option<&str>,
+    base_url: Option<&str>,
+    api_version: Option<&str>,
+    api_key: &str,
+) {
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: profile_id.into(),
+            provider_id: provider_id.into(),
+            runtime_kind: runtime_kind.into(),
+            label: profile_id.into(),
+            model_id: model_id.into(),
+            preset_id: preset_id.map(str::to_string),
+            base_url: base_url.map(str::to_string),
+            api_version: api_version.map(str::to_string),
+            api_key: Some(api_key.into()),
+            activate: true,
+        },
+    )
+    .expect("seed openai-compatible profile");
 }
 
 pub(crate) fn attach_event_recorders(app: &tauri::App<tauri::test::MockRuntime>) -> EventRecorder {

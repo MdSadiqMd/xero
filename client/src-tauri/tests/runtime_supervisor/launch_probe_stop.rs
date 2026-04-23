@@ -26,6 +26,36 @@ fn anthropic_environment_report_script() -> String {
     }
 }
 
+fn openai_compatible_environment_report_script() -> String {
+    if cfg!(windows) {
+        [
+            "if not \"%OPENAI_API_KEY%\"==\"\" (echo key-present) else (echo key-missing)"
+                .to_string(),
+            "echo base:%OPENAI_BASE_URL%".to_string(),
+            "echo version:%OPENAI_API_VERSION%".to_string(),
+            "echo provider:%CADENCE_RUNTIME_PROVIDER_ID%".to_string(),
+            "echo session:%CADENCE_RUNTIME_SESSION_ID%".to_string(),
+            "echo model:%CADENCE_RUNTIME_MODEL_ID%".to_string(),
+            "echo thinking:%CADENCE_RUNTIME_THINKING_EFFORT%".to_string(),
+            "timeout /T 5 /NOBREAK > NUL".to_string(),
+        ]
+        .join(" & ")
+    } else {
+        [
+            "if [ -n \"$OPENAI_API_KEY\" ]; then printf '%s\\n' 'key-present'; else printf '%s\\n' 'key-missing'; fi"
+                .to_string(),
+            "printf '%s\\n' \"base:$OPENAI_BASE_URL\"".to_string(),
+            "printf '%s\\n' \"version:$OPENAI_API_VERSION\"".to_string(),
+            "printf '%s\\n' \"provider:$CADENCE_RUNTIME_PROVIDER_ID\"".to_string(),
+            "printf '%s\\n' \"session:$CADENCE_RUNTIME_SESSION_ID\"".to_string(),
+            "printf '%s\\n' \"model:$CADENCE_RUNTIME_MODEL_ID\"".to_string(),
+            "printf '%s\\n' \"thinking:$CADENCE_RUNTIME_THINKING_EFFORT\"".to_string(),
+            "sleep 5".to_string(),
+        ]
+        .join("; ")
+    }
+}
+
 pub(crate) fn detached_supervisor_launches_and_recovers_after_fresh_host_probe() {
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");
@@ -388,5 +418,119 @@ pub(crate) fn detached_supervisor_rejects_anthropic_launch_without_api_key_env()
             .as_ref()
             .map(|error| error.code.as_str()),
         Some("anthropic_api_key_missing")
+    );
+}
+
+pub(crate) fn detached_supervisor_launches_openai_compatible_child_with_context_env_and_secret_free_persistence() {
+    let _guard = supervisor_test_guard();
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-gemini";
+    let repo_root = seed_project(&root, project_id, "repo-gemini", "repo");
+    let state = DesktopState::default();
+    let secret = "sk-gemini-sidecar-secret";
+
+    let launched = launch_detached_runtime_supervisor(
+        &state,
+        openai_compatible_launch_request(
+            project_id,
+            &repo_root,
+            "run-gemini",
+            "gemini_ai_studio",
+            "gemini",
+            "gemini-2.5-flash",
+            Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+            Some(secret),
+            Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+            None,
+            &openai_compatible_environment_report_script(),
+        ),
+    )
+    .expect("launch openai-compatible detached runtime supervisor");
+
+    assert_eq!(launched.run.provider_id, "gemini_ai_studio");
+    assert_eq!(launched.run.runtime_kind, "gemini");
+
+    let running = wait_for_runtime_run(&state, &repo_root, project_id, |snapshot| {
+        snapshot.run.status == project_store::RuntimeRunStatus::Running
+            && snapshot.run.transport.liveness
+                == project_store::RuntimeRunTransportLiveness::Reachable
+            && snapshot.last_checkpoint_sequence >= 1
+    });
+
+    let mut reader = attach_reader(
+        &running.run.transport.endpoint,
+        SupervisorControlRequest::attach(project_id, "run-gemini", None),
+    );
+    let attached = expect_attach_ack(read_supervisor_response(&mut reader));
+    let frames = read_event_frames(&mut reader, attached.replayed_count);
+    assert_monotonic_sequences(&frames, "run-gemini");
+    let transcripts = frames
+        .iter()
+        .filter_map(|frame| match frame {
+            SupervisorControlResponse::Event {
+                item: SupervisorLiveEventPayload::Transcript { text },
+                ..
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(transcripts.iter().any(|text| *text == "key-present"));
+    assert!(transcripts.iter().any(|text| {
+        *text == "base:https://generativelanguage.googleapis.com/v1beta/openai"
+    }));
+    assert!(transcripts.iter().any(|text| *text == "provider:gemini_ai_studio"));
+    assert!(transcripts.iter().any(|text| *text == "model:gemini-2.5-flash"));
+    assert!(transcripts.iter().any(|text| *text == "thinking:medium"));
+
+    let database_bytes = std::fs::read(database_path_for_repo(&repo_root)).expect("read runtime db");
+    let database_text = String::from_utf8_lossy(&database_bytes);
+    assert!(!database_text.contains(secret));
+
+    let stopped = stop_runtime_run(&state, stop_request(project_id, &repo_root))
+        .expect("stop openai-compatible detached runtime supervisor")
+        .expect("openai-compatible runtime run should exist after stop");
+    assert_eq!(stopped.run.status, project_store::RuntimeRunStatus::Stopped);
+}
+
+pub(crate) fn detached_supervisor_rejects_openai_compatible_launch_without_base_url_env() {
+    let _guard = supervisor_test_guard();
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-gemini-missing";
+    let repo_root = seed_project(&root, project_id, "repo-gemini-missing", "repo");
+    let state = DesktopState::default();
+
+    let error = launch_detached_runtime_supervisor(
+        &state,
+        openai_compatible_launch_request(
+            project_id,
+            &repo_root,
+            "run-gemini-missing",
+            "gemini_ai_studio",
+            "gemini",
+            "gemini-2.5-flash",
+            Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+            Some("sk-gemini-present"),
+            None,
+            None,
+            &runtime_shell::script_sleep(5),
+        ),
+    )
+    .expect_err("openai-compatible detached launch should require base url env");
+    assert_eq!(error.code, "openai_compatible_base_url_missing");
+
+    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
+        .expect("load failed openai-compatible runtime run")
+        .expect("failed openai-compatible runtime run should persist");
+    assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Failed);
+    assert_eq!(snapshot.run.transport.endpoint, "launch-pending");
+    assert!(snapshot.run.last_heartbeat_at.is_none());
+    assert_eq!(
+        snapshot
+            .run
+            .last_error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("openai_compatible_base_url_missing")
     );
 }
