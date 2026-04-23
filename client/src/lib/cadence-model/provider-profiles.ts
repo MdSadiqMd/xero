@@ -2,6 +2,40 @@ import { z } from 'zod'
 import { isoTimestampSchema, optionalIsoTimestampSchema } from './shared'
 import { runtimeProviderIdSchema, runtimeSettingsSchema, type RuntimeSettingsDto } from './runtime'
 
+const providerProfileRuntimeKindSchema = z.enum([
+  'openai_codex',
+  'openrouter',
+  'anthropic',
+  'openai_compatible',
+  'gemini',
+])
+
+const providerProfilePresetIdSchema = z.enum([
+  'openrouter',
+  'anthropic',
+  'openai_api',
+  'azure_openai',
+  'gemini_ai_studio',
+])
+
+const optionalUrlSchema = z.string().url().nullable().optional()
+
+function expectedRuntimeKindForProvider(providerId: z.infer<typeof runtimeProviderIdSchema>): z.infer<typeof providerProfileRuntimeKindSchema> {
+  switch (providerId) {
+    case 'openai_codex':
+      return 'openai_codex'
+    case 'openrouter':
+      return 'openrouter'
+    case 'anthropic':
+      return 'anthropic'
+    case 'openai_api':
+    case 'azure_openai':
+      return 'openai_compatible'
+    case 'gemini_ai_studio':
+      return 'gemini'
+  }
+}
+
 function validateRuntimeProviderModel(
   payload: { providerId: z.infer<typeof runtimeProviderIdSchema>; modelId: string },
   ctx: z.RefinementCtx,
@@ -12,6 +46,133 @@ function validateRuntimeProviderModel(
       path: ['modelId'],
       message: 'Cadence only supports modelId `openai_codex` for provider `openai_codex`.',
     })
+  }
+}
+
+function validateCloudProfileContract(
+  payload: {
+    providerId: z.infer<typeof runtimeProviderIdSchema>
+    runtimeKind: z.infer<typeof providerProfileRuntimeKindSchema>
+    presetId?: z.infer<typeof providerProfilePresetIdSchema> | null
+    baseUrl?: string | null
+    apiVersion?: string | null
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const expectedRuntimeKind = expectedRuntimeKindForProvider(payload.providerId)
+  if (payload.runtimeKind !== expectedRuntimeKind) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['runtimeKind'],
+      message: `Cadence requires runtimeKind \`${expectedRuntimeKind}\` for provider \`${payload.providerId}\`.`,
+    })
+  }
+
+  const hasPresetId = typeof payload.presetId === 'string' && payload.presetId.trim().length > 0
+  const hasBaseUrl = typeof payload.baseUrl === 'string' && payload.baseUrl.trim().length > 0
+  const hasApiVersion = typeof payload.apiVersion === 'string' && payload.apiVersion.trim().length > 0
+
+  switch (payload.providerId) {
+    case 'openai_codex':
+      if (hasPresetId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['presetId'],
+          message: 'Cadence OpenAI Codex profiles do not accept `presetId` metadata.',
+        })
+      }
+      if (hasBaseUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['baseUrl'],
+          message: 'Cadence OpenAI Codex profiles do not accept `baseUrl` metadata.',
+        })
+      }
+      if (hasApiVersion) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['apiVersion'],
+          message: 'Cadence OpenAI Codex profiles do not accept `apiVersion` metadata.',
+        })
+      }
+      return
+
+    case 'openrouter':
+    case 'anthropic':
+    case 'gemini_ai_studio': {
+      if (payload.presetId !== payload.providerId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['presetId'],
+          message: `Cadence requires presetId \`${payload.providerId}\` for provider \`${payload.providerId}\`.`,
+        })
+      }
+      if (hasBaseUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['baseUrl'],
+          message: `Cadence does not accept custom baseUrl overrides for provider \`${payload.providerId}\`.`,
+        })
+      }
+      if (hasApiVersion) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['apiVersion'],
+          message: `Cadence does not accept apiVersion metadata for provider \`${payload.providerId}\`.`,
+        })
+      }
+      return
+    }
+
+    case 'openai_api':
+      if (!hasBaseUrl && payload.presetId !== 'openai_api') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['presetId'],
+          message:
+            'Cadence requires presetId `openai_api` for the default OpenAI API endpoint, or a custom baseUrl for a custom OpenAI-compatible endpoint.',
+        })
+      }
+      if (hasBaseUrl && hasPresetId && payload.presetId !== 'openai_api') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['presetId'],
+          message:
+            'Cadence only accepts presetId `openai_api` when saving a custom OpenAI-compatible baseUrl for provider `openai_api`.',
+        })
+      }
+      if (!hasBaseUrl && hasApiVersion) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['apiVersion'],
+          message: 'Cadence only accepts apiVersion metadata for custom OpenAI-compatible endpoints.',
+        })
+      }
+      return
+
+    case 'azure_openai':
+      if (payload.presetId !== 'azure_openai') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['presetId'],
+          message: 'Cadence requires presetId `azure_openai` for Azure OpenAI profiles.',
+        })
+      }
+      if (!hasBaseUrl) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['baseUrl'],
+          message: 'Cadence requires baseUrl metadata for Azure OpenAI profiles.',
+        })
+      }
+      if (!hasApiVersion) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['apiVersion'],
+          message: 'Cadence requires apiVersion metadata for Azure OpenAI profiles.',
+        })
+      }
+      return
   }
 }
 
@@ -74,8 +235,12 @@ export const providerProfileSchema = z
   .object({
     profileId: z.string().trim().min(1),
     providerId: runtimeProviderIdSchema,
+    runtimeKind: providerProfileRuntimeKindSchema,
     label: z.string().trim().min(1),
     modelId: z.string().trim().min(1),
+    presetId: providerProfilePresetIdSchema.nullable().optional(),
+    baseUrl: optionalUrlSchema,
+    apiVersion: z.string().trim().min(1).nullable().optional(),
     active: z.boolean(),
     readiness: providerProfileReadinessSchema,
     migratedFromLegacy: z.boolean(),
@@ -87,6 +252,17 @@ export const providerProfileSchema = z
       {
         providerId: profile.providerId,
         modelId: profile.modelId,
+      },
+      ctx,
+    )
+
+    validateCloudProfileContract(
+      {
+        providerId: profile.providerId,
+        runtimeKind: profile.runtimeKind,
+        presetId: profile.presetId,
+        baseUrl: profile.baseUrl,
+        apiVersion: profile.apiVersion,
       },
       ctx,
     )
@@ -149,7 +325,8 @@ export const providerProfilesSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['activeProfileId'],
-        message: 'Cadence could not resolve the active provider profile because `activeProfileId` did not match a stored profile.',
+        message:
+          'Cadence could not resolve the active provider profile because `activeProfileId` did not match a stored profile.',
       })
     }
 
@@ -175,10 +352,13 @@ export const upsertProviderProfileRequestSchema = z
   .object({
     profileId: z.string().trim().min(1),
     providerId: runtimeProviderIdSchema,
+    runtimeKind: providerProfileRuntimeKindSchema,
     label: z.string().trim().min(1),
     modelId: z.string().trim().min(1),
-    openrouterApiKey: z.string().nullable().optional(),
-    anthropicApiKey: z.string().nullable().optional(),
+    presetId: providerProfilePresetIdSchema.nullable().optional(),
+    baseUrl: optionalUrlSchema,
+    apiVersion: z.string().trim().min(1).nullable().optional(),
+    apiKey: z.string().nullable().optional(),
     activate: z.boolean().optional(),
   })
   .strict()
@@ -190,6 +370,25 @@ export const upsertProviderProfileRequestSchema = z
       },
       ctx,
     )
+
+    validateCloudProfileContract(
+      {
+        providerId: payload.providerId,
+        runtimeKind: payload.runtimeKind,
+        presetId: payload.presetId,
+        baseUrl: payload.baseUrl,
+        apiVersion: payload.apiVersion,
+      },
+      ctx,
+    )
+
+    if (payload.providerId === 'openai_codex' && typeof payload.apiKey === 'string' && payload.apiKey.trim().length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['apiKey'],
+        message: 'Cadence OpenAI Codex profiles use OAuth and do not accept `apiKey` payloads.',
+      })
+    }
   })
 
 export const setActiveProviderProfileRequestSchema = z

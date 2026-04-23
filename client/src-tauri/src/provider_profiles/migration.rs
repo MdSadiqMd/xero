@@ -125,7 +125,7 @@ fn build_legacy_provider_profiles_snapshot(
             snapshot
                 .openrouter_credentials_updated_at
                 .as_ref()
-                .map(|updated_at| ProviderProfileCredentialLink::OpenRouter {
+                .map(|updated_at| ProviderProfileCredentialLink::ApiKey {
                     updated_at: updated_at.clone(),
                 })
         });
@@ -142,20 +142,18 @@ fn build_legacy_provider_profiles_snapshot(
                 snapshot.openrouter_api_key.as_ref(),
                 snapshot.openrouter_credentials_updated_at.as_ref(),
             ) {
-                credentials
-                    .openrouter_api_keys
-                    .push(OpenRouterProfileCredentialEntry {
-                        profile_id: OPENROUTER_DEFAULT_PROFILE_ID.into(),
-                        api_key: api_key.clone(),
-                        updated_at: updated_at.clone(),
-                    });
+                credentials.api_keys.push(OpenRouterProfileCredentialEntry {
+                    profile_id: OPENROUTER_DEFAULT_PROFILE_ID.into(),
+                    api_key: api_key.clone(),
+                    updated_at: updated_at.clone(),
+                });
             }
         }
     }
 
     Ok(Some(ProviderProfilesSnapshot {
         metadata: ProviderProfilesMetadataFile {
-            version: 1,
+            version: 2,
             active_profile_id: if active_provider_id == OPENROUTER_PROVIDER_ID {
                 OPENROUTER_DEFAULT_PROFILE_ID.into()
             } else {

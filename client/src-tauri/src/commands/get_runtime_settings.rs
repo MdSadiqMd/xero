@@ -11,7 +11,8 @@ use crate::{
     },
     provider_profiles::ProviderProfilesSnapshot,
     runtime::{
-        resolve_runtime_provider_identity, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
+        resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
+        OPENROUTER_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -38,6 +39,12 @@ pub(crate) struct OpenRouterCredentialFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeSettingsSnapshot {
     pub settings: RuntimeSettingsFile,
+    pub runtime_kind: String,
+    pub provider_api_key: Option<String>,
+    pub provider_api_key_updated_at: Option<String>,
+    pub preset_id: Option<String>,
+    pub base_url: Option<String>,
+    pub api_version: Option<String>,
     pub openrouter_api_key: Option<String>,
     pub openrouter_credentials_updated_at: Option<String>,
     pub anthropic_api_key: Option<String>,
@@ -194,6 +201,16 @@ pub(crate) fn validate_runtime_settings_file(
     let provider = resolve_runtime_provider_identity(Some(provider_id), Some(provider_id))
         .map_err(|diagnostic| CommandError::user_fixable(error_code, diagnostic.message))?;
 
+    if !supports_runtime_settings_compatibility_provider(provider.provider_id) {
+        return Err(CommandError::user_fixable(
+            error_code,
+            format!(
+                "Cadence only supports legacy runtime-settings compatibility files for `openai_codex`, `openrouter`, or `anthropic`, not `{}`.",
+                provider.provider_id
+            ),
+        ));
+    }
+
     if provider.provider_id == OPENAI_CODEX_PROVIDER_ID && model_id != OPENAI_CODEX_PROVIDER_ID {
         return Err(CommandError::user_fixable(
             error_code,
@@ -230,6 +247,16 @@ pub(crate) fn runtime_settings_file_from_request(
         .map_err(|diagnostic| {
             CommandError::user_fixable("runtime_settings_request_invalid", diagnostic.message)
         })?;
+
+    if !supports_runtime_settings_compatibility_provider(provider.provider_id) {
+        return Err(CommandError::user_fixable(
+            "runtime_settings_request_invalid",
+            format!(
+                "Cadence only accepts runtime-settings compatibility writes for `openai_codex`, `openrouter`, or `anthropic`. Use provider profiles for provider `{}`.",
+                provider.provider_id
+            ),
+        ));
+    }
 
     if provider.provider_id == OPENAI_CODEX_PROVIDER_ID && model_id != OPENAI_CODEX_PROVIDER_ID {
         return Err(CommandError::user_fixable(
@@ -331,6 +358,12 @@ pub(crate) fn default_runtime_settings_snapshot() -> RuntimeSettingsSnapshot {
             openrouter_api_key_configured: false,
             updated_at: crate::auth::now_timestamp(),
         },
+        runtime_kind: DEFAULT_RUNTIME_PROVIDER_ID.into(),
+        provider_api_key: None,
+        provider_api_key_updated_at: None,
+        preset_id: None,
+        base_url: None,
+        api_version: None,
         openrouter_api_key: None,
         openrouter_credentials_updated_at: None,
         anthropic_api_key: None,
@@ -369,12 +402,27 @@ fn validate_runtime_settings_contract(
         ));
     }
 
+    let openrouter_api_key = credentials.as_ref().map(|credentials| credentials.api_key.clone());
+    let openrouter_updated_at = credentials.as_ref().map(|credentials| credentials.updated_at.clone());
+
     Ok(RuntimeSettingsSnapshot {
         settings: settings.clone(),
-        openrouter_api_key: credentials
-            .as_ref()
-            .map(|credentials| credentials.api_key.clone()),
-        openrouter_credentials_updated_at: credentials.map(|credentials| credentials.updated_at),
+        runtime_kind: settings.provider_id.clone(),
+        provider_api_key: if settings.provider_id == OPENROUTER_PROVIDER_ID {
+            openrouter_api_key.clone()
+        } else {
+            None
+        },
+        provider_api_key_updated_at: if settings.provider_id == OPENROUTER_PROVIDER_ID {
+            openrouter_updated_at.clone()
+        } else {
+            None
+        },
+        preset_id: None,
+        base_url: None,
+        api_version: None,
+        openrouter_api_key,
+        openrouter_credentials_updated_at: openrouter_updated_at,
         anthropic_api_key: None,
         anthropic_credentials_updated_at: None,
     })
@@ -392,6 +440,8 @@ pub(crate) fn runtime_settings_snapshot_from_provider_profiles(
 
     let preferred_openrouter_credential = provider_profiles.preferred_openrouter_credential();
     let preferred_anthropic_credential = provider_profiles.preferred_anthropic_credential();
+    let active_api_key_credential = provider_profiles
+        .matched_api_key_credential_for_profile(&active_profile.profile_id);
 
     Ok(RuntimeSettingsSnapshot {
         settings: RuntimeSettingsFile {
@@ -400,6 +450,12 @@ pub(crate) fn runtime_settings_snapshot_from_provider_profiles(
             openrouter_api_key_configured: provider_profiles.any_openrouter_api_key_configured(),
             updated_at: active_profile.updated_at.clone(),
         },
+        runtime_kind: active_profile.runtime_kind.clone(),
+        provider_api_key: active_api_key_credential.map(|entry| entry.api_key.clone()),
+        provider_api_key_updated_at: active_api_key_credential.map(|entry| entry.updated_at.clone()),
+        preset_id: active_profile.preset_id.clone(),
+        base_url: active_profile.base_url.clone(),
+        api_version: active_profile.api_version.clone(),
         openrouter_api_key: preferred_openrouter_credential.map(|entry| entry.api_key.clone()),
         openrouter_credentials_updated_at: preferred_openrouter_credential
             .map(|entry| entry.updated_at.clone()),
@@ -416,4 +472,10 @@ fn normalize_updated_at(value: String) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+fn supports_runtime_settings_compatibility_provider(provider_id: &str) -> bool {
+    provider_id == OPENAI_CODEX_PROVIDER_ID
+        || provider_id == OPENROUTER_PROVIDER_ID
+        || provider_id == ANTHROPIC_PROVIDER_ID
 }

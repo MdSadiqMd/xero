@@ -25,7 +25,15 @@ export const runtimeDiagnosticSchema = z.object({
   retryable: z.boolean(),
 })
 
-export const runtimeProviderIdSchema = z.enum(['openrouter', 'openai_codex', 'anthropic'])
+export const runtimeProviderIdSchema = z.enum([
+  'openrouter',
+  'openai_codex',
+  'anthropic',
+  'openai_api',
+  'azure_openai',
+  'gemini_ai_studio',
+])
+export const writableRuntimeSettingsProviderIdSchema = z.enum(['openrouter', 'openai_codex', 'anthropic'])
 
 export const runtimeRunThinkingEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'x_high'])
 export const runtimeRunApprovalModeSchema = z.enum(['suggest', 'auto_edit', 'yolo'])
@@ -40,6 +48,20 @@ function validateRuntimeSettingsProviderModel(
       code: z.ZodIssueCode.custom,
       path: ['modelId'],
       message: 'Cadence only supports modelId `openai_codex` for provider `openai_codex`.',
+    })
+  }
+}
+
+function validateWritableRuntimeSettingsProvider(
+  providerId: z.infer<typeof runtimeProviderIdSchema>,
+  ctx: z.RefinementCtx,
+): void {
+  if (!writableRuntimeSettingsProviderIdSchema.options.includes(providerId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['providerId'],
+      message:
+        'Cadence only accepts runtime-settings compatibility writes for `openai_codex`, `openrouter`, or `anthropic`. Use provider profiles for other cloud providers.',
     })
   }
 }
@@ -65,6 +87,7 @@ export const upsertRuntimeSettingsRequestSchema = z
   })
   .strict()
   .superRefine((payload, ctx) => {
+    validateWritableRuntimeSettingsProvider(payload.providerId, ctx)
     validateRuntimeSettingsProviderModel(payload, ctx)
   })
 

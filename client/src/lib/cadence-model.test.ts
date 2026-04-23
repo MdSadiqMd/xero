@@ -358,8 +358,12 @@ function makeProviderProfiles(overrides: Record<string, unknown> = {}) {
       {
         profileId: 'openrouter-default',
         providerId: 'openrouter',
+        runtimeKind: 'openrouter',
         label: 'OpenRouter',
         modelId: 'openai/gpt-4.1-mini',
+        presetId: 'openrouter',
+        baseUrl: null,
+        apiVersion: null,
         active: true,
         readiness: {
           ready: true,
@@ -372,8 +376,12 @@ function makeProviderProfiles(overrides: Record<string, unknown> = {}) {
       {
         profileId: 'openai_codex-default',
         providerId: 'openai_codex',
+        runtimeKind: 'openai_codex',
         label: 'OpenAI Codex',
         modelId: 'openai_codex',
+        presetId: null,
+        baseUrl: null,
+        apiVersion: null,
         active: false,
         readiness: {
           ready: false,
@@ -2859,7 +2867,7 @@ describe('cadence-model', () => {
           },
         ],
       }),
-    ).toThrow()
+    ).toThrow(/runtimeKind/)
 
     expect(() =>
       providerProfilesSchema.parse({
@@ -2907,7 +2915,7 @@ describe('cadence-model', () => {
         profiles: [
           {
             ...makeProviderProfiles().profiles[0],
-            openrouterApiKey: 'sk-or-v1-should-never-cross-the-boundary',
+            apiKey: 'sk-or-v1-should-never-cross-the-boundary',
           },
         ],
       }),
@@ -2917,9 +2925,23 @@ describe('cadence-model', () => {
       upsertProviderProfileRequestSchema.parse({
         profileId: 'openrouter-default',
         providerId: 'openrouter',
+        runtimeKind: 'openrouter',
         label: 'OpenRouter',
         modelId: 'openai/gpt-4.1-mini',
+        presetId: 'openrouter',
         activate: true,
+      }),
+    ).not.toThrow()
+
+    expect(() =>
+      upsertProviderProfileRequestSchema.parse({
+        profileId: 'openai-compatible-custom',
+        providerId: 'openai_api',
+        runtimeKind: 'openai_compatible',
+        label: 'Custom Endpoint',
+        modelId: 'custom-model-1',
+        baseUrl: 'https://example.invalid/v1',
+        apiKey: 'sk-custom-1',
       }),
     ).not.toThrow()
 
@@ -2927,6 +2949,7 @@ describe('cadence-model', () => {
       upsertProviderProfileRequestSchema.parse({
         profileId: 'openrouter-default',
         providerId: 'openrouter',
+        runtimeKind: 'openrouter',
         label: 'OpenRouter',
         modelId: '   ',
       }),
@@ -2945,7 +2968,7 @@ describe('cadence-model', () => {
     ).toThrow()
   })
 
-  it('admits Anthropic runtime and provider-profile payloads while preserving fail-closed unknown-provider checks', () => {
+  it('admits Anthropic and cloud runtime/provider payloads while preserving compatibility-write guards', () => {
     const providerProfiles = providerProfilesSchema.parse({
       ...makeProviderProfiles({
         activeProfileId: 'anthropic-work',
@@ -2953,8 +2976,12 @@ describe('cadence-model', () => {
           {
             profileId: 'anthropic-work',
             providerId: 'anthropic',
+            runtimeKind: 'anthropic',
             label: 'Anthropic Work',
             modelId: 'claude-3-7-sonnet-latest',
+            presetId: 'anthropic',
+            baseUrl: null,
+            apiVersion: null,
             active: true,
             readiness: {
               ready: true,
@@ -2967,8 +2994,12 @@ describe('cadence-model', () => {
           {
             profileId: 'openrouter-default',
             providerId: 'openrouter',
+            runtimeKind: 'openrouter',
             label: 'OpenRouter',
             modelId: 'openai/gpt-4.1-mini',
+            presetId: 'openrouter',
+            baseUrl: null,
+            apiVersion: null,
             active: false,
             readiness: {
               ready: false,
@@ -3006,15 +3037,57 @@ describe('cadence-model', () => {
       upsertProviderProfileRequestSchema.parse({
         profileId: 'anthropic-work',
         providerId: 'anthropic',
+        runtimeKind: 'anthropic',
         label: 'Anthropic Work',
         modelId: 'claude-3-7-sonnet-latest',
-        anthropicApiKey: 'sk-ant-test-secret',
+        presetId: 'anthropic',
+        apiKey: 'sk-ant-test-secret',
         activate: true,
       }),
     ).toMatchObject({
       providerId: 'anthropic',
       modelId: 'claude-3-7-sonnet-latest',
       activate: true,
+    })
+
+    expect(
+      providerProfilesSchema.parse({
+        activeProfileId: 'azure-work',
+        profiles: [
+          {
+            profileId: 'azure-work',
+            providerId: 'azure_openai',
+            runtimeKind: 'openai_compatible',
+            label: 'Azure Work',
+            modelId: 'gpt-4.1',
+            presetId: 'azure_openai',
+            baseUrl: 'https://example-resource.openai.azure.com/openai/deployments/work',
+            apiVersion: '2024-10-21',
+            active: true,
+            readiness: {
+              ready: false,
+              status: 'missing',
+              credentialUpdatedAt: null,
+            },
+            migratedFromLegacy: false,
+            migratedAt: null,
+          },
+        ],
+      }),
+    ).toMatchObject({
+      activeProfileId: 'azure-work',
+    })
+
+    expect(
+      runtimeSettingsSchema.parse({
+        providerId: 'azure_openai',
+        modelId: 'gpt-4.1',
+        openrouterApiKeyConfigured: false,
+        anthropicApiKeyConfigured: false,
+      }),
+    ).toMatchObject({
+      providerId: 'azure_openai',
+      modelId: 'gpt-4.1',
     })
 
     expect(
@@ -3029,13 +3102,11 @@ describe('cadence-model', () => {
     })
 
     expect(() =>
-      runtimeSettingsSchema.parse({
+      upsertRuntimeSettingsRequestSchema.parse({
         providerId: 'azure_openai',
-        modelId: 'azure_openai',
-        openrouterApiKeyConfigured: false,
-        anthropicApiKeyConfigured: false,
+        modelId: 'gpt-4.1',
       }),
-    ).toThrow()
+    ).toThrow(/provider profiles/)
   })
 
   it('rejects malformed runtime payloads at the TypeScript boundary', () => {

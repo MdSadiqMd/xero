@@ -416,15 +416,17 @@ fn anthropic_profile_store_keeps_api_keys_out_of_metadata() {
     write_json(
         &paths.provider_profiles_path,
         serde_json::json!({
-            "version": 1,
+            "version": 2,
             "activeProfileId": ANTHROPIC_DEFAULT_PROFILE_ID,
             "profiles": [{
                 "profileId": ANTHROPIC_DEFAULT_PROFILE_ID,
                 "providerId": "anthropic",
+                "runtimeKind": "anthropic",
                 "label": "Anthropic",
                 "modelId": "claude-3-5-sonnet-latest",
+                "presetId": "anthropic",
                 "credentialLink": {
-                    "kind": "anthropic",
+                    "kind": "api_key",
                     "updated_at": "2026-04-21T05:00:00Z"
                 },
                 "updatedAt": "2026-04-21T05:00:00Z"
@@ -435,7 +437,7 @@ fn anthropic_profile_store_keeps_api_keys_out_of_metadata() {
     write_json(
         &paths.provider_profile_credentials_path,
         serde_json::json!({
-            "anthropicApiKeys": [{
+            "apiKeys": [{
                 "profileId": ANTHROPIC_DEFAULT_PROFILE_ID,
                 "apiKey": secret,
                 "updatedAt": "2026-04-21T05:00:00Z"
@@ -464,7 +466,7 @@ fn anthropic_profile_store_keeps_api_keys_out_of_metadata() {
         .expect("anthropic profile");
     assert!(matches!(
         anthropic_profile.credential_link,
-        Some(ProviderProfileCredentialLink::Anthropic { .. })
+        Some(ProviderProfileCredentialLink::ApiKey { .. })
     ));
     assert_eq!(
         anthropic_profile.readiness(&snapshot.credentials).status,
@@ -480,15 +482,17 @@ fn anthropic_profile_readiness_becomes_malformed_when_secret_link_stales() {
     write_json(
         &paths.provider_profiles_path,
         serde_json::json!({
-            "version": 1,
+            "version": 2,
             "activeProfileId": ANTHROPIC_DEFAULT_PROFILE_ID,
             "profiles": [{
                 "profileId": ANTHROPIC_DEFAULT_PROFILE_ID,
                 "providerId": "anthropic",
+                "runtimeKind": "anthropic",
                 "label": "Anthropic",
                 "modelId": "claude-3-5-sonnet-latest",
+                "presetId": "anthropic",
                 "credentialLink": {
-                    "kind": "anthropic",
+                    "kind": "api_key",
                     "updated_at": "2026-04-21T05:10:00Z"
                 },
                 "updatedAt": "2026-04-21T05:10:00Z"

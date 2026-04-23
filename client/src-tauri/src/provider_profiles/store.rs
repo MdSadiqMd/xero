@@ -5,6 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{
     commands::{
@@ -12,8 +13,9 @@ use crate::{
         CommandError, CommandResult,
     },
     runtime::{
-        resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
-        OPENROUTER_PROVIDER_ID,
+        resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID,
+        GEMINI_AI_STUDIO_PROVIDER_ID, GEMINI_RUNTIME_KIND, OPENAI_API_PROVIDER_ID,
+        OPENAI_CODEX_PROVIDER_ID, OPENAI_COMPATIBLE_RUNTIME_KIND, OPENROUTER_PROVIDER_ID,
     },
 };
 
@@ -23,7 +25,7 @@ pub const OPENAI_CODEX_DEFAULT_PROFILE_ID: &str = "openai_codex-default";
 pub const OPENROUTER_DEFAULT_PROFILE_ID: &str = "openrouter-default";
 pub const ANTHROPIC_DEFAULT_PROFILE_ID: &str = "anthropic-default";
 pub const OPENROUTER_FALLBACK_MODEL_ID: &str = "openai/gpt-4.1-mini";
-const PROVIDER_PROFILES_SCHEMA_VERSION: u32 = 1;
+const PROVIDER_PROFILES_SCHEMA_VERSION: u32 = 2;
 const OPENAI_CODEX_DEFAULT_PROFILE_LABEL: &str = "OpenAI Codex";
 const OPENROUTER_DEFAULT_PROFILE_LABEL: &str = "OpenRouter";
 const ANTHROPIC_DEFAULT_PROFILE_LABEL: &str = "Anthropic";
@@ -46,8 +48,16 @@ pub struct ProviderProfilesMetadataFile {
 pub struct ProviderProfileRecord {
     pub profile_id: String,
     pub provider_id: String,
+    #[serde(default)]
+    pub runtime_kind: String,
     pub label: String,
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_link: Option<ProviderProfileCredentialLink>,
     #[serde(default)]
@@ -66,10 +76,8 @@ pub enum ProviderProfileCredentialLink {
         session_id: String,
         updated_at: String,
     },
-    #[serde(rename = "openrouter")]
-    OpenRouter { updated_at: String },
-    #[serde(rename = "anthropic")]
-    Anthropic { updated_at: String },
+    #[serde(rename = "api_key", alias = "openrouter", alias = "anthropic")]
+    ApiKey { updated_at: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -102,9 +110,16 @@ pub type AnthropicProfileCredentialEntry = ProviderApiKeyCredentialEntry;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderProfileCredentialsFile {
     #[serde(default)]
-    pub openrouter_api_keys: Vec<OpenRouterProfileCredentialEntry>,
+    pub api_keys: Vec<ProviderApiKeyCredentialEntry>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LegacyProviderProfileCredentialsFile {
     #[serde(default)]
-    pub anthropic_api_keys: Vec<AnthropicProfileCredentialEntry>,
+    openrouter_api_keys: Vec<ProviderApiKeyCredentialEntry>,
+    #[serde(default)]
+    anthropic_api_keys: Vec<ProviderApiKeyCredentialEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,76 +172,68 @@ impl ProviderProfilesSnapshot {
     }
 
     pub fn preferred_openrouter_credential(&self) -> Option<&OpenRouterProfileCredentialEntry> {
-        self.active_profile()
-            .filter(|profile| profile.provider_id == OPENROUTER_PROVIDER_ID)
-            .and_then(|profile| self.matched_openrouter_credential(profile))
-            .or_else(|| {
-                self.metadata
-                    .profiles
-                    .iter()
-                    .filter(|profile| profile.provider_id == OPENROUTER_PROVIDER_ID)
-                    .find_map(|profile| self.matched_openrouter_credential(profile))
-            })
+        self.preferred_api_key_credential_for_provider(OPENROUTER_PROVIDER_ID)
     }
 
     pub fn preferred_anthropic_credential(&self) -> Option<&AnthropicProfileCredentialEntry> {
-        self.active_profile()
-            .filter(|profile| profile.provider_id == ANTHROPIC_PROVIDER_ID)
-            .and_then(|profile| self.matched_anthropic_credential(profile))
-            .or_else(|| {
-                self.metadata
-                    .profiles
-                    .iter()
-                    .filter(|profile| profile.provider_id == ANTHROPIC_PROVIDER_ID)
-                    .find_map(|profile| self.matched_anthropic_credential(profile))
-            })
+        self.preferred_api_key_credential_for_provider(ANTHROPIC_PROVIDER_ID)
+    }
+
+    pub fn api_key_credential(&self, profile_id: &str) -> Option<&ProviderApiKeyCredentialEntry> {
+        self.credentials
+            .api_keys
+            .iter()
+            .find(|entry| entry.profile_id == profile_id)
     }
 
     pub fn openrouter_credential(
         &self,
         profile_id: &str,
     ) -> Option<&OpenRouterProfileCredentialEntry> {
-        self.credentials
-            .openrouter_api_keys
-            .iter()
-            .find(|entry| entry.profile_id == profile_id)
+        self.api_key_credential(profile_id)
     }
 
     pub fn anthropic_credential(
         &self,
         profile_id: &str,
     ) -> Option<&AnthropicProfileCredentialEntry> {
-        self.credentials
-            .anthropic_api_keys
-            .iter()
-            .find(|entry| entry.profile_id == profile_id)
+        self.api_key_credential(profile_id)
     }
 
-    fn matched_openrouter_credential(
+    pub fn matched_api_key_credential_for_profile(
+        &self,
+        profile_id: &str,
+    ) -> Option<&ProviderApiKeyCredentialEntry> {
+        self.profile(profile_id)
+            .and_then(|profile| self.matched_api_key_credential(profile))
+    }
+
+    fn preferred_api_key_credential_for_provider(
+        &self,
+        provider_id: &str,
+    ) -> Option<&ProviderApiKeyCredentialEntry> {
+        self.active_profile()
+            .filter(|profile| profile.provider_id == provider_id)
+            .and_then(|profile| self.matched_api_key_credential(profile))
+            .or_else(|| {
+                self.metadata
+                    .profiles
+                    .iter()
+                    .filter(|profile| profile.provider_id == provider_id)
+                    .find_map(|profile| self.matched_api_key_credential(profile))
+            })
+    }
+
+    fn matched_api_key_credential(
         &self,
         profile: &ProviderProfileRecord,
-    ) -> Option<&OpenRouterProfileCredentialEntry> {
-        let ProviderProfileCredentialLink::OpenRouter { updated_at } =
-            profile.credential_link.as_ref()?
+    ) -> Option<&ProviderApiKeyCredentialEntry> {
+        let ProviderProfileCredentialLink::ApiKey { updated_at } = profile.credential_link.as_ref()?
         else {
             return None;
         };
 
-        self.openrouter_credential(&profile.profile_id)
-            .filter(|entry| entry.updated_at == *updated_at)
-    }
-
-    fn matched_anthropic_credential(
-        &self,
-        profile: &ProviderProfileRecord,
-    ) -> Option<&AnthropicProfileCredentialEntry> {
-        let ProviderProfileCredentialLink::Anthropic { updated_at } =
-            profile.credential_link.as_ref()?
-        else {
-            return None;
-        };
-
-        self.anthropic_credential(&profile.profile_id)
+        self.api_key_credential(&profile.profile_id)
             .filter(|entry| entry.updated_at == *updated_at)
     }
 }
@@ -244,26 +251,8 @@ impl ProviderProfileRecord {
                     credential_updated_at: Some(updated_at.clone()),
                 }
             }
-            Some(ProviderProfileCredentialLink::OpenRouter { updated_at }) => {
-                let matched_secret = credentials.openrouter_api_keys.iter().any(|entry| {
-                    entry.profile_id == self.profile_id && entry.updated_at == *updated_at
-                });
-                if matched_secret {
-                    ProviderProfileReadinessProjection {
-                        ready: true,
-                        status: ProviderProfileReadinessStatus::Ready,
-                        credential_updated_at: Some(updated_at.clone()),
-                    }
-                } else {
-                    ProviderProfileReadinessProjection {
-                        ready: false,
-                        status: ProviderProfileReadinessStatus::Malformed,
-                        credential_updated_at: Some(updated_at.clone()),
-                    }
-                }
-            }
-            Some(ProviderProfileCredentialLink::Anthropic { updated_at }) => {
-                let matched_secret = credentials.anthropic_api_keys.iter().any(|entry| {
+            Some(ProviderProfileCredentialLink::ApiKey { updated_at }) => {
+                let matched_secret = credentials.api_keys.iter().any(|entry| {
                     entry.profile_id == self.profile_id && entry.updated_at == *updated_at
                 });
                 if matched_secret {
@@ -383,7 +372,15 @@ pub(crate) fn read_provider_profile_credentials_file(
         )
     })?;
 
-    let parsed = serde_json::from_str::<ProviderProfileCredentialsFile>(&contents).map_err(|error| {
+    let parsed = decode_provider_profile_credentials_file(&contents, path)?;
+    Ok(Some(parsed))
+}
+
+fn decode_provider_profile_credentials_file(
+    contents: &str,
+    path: &Path,
+) -> CommandResult<ProviderProfileCredentialsFile> {
+    let value = serde_json::from_str::<serde_json::Value>(contents).map_err(|error| {
         CommandError::user_fixable(
             "provider_profile_credentials_decode_failed",
             format!(
@@ -393,7 +390,33 @@ pub(crate) fn read_provider_profile_credentials_file(
         )
     })?;
 
-    Ok(Some(parsed))
+    if value.get("apiKeys").is_some() {
+        return serde_json::from_value::<ProviderProfileCredentialsFile>(value).map_err(|error| {
+            CommandError::user_fixable(
+                "provider_profile_credentials_decode_failed",
+                format!(
+                    "Cadence could not decode the app-local provider-profile credential file at {}: {error}",
+                    path.display()
+                ),
+            )
+        });
+    }
+
+    let legacy = serde_json::from_value::<LegacyProviderProfileCredentialsFile>(value).map_err(
+        |error| {
+            CommandError::user_fixable(
+                "provider_profile_credentials_decode_failed",
+                format!(
+                    "Cadence could not decode the app-local provider-profile credential file at {}: {error}",
+                    path.display()
+                ),
+            )
+        },
+    )?;
+
+    let mut api_keys = legacy.openrouter_api_keys;
+    api_keys.extend(legacy.anthropic_api_keys);
+    Ok(ProviderProfileCredentialsFile { api_keys })
 }
 
 pub(crate) fn validate_provider_profiles_contract(
@@ -404,8 +427,7 @@ pub(crate) fn validate_provider_profiles_contract(
 ) -> CommandResult<ProviderProfilesSnapshot> {
     let metadata = validate_provider_profiles_metadata(metadata, metadata_path)?;
     let credentials = validate_provider_profile_credentials(credentials, credentials_path)?;
-    let openrouter_credentials = openrouter_credentials_by_profile(&credentials);
-    let anthropic_credentials = anthropic_credentials_by_profile(&credentials);
+    let credentials_by_profile = api_key_credentials_by_profile(&credentials);
 
     for profile in &metadata.profiles {
         match &profile.credential_link {
@@ -421,80 +443,32 @@ pub(crate) fn validate_provider_profiles_contract(
                 }
                 ensure_no_api_key_secret(
                     profile.profile_id.as_str(),
-                    &openrouter_credentials,
+                    &credentials_by_profile,
                     credentials_path,
-                    "OpenRouter",
-                )?;
-                ensure_no_api_key_secret(
-                    profile.profile_id.as_str(),
-                    &anthropic_credentials,
-                    credentials_path,
-                    "Anthropic",
                 )?;
             }
-            Some(ProviderProfileCredentialLink::OpenRouter { .. }) => {
-                if profile.provider_id != OPENROUTER_PROVIDER_ID {
+            Some(ProviderProfileCredentialLink::ApiKey { .. }) => {
+                if profile.provider_id == OPENAI_CODEX_PROVIDER_ID {
                     return Err(CommandError::user_fixable(
                         "provider_profiles_invalid",
                         format!(
-                            "Cadence rejected provider profile `{}` because the OpenRouter credential linkage does not match provider `{}`.",
-                            profile.profile_id, profile.provider_id
+                            "Cadence rejected provider profile `{}` because OpenAI Codex profiles cannot use api_key credential links.",
+                            profile.profile_id
                         ),
                     ));
                 }
-                ensure_no_api_key_secret(
-                    profile.profile_id.as_str(),
-                    &anthropic_credentials,
-                    credentials_path,
-                    "Anthropic",
-                )?;
-            }
-            Some(ProviderProfileCredentialLink::Anthropic { .. }) => {
-                if profile.provider_id != ANTHROPIC_PROVIDER_ID {
-                    return Err(CommandError::user_fixable(
-                        "provider_profiles_invalid",
-                        format!(
-                            "Cadence rejected provider profile `{}` because the Anthropic credential linkage does not match provider `{}`.",
-                            profile.profile_id, profile.provider_id
-                        ),
-                    ));
-                }
-                ensure_no_api_key_secret(
-                    profile.profile_id.as_str(),
-                    &openrouter_credentials,
-                    credentials_path,
-                    "OpenRouter",
-                )?;
             }
             None => {
                 ensure_no_api_key_secret(
                     profile.profile_id.as_str(),
-                    &openrouter_credentials,
+                    &credentials_by_profile,
                     credentials_path,
-                    "OpenRouter",
-                )?;
-                ensure_no_api_key_secret(
-                    profile.profile_id.as_str(),
-                    &anthropic_credentials,
-                    credentials_path,
-                    "Anthropic",
                 )?;
             }
         }
     }
 
-    ensure_all_credentials_reference_profiles(
-        &metadata,
-        &openrouter_credentials,
-        credentials_path,
-        "OpenRouter",
-    )?;
-    ensure_all_credentials_reference_profiles(
-        &metadata,
-        &anthropic_credentials,
-        credentials_path,
-        "Anthropic",
-    )?;
+    ensure_all_credentials_reference_profiles(&metadata, &credentials_by_profile, credentials_path)?;
 
     Ok(ProviderProfilesSnapshot {
         metadata,
@@ -516,9 +490,7 @@ pub(crate) fn persist_provider_profiles_snapshot(
     let metadata_json = serialize_pretty_json(&next.metadata, "provider_profiles")?;
     write_json_file_atomically(metadata_path, &metadata_json, "provider_profiles")?;
 
-    let credential_result = if next.credentials.openrouter_api_keys.is_empty()
-        && next.credentials.anthropic_api_keys.is_empty()
-    {
+    let credential_result = if next.credentials.api_keys.is_empty() {
         remove_file_if_exists(credentials_path, "provider_profile_credentials")
     } else {
         let credentials_json =
@@ -621,8 +593,12 @@ pub(crate) fn build_openai_default_profile(
     ProviderProfileRecord {
         profile_id: OPENAI_CODEX_DEFAULT_PROFILE_ID.into(),
         provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+        runtime_kind: OPENAI_CODEX_PROVIDER_ID.into(),
         label: OPENAI_CODEX_DEFAULT_PROFILE_LABEL.into(),
         model_id: OPENAI_CODEX_PROVIDER_ID.into(),
+        preset_id: None,
+        base_url: None,
+        api_version: None,
         credential_link,
         migrated_from_legacy: migrated_at.is_some(),
         migrated_at: migrated_at.map(str::to_owned),
@@ -639,8 +615,12 @@ pub(crate) fn build_openrouter_default_profile(
     ProviderProfileRecord {
         profile_id: OPENROUTER_DEFAULT_PROFILE_ID.into(),
         provider_id: OPENROUTER_PROVIDER_ID.into(),
+        runtime_kind: OPENROUTER_PROVIDER_ID.into(),
         label: OPENROUTER_DEFAULT_PROFILE_LABEL.into(),
         model_id: model_id.trim().to_owned(),
+        preset_id: Some(OPENROUTER_PROVIDER_ID.into()),
+        base_url: None,
+        api_version: None,
         credential_link,
         migrated_from_legacy: migrated_at.is_some(),
         migrated_at: migrated_at.map(str::to_owned),
@@ -657,8 +637,12 @@ pub(crate) fn build_anthropic_default_profile(
     ProviderProfileRecord {
         profile_id: ANTHROPIC_DEFAULT_PROFILE_ID.into(),
         provider_id: ANTHROPIC_PROVIDER_ID.into(),
+        runtime_kind: ANTHROPIC_PROVIDER_ID.into(),
         label: ANTHROPIC_DEFAULT_PROFILE_LABEL.into(),
         model_id: model_id.trim().to_owned(),
+        preset_id: Some(ANTHROPIC_PROVIDER_ID.into()),
+        base_url: None,
+        api_version: None,
         credential_link,
         migrated_from_legacy: migrated_at.is_some(),
         migrated_at: migrated_at.map(str::to_owned),
@@ -670,7 +654,7 @@ fn validate_provider_profiles_metadata(
     metadata: ProviderProfilesMetadataFile,
     path: &Path,
 ) -> CommandResult<ProviderProfilesMetadataFile> {
-    if metadata.version != PROVIDER_PROFILES_SCHEMA_VERSION {
+    if metadata.version != 1 && metadata.version != PROVIDER_PROFILES_SCHEMA_VERSION {
         return Err(CommandError::user_fixable(
             "provider_profiles_invalid",
             format!(
@@ -705,7 +689,7 @@ fn validate_provider_profiles_metadata(
     let mut seen_profile_ids = BTreeSet::new();
     let mut validated_profiles = Vec::with_capacity(metadata.profiles.len());
     for profile in metadata.profiles {
-        let validated = validate_provider_profile_record(profile, path)?;
+        let validated = validate_provider_profile_record(profile, path, metadata.version)?;
         if !seen_profile_ids.insert(validated.profile_id.clone()) {
             return Err(CommandError::user_fixable(
                 "provider_profiles_invalid",
@@ -734,7 +718,7 @@ fn validate_provider_profiles_metadata(
     }
 
     Ok(ProviderProfilesMetadataFile {
-        version: metadata.version,
+        version: PROVIDER_PROFILES_SCHEMA_VERSION,
         active_profile_id: active_profile_id.to_owned(),
         profiles: validated_profiles,
         updated_at: normalize_updated_at(metadata.updated_at),
@@ -745,6 +729,7 @@ fn validate_provider_profiles_metadata(
 fn validate_provider_profile_record(
     profile: ProviderProfileRecord,
     path: &Path,
+    schema_version: u32,
 ) -> CommandResult<ProviderProfileRecord> {
     let profile_id = profile.profile_id.trim();
     if profile_id.is_empty() {
@@ -769,7 +754,25 @@ fn validate_provider_profile_record(
         ));
     }
 
-    let provider = resolve_runtime_provider_identity(Some(provider_id), Some(provider_id))
+    let runtime_kind = profile.runtime_kind.trim();
+    let runtime_kind = if runtime_kind.is_empty() {
+        if schema_version == 1 {
+            provider_id
+        } else {
+            return Err(CommandError::user_fixable(
+                "provider_profiles_invalid",
+                format!(
+                    "Cadence rejected provider profile `{}` in {} because runtimeKind was blank.",
+                    profile_id,
+                    path.display()
+                ),
+            ));
+        }
+    } else {
+        runtime_kind
+    };
+
+    let provider = resolve_runtime_provider_identity(Some(provider_id), Some(runtime_kind))
         .map_err(|diagnostic| {
             CommandError::user_fixable("provider_profiles_invalid", diagnostic.message)
         })?;
@@ -810,6 +813,20 @@ fn validate_provider_profile_record(
         ));
     }
 
+    let preset_id = normalize_optional_text(profile.preset_id);
+    let base_url = normalize_optional_text(profile.base_url);
+    let api_version = normalize_optional_text(profile.api_version);
+    let (preset_id, base_url, api_version) = validate_cloud_profile_metadata(
+        provider.provider_id,
+        provider.runtime_kind,
+        profile_id,
+        path,
+        schema_version,
+        preset_id,
+        base_url,
+        api_version,
+    )?;
+
     let credential_link = match profile.credential_link {
         Some(ProviderProfileCredentialLink::OpenAiCodex {
             account_id,
@@ -846,13 +863,8 @@ fn validate_provider_profile_record(
                 updated_at: normalize_updated_at(updated_at),
             })
         }
-        Some(ProviderProfileCredentialLink::OpenRouter { updated_at }) => {
-            Some(ProviderProfileCredentialLink::OpenRouter {
-                updated_at: normalize_updated_at(updated_at),
-            })
-        }
-        Some(ProviderProfileCredentialLink::Anthropic { updated_at }) => {
-            Some(ProviderProfileCredentialLink::Anthropic {
+        Some(ProviderProfileCredentialLink::ApiKey { updated_at }) => {
+            Some(ProviderProfileCredentialLink::ApiKey {
                 updated_at: normalize_updated_at(updated_at),
             })
         }
@@ -862,13 +874,212 @@ fn validate_provider_profile_record(
     Ok(ProviderProfileRecord {
         profile_id: profile_id.to_owned(),
         provider_id: provider.provider_id.to_owned(),
+        runtime_kind: provider.runtime_kind.to_owned(),
         label: label.to_owned(),
         model_id: model_id.to_owned(),
+        preset_id,
+        base_url,
+        api_version,
         credential_link,
         migrated_from_legacy: profile.migrated_from_legacy,
         migrated_at: profile.migrated_at.map(normalize_updated_at),
         updated_at: normalize_updated_at(profile.updated_at),
     })
+}
+
+fn validate_cloud_profile_metadata(
+    provider_id: &str,
+    runtime_kind: &str,
+    profile_id: &str,
+    path: &Path,
+    schema_version: u32,
+    preset_id: Option<String>,
+    base_url: Option<String>,
+    api_version: Option<String>,
+) -> CommandResult<(Option<String>, Option<String>, Option<String>)> {
+    let mut preset_id = preset_id;
+    let base_url = base_url;
+    let api_version = api_version;
+
+    if schema_version == 1 && provider_id != OPENAI_CODEX_PROVIDER_ID && preset_id.is_none() {
+        preset_id = Some(provider_id.to_owned());
+    }
+
+    match provider_id {
+        OPENAI_CODEX_PROVIDER_ID => {
+            ensure_absent_metadata_field(profile_id, path, "presetId", preset_id.as_deref())?;
+            ensure_absent_metadata_field(profile_id, path, "baseUrl", base_url.as_deref())?;
+            ensure_absent_metadata_field(profile_id, path, "apiVersion", api_version.as_deref())?;
+        }
+        OPENROUTER_PROVIDER_ID | ANTHROPIC_PROVIDER_ID | GEMINI_AI_STUDIO_PROVIDER_ID => {
+            require_exact_preset_id(profile_id, path, provider_id, preset_id.as_deref())?;
+            ensure_absent_metadata_field(profile_id, path, "baseUrl", base_url.as_deref())?;
+            ensure_absent_metadata_field(profile_id, path, "apiVersion", api_version.as_deref())?;
+        }
+        OPENAI_API_PROVIDER_ID => {
+            if base_url.is_none() {
+                require_exact_preset_id(profile_id, path, OPENAI_API_PROVIDER_ID, preset_id.as_deref())?;
+            } else if let Some(preset_id) = preset_id.as_deref() {
+                if preset_id != OPENAI_API_PROVIDER_ID {
+                    return Err(CommandError::user_fixable(
+                        "provider_profiles_invalid",
+                        format!(
+                            "Cadence rejected provider profile `{}` in {} because custom OpenAI-compatible profiles only accept presetId `{}` when presetId is provided.",
+                            profile_id,
+                            path.display(),
+                            OPENAI_API_PROVIDER_ID
+                        ),
+                    ));
+                }
+            }
+
+            if let Some(base_url) = base_url.as_deref() {
+                validate_base_url(profile_id, path, base_url)?;
+            }
+            if base_url.is_none() && api_version.is_some() {
+                return Err(CommandError::user_fixable(
+                    "provider_profiles_invalid",
+                    format!(
+                        "Cadence rejected provider profile `{}` in {} because apiVersion requires a custom baseUrl for provider `{}`.",
+                        profile_id,
+                        path.display(),
+                        OPENAI_API_PROVIDER_ID
+                    ),
+                ));
+            }
+        }
+        AZURE_OPENAI_PROVIDER_ID => {
+            if runtime_kind != OPENAI_COMPATIBLE_RUNTIME_KIND {
+                return Err(CommandError::user_fixable(
+                    "provider_profiles_invalid",
+                    format!(
+                        "Cadence rejected provider profile `{}` in {} because Azure OpenAI profiles must use runtimeKind `{}`.",
+                        profile_id,
+                        path.display(),
+                        OPENAI_COMPATIBLE_RUNTIME_KIND
+                    ),
+                ));
+            }
+            require_exact_preset_id(profile_id, path, AZURE_OPENAI_PROVIDER_ID, preset_id.as_deref())?;
+            let base_url = base_url.as_deref().ok_or_else(|| {
+                CommandError::user_fixable(
+                    "provider_profiles_invalid",
+                    format!(
+                        "Cadence rejected provider profile `{}` in {} because Azure OpenAI profiles require baseUrl.",
+                        profile_id,
+                        path.display()
+                    ),
+                )
+            })?;
+            validate_base_url(profile_id, path, base_url)?;
+            if api_version.is_none() {
+                return Err(CommandError::user_fixable(
+                    "provider_profiles_invalid",
+                    format!(
+                        "Cadence rejected provider profile `{}` in {} because Azure OpenAI profiles require apiVersion.",
+                        profile_id,
+                        path.display()
+                    ),
+                ));
+            }
+        }
+        other => {
+            return Err(CommandError::user_fixable(
+                "provider_profiles_invalid",
+                format!(
+                    "Cadence rejected provider profile `{}` in {} because provider `{other}` is not supported by the provider-profile store.",
+                    profile_id,
+                    path.display()
+                ),
+            ));
+        }
+    }
+
+    if runtime_kind == GEMINI_RUNTIME_KIND && provider_id != GEMINI_AI_STUDIO_PROVIDER_ID {
+        return Err(CommandError::user_fixable(
+            "provider_profiles_invalid",
+            format!(
+                "Cadence rejected provider profile `{}` in {} because runtimeKind `{}` currently requires providerId `{}`.",
+                profile_id,
+                path.display(),
+                GEMINI_RUNTIME_KIND,
+                GEMINI_AI_STUDIO_PROVIDER_ID
+            ),
+        ));
+    }
+
+    Ok((preset_id, base_url, api_version))
+}
+
+fn require_exact_preset_id(
+    profile_id: &str,
+    path: &Path,
+    expected: &str,
+    actual: Option<&str>,
+) -> CommandResult<()> {
+    if actual == Some(expected) {
+        return Ok(());
+    }
+
+    Err(CommandError::user_fixable(
+        "provider_profiles_invalid",
+        format!(
+            "Cadence rejected provider profile `{}` in {} because presetId `{}` is required.",
+            profile_id,
+            path.display(),
+            expected
+        ),
+    ))
+}
+
+fn ensure_absent_metadata_field(
+    profile_id: &str,
+    path: &Path,
+    field: &str,
+    value: Option<&str>,
+) -> CommandResult<()> {
+    if value.is_none() {
+        return Ok(());
+    }
+
+    Err(CommandError::user_fixable(
+        "provider_profiles_invalid",
+        format!(
+            "Cadence rejected provider profile `{}` in {} because field `{}` is not allowed for that provider.",
+            profile_id,
+            path.display(),
+            field
+        ),
+    ))
+}
+
+fn validate_base_url(profile_id: &str, path: &Path, base_url: &str) -> CommandResult<()> {
+    let parsed = Url::parse(base_url).map_err(|error| {
+        CommandError::user_fixable(
+            "provider_profiles_invalid",
+            format!(
+                "Cadence rejected provider profile `{}` in {} because baseUrl `{}` was not a valid absolute URL: {}",
+                profile_id,
+                path.display(),
+                base_url,
+                error
+            ),
+        )
+    })?;
+
+    match parsed.scheme() {
+        "http" | "https" => Ok(()),
+        other => Err(CommandError::user_fixable(
+            "provider_profiles_invalid",
+            format!(
+                "Cadence rejected provider profile `{}` in {} because baseUrl `{}` used unsupported scheme `{}`.",
+                profile_id,
+                path.display(),
+                base_url,
+                other
+            ),
+        )),
+    }
 }
 
 fn validate_migration_state(
@@ -897,23 +1108,13 @@ fn validate_provider_profile_credentials(
     path: &Path,
 ) -> CommandResult<ProviderProfileCredentialsFile> {
     Ok(ProviderProfileCredentialsFile {
-        openrouter_api_keys: validate_provider_api_key_credentials(
-            credentials.openrouter_api_keys,
-            path,
-            "OpenRouter",
-        )?,
-        anthropic_api_keys: validate_provider_api_key_credentials(
-            credentials.anthropic_api_keys,
-            path,
-            "Anthropic",
-        )?,
+        api_keys: validate_provider_api_key_credentials(credentials.api_keys, path)?,
     })
 }
 
 fn validate_provider_api_key_credentials(
     entries: Vec<ProviderApiKeyCredentialEntry>,
     path: &Path,
-    provider_label: &str,
 ) -> CommandResult<Vec<ProviderApiKeyCredentialEntry>> {
     let mut seen_profile_ids = BTreeSet::new();
     let mut validated = Vec::with_capacity(entries.len());
@@ -946,9 +1147,8 @@ fn validate_provider_api_key_credentials(
             return Err(CommandError::user_fixable(
                 "provider_profile_credentials_invalid",
                 format!(
-                    "Cadence rejected the app-local provider-profile credential file at {} because the {} apiKey for profile `{}` was blank.",
+                    "Cadence rejected the app-local provider-profile credential file at {} because the apiKey for profile `{}` was blank.",
                     path.display(),
-                    provider_label,
                     profile_id
                 ),
             ));
@@ -964,21 +1164,11 @@ fn validate_provider_api_key_credentials(
     Ok(validated)
 }
 
-fn openrouter_credentials_by_profile(
+fn api_key_credentials_by_profile(
     credentials: &ProviderProfileCredentialsFile,
-) -> BTreeMap<&str, &OpenRouterProfileCredentialEntry> {
+) -> BTreeMap<&str, &ProviderApiKeyCredentialEntry> {
     let mut entries = BTreeMap::new();
-    for entry in &credentials.openrouter_api_keys {
-        entries.insert(entry.profile_id.as_str(), entry);
-    }
-    entries
-}
-
-fn anthropic_credentials_by_profile(
-    credentials: &ProviderProfileCredentialsFile,
-) -> BTreeMap<&str, &AnthropicProfileCredentialEntry> {
-    let mut entries = BTreeMap::new();
-    for entry in &credentials.anthropic_api_keys {
+    for entry in &credentials.api_keys {
         entries.insert(entry.profile_id.as_str(), entry);
     }
     entries
@@ -988,13 +1178,12 @@ fn ensure_no_api_key_secret<'a>(
     profile_id: &str,
     credentials: &BTreeMap<&'a str, &'a ProviderApiKeyCredentialEntry>,
     credentials_path: &Path,
-    provider_label: &str,
 ) -> CommandResult<()> {
     if credentials.contains_key(profile_id) {
         return Err(CommandError::user_fixable(
             "provider_profiles_contract_failed",
             format!(
-                "Cadence found an unexpected {provider_label} secret entry for profile `{profile_id}` in {}.",
+                "Cadence found an unexpected apiKey secret entry for profile `{profile_id}` in {}.",
                 credentials_path.display()
             ),
         ));
@@ -1007,7 +1196,6 @@ fn ensure_all_credentials_reference_profiles<'a>(
     metadata: &ProviderProfilesMetadataFile,
     credentials: &BTreeMap<&'a str, &'a ProviderApiKeyCredentialEntry>,
     credentials_path: &Path,
-    provider_label: &str,
 ) -> CommandResult<()> {
     for profile_id in credentials.keys() {
         if !metadata
@@ -1018,7 +1206,7 @@ fn ensure_all_credentials_reference_profiles<'a>(
             return Err(CommandError::user_fixable(
                 "provider_profiles_contract_failed",
                 format!(
-                    "Cadence found an unexpected {provider_label} secret entry for `{profile_id}` in {} without matching provider-profile metadata.",
+                    "Cadence found an unexpected apiKey secret entry for `{profile_id}` in {} without matching provider-profile metadata.",
                     credentials_path.display()
                 ),
             ));
@@ -1044,11 +1232,7 @@ fn normalize_snapshot_for_persist(
         .sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
     validated
         .credentials
-        .openrouter_api_keys
-        .sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
-    validated
-        .credentials
-        .anthropic_api_keys
+        .api_keys
         .sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
 
     Ok(validated)
@@ -1079,6 +1263,17 @@ fn normalize_updated_at(value: String) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    })
 }
 
 const fn provider_profiles_schema_version() -> u32 {

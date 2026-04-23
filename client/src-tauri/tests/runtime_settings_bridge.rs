@@ -202,7 +202,7 @@ fn upsert_runtime_settings_persists_redacted_anthropic_provider_profile_metadata
 
     let credential_file = std::fs::read_to_string(&paths.provider_profile_credentials_path)
         .expect("read provider profile credentials");
-    assert!(credential_file.contains("\"anthropicApiKeys\""));
+    assert!(credential_file.contains("\"apiKeys\""));
     assert!(credential_file.contains("\"apiKey\": \"anthropic-secret-value-1\""));
 
     let reloaded = get_runtime_settings(app.handle().clone(), app.state::<DesktopState>())
@@ -574,14 +574,18 @@ fn upsert_runtime_settings_treats_missing_api_key_linkage_as_unconfigured() {
     std::fs::write(
         &paths.provider_profiles_path,
         serde_json::to_vec_pretty(&ProviderProfilesMetadataFile {
-            version: 1,
+            version: 2,
             active_profile_id: "openrouter-default".into(),
             profiles: vec![ProviderProfileRecord {
                 profile_id: "openrouter-default".into(),
                 provider_id: "openrouter".into(),
+                runtime_kind: "openrouter".into(),
                 label: "OpenRouter".into(),
                 model_id: "openai/gpt-4.1-mini".into(),
-                credential_link: Some(ProviderProfileCredentialLink::OpenRouter {
+                preset_id: Some("openrouter".into()),
+                base_url: None,
+                api_version: None,
+                credential_link: Some(ProviderProfileCredentialLink::ApiKey {
                     updated_at: "2026-04-21T01:00:00Z".into(),
                 }),
                 migrated_from_legacy: false,

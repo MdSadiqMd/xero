@@ -442,10 +442,7 @@ fn upsert_openai_profile_link(
 fn profile_link_updated_at(link: &ProviderProfileCredentialLink) -> String {
     match link {
         ProviderProfileCredentialLink::OpenAiCodex { updated_at, .. }
-        | ProviderProfileCredentialLink::OpenRouter { updated_at }
-        | ProviderProfileCredentialLink::Anthropic { updated_at } => {
-            normalize_updated_at(updated_at)
-        }
+        | ProviderProfileCredentialLink::ApiKey { updated_at } => normalize_updated_at(updated_at),
     }
 }
 

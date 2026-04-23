@@ -682,10 +682,13 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
     let upsert_provider_profile_request = serde_json::to_value(UpsertProviderProfileRequestDto {
         profile_id: "openrouter-work".into(),
         provider_id: "openrouter".into(),
+        runtime_kind: "openrouter".into(),
         label: "OpenRouter Work".into(),
         model_id: "openai/gpt-4.1-mini".into(),
-        openrouter_api_key: Some("credential-value-2".into()),
-        anthropic_api_key: None,
+        preset_id: Some("openrouter".into()),
+        base_url: None,
+        api_version: None,
+        api_key: Some("credential-value-2".into()),
         activate: true,
     })
     .expect("provider profile request should serialize");
@@ -694,9 +697,11 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         json!({
             "profileId": "openrouter-work",
             "providerId": "openrouter",
+            "runtimeKind": "openrouter",
             "label": "OpenRouter Work",
             "modelId": "openai/gpt-4.1-mini",
-            "openrouterApiKey": "credential-value-2",
+            "presetId": "openrouter",
+            "apiKey": "credential-value-2",
             "activate": true
         })
     );
@@ -705,10 +710,13 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         serde_json::to_value(UpsertProviderProfileRequestDto {
             profile_id: "anthropic-work".into(),
             provider_id: "anthropic".into(),
+            runtime_kind: "anthropic".into(),
             label: "Anthropic Work".into(),
             model_id: "claude-3-7-sonnet-latest".into(),
-            openrouter_api_key: None,
-            anthropic_api_key: Some("credential-value-ant-2".into()),
+            preset_id: Some("anthropic".into()),
+            base_url: None,
+            api_version: None,
+            api_key: Some("credential-value-ant-2".into()),
             activate: false,
         })
         .expect("anthropic provider profile request should serialize");
@@ -717,9 +725,11 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         json!({
             "profileId": "anthropic-work",
             "providerId": "anthropic",
+            "runtimeKind": "anthropic",
             "label": "Anthropic Work",
             "modelId": "claude-3-7-sonnet-latest",
-            "anthropicApiKey": "credential-value-ant-2",
+            "presetId": "anthropic",
+            "apiKey": "credential-value-ant-2",
             "activate": false
         })
     );
@@ -757,8 +767,12 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         profiles: vec![ProviderProfileDto {
             profile_id: "openrouter-work".into(),
             provider_id: "openrouter".into(),
+            runtime_kind: "openrouter".into(),
             label: "OpenRouter Work".into(),
             model_id: "openai/gpt-4.1-mini".into(),
+            preset_id: Some("openrouter".into()),
+            base_url: None,
+            api_version: None,
             active: true,
             readiness: ProviderProfileReadinessDto {
                 ready: true,
@@ -785,8 +799,10 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             "profiles": [{
                 "profileId": "openrouter-work",
                 "providerId": "openrouter",
+                "runtimeKind": "openrouter",
                 "label": "OpenRouter Work",
                 "modelId": "openai/gpt-4.1-mini",
+                "presetId": "openrouter",
                 "active": true,
                 "readiness": {
                     "ready": true,

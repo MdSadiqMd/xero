@@ -206,8 +206,15 @@ pub struct ProviderProfileReadinessDto {
 pub struct ProviderProfileDto {
     pub profile_id: String,
     pub provider_id: String,
+    pub runtime_kind: String,
     pub label: String,
     pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
     pub active: bool,
     pub readiness: ProviderProfileReadinessDto,
     pub migrated_from_legacy: bool,
@@ -355,12 +362,17 @@ pub struct UpsertRuntimeSettingsRequestDto {
 pub struct UpsertProviderProfileRequestDto {
     pub profile_id: String,
     pub provider_id: String,
+    pub runtime_kind: String,
     pub label: String,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openrouter_api_key: Option<String>,
+    pub preset_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anthropic_api_key: Option<String>,
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
     #[serde(default)]
     pub activate: bool,
 }

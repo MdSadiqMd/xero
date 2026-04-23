@@ -8,7 +8,6 @@ use crate::{
     provider_profiles::{
         build_anthropic_default_profile, build_openai_default_profile,
         build_openrouter_default_profile, persist_provider_profiles_snapshot,
-        AnthropicProfileCredentialEntry, OpenRouterProfileCredentialEntry,
         ProviderApiKeyCredentialEntry, ProviderProfileCredentialLink, ProviderProfileRecord,
         ProviderProfilesSnapshot, ANTHROPIC_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID,
         OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
@@ -70,16 +69,16 @@ fn apply_runtime_settings_update(
     let current_openrouter = current.profile(OPENROUTER_DEFAULT_PROFILE_ID).cloned();
     let current_anthropic = current.profile(ANTHROPIC_DEFAULT_PROFILE_ID).cloned();
     let current_openrouter_secret = current
-        .openrouter_credential(OPENROUTER_DEFAULT_PROFILE_ID)
+        .api_key_credential(OPENROUTER_DEFAULT_PROFILE_ID)
         .cloned();
     let current_anthropic_secret = current
-        .anthropic_credential(ANTHROPIC_DEFAULT_PROFILE_ID)
+        .api_key_credential(ANTHROPIC_DEFAULT_PROFILE_ID)
         .cloned();
 
     let next_openrouter_secret = if explicit_openrouter_clear {
         None
     } else if let Some(api_key) = requested_openrouter_key {
-        Some(OpenRouterProfileCredentialEntry {
+        Some(ProviderApiKeyCredentialEntry {
             profile_id: OPENROUTER_DEFAULT_PROFILE_ID.into(),
             api_key: api_key.to_owned(),
             updated_at: api_key_updated_at(current_openrouter_secret.as_ref(), Some(api_key)),
@@ -87,17 +86,16 @@ fn apply_runtime_settings_update(
     } else {
         current_openrouter_secret.clone()
     };
-    let next_openrouter_link =
-        next_openrouter_secret
-            .as_ref()
-            .map(|entry| ProviderProfileCredentialLink::OpenRouter {
-                updated_at: entry.updated_at.clone(),
-            });
+    let next_openrouter_link = next_openrouter_secret.as_ref().map(|entry| {
+        ProviderProfileCredentialLink::ApiKey {
+            updated_at: entry.updated_at.clone(),
+        }
+    });
 
     let next_anthropic_secret = if explicit_anthropic_clear {
         None
     } else if let Some(api_key) = requested_anthropic_key {
-        Some(AnthropicProfileCredentialEntry {
+        Some(ProviderApiKeyCredentialEntry {
             profile_id: ANTHROPIC_DEFAULT_PROFILE_ID.into(),
             api_key: api_key.to_owned(),
             updated_at: api_key_updated_at(current_anthropic_secret.as_ref(), Some(api_key)),
@@ -105,12 +103,11 @@ fn apply_runtime_settings_update(
     } else {
         current_anthropic_secret.clone()
     };
-    let next_anthropic_link =
-        next_anthropic_secret
-            .as_ref()
-            .map(|entry| ProviderProfileCredentialLink::Anthropic {
-                updated_at: entry.updated_at.clone(),
-            });
+    let next_anthropic_link = next_anthropic_secret.as_ref().map(|entry| {
+        ProviderProfileCredentialLink::ApiKey {
+            updated_at: entry.updated_at.clone(),
+        }
+    });
 
     let openai_profile = merge_profile(
         current_openai.as_ref(),
@@ -126,8 +123,9 @@ fn apply_runtime_settings_update(
     let include_openrouter_profile = current_openrouter.is_some()
         || validated_request.provider_id == OPENROUTER_PROVIDER_ID
         || next_openrouter_link.is_some();
-    let include_anthropic_profile =
-        current_anthropic.is_some() || validated_request.provider_id == ANTHROPIC_PROVIDER_ID;
+    let include_anthropic_profile = current_anthropic.is_some()
+        || validated_request.provider_id == ANTHROPIC_PROVIDER_ID
+        || next_anthropic_link.is_some();
 
     let openrouter_model_id = if validated_request.provider_id == OPENROUTER_PROVIDER_ID {
         validated_request.model_id.clone()
@@ -185,18 +183,18 @@ fn apply_runtime_settings_update(
     };
 
     if let Some(secret) = next_openrouter_secret {
-        upsert_openrouter_secret(&mut next, secret);
+        upsert_api_key_secret(&mut next, secret);
     } else {
         next.credentials
-            .openrouter_api_keys
+            .api_keys
             .retain(|entry| entry.profile_id != OPENROUTER_DEFAULT_PROFILE_ID);
     }
 
     if let Some(secret) = next_anthropic_secret {
-        upsert_anthropic_secret(&mut next, secret);
+        upsert_api_key_secret(&mut next, secret);
     } else {
         next.credentials
-            .anthropic_api_keys
+            .api_keys
             .retain(|entry| entry.profile_id != ANTHROPIC_DEFAULT_PROFILE_ID);
     }
 
@@ -235,7 +233,11 @@ fn merge_profile(
         next.migrated_from_legacy = existing.migrated_from_legacy;
         next.migrated_at = existing.migrated_at.clone();
         if existing.provider_id == next.provider_id
+            && existing.runtime_kind == next.runtime_kind
             && existing.model_id == next.model_id
+            && existing.preset_id == next.preset_id
+            && existing.base_url == next.base_url
+            && existing.api_version == next.api_version
             && existing.credential_link == next.credential_link
         {
             next.updated_at = existing.updated_at.clone();
@@ -256,35 +258,19 @@ fn upsert_profile(profiles: &mut Vec<ProviderProfileRecord>, next: ProviderProfi
     }
 }
 
-fn upsert_openrouter_secret(
+fn upsert_api_key_secret(
     snapshot: &mut ProviderProfilesSnapshot,
-    next: OpenRouterProfileCredentialEntry,
+    next: ProviderApiKeyCredentialEntry,
 ) {
     if let Some(existing) = snapshot
         .credentials
-        .openrouter_api_keys
+        .api_keys
         .iter_mut()
         .find(|entry| entry.profile_id == next.profile_id)
     {
         *existing = next;
     } else {
-        snapshot.credentials.openrouter_api_keys.push(next);
-    }
-}
-
-fn upsert_anthropic_secret(
-    snapshot: &mut ProviderProfilesSnapshot,
-    next: AnthropicProfileCredentialEntry,
-) {
-    if let Some(existing) = snapshot
-        .credentials
-        .anthropic_api_keys
-        .iter_mut()
-        .find(|entry| entry.profile_id == next.profile_id)
-    {
-        *existing = next;
-    } else {
-        snapshot.credentials.anthropic_api_keys.push(next);
+        snapshot.credentials.api_keys.push(next);
     }
 }
 

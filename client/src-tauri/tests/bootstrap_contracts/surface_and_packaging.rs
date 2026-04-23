@@ -180,8 +180,12 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
             profiles: vec![cadence_desktop_lib::commands::ProviderProfileDto {
                 profile_id: "openai_codex-default".into(),
                 provider_id: "openai_codex".into(),
+                runtime_kind: "openai_codex".into(),
                 label: "OpenAI Codex".into(),
                 model_id: "openai_codex".into(),
+                preset_id: None,
+                base_url: None,
+                api_version: None,
                 active: true,
                 readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
                     ready: false,
@@ -204,6 +208,7 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
                 "request": {
                     "profileId": "zz-openai-alt",
                     "providerId": "openai_codex",
+                    "runtimeKind": "openai_codex",
                     "label": "OpenAI Alt",
                     "modelId": "openai_codex",
                     "activate": false
@@ -216,8 +221,12 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
                 cadence_desktop_lib::commands::ProviderProfileDto {
                     profile_id: "openai_codex-default".into(),
                     provider_id: "openai_codex".into(),
+                    runtime_kind: "openai_codex".into(),
                     label: "OpenAI Codex".into(),
                     model_id: "openai_codex".into(),
+                    preset_id: None,
+                    base_url: None,
+                    api_version: None,
                     active: true,
                     readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
                         ready: false,
@@ -230,8 +239,12 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
                 cadence_desktop_lib::commands::ProviderProfileDto {
                     profile_id: "zz-openai-alt".into(),
                     provider_id: "openai_codex".into(),
+                    runtime_kind: "openai_codex".into(),
                     label: "OpenAI Alt".into(),
                     model_id: "openai_codex".into(),
+                    preset_id: None,
+                    base_url: None,
+                    api_version: None,
                     active: false,
                     readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
                         ready: false,
@@ -258,8 +271,12 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
                 cadence_desktop_lib::commands::ProviderProfileDto {
                     profile_id: "openai_codex-default".into(),
                     provider_id: "openai_codex".into(),
+                    runtime_kind: "openai_codex".into(),
                     label: "OpenAI Codex".into(),
                     model_id: "openai_codex".into(),
+                    preset_id: None,
+                    base_url: None,
+                    api_version: None,
                     active: false,
                     readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
                         ready: false,
@@ -272,8 +289,12 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
                 cadence_desktop_lib::commands::ProviderProfileDto {
                     profile_id: "zz-openai-alt".into(),
                     provider_id: "openai_codex".into(),
+                    runtime_kind: "openai_codex".into(),
                     label: "OpenAI Alt".into(),
                     model_id: "openai_codex".into(),
+                    preset_id: None,
+                    base_url: None,
+                    api_version: None,
                     active: true,
                     readiness: cadence_desktop_lib::commands::ProviderProfileReadinessDto {
                         ready: false,

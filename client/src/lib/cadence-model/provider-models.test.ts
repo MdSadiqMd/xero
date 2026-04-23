@@ -54,7 +54,7 @@ describe('provider-models', () => {
   it('rejects unknown providers and malformed thinking capability payloads', () => {
     const unknownProvider = providerModelCatalogSchema.safeParse({
       ...makeOpenRouterCatalog(),
-      providerId: 'azure_openai',
+      providerId: 'deepseek',
     })
     expect(unknownProvider.success).toBe(false)
 
