@@ -125,15 +125,14 @@ impl Drop for AndroidLogStream {
 /// 03-21 10:10:00.123  1234  5678 I MyTag: something happened
 /// ```
 pub fn parse_logcat_line(line: &str) -> Option<LogEntry> {
-    // Skip the date/time/pid/tid prefix. We look for the first " X " where
-    // X is one of V, D, I, W, E, F.
-    let mut parts = line.splitn(6, ' ').filter(|p| !p.is_empty());
-    let _mmdd = parts.next()?;
-    let hms = parts.next()?;
-    let _pid = parts.next()?;
-    let _tid = parts.next()?;
-    let level_char = parts.next()?;
-    let rest = parts.next()?;
+    // Walk whitespace-delimited fields — logcat may use 1 or 2 spaces between
+    // columns. The last field (message) is everything after the level.
+    let mut fields = line.split_whitespace();
+    let _mmdd = fields.next()?;
+    let hms = fields.next()?;
+    let _pid = fields.next()?;
+    let _tid = fields.next()?;
+    let level_char = fields.next()?;
 
     let level = match level_char {
         "V" => "verbose",
@@ -144,6 +143,15 @@ pub fn parse_logcat_line(line: &str) -> Option<LogEntry> {
         "F" => "fatal",
         _ => return None,
     };
+
+    // Locate the position after the level char to capture the rest of the
+    // line verbatim (message text may contain tabs, multiple spaces, etc.).
+    let level_pos = line.find(&format!(" {level_char} "))?;
+    let rest_start = level_pos + level_char.len() + 2;
+    if rest_start >= line.len() {
+        return None;
+    }
+    let rest = line[rest_start..].trim_end_matches(['\r', '\n']);
 
     let (tag, message) = rest
         .split_once(": ")

@@ -117,6 +117,23 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::emulator::emulator_input,
             commands::emulator::emulator_rotate,
             commands::emulator::emulator_subscribe_ready,
+            commands::emulator::emulator_screenshot,
+            commands::emulator::emulator_ui_dump,
+            commands::emulator::emulator_find,
+            commands::emulator::emulator_tap,
+            commands::emulator::emulator_swipe,
+            commands::emulator::emulator_type,
+            commands::emulator::emulator_press_key,
+            commands::emulator::emulator_list_apps,
+            commands::emulator::emulator_install_app,
+            commands::emulator::emulator_uninstall_app,
+            commands::emulator::emulator_launch_app,
+            commands::emulator::emulator_terminate_app,
+            commands::emulator::emulator_set_location,
+            commands::emulator::emulator_push_notification,
+            commands::emulator::emulator_logs_subscribe,
+            commands::emulator::emulator_logs_unsubscribe,
+            commands::emulator::emulator_logs_get_recent,
         ])
 }
 

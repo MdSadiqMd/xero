@@ -50,7 +50,8 @@ pub struct EmulatorState {
 }
 
 enum LogStreamHandle {
-    Android(automation::logs::AndroidLogStream),
+    // Variant is held only for its Drop impl (kills the logcat child).
+    Android(#[allow(dead_code)] automation::logs::AndroidLogStream),
 }
 
 impl Default for EmulatorState {
@@ -614,6 +615,16 @@ fn stop_active<R: Runtime>(
     app: &AppHandle<R>,
     state: &State<'_, EmulatorState>,
 ) -> CommandResult<()> {
+    // Stop any active log stream first so its child process doesn't outlive
+    // the emulator session.
+    {
+        let mut stream = state
+            .log_stream
+            .lock()
+            .expect("log stream mutex poisoned");
+        *stream = None;
+    }
+
     let mut active = state.active.lock().expect("emulator active mutex poisoned");
     let taken = active.take();
     drop(active);
@@ -641,6 +652,7 @@ fn stop_active<R: Runtime>(
     drop(taken); // Joins the decoder thread + kills child processes.
 
     state.frame_bus().clear();
+    state.log_collector.clear();
 
     let _ = app.emit(
         EMULATOR_STATUS_EVENT,
@@ -652,4 +664,560 @@ fn stop_active<R: Runtime>(
         },
     );
     Ok(())
+}
+
+// ---------- Automation commands --------------------------------------------
+
+#[tauri::command]
+pub fn emulator_screenshot(
+    state: State<'_, EmulatorState>,
+) -> CommandResult<ScreenshotResponse> {
+    let frame = state.frame_bus().latest().ok_or_else(|| {
+        CommandError::user_fixable(
+            "emulator_no_frame",
+            "No frame has been captured yet. Wait for the stream to start.",
+        )
+    })?;
+
+    // `FrameBus` stores JPEG; re-encode once as PNG so agents get a
+    // lossless copy they can pipe into a vision model without worrying
+    // about JPEG artifacts.
+    let img = image::load_from_memory_with_format(&frame.bytes, image::ImageFormat::Jpeg)
+        .map_err(|e| {
+            CommandError::system_fault(
+                "emulator_frame_decode_failed",
+                format!("could not decode live frame: {e}"),
+            )
+        })?;
+
+    let mut png_bytes: Vec<u8> = Vec::new();
+    img.write_to(
+        &mut std::io::Cursor::new(&mut png_bytes),
+        image::ImageFormat::Png,
+    )
+    .map_err(|e| {
+        CommandError::system_fault(
+            "emulator_frame_encode_failed",
+            format!("png encode failed: {e}"),
+        )
+    })?;
+
+    Ok(ScreenshotResponse {
+        png_base64: base64::engine::general_purpose::STANDARD.encode(&png_bytes),
+        width: frame.width,
+        height: frame.height,
+        device_pixel_ratio: 1.0,
+    })
+}
+
+#[tauri::command]
+pub fn emulator_ui_dump(state: State<'_, EmulatorState>) -> CommandResult<UiTree> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    match active.as_ref() {
+        Some(ActiveDevice::Android { session, .. }) => automation::android_ui::dump(session.adb())
+            .map_err(|err| {
+                CommandError::system_fault(
+                    "android_ui_dump_failed",
+                    format!("uiautomator dump failed: {err}"),
+                )
+            }),
+        #[cfg(target_os = "macos")]
+        Some(ActiveDevice::Ios { session, .. }) => {
+            let client = session.client();
+            automation::ios_ui::dump(&client)
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        Some(ActiveDevice::Synthetic { .. }) => Err(CommandError::user_fixable(
+            "synthetic_ui_dump_unsupported",
+            "UI dumps are not available for the synthetic device. Start a real AVD or simulator.",
+        )),
+        None => Err(no_active_device()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_find(
+    state: State<'_, EmulatorState>,
+    selector: Selector,
+) -> CommandResult<Vec<automation::UiNode>> {
+    let tree = emulator_ui_dump(state)?;
+    Ok(automation::selector::find(&tree, &selector))
+}
+
+#[tauri::command]
+pub fn emulator_tap(
+    state: State<'_, EmulatorState>,
+    target: TapTarget,
+) -> CommandResult<()> {
+    match target {
+        TapTarget::Point { x, y } => tap_point(&state, x, y),
+        TapTarget::Element { selector } => {
+            let tree = emulator_ui_dump(state.clone())?;
+            let hits = automation::selector::find(&tree, &selector);
+            match hits.len() {
+                0 => Err(CommandError::user_fixable(
+                    "emulator_selector_no_match",
+                    "Selector matched no elements.",
+                )),
+                1 => {
+                    let (cx, cy) = hits[0].bounds.center();
+                    // Resolve the tap at the exact pixel bounds found by the
+                    // dump. We must normalize back to 0..1 for the session's
+                    // dispatch which expects normalized coords.
+                    tap_element(&state, cx, cy)
+                }
+                n => Err(CommandError::user_fixable(
+                    "emulator_selector_ambiguous",
+                    format!("Selector matched {n} elements. Narrow it with an id or label."),
+                )),
+            }
+        }
+    }
+}
+
+fn tap_point(state: &State<'_, EmulatorState>, x: f32, y: f32) -> CommandResult<()> {
+    synthetic_down_up(state, x, y)
+}
+
+fn tap_element(state: &State<'_, EmulatorState>, px: i32, py: i32) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    let device = active.as_ref().ok_or_else(no_active_device)?;
+    let (w, h) = device.viewport();
+    if w == 0 || h == 0 {
+        return Err(CommandError::system_fault(
+            "emulator_viewport_unknown",
+            "Device viewport dimensions are unknown; cannot resolve selector bounds.",
+        ));
+    }
+    let nx = (px as f32 / w as f32).clamp(0.0, 1.0);
+    let ny = (py as f32 / h as f32).clamp(0.0, 1.0);
+    drop(active);
+    synthetic_down_up(state, nx, ny)
+}
+
+fn synthetic_down_up(state: &State<'_, EmulatorState>, x: f32, y: f32) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    let device = active.as_ref().ok_or_else(no_active_device)?;
+    match device {
+        ActiveDevice::Android { session, .. } => {
+            use android::input::MotionAction;
+            session.send_touch(MotionAction::Down, x, y)?;
+            session.send_touch(MotionAction::Up, x, y)?;
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        ActiveDevice::Ios { session, .. } => {
+            use ios::input::{HidEvent, TouchPhase};
+            let (width, height) = (session.width().max(1), session.height().max(1));
+            let (px, py) = ios::input::denormalize(x, y, width, height);
+            session.client().send_hid(HidEvent::Touch {
+                phase: TouchPhase::Began,
+                x: px,
+                y: py,
+            })?;
+            session.client().send_hid(HidEvent::Touch {
+                phase: TouchPhase::Ended,
+                x: px,
+                y: py,
+            })?;
+            Ok(())
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        ActiveDevice::Synthetic { .. } => Ok(()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_swipe(
+    state: State<'_, EmulatorState>,
+    request: SwipeRequest,
+) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    let device = active.as_ref().ok_or_else(no_active_device)?;
+    match device {
+        ActiveDevice::Android { session, .. } => {
+            use android::input::MotionAction;
+            session.send_touch(MotionAction::Down, request.from_x, request.from_y)?;
+            // Issue a few interpolated Move events so the gesture reads as a
+            // real swipe rather than a teleport.
+            let steps = 6;
+            for i in 1..=steps {
+                let t = i as f32 / steps as f32;
+                let x = request.from_x + (request.to_x - request.from_x) * t;
+                let y = request.from_y + (request.to_y - request.from_y) * t;
+                session.send_touch(MotionAction::Move, x, y)?;
+            }
+            session.send_touch(MotionAction::Up, request.to_x, request.to_y)?;
+            Ok(())
+        }
+        #[cfg(target_os = "macos")]
+        ActiveDevice::Ios { session, .. } => {
+            use ios::input::HidEvent;
+            let width = session.width().max(1);
+            let height = session.height().max(1);
+            let (from_x, from_y) =
+                ios::input::denormalize(request.from_x, request.from_y, width, height);
+            let (to_x, to_y) =
+                ios::input::denormalize(request.to_x, request.to_y, width, height);
+            session.client().send_hid(HidEvent::Swipe {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                duration_ms: request.duration_ms.unwrap_or(200),
+            })
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        ActiveDevice::Synthetic { .. } => Ok(()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_type(
+    state: State<'_, EmulatorState>,
+    request: TypeRequest,
+) -> CommandResult<()> {
+    if let Some(selector) = request.into.as_ref() {
+        let tree = emulator_ui_dump(state.clone())?;
+        let hits = automation::selector::find(&tree, selector);
+        match hits.len() {
+            0 => {
+                return Err(CommandError::user_fixable(
+                    "emulator_selector_no_match",
+                    "Selector for `into` matched no elements.",
+                ))
+            }
+            1 => {
+                let (cx, cy) = hits[0].bounds.center();
+                tap_element(&state, cx, cy)?;
+            }
+            n => {
+                return Err(CommandError::user_fixable(
+                    "emulator_selector_ambiguous",
+                    format!("Selector for `into` matched {n} elements."),
+                ))
+            }
+        }
+    }
+
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    let device = active.as_ref().ok_or_else(no_active_device)?;
+    match device {
+        ActiveDevice::Android { session, .. } => session.send_text(&request.text),
+        #[cfg(target_os = "macos")]
+        ActiveDevice::Ios { session, .. } => {
+            use ios::input::HidEvent;
+            session.client().send_hid(HidEvent::Text {
+                text: request.text.clone(),
+            })
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        ActiveDevice::Synthetic { .. } => Ok(()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_press_key(
+    state: State<'_, EmulatorState>,
+    request: HardwareKeyRequest,
+) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    let device = active.as_ref().ok_or_else(no_active_device)?;
+    match device {
+        ActiveDevice::Android { session, .. } => {
+            let keycode = map_hardware_key(&request.key).ok_or_else(|| {
+                CommandError::user_fixable(
+                    "emulator_unknown_key",
+                    format!("Unknown hardware key: {}", request.key),
+                )
+            })?;
+            session.send_key(keycode)
+        }
+        #[cfg(target_os = "macos")]
+        ActiveDevice::Ios { session, .. } => {
+            use ios::input::HidEvent;
+            if request.key == "home" {
+                return session.client().send_hid(HidEvent::Home);
+            }
+            let button = ios::input::parse_hardware_button(&request.key).ok_or_else(|| {
+                CommandError::user_fixable(
+                    "emulator_unknown_key",
+                    format!("Unknown iOS hardware key: {}", request.key),
+                )
+            })?;
+            session.client().send_hid(HidEvent::Button { button })
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        ActiveDevice::Synthetic { .. } => Ok(()),
+    }
+}
+
+// ---- App lifecycle commands ------------------------------------------------
+
+#[tauri::command]
+pub fn emulator_list_apps(
+    state: State<'_, EmulatorState>,
+) -> CommandResult<Vec<AppDescriptor>> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    match active.as_ref() {
+        Some(ActiveDevice::Android { session, .. }) => automation::apps::android_list(session.adb()),
+        #[cfg(target_os = "macos")]
+        Some(ActiveDevice::Ios { session, .. }) => automation::apps::ios_list(session.device_id()),
+        #[cfg(feature = "emulator-synthetic")]
+        Some(ActiveDevice::Synthetic { .. }) => Ok(Vec::new()),
+        None => Err(no_active_device()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_install_app(
+    state: State<'_, EmulatorState>,
+    request: InstallAppRequest,
+) -> CommandResult<AppDescriptor> {
+    let path = PathBuf::from(request.source_path);
+    if !path.exists() {
+        return Err(CommandError::user_fixable(
+            "emulator_install_source_missing",
+            format!("{} does not exist.", path.display()),
+        ));
+    }
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    match active.as_ref() {
+        Some(ActiveDevice::Android { session, .. }) => {
+            automation::apps::android_install(session.adb(), &path)
+        }
+        #[cfg(target_os = "macos")]
+        Some(ActiveDevice::Ios { session, .. }) => {
+            automation::apps::ios_install(session.device_id(), &path)
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        Some(ActiveDevice::Synthetic { .. }) => Err(CommandError::user_fixable(
+            "synthetic_app_unsupported",
+            "App install is not available for the synthetic device.",
+        )),
+        None => Err(no_active_device()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_uninstall_app(
+    state: State<'_, EmulatorState>,
+    request: BundleIdRequest,
+) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    match active.as_ref() {
+        Some(ActiveDevice::Android { session, .. }) => {
+            automation::apps::android_uninstall(session.adb(), &request.bundle_id)
+        }
+        #[cfg(target_os = "macos")]
+        Some(ActiveDevice::Ios { session, .. }) => {
+            automation::apps::ios_uninstall(session.device_id(), &request.bundle_id)
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        Some(ActiveDevice::Synthetic { .. }) => Ok(()),
+        None => Err(no_active_device()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_launch_app(
+    state: State<'_, EmulatorState>,
+    request: LaunchAppRequest,
+) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    match active.as_ref() {
+        Some(ActiveDevice::Android { session, .. }) => {
+            automation::apps::android_launch(session.adb(), &request.bundle_id, &request.args)
+        }
+        #[cfg(target_os = "macos")]
+        Some(ActiveDevice::Ios { session, .. }) => {
+            automation::apps::ios_launch(session.device_id(), &request.bundle_id, &request.args)
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        Some(ActiveDevice::Synthetic { .. }) => Ok(()),
+        None => Err(no_active_device()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_terminate_app(
+    state: State<'_, EmulatorState>,
+    request: BundleIdRequest,
+) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    match active.as_ref() {
+        Some(ActiveDevice::Android { session, .. }) => {
+            automation::apps::android_terminate(session.adb(), &request.bundle_id)
+        }
+        #[cfg(target_os = "macos")]
+        Some(ActiveDevice::Ios { session, .. }) => {
+            automation::apps::ios_terminate(session.device_id(), &request.bundle_id)
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        Some(ActiveDevice::Synthetic { .. }) => Ok(()),
+        None => Err(no_active_device()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_set_location(
+    state: State<'_, EmulatorState>,
+    request: LocationRequest,
+) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    match active.as_ref() {
+        Some(ActiveDevice::Android { session, .. }) => {
+            // Android emulator supports `geo fix <lon> <lat>` via the console
+            // but that requires a telnet connection. We route through `adb`
+            // emu geo instead, which the platform-tools binary supports.
+            session
+                .adb()
+                .shell([
+                    "geo".to_string(),
+                    "fix".to_string(),
+                    request.lon.to_string(),
+                    request.lat.to_string(),
+                ])
+                .map(|_| ())
+                .map_err(|e| {
+                    CommandError::system_fault(
+                        "android_set_location_failed",
+                        format!("emu geo fix failed: {e}"),
+                    )
+                })
+        }
+        #[cfg(target_os = "macos")]
+        Some(ActiveDevice::Ios { session, .. }) => {
+            ios::xcrun::set_location(session.device_id(), request.lat, request.lon).map_err(|e| {
+                CommandError::system_fault(
+                    "ios_set_location_failed",
+                    format!("simctl location set failed: {e}"),
+                )
+            })
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        Some(ActiveDevice::Synthetic { .. }) => Ok(()),
+        None => Err(no_active_device()),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_push_notification(
+    state: State<'_, EmulatorState>,
+    request: PushNotificationRequest,
+) -> CommandResult<()> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    match active.as_ref() {
+        Some(ActiveDevice::Android { .. }) => Err(CommandError::user_fixable(
+            "push_unsupported_on_android",
+            "Android AVDs have no APNS equivalent; push notifications are iOS-only.",
+        )),
+        #[cfg(target_os = "macos")]
+        Some(ActiveDevice::Ios { session, .. }) => {
+            ios::xcrun::push_notification(session.device_id(), &request.bundle_id, &request.payload)
+                .map_err(|e| {
+                    CommandError::system_fault(
+                        "ios_push_failed",
+                        format!("simctl push failed: {e}"),
+                    )
+                })
+        }
+        #[cfg(feature = "emulator-synthetic")]
+        Some(ActiveDevice::Synthetic { .. }) => Ok(()),
+        None => Err(no_active_device()),
+    }
+}
+
+// ---- Log streaming ---------------------------------------------------------
+
+#[tauri::command]
+pub fn emulator_logs_subscribe<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, EmulatorState>,
+    _request: LogSubscribeRequest,
+) -> CommandResult<SubscriptionToken> {
+    let active = state.active.lock().expect("emulator active mutex poisoned");
+    let device = active.as_ref().ok_or_else(no_active_device)?;
+
+    let id = format!("log-{}", uuid_like());
+
+    match device {
+        ActiveDevice::Android { session, .. } => {
+            let stream = automation::logs::AndroidLogStream::spawn(
+                app,
+                session.adb(),
+                state.log_collector.clone(),
+            )
+            .map_err(|e| {
+                CommandError::system_fault(
+                    "android_logcat_spawn_failed",
+                    format!("logcat spawn failed: {e}"),
+                )
+            })?;
+            let mut slot = state.log_stream.lock().expect("log stream mutex poisoned");
+            *slot = Some(LogStreamHandle::Android(stream));
+            Ok(SubscriptionToken { id })
+        }
+        #[cfg(target_os = "macos")]
+        ActiveDevice::Ios { .. } => Err(CommandError::system_fault(
+            "ios_log_stream_not_implemented",
+            "iOS log streaming requires the idb proto to be vendored.",
+        )),
+        #[cfg(feature = "emulator-synthetic")]
+        ActiveDevice::Synthetic { .. } => Ok(SubscriptionToken { id }),
+    }
+}
+
+#[tauri::command]
+pub fn emulator_logs_unsubscribe(
+    state: State<'_, EmulatorState>,
+    _token: SubscriptionToken,
+) -> CommandResult<()> {
+    let mut slot = state.log_stream.lock().expect("log stream mutex poisoned");
+    *slot = None;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn emulator_logs_get_recent(
+    state: State<'_, EmulatorState>,
+    limit: Option<usize>,
+) -> CommandResult<Vec<automation::LogEntry>> {
+    let limit = limit.unwrap_or(500).min(10_000);
+    Ok(state.log_collector.recent(limit))
+}
+
+// ---- Helpers --------------------------------------------------------------
+
+fn no_active_device() -> CommandError {
+    CommandError::user_fixable(
+        "emulator_not_running",
+        "No emulator device is currently running.",
+    )
+}
+
+impl ActiveDevice {
+    fn viewport(&self) -> (u32, u32) {
+        match self {
+            ActiveDevice::Android { session, .. } => (session.width(), session.height()),
+            #[cfg(target_os = "macos")]
+            ActiveDevice::Ios { session, .. } => (session.width(), session.height()),
+            #[cfg(feature = "emulator-synthetic")]
+            ActiveDevice::Synthetic { .. } => (
+                synthetic::synthetic_width(),
+                synthetic::synthetic_height(),
+            ),
+        }
+    }
+}
+
+fn uuid_like() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos:x}-{seq:x}")
 }
