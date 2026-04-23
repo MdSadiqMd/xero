@@ -3,12 +3,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
-import { ArrowLeft, ArrowRight, Loader2, Plus, RotateCw, X } from "lucide-react"
+import {
+  ArrowLeft,
+  ArrowRight,
+  Cookie,
+  Loader2,
+  Plus,
+  RotateCw,
+  X,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const MIN_WIDTH = 320
 const RIGHT_PADDING = 200
 const DEFAULT_RATIO = 0.4
+const COOKIE_IMPORT_PROMPTED_KEY = "cadence.browser.cookieImportPrompted"
 // Pixel inset on the left of the content area reserved for the resize handle.
 // The native child webview paints on top of all HTML, so without this inset the
 // right half of the resize handle (which straddles the sidebar edge) would be
@@ -57,6 +66,25 @@ interface BrowserTabUpdatedPayload {
   tabs: BrowserTabMeta[]
 }
 
+interface DetectedBrowser {
+  id: string
+  label: string
+  available: boolean
+}
+
+interface CookieImportResult {
+  source: string
+  imported: number
+  skipped: number
+  domains: number
+}
+
+type ImportStatus =
+  | { kind: "idle" }
+  | { kind: "running"; source: string }
+  | { kind: "success"; source: string; result: CookieImportResult }
+  | { kind: "error"; source: string; message: string }
+
 function viewportDefaultWidth() {
   if (typeof window === "undefined") return 640
   return Math.round(window.innerWidth * DEFAULT_RATIO)
@@ -86,6 +114,31 @@ function safeInvoke<T>(command: string, args?: Record<string, unknown>): Promise
   return invoke<T>(command, args).catch(() => null)
 }
 
+function readCookiePromptFlag(): boolean {
+  try {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.localStorage?.getItem === "function" &&
+      window.localStorage.getItem(COOKIE_IMPORT_PROMPTED_KEY) === "true"
+    )
+  } catch {
+    return false
+  }
+}
+
+function writeCookiePromptFlag(): void {
+  try {
+    if (
+      typeof window !== "undefined" &&
+      typeof window.localStorage?.setItem === "function"
+    ) {
+      window.localStorage.setItem(COOKIE_IMPORT_PROMPTED_KEY, "true")
+    }
+  } catch {
+    /* storage quota / privacy mode — the banner will re-appear next session */
+  }
+}
+
 export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const [width, setWidth] = useState(viewportDefaultWidth)
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
@@ -97,12 +150,16 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const [canGoBack, setCanGoBack] = useState(false)
   const [canGoForward, setCanGoForward] = useState(false)
   const [navError, setNavError] = useState<string | null>(null)
+  const [cookieBrowsers, setCookieBrowsers] = useState<DetectedBrowser[]>([])
+  const [showCookieBanner, setShowCookieBanner] = useState(false)
+  const [importStatus, setImportStatus] = useState<ImportStatus>({ kind: "idle" })
   const widthRef = useRef(width)
   widthRef.current = width
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const lastSyncedRectRef = useRef<ViewportRect | null>(null)
   const addressFocusedRef = useRef(false)
   const hasWebviewRef = useRef(false)
+  const cookieSourcesLoadedRef = useRef(false)
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? null,
@@ -422,6 +479,80 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
     openUrl("https://www.google.com/", { newTab: true })
   }, [openUrl])
 
+  const loadCookieSources = useCallback(async () => {
+    if (!isTauri()) return [] as DetectedBrowser[]
+    try {
+      const list = (await invoke<DetectedBrowser[]>("browser_list_cookie_sources")) ?? []
+      setCookieBrowsers(list)
+      return list
+    } catch {
+      setCookieBrowsers([])
+      return []
+    }
+  }, [])
+
+  // First-run prompt: once a webview exists and the user hasn't been prompted
+  // yet, probe installed browsers and pop the banner. Keyed off tabs (not
+  // sidebar open) because the import command needs a live webview to anchor
+  // the shared cookie store.
+  useEffect(() => {
+    if (!open || !isTauri()) return
+    if (tabs.length === 0) return
+    if (cookieSourcesLoadedRef.current) return
+    cookieSourcesLoadedRef.current = true
+
+    const prompted = readCookiePromptFlag()
+
+    void loadCookieSources().then((list) => {
+      if (prompted) return
+      if (!list.some((browser) => browser.available)) return
+      setShowCookieBanner(true)
+    })
+  }, [open, tabs.length, loadCookieSources])
+
+  const markCookiePromptDone = useCallback(() => {
+    writeCookiePromptFlag()
+  }, [])
+
+  const handleImportCookies = useCallback(
+    async (browser: DetectedBrowser) => {
+      if (!isTauri()) return
+      setImportStatus({ kind: "running", source: browser.id })
+      try {
+        const result = await invoke<CookieImportResult>("browser_import_cookies", {
+          source: browser.id,
+        })
+        setImportStatus({ kind: "success", source: browser.id, result })
+        markCookiePromptDone()
+      } catch (error) {
+        const message =
+          typeof error === "object" && error && "message" in error
+            ? String((error as { message?: unknown }).message ?? "")
+            : String(error)
+        setImportStatus({
+          kind: "error",
+          source: browser.id,
+          message: message || `Could not import from ${browser.label}.`,
+        })
+      }
+    },
+    [markCookiePromptDone],
+  )
+
+  const handleDismissCookieBanner = useCallback(() => {
+    setShowCookieBanner(false)
+    setImportStatus({ kind: "idle" })
+    markCookiePromptDone()
+  }, [markCookiePromptDone])
+
+  const handleOpenCookieBanner = useCallback(() => {
+    setImportStatus({ kind: "idle" })
+    setShowCookieBanner(true)
+    if (cookieBrowsers.length === 0) {
+      void loadCookieSources()
+    }
+  }, [cookieBrowsers.length, loadCookieSources])
+
   // Show the tab strip (and the + button) as soon as there's any tab — otherwise
   // users have no way to open a second tab because the new-tab trigger lives there.
   const showTabs = tabs.length > 0
@@ -532,6 +663,16 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
             <RotateCw className="h-3.5 w-3.5" />
           )}
         </button>
+        <button
+          aria-label="Import cookies"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+          disabled={!activeTab}
+          onClick={handleOpenCookieBanner}
+          title="Import cookies from another browser"
+          type="button"
+        >
+          <Cookie className="h-3.5 w-3.5" />
+        </button>
 
         <form className="ml-1 flex min-w-0 flex-1" onSubmit={handleSubmit}>
           <input
@@ -551,6 +692,16 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
           />
         </form>
       </div>
+
+      {showCookieBanner ? (
+        <CookieImportBanner
+          browsers={cookieBrowsers}
+          onDismiss={handleDismissCookieBanner}
+          onImport={handleImportCookies}
+          onRefresh={() => void loadCookieSources()}
+          status={importStatus}
+        />
+      ) : null}
 
       <div
         ref={viewportRef}
@@ -574,5 +725,96 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
         ) : null}
       </div>
     </aside>
+  )
+}
+
+interface CookieImportBannerProps {
+  browsers: DetectedBrowser[]
+  onDismiss: () => void
+  onImport: (browser: DetectedBrowser) => void
+  onRefresh: () => void
+  status: ImportStatus
+}
+
+function CookieImportBanner({
+  browsers,
+  onDismiss,
+  onImport,
+  onRefresh,
+  status,
+}: CookieImportBannerProps) {
+  const available = browsers.filter((b) => b.available)
+  const isRunning = status.kind === "running"
+
+  return (
+    <div className="shrink-0 border-b border-border/70 bg-sidebar/80 px-3 py-2 text-[11.5px]">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="font-medium text-foreground">Import cookies</div>
+          <div className="mt-0.5 text-muted-foreground/80">
+            Stay signed in by copying cookies from another browser. Cookies apply
+            on the next reload.
+          </div>
+        </div>
+        <button
+          aria-label="Dismiss"
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+          onClick={onDismiss}
+          type="button"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+
+      {available.length === 0 ? (
+        <div className="mt-2 text-muted-foreground/80">
+          No supported browsers detected on this machine.{" "}
+          <button
+            className="underline underline-offset-2 hover:text-foreground"
+            onClick={onRefresh}
+            type="button"
+          >
+            Re-scan
+          </button>
+          .
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {available.map((browser) => {
+            const running = isRunning && status.source === browser.id
+            return (
+              <button
+                key={browser.id}
+                className="flex items-center gap-1 rounded-md border border-border/60 bg-background/60 px-2 py-1 text-foreground transition-colors hover:border-primary/40 hover:bg-background disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isRunning}
+                onClick={() => onImport(browser)}
+                type="button"
+              >
+                {running ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Cookie className="h-3 w-3" />
+                )}
+                <span>{browser.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {status.kind === "success" ? (
+        <div className="mt-2 text-foreground/85">
+          Imported {status.result.imported} cookies across{" "}
+          {status.result.domains} domains
+          {status.result.skipped > 0
+            ? ` (${status.result.skipped} skipped)`
+            : ""}
+          .
+        </div>
+      ) : null}
+      {status.kind === "error" ? (
+        <div className="mt-2 text-destructive">{status.message}</div>
+      ) : null}
+    </div>
   )
 }

@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -12,9 +14,10 @@ use crate::commands::{CommandError, CommandResult};
 use super::tabs::BrowserTabs;
 use super::BrowserState;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum BrowserSource {
+const HELPER_BIN_NAME: &str = "cadence-cookie-importer";
+
+#[derive(Debug, Clone, Copy)]
+enum BrowserSource {
     Chrome,
     Chromium,
     Brave,
@@ -63,7 +66,7 @@ impl BrowserSource {
             BrowserSource::LibreWolf => "librewolf",
             BrowserSource::Zen => "zen",
             #[cfg(target_os = "macos")]
-            BrowserSource::Safari => "Safari",
+            BrowserSource::Safari => "safari",
         }
     }
 
@@ -86,23 +89,116 @@ impl BrowserSource {
         sources
     }
 
-    fn fetch(self, domains: Option<Vec<String>>) -> rookie::Result<Vec<rookie::enums::Cookie>> {
-        match self {
-            BrowserSource::Chrome => rookie::chrome(domains),
-            BrowserSource::Chromium => rookie::chromium(domains),
-            BrowserSource::Brave => rookie::brave(domains),
-            BrowserSource::Edge => rookie::edge(domains),
-            BrowserSource::Opera => rookie::opera(domains),
-            BrowserSource::OperaGx => rookie::opera_gx(domains),
-            BrowserSource::Vivaldi => rookie::vivaldi(domains),
-            BrowserSource::Arc => rookie::arc(domains),
-            BrowserSource::Firefox => rookie::firefox(domains),
-            BrowserSource::LibreWolf => rookie::librewolf(domains),
-            BrowserSource::Zen => rookie::zen(domains),
-            #[cfg(target_os = "macos")]
-            BrowserSource::Safari => rookie::safari(domains),
+    /// Detects installed browsers via file presence instead of rookie. Rookie's
+    /// code path for chromium-based browsers decrypts the Safe Storage key up
+    /// front, which fires a macOS Keychain permission prompt per browser on
+    /// every probe — unusable for a background "what's installed" check. A
+    /// `Path::exists()` stat is permission-free and runs instantly.
+    fn detect_available(self) -> bool {
+        let Some(home) = dirs::home_dir() else {
+            return false;
+        };
+        for path in self.candidate_paths(&home) {
+            if path_exists(&path) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn candidate_paths(self, home: &Path) -> Vec<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            let app_support = home.join("Library").join("Application Support");
+            match self {
+                BrowserSource::Chrome => vec![app_support
+                    .join("Google/Chrome/Default/Cookies")],
+                BrowserSource::Chromium => vec![app_support.join("Chromium/Default/Cookies")],
+                BrowserSource::Brave => vec![app_support
+                    .join("BraveSoftware/Brave-Browser/Default/Cookies")],
+                BrowserSource::Edge => vec![app_support
+                    .join("Microsoft Edge/Default/Cookies")],
+                BrowserSource::Opera => vec![app_support
+                    .join("com.operasoftware.Opera/Cookies")],
+                BrowserSource::OperaGx => vec![app_support
+                    .join("com.operasoftware.OperaGX/Cookies")],
+                BrowserSource::Vivaldi => vec![app_support.join("Vivaldi/Default/Cookies")],
+                BrowserSource::Arc => vec![app_support
+                    .join("Arc/User Data/Default/Cookies")],
+                BrowserSource::Firefox => mozilla_profile_cookies(&app_support, "Firefox"),
+                BrowserSource::LibreWolf => mozilla_profile_cookies(&app_support, "LibreWolf"),
+                BrowserSource::Zen => mozilla_profile_cookies(&app_support, "zen"),
+                BrowserSource::Safari => vec![
+                    home.join("Library/HTTPStorages/com.apple.Safari/Cookies.binarycookies"),
+                    home.join("Library/Cookies/Cookies.binarycookies"),
+                ],
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let local = home.join("AppData/Local");
+            let roaming = home.join("AppData/Roaming");
+            match self {
+                BrowserSource::Chrome => vec![local
+                    .join("Google/Chrome/User Data/Default/Network/Cookies")],
+                BrowserSource::Chromium => vec![local
+                    .join("Chromium/User Data/Default/Network/Cookies")],
+                BrowserSource::Brave => vec![local
+                    .join("BraveSoftware/Brave-Browser/User Data/Default/Network/Cookies")],
+                BrowserSource::Edge => vec![local
+                    .join("Microsoft/Edge/User Data/Default/Network/Cookies")],
+                BrowserSource::Opera => vec![roaming
+                    .join("Opera Software/Opera Stable/Network/Cookies")],
+                BrowserSource::OperaGx => vec![roaming
+                    .join("Opera Software/Opera GX Stable/Network/Cookies")],
+                BrowserSource::Vivaldi => vec![local
+                    .join("Vivaldi/User Data/Default/Network/Cookies")],
+                BrowserSource::Arc => vec![local
+                    .join("Packages/TheBrowserCompany.Arc_ttt1ap7aakyb4/LocalCache/Local/Arc/User Data/Default/Network/Cookies")],
+                BrowserSource::Firefox => mozilla_profile_cookies(&roaming, "Mozilla/Firefox"),
+                BrowserSource::LibreWolf => mozilla_profile_cookies(&roaming, "LibreWolf"),
+                BrowserSource::Zen => mozilla_profile_cookies(&roaming, "zen"),
+            }
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            let config = home.join(".config");
+            match self {
+                BrowserSource::Chrome => vec![config.join("google-chrome/Default/Cookies")],
+                BrowserSource::Chromium => vec![config.join("chromium/Default/Cookies")],
+                BrowserSource::Brave => vec![config
+                    .join("BraveSoftware/Brave-Browser/Default/Cookies")],
+                BrowserSource::Edge => vec![config.join("microsoft-edge/Default/Cookies")],
+                BrowserSource::Opera => vec![config.join("opera/Cookies")],
+                BrowserSource::OperaGx => vec![config.join("opera-gx/Cookies")],
+                BrowserSource::Vivaldi => vec![config.join("vivaldi/Default/Cookies")],
+                BrowserSource::Arc => vec![],
+                BrowserSource::Firefox => mozilla_profile_cookies(&home.join(".mozilla"), "firefox"),
+                BrowserSource::LibreWolf => mozilla_profile_cookies(&home.join(".librewolf"), ""),
+                BrowserSource::Zen => mozilla_profile_cookies(&home.join(".zen"), ""),
+            }
         }
     }
+}
+
+fn path_exists(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok()
+}
+
+fn mozilla_profile_cookies(root: &Path, subdir: &str) -> Vec<PathBuf> {
+    let profiles_dir = if subdir.is_empty() {
+        root.join("Profiles")
+    } else {
+        root.join(subdir).join("Profiles")
+    };
+    let Ok(entries) = std::fs::read_dir(&profiles_dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path().join("cookies.sqlite"))
+        .filter(|path| path_exists(path))
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,22 +218,38 @@ pub struct CookieImportResult {
     pub domains: u32,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum HelperOutput {
+    Ok { cookies: Vec<HelperCookie> },
+    Err { message: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HelperCookie {
+    domain: String,
+    path: String,
+    secure: bool,
+    expires: Option<u64>,
+    name: String,
+    value: String,
+    http_only: bool,
+    same_site: i64,
+}
+
 #[tauri::command]
 pub fn browser_list_cookie_sources<R: Runtime>(
     _app: AppHandle<R>,
     _state: State<'_, BrowserState>,
 ) -> CommandResult<Vec<DetectedBrowser>> {
-    // Probe each browser with a cheap call (domains filter = []) — if rookie can
-    // resolve the config paths and open the DB, we consider the source
-    // available. Read failures (no install, locked DB, missing keychain entry)
-    // surface as `available: false`.
+    // Path-only detection, no rookie invocation — probing via rookie would fire
+    // a macOS Keychain prompt per chromium-based browser on every call.
     let mut out = Vec::new();
     for source in BrowserSource::all() {
-        let available = source.fetch(Some(vec!["__cadence_probe__.invalid".to_string()])).is_ok();
         out.push(DetectedBrowser {
             id: source.id().to_string(),
             label: source.label().to_string(),
-            available,
+            available: source.detect_available(),
         });
     }
     Ok(out)
@@ -151,28 +263,32 @@ pub fn browser_import_cookies<R: Runtime>(
     domains: Option<Vec<String>>,
 ) -> CommandResult<CookieImportResult> {
     let source_enum = parse_source(&source)?;
-    let domains = domains.and_then(|list| {
-        let cleaned: Vec<String> = list
-            .into_iter()
-            .map(|d| d.trim().to_string())
-            .filter(|d| !d.is_empty())
-            .collect();
-        if cleaned.is_empty() {
-            None
-        } else {
-            Some(cleaned)
-        }
-    });
+    let helper = locate_helper()?;
 
-    let cookies = source_enum.fetch(domains).map_err(|error| {
-        CommandError::user_fixable(
-            "browser_cookie_read_failed",
-            format!(
-                "Could not read cookies from {label}: {error}. On macOS you may need to grant Full Disk Access; on newer systems Cadence also needs permission to access that browser's data directory.",
-                label = source_enum.label(),
-            ),
-        )
-    })?;
+    let cleaned_domains: Vec<String> = domains
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty())
+        .collect();
+
+    let mut argv: Vec<&str> = vec!["import", source_enum.id()];
+    for d in &cleaned_domains {
+        argv.push(d);
+    }
+
+    let cookies = match run_helper(&helper, &argv)? {
+        HelperOutput::Ok { cookies } => cookies,
+        HelperOutput::Err { message } => {
+            return Err(CommandError::user_fixable(
+                "browser_cookie_read_failed",
+                format!(
+                    "Could not read cookies from {label}: {message}. Close that browser and try again; on macOS Cadence may also need Full Disk Access.",
+                    label = source_enum.label(),
+                ),
+            ));
+        }
+    };
 
     let tabs = state.tabs();
     let webview = resolve_any_webview(&app, &tabs)?;
@@ -233,7 +349,57 @@ fn resolve_any_webview<R: Runtime>(
     ))
 }
 
-fn build_cookie(raw: &rookie::enums::Cookie) -> Option<Cookie<'static>> {
+fn locate_helper() -> CommandResult<PathBuf> {
+    // The helper is built as a sibling binary in the same cargo workspace, so
+    // in both `cargo tauri dev` and bundled builds it sits next to the main
+    // exe. Fall back to PATH if that lookup fails so devs can stash it
+    // somewhere custom without rebuilds.
+    let helper_name = if cfg!(windows) {
+        format!("{HELPER_BIN_NAME}.exe")
+    } else {
+        HELPER_BIN_NAME.to_string()
+    };
+
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(dir) = current.parent() {
+            let candidate = dir.join(&helper_name);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Ok(PathBuf::from(helper_name))
+}
+
+fn run_helper(helper: &PathBuf, args: &[&str]) -> CommandResult<HelperOutput> {
+    let output = Command::new(helper).args(args).output().map_err(|error| {
+        CommandError::system_fault(
+            "browser_cookie_helper_spawn_failed",
+            format!("Could not launch cookie importer helper: {error}"),
+        )
+    })?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let last_line = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+
+    if last_line.is_empty() {
+        return Err(CommandError::system_fault(
+            "browser_cookie_helper_no_output",
+            format!("Cookie importer produced no output. stderr: {}", stderr.trim()),
+        ));
+    }
+
+    serde_json::from_str::<HelperOutput>(last_line).map_err(|error| {
+        CommandError::system_fault(
+            "browser_cookie_helper_parse_failed",
+            format!("Could not parse cookie importer output: {error}. Raw: {last_line}"),
+        )
+    })
+}
+
+fn build_cookie(raw: &HelperCookie) -> Option<Cookie<'static>> {
     if raw.name.is_empty() {
         return None;
     }
@@ -270,9 +436,9 @@ fn build_cookie(raw: &rookie::enums::Cookie) -> Option<Cookie<'static>> {
             builder = builder.expires(cookie::Expiration::DateTime(dt));
         }
     } else {
-        // Session cookie — mark as expiring far in the future so wry persists
-        // it for this session. Without an explicit expiry, WKHTTPCookieStore
-        // may drop it across webview tears.
+        // Session cookie — give it a far-future expiry so WKHTTPCookieStore
+        // persists it past this webview's lifetime. Without an explicit
+        // expiration, session cookies get dropped when the webview tears down.
         let expires = OffsetDateTime::now_utc() + Duration::days(30);
         builder = builder.expires(cookie::Expiration::DateTime(expires));
     }

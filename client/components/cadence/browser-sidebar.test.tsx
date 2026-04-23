@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 type ListenerHandle = () => void
 type InvokeHandler = (args: Record<string, unknown> | undefined) => unknown
@@ -52,9 +52,48 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import { BrowserSidebar } from "./browser-sidebar"
 
+// jsdom in this project ships a localStorage object whose methods aren't
+// functions; install a minimal in-memory shim so the component's first-run
+// check (which reads cookie-import state from storage) has something to call.
+function installLocalStorage() {
+  const store = new Map<string, string>()
+  const shim: Storage = {
+    get length() {
+      return store.size
+    },
+    clear() {
+      store.clear()
+    },
+    getItem(key) {
+      return store.has(key) ? store.get(key)! : null
+    },
+    key(index) {
+      return Array.from(store.keys())[index] ?? null
+    },
+    removeItem(key) {
+      store.delete(key)
+    },
+    setItem(key, value) {
+      store.set(key, String(value))
+    },
+  }
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: shim,
+  })
+  return shim
+}
+
+let cookieStorage: Storage | null = null
+
+beforeEach(() => {
+  cookieStorage = installLocalStorage()
+})
+
 afterEach(() => {
   resetBridge()
   vi.restoreAllMocks()
+  cookieStorage?.clear()
 })
 
 describe("BrowserSidebar", () => {
@@ -259,6 +298,77 @@ describe("BrowserSidebar", () => {
     await waitFor(() => expect(recordedArgs).not.toBeNull())
     // The inset is 6px; the webview must start at least that far from the sidebar's left edge.
     expect(Number(recordedArgs!.x)).toBeGreaterThanOrEqual(6)
+  })
+
+  it("shows the cookie-import banner once a tab exists and a source is available, then dispatches browser_import_cookies", async () => {
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "cadence-browser",
+        title: null,
+        url: "https://example.com/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+    registerInvoke("browser_list_cookie_sources", async () => [
+      { id: "chrome", label: "Google Chrome", available: true },
+      { id: "firefox", label: "Firefox", available: false },
+    ])
+    const importCalls: Array<Record<string, unknown> | undefined> = []
+    registerInvoke("browser_import_cookies", async (args) => {
+      importCalls.push(args)
+      return { source: "chrome", imported: 42, skipped: 1, domains: 7 }
+    })
+
+    render(<BrowserSidebar open />)
+
+    const btn = await screen.findByRole("button", { name: "Google Chrome" })
+    expect(btn).toBeVisible()
+    // Unavailable source shouldn't render as a button.
+    expect(screen.queryByRole("button", { name: "Firefox" })).toBeNull()
+
+    fireEvent.click(btn)
+    await waitFor(() => expect(importCalls.length).toBe(1))
+    expect(importCalls[0]).toMatchObject({ source: "chrome" })
+
+    // Success summary appears
+    await waitFor(() =>
+      expect(screen.getByText(/Imported 42 cookies/i)).toBeInTheDocument(),
+    )
+
+    // Banner is dismissible and sets the "prompted" flag so it stays closed.
+    expect(window.localStorage.getItem("cadence.browser.cookieImportPrompted")).toBe(
+      "true",
+    )
+  })
+
+  it("does not show the cookie-import banner when the prompted flag is already set", async () => {
+    window.localStorage.setItem("cadence.browser.cookieImportPrompted", "true")
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "cadence-browser",
+        title: null,
+        url: "https://example.com/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+    registerInvoke("browser_list_cookie_sources", async () => [
+      { id: "chrome", label: "Google Chrome", available: true },
+    ])
+
+    render(<BrowserSidebar open />)
+
+    // Give the effect a chance to run.
+    await screen.findByLabelText("Address")
+    // Banner would render a "Google Chrome" action button; the toolbar doesn't.
+    expect(screen.queryByRole("button", { name: "Google Chrome" })).toBeNull()
   })
 
   it("updates the address bar when a load_state event delivers a new URL while unfocused", async () => {

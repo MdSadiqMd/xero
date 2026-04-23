@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "cadence-cookie-importer"
+version = "0.1.0"
+edition = "2021"
+description = "Reads cookies from installed browsers for Cadence's in-app browser. Separate binary so rookie's rusqlite 0.31 does not conflict with the desktop app's rusqlite 0.37 (libsqlite3-sys links = \"sqlite3\")."
+
+[[bin]]
+name = "cadence-cookie-importer"
+path = "src/main.rs"
+
+[dependencies]
+eyre = "0.6"
+rookie = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

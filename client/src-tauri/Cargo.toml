@@ -1,3 +1,8 @@
+[workspace]
+members = ["."]
+exclude = ["crates/cookie-importer"]
+resolver = "2"
+
 [package]
 name = "cadence-desktop"
 version = "0.1.0"
@@ -24,6 +29,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 base64 = "0.22"
+dirs = "5"
 git2 = "0.20"
 globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -32,7 +38,6 @@ ignore = "0.4"
 rand = "0.8"
 regex = "1"
 portable-pty = "0.9"
-rookie = "0.5"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 rusqlite_migration = "2"
