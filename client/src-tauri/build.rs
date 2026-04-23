@@ -11,6 +11,44 @@ fn main() {
     tauri_build::build();
     build_cookie_importer();
     fetch_scrcpy_server();
+    compile_idb_proto();
+}
+
+/// Compile `proto/idb.proto` into a tonic gRPC client. Only runs when the
+/// `ios-grpc` feature is enabled — the default build leaves the stub client
+/// in `ios/idb_client.rs` alone.
+#[cfg(feature = "ios-grpc")]
+fn compile_idb_proto() {
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let proto = manifest_dir.join("proto/idb.proto");
+
+    println!("cargo:rerun-if-changed=proto/idb.proto");
+
+    if !proto.exists() {
+        println!(
+            "cargo:warning=proto/idb.proto missing — ios-grpc feature was enabled but the vendored proto is not present."
+        );
+        return;
+    }
+
+    // Point tonic-build at the vendored `protoc` so developers don't need
+    // `brew install protobuf` just to build Cadence.
+    std::env::set_var("PROTOC", protoc_bin_vendored::protoc_bin_path().unwrap());
+
+    if let Err(err) = tonic_build::configure()
+        .build_server(false)
+        .build_client(true)
+        .compile_protos(&[proto], &[manifest_dir.join("proto")])
+    {
+        panic!("failed to compile idb.proto: {err}");
+    }
+}
+
+#[cfg(not(feature = "ios-grpc"))]
+fn compile_idb_proto() {
+    // No-op. The stub client in src/commands/emulator/ios/idb_client.rs
+    // keeps the module compilable without pulling tonic + prost into
+    // every build.
 }
 
 // Build the sibling cookie-importer crate and copy its binary next to the main

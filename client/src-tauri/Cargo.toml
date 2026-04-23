@@ -26,6 +26,8 @@ doctest = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+tonic-build = { version = "0.12", optional = true }
+protoc-bin-vendored = { version = "3", optional = true }
 
 [features]
 default = []
@@ -39,7 +41,11 @@ emulator-synthetic = []
 # units — but frames are not rendered until a decoder is plugged in.
 # Gated because `openh264-sys2` requires a C++ toolchain and adds ~30 MB to
 # the build artifact.
-emulator-live = ["openh264"]
+emulator-live = ["dep:openh264", "ios-grpc"]
+# Compiles the vendored `proto/idb.proto` with `tonic-build` and links the
+# resulting gRPC client. Required for real iOS streaming; the default build
+# uses a simctl screenshot fallback so the sidebar still works without this.
+ios-grpc = ["dep:tonic", "dep:tonic-build", "dep:protoc-bin-vendored", "dep:prost", "dep:tokio", "dep:tokio-stream"]
 
 [dependencies]
 arc-swap = "1"
@@ -53,6 +59,7 @@ xcap = "0.6"
 ignore = "0.4"
 libc = "0.2"
 openh264 = { version = "0.6", optional = true }
+prost = { version = "0.13", optional = true }
 quick-xml = "0.36"
 rand = "0.8"
 regex = "1"
@@ -69,6 +76,9 @@ tauri-plugin-opener = "2.5.3"
 tempfile = "3"
 thiserror = "2"
 time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"], optional = true }
+tokio-stream = { version = "0.1", optional = true }
+tonic = { version = "0.12", optional = true }
 url = "2"
 
 [dev-dependencies]
