@@ -757,9 +757,9 @@ pub(crate) fn config_and_capability_files_lock_the_packaged_vite_shell_and_auth_
         "capabilities/default.json identifier drifted; bootstrap must lock to default"
     );
     assert_eq!(
-        capability["windows"],
+        capability["webviews"],
         json!(["main"]),
-        "capabilities/default.json windows drifted; permission scope must stay bound to the main window"
+        "capabilities/default.json webviews drifted; permission scope must stay bound to the main window"
     );
 
     let permissions = capability["permissions"]

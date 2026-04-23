@@ -103,6 +103,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::browser::browser_tab_close,
             commands::browser::browser_internal_reply,
             commands::browser::browser_internal_event,
+            commands::browser::cookie_import::browser_list_cookie_sources,
+            commands::browser::cookie_import::browser_import_cookies,
         ])
 }
 

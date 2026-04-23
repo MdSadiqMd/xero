@@ -1,5 +1,6 @@
 pub mod actions;
 pub(crate) mod bridge;
+pub mod cookie_import;
 mod events;
 mod screenshot;
 mod script;

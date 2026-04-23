@@ -8,7 +8,7 @@ pub(crate) use std::{
 };
 
 pub(crate) use cadence_desktop_lib::{
-    db::{self, project_store},
+    db::{self, database_path_for_repo, project_store},
     git::repository::CanonicalRepository,
     runtime::protocol::{
         SupervisorControlRequest, SupervisorControlResponse, SupervisorLiveEventPayload,

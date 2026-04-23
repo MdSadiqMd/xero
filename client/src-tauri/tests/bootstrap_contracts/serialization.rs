@@ -674,6 +674,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         json!({
             "providerId": "anthropic",
             "modelId": "claude-3-7-sonnet-latest",
+            "openrouterApiKeyConfigured": false,
             "anthropicApiKeyConfigured": true
         })
     );
