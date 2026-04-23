@@ -1192,6 +1192,7 @@ export function useCadenceDesktopState(
     refs: {
       activeProjectIdRef,
       activeProjectRef,
+      runtimeRunsRef,
       providerProfilesRef,
       providerProfilesLoadInFlightRef,
       runtimeSettingsRef,

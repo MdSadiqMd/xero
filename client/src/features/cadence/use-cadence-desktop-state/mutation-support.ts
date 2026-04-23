@@ -79,6 +79,7 @@ export type CadenceDesktopMutationActions = Pick<
 export interface UseCadenceDesktopMutationsRefs {
   activeProjectIdRef: MutableRefObject<string | null>
   activeProjectRef: MutableRefObject<ProjectDetailView | null>
+  runtimeRunsRef: MutableRefObject<Record<string, RuntimeRunView>>
   providerProfilesRef: MutableRefObject<ProviderProfilesDto | null>
   providerProfilesLoadInFlightRef: MutableRefObject<Promise<ProviderProfilesDto> | null>
   runtimeSettingsRef: MutableRefObject<RuntimeSettingsDto | null>

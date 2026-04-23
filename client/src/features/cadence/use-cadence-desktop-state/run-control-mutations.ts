@@ -29,7 +29,7 @@ export function useRunControlMutations({
   | 'updateRuntimeRunControls'
   | 'stopRuntimeRun'
 > {
-  const { activeProjectIdRef, activeProjectRef } = refs
+  const { activeProjectIdRef, activeProjectRef, runtimeRunsRef } = refs
   const {
     setAutonomousRunActionStatus,
     setPendingAutonomousRunAction,
@@ -221,7 +221,9 @@ export function useRunControlMutations({
         activeProjectIdRef,
         'Select an imported project before queueing supervised runtime-run controls.',
       )
-      const runId = activeProjectRef.current?.runtimeRun?.runId?.trim()
+      const runId =
+        runtimeRunsRef.current[projectId]?.runId?.trim() ??
+        activeProjectRef.current?.runtimeRun?.runId?.trim()
       if (!runId) {
         throw new Error('Cadence cannot queue runtime-run controls until a supervised runtime run exists for this project.')
       }
@@ -264,6 +266,7 @@ export function useRunControlMutations({
     [
       activeProjectIdRef,
       activeProjectRef,
+      runtimeRunsRef,
       adapter,
       applyRuntimeRunUpdate,
       setPendingRuntimeRunAction,
