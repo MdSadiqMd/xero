@@ -248,10 +248,39 @@ function makeProviderProfilesFromRuntimeSettings(runtimeSettings: RuntimeSetting
   }
 }
 
+function makeProviderProfile(
+  overrides: Partial<ProviderProfilesDto['profiles'][number]> &
+    Pick<ProviderProfilesDto['profiles'][number], 'profileId' | 'providerId' | 'label' | 'modelId'>,
+): ProviderProfilesDto['profiles'][number] {
+  return {
+    profileId: overrides.profileId,
+    providerId: overrides.providerId,
+    label: overrides.label,
+    modelId: overrides.modelId,
+    active: overrides.active ?? true,
+    readiness:
+      overrides.readiness ?? {
+        ready: false,
+        status: 'missing',
+        credentialUpdatedAt: null,
+      },
+    migratedFromLegacy: overrides.migratedFromLegacy ?? false,
+    migratedAt: overrides.migratedAt ?? null,
+    baseUrl: overrides.baseUrl ?? null,
+    apiVersion: overrides.apiVersion ?? null,
+    region: overrides.region ?? null,
+    projectId: overrides.projectId ?? null,
+    ...overrides,
+  }
+}
+
 function buildProviderModelCatalog(profile: ProviderProfilesDto['profiles'][number]): ProviderModelCatalogDto {
   const isOpenRouter = profile.providerId === 'openrouter'
   const isAnthropic = profile.providerId === 'anthropic'
-  const isReady = isOpenRouter || isAnthropic ? profile.readiness.ready : true
+  const isOllama = profile.providerId === 'ollama'
+  const isBedrock = profile.providerId === 'bedrock'
+  const isVertex = profile.providerId === 'vertex'
+  const isReady = isOpenRouter || isAnthropic || isOllama || isBedrock || isVertex ? profile.readiness.ready : true
 
   return {
     profileId: profile.profileId,
@@ -263,8 +292,24 @@ function buildProviderModelCatalog(profile: ProviderProfilesDto['profiles'][numb
     lastRefreshError:
       !isReady
         ? {
-            code: isOpenRouter ? 'openrouter_credentials_missing' : 'anthropic_api_key_missing',
-            message: `Configure an ${isOpenRouter ? 'OpenRouter' : 'Anthropic'} API key before refreshing provider models.`,
+            code: isOpenRouter
+              ? 'openrouter_credentials_missing'
+              : isAnthropic
+                ? 'anthropic_api_key_missing'
+                : isOllama
+                  ? 'local_provider_unreachable'
+                  : isBedrock
+                    ? 'bedrock_aws_credentials_missing'
+                    : 'vertex_adc_missing',
+            message: isOpenRouter
+              ? 'Configure an OpenRouter API key before refreshing provider models.'
+              : isAnthropic
+                ? 'Configure an Anthropic API key before refreshing provider models.'
+                : isOllama
+                  ? 'Save a reachable Ollama local endpoint before refreshing provider models.'
+                  : isBedrock
+                    ? 'Save Amazon Bedrock region metadata and ambient AWS credentials before refreshing provider models.'
+                    : 'Save Google Vertex AI region/project metadata and ambient ADC credentials before refreshing provider models.',
             retryable: false,
           }
         : null,
@@ -305,17 +350,59 @@ function buildProviderModelCatalog(profile: ProviderProfilesDto['profiles'][numb
               },
             ]
           : []
-        : [
-            {
-              modelId: 'openai_codex',
-              displayName: 'OpenAI Codex',
-              thinking: {
-                supported: true,
-                effortOptions: ['low', 'medium', 'high'],
-                defaultEffort: 'medium',
-              },
-            },
-          ],
+        : isOllama
+          ? isReady
+            ? [
+                {
+                  modelId: 'llama3.2',
+                  displayName: 'Llama 3.2',
+                  thinking: {
+                    supported: false,
+                    effortOptions: [],
+                    defaultEffort: null,
+                  },
+                },
+              ]
+            : []
+          : isBedrock
+            ? isReady
+              ? [
+                  {
+                    modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+                    displayName: 'Claude 3.7 Sonnet (Bedrock)',
+                    thinking: {
+                      supported: true,
+                      effortOptions: ['low', 'medium', 'high'],
+                      defaultEffort: 'medium',
+                    },
+                  },
+                ]
+              : []
+            : isVertex
+              ? isReady
+                ? [
+                    {
+                      modelId: 'claude-3-7-sonnet@20250219',
+                      displayName: 'Claude 3.7 Sonnet (Vertex)',
+                      thinking: {
+                        supported: true,
+                        effortOptions: ['low', 'medium', 'high'],
+                        defaultEffort: 'medium',
+                      },
+                    },
+                  ]
+                : []
+              : [
+                  {
+                    modelId: 'openai_codex',
+                    displayName: 'OpenAI Codex',
+                    thinking: {
+                      supported: true,
+                      effortOptions: ['low', 'medium', 'high'],
+                      defaultEffort: 'medium',
+                    },
+                  },
+                ],
   }
 }
 
@@ -1462,6 +1549,7 @@ describe('CadenceApp current UI', () => {
     render(<CadenceApp adapter={adapter} />)
 
     expect(await screen.findByRole('heading', { name: /Welcome to Cadence/i })).toBeVisible()
+    expect(screen.getByText('OpenAI, Anthropic, Ollama, Bedrock, Vertex, and more')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Get started' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Skip setup' })).toBeVisible()
   })
@@ -1503,6 +1591,9 @@ describe('CadenceApp current UI', () => {
     expect(screen.getByText('Active')).toBeVisible()
     expect(within(getProviderCard('Anthropic')).getByRole('button', { name: 'Set up' })).toBeVisible()
     expect(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'Use this' })).toBeVisible()
+    expect(within(getProviderCard('Ollama')).getByRole('button', { name: 'Set up' })).toBeVisible()
+    expect(within(getProviderCard('Amazon Bedrock')).getByRole('button', { name: 'Set up' })).toBeVisible()
+    expect(within(getProviderCard('Google Vertex AI')).getByRole('button', { name: 'Set up' })).toBeVisible()
     expect(within(getProviderCard('OpenAI Codex')).getByText('Choose a project next')).toBeVisible()
   })
 
@@ -1524,7 +1615,7 @@ describe('CadenceApp current UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
 
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
-    expect(screen.getByText('OpenAI Codex · active profile')).toBeVisible()
+    expect(screen.getByText(/OpenAI Codex .*active profile/)).toBeVisible()
   })
 
   it('keeps onboarding provider review truthful for Anthropic API-key readiness', async () => {
@@ -1552,7 +1643,7 @@ describe('CadenceApp current UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
 
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
-    expect(screen.getByText('Anthropic · API key required')).toBeVisible()
+    expect(screen.getByText(/Anthropic .*API key required/)).toBeVisible()
   })
 
   it('keeps onboarding provider review truthful when an Anthropic API key is already saved', async () => {
@@ -1580,7 +1671,135 @@ describe('CadenceApp current UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
 
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
-    expect(screen.getByText('Anthropic · API key saved')).toBeVisible()
+    expect(screen.getByText(/Anthropic .*API key saved/)).toBeVisible()
+  })
+
+  it('keeps onboarding provider review truthful for Ollama local endpoint readiness', async () => {
+    const { adapter } = createAdapter({
+      projects: [],
+      providerProfiles: {
+        activeProfileId: 'ollama-default',
+        profiles: [
+          makeProviderProfile({
+            profileId: 'ollama-default',
+            providerId: 'ollama',
+            label: 'Ollama',
+            modelId: 'llama3.2',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'local',
+              proofUpdatedAt: '2026-04-20T12:00:00Z',
+              credentialUpdatedAt: '2026-04-20T12:00:00Z',
+            },
+          }),
+        ],
+        migration: null,
+      },
+      runtimeSession: makeRuntimeSession('project-1', {
+        providerId: 'ollama',
+        runtimeKind: 'openai_compatible',
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+
+    expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
+    expect(screen.getByText('Ollama · Custom endpoint · http://127.0.0.1:11434/v1 · local endpoint ready')).toBeVisible()
+  })
+
+  it('keeps onboarding provider review truthful for Bedrock ambient-auth readiness', async () => {
+    const { adapter } = createAdapter({
+      projects: [],
+      providerProfiles: {
+        activeProfileId: 'bedrock-default',
+        profiles: [
+          makeProviderProfile({
+            profileId: 'bedrock-default',
+            providerId: 'bedrock',
+            label: 'Amazon Bedrock',
+            modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+            region: 'us-east-1',
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'ambient',
+              proofUpdatedAt: '2026-04-20T12:00:00Z',
+              credentialUpdatedAt: '2026-04-20T12:00:00Z',
+            },
+          }),
+        ],
+        migration: null,
+      },
+      runtimeSession: makeRuntimeSession('project-1', {
+        providerId: 'bedrock',
+        runtimeKind: 'anthropic',
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+
+    expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
+    expect(screen.getByText('Amazon Bedrock · Region us-east-1 · ambient auth ready')).toBeVisible()
+  })
+
+  it('keeps onboarding provider review truthful for Vertex ambient-auth repair state', async () => {
+    const { adapter } = createAdapter({
+      projects: [],
+      providerProfiles: {
+        activeProfileId: 'vertex-default',
+        profiles: [
+          makeProviderProfile({
+            profileId: 'vertex-default',
+            providerId: 'vertex',
+            label: 'Google Vertex AI',
+            modelId: 'claude-3-7-sonnet@20250219',
+            region: 'us-central1',
+            projectId: 'vertex-project',
+            readiness: {
+              ready: false,
+              status: 'malformed',
+              credentialUpdatedAt: null,
+            },
+          }),
+        ],
+        migration: null,
+      },
+      runtimeSession: makeRuntimeSession('project-1', {
+        providerId: 'vertex',
+        runtimeKind: 'anthropic',
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+
+    expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
+    expect(screen.getByText('Google Vertex AI · Region us-central1 · Project vertex-project · ambient profile needs repair')).toBeVisible()
   })
 
   it('saves OpenRouter provider settings from onboarding', async () => {
@@ -1611,6 +1830,8 @@ describe('CadenceApp current UI', () => {
       presetId: 'openrouter',
       baseUrl: null,
       apiVersion: null,
+      region: null,
+      projectId: null,
       apiKey: 'sk-or-v1-test-secret',
       activate: false,
     })
@@ -1643,6 +1864,8 @@ describe('CadenceApp current UI', () => {
       presetId: 'anthropic',
       baseUrl: null,
       apiVersion: null,
+      region: null,
+      projectId: null,
       apiKey: 'sk-ant-test-secret',
       activate: false,
     })

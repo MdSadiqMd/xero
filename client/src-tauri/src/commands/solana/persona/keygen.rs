@@ -233,18 +233,20 @@ impl KeypairStore {
     }
 }
 
-/// Strip path separators and leading dots so a user-chosen persona name
-/// can't escape the storage root even by accident.
+/// Strip path separators and dot runs so a user-chosen persona name can't
+/// escape the storage root even by accident. Dots are turned into dashes
+/// outright — we never need a period inside a segment, and allowing them
+/// opens `..` path-traversal paths.
 pub fn sanitize_segment(input: &str) -> String {
     let cleaned: String = input
         .chars()
         .map(|c| match c {
             c if c.is_ascii_alphanumeric() => c,
-            '-' | '_' | '.' => c,
+            '-' | '_' => c,
             _ => '-',
         })
         .collect();
-    let trimmed = cleaned.trim_start_matches('.').trim_matches('-');
+    let trimmed = cleaned.trim_matches('-');
     if trimmed.is_empty() {
         "unnamed".to_string()
     } else {
@@ -297,7 +299,7 @@ mod tests {
 
     #[test]
     fn generated_keypair_is_64_bytes_and_pubkey_is_base58() {
-        let provider = OsRngKeypairProvider::default();
+        let provider = OsRngKeypairProvider;
         let bytes = provider.generate().unwrap();
         assert_eq!(bytes.0.len(), 64);
         let pubkey = bytes.pubkey_base58();
@@ -310,7 +312,7 @@ mod tests {
 
     #[test]
     fn pubkey_matches_derived_public_key_from_seed() {
-        let provider = OsRngKeypairProvider::default();
+        let provider = OsRngKeypairProvider;
         let bytes = provider.generate().unwrap();
         let seed = bytes.secret_seed();
         let signing = SigningKey::from_bytes(&seed);
@@ -320,7 +322,7 @@ mod tests {
 
     #[test]
     fn keypair_json_round_trips_through_solana_keygen_format() {
-        let provider = OsRngKeypairProvider::default();
+        let provider = OsRngKeypairProvider;
         let bytes = provider.generate().unwrap();
         let json = bytes.to_solana_keygen_json();
         let parsed = KeypairBytes::from_solana_keygen_json(json.as_bytes()).unwrap();

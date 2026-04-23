@@ -166,7 +166,7 @@ impl PersonaStore {
     pub fn with_default_root() -> CommandResult<Self> {
         let root = default_root()?;
         let keypair_root = root.join("keypairs");
-        let keypairs = KeypairStore::new(keypair_root, Box::new(OsRngKeypairProvider::default()));
+        let keypairs = KeypairStore::new(keypair_root, Box::new(OsRngKeypairProvider));
         let funding = Box::new(fund::DefaultFundingBackend::new());
         Ok(Self::new(root, keypairs, funding))
     }
@@ -622,7 +622,7 @@ mod tests {
         let store = make_store(&tmp);
 
         // Synthesize a bytes blob by generating once.
-        let provider = keygen::OsRngKeypairProvider::default();
+        let provider = keygen::OsRngKeypairProvider;
         let bytes = provider.generate().unwrap();
 
         for forbidden in [ClusterKind::Mainnet, ClusterKind::Devnet] {
@@ -643,7 +643,7 @@ mod tests {
     fn import_keypair_works_on_localnet() {
         let tmp = TempDir::new().unwrap();
         let store = make_store(&tmp);
-        let provider = keygen::OsRngKeypairProvider::default();
+        let provider = keygen::OsRngKeypairProvider;
         let bytes = provider.generate().unwrap();
         let expected_pubkey = bytes.pubkey_base58();
 

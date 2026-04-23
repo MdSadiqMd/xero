@@ -28,6 +28,9 @@ mod rpc_failover;
 #[path = "solana/toolchain_shape.rs"]
 mod toolchain_shape;
 
+#[path = "solana/persona_lifecycle.rs"]
+mod persona_lifecycle;
+
 #[test]
 fn spin_restore_cycle_runs_three_consecutive_times() {
     spin_restore_cycle::spin_restore_cycle_runs_three_consecutive_times();
@@ -66,4 +69,34 @@ fn toolchain_probe_returns_well_shaped_struct_on_this_host() {
 #[test]
 fn toolchain_probe_serializes_to_camel_case_json() {
     toolchain_shape::toolchain_probe_serializes_to_camel_case_json();
+}
+
+#[test]
+fn whale_persona_created_under_budget_on_localnet() {
+    persona_lifecycle::whale_persona_created_under_budget_on_localnet();
+}
+
+#[test]
+fn persona_mainnet_operations_are_policy_denied() {
+    persona_lifecycle::persona_mainnet_operations_are_policy_denied();
+}
+
+#[test]
+fn localnet_keypair_import_works() {
+    persona_lifecycle::localnet_keypair_import_works();
+}
+
+#[test]
+fn self_contained_scenario_runs_end_to_end() {
+    persona_lifecycle::self_contained_scenario_runs_end_to_end();
+}
+
+#[test]
+fn pipeline_scenario_pre_stages_on_mainnet_fork() {
+    persona_lifecycle::pipeline_scenario_pre_stages_on_mainnet_fork();
+}
+
+#[test]
+fn fund_command_rejects_empty_delta() {
+    persona_lifecycle::fund_command_rejects_empty_delta();
 }

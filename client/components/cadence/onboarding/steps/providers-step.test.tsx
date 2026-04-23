@@ -110,6 +110,94 @@ function makeGithubProfile(overrides: Partial<ProviderProfileDto> = {}): Provide
   }
 }
 
+function makeOllamaProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
+  const ready = overrides.readiness?.ready ?? false
+
+  return {
+    profileId: 'ollama-default',
+    providerId: 'ollama',
+    label: 'Ollama',
+    modelId: 'llama3.2',
+    active: false,
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    readiness: ready
+      ? {
+          ready: true,
+          status: 'ready',
+          proof: 'local',
+          proofUpdatedAt: '2026-04-20T00:00:00Z',
+          credentialUpdatedAt: '2026-04-20T00:00:00Z',
+        }
+      : {
+          ready: false,
+          status: 'missing',
+          credentialUpdatedAt: null,
+        },
+    migratedFromLegacy: false,
+    migratedAt: null,
+    ...overrides,
+  }
+}
+
+function makeBedrockProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
+  const ready = overrides.readiness?.ready ?? false
+
+  return {
+    profileId: 'bedrock-default',
+    providerId: 'bedrock',
+    label: 'Amazon Bedrock',
+    modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+    active: false,
+    region: 'us-east-1',
+    readiness: ready
+      ? {
+          ready: true,
+          status: 'ready',
+          proof: 'ambient',
+          proofUpdatedAt: '2026-04-20T00:00:00Z',
+          credentialUpdatedAt: '2026-04-20T00:00:00Z',
+        }
+      : {
+          ready: false,
+          status: 'missing',
+          credentialUpdatedAt: null,
+        },
+    migratedFromLegacy: false,
+    migratedAt: null,
+    ...overrides,
+  }
+}
+
+function makeVertexProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
+  const ready = overrides.readiness?.ready ?? false
+
+  return {
+    profileId: 'vertex-default',
+    providerId: 'vertex',
+    label: 'Google Vertex AI',
+    modelId: 'claude-3-7-sonnet@20250219',
+    active: false,
+    region: 'us-central1',
+    projectId: 'vertex-project',
+    readiness: ready
+      ? {
+          ready: true,
+          status: 'ready',
+          proof: 'ambient',
+          proofUpdatedAt: '2026-04-20T00:00:00Z',
+          credentialUpdatedAt: '2026-04-20T00:00:00Z',
+        }
+      : {
+          ready: false,
+          status: 'missing',
+          credentialUpdatedAt: null,
+        },
+    migratedFromLegacy: false,
+    migratedAt: null,
+    ...overrides,
+  }
+}
+
 function makeProviderProfiles(overrides: Partial<ProviderProfilesDto> = {}): ProviderProfilesDto {
   return {
     activeProfileId: overrides.activeProfileId ?? 'openrouter-default',
@@ -129,14 +217,30 @@ function makeProviderModelCatalog(
       ? 'openrouter'
       : profileId.startsWith('anthropic')
         ? 'anthropic'
-        : 'openai_codex')
+        : profileId.startsWith('github_models')
+          ? 'github_models'
+          : profileId.startsWith('ollama')
+            ? 'ollama'
+            : profileId.startsWith('bedrock')
+              ? 'bedrock'
+              : profileId.startsWith('vertex')
+                ? 'vertex'
+                : 'openai_codex')
   const configuredModelId =
     overrides.configuredModelId ??
     (providerId === 'openrouter'
       ? 'openai/gpt-4.1-mini'
       : providerId === 'anthropic'
         ? 'claude-3-7-sonnet-latest'
-        : 'openai_codex')
+        : providerId === 'github_models'
+          ? 'openai/gpt-4.1'
+          : providerId === 'ollama'
+            ? 'llama3.2'
+            : providerId === 'bedrock'
+              ? 'anthropic.claude-3-7-sonnet-20250219-v1:0'
+              : providerId === 'vertex'
+                ? 'claude-3-7-sonnet@20250219'
+                : 'openai_codex')
 
   return {
     profileId,
@@ -190,17 +294,65 @@ function makeProviderModelCatalog(
                 },
               },
             ]
-          : [
-              {
-                modelId: 'openai_codex',
-                displayName: 'OpenAI Codex',
-                thinking: {
-                  supported: true,
-                  effortOptions: ['low', 'medium', 'high'],
-                  defaultEffort: 'medium',
+          : providerId === 'github_models'
+            ? [
+                {
+                  modelId: 'openai/gpt-4.1',
+                  displayName: 'OpenAI GPT-4.1',
+                  thinking: {
+                    supported: true,
+                    effortOptions: ['low', 'medium', 'high'],
+                    defaultEffort: 'medium',
+                  },
                 },
-              },
-            ]),
+              ]
+            : providerId === 'ollama'
+              ? [
+                  {
+                    modelId: 'llama3.2',
+                    displayName: 'Llama 3.2',
+                    thinking: {
+                      supported: false,
+                      effortOptions: [],
+                      defaultEffort: null,
+                    },
+                  },
+                ]
+              : providerId === 'bedrock'
+                ? [
+                    {
+                      modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+                      displayName: 'Claude 3.7 Sonnet (Bedrock)',
+                      thinking: {
+                        supported: true,
+                        effortOptions: ['low', 'medium', 'high'],
+                        defaultEffort: 'medium',
+                      },
+                    },
+                  ]
+                : providerId === 'vertex'
+                  ? [
+                      {
+                        modelId: 'claude-3-7-sonnet@20250219',
+                        displayName: 'Claude 3.7 Sonnet (Vertex)',
+                        thinking: {
+                          supported: true,
+                          effortOptions: ['low', 'medium', 'high'],
+                          defaultEffort: 'medium',
+                        },
+                      },
+                    ]
+                  : [
+                      {
+                        modelId: 'openai_codex',
+                        displayName: 'OpenAI Codex',
+                        thinking: {
+                          supported: true,
+                          effortOptions: ['low', 'medium', 'high'],
+                          defaultEffort: 'medium',
+                        },
+                      },
+                    ]),
   }
 }
 
@@ -317,6 +469,8 @@ describe('ProvidersStep', () => {
         presetId: 'openrouter',
         baseUrl: null,
         apiVersion: null,
+        region: null,
+        projectId: null,
         apiKey: null,
         activate: true,
       }),
@@ -382,6 +536,8 @@ describe('ProvidersStep', () => {
         presetId: 'anthropic',
         baseUrl: null,
         apiVersion: null,
+        region: null,
+        projectId: null,
         apiKey: null,
         activate: true,
       }),
@@ -417,6 +573,8 @@ describe('ProvidersStep', () => {
         presetId: 'anthropic',
         baseUrl: null,
         apiVersion: null,
+        region: null,
+        projectId: null,
         apiKey: secret,
         activate: true,
       }),
@@ -446,6 +604,8 @@ describe('ProvidersStep', () => {
         presetId: 'anthropic',
         baseUrl: null,
         apiVersion: null,
+        region: null,
+        projectId: null,
         apiKey: '',
         activate: true,
       }),
@@ -512,6 +672,8 @@ describe('ProvidersStep', () => {
         presetId: 'github_models',
         baseUrl: null,
         apiVersion: null,
+        region: null,
+        projectId: null,
         apiKey: null,
         activate: true,
       }),
@@ -549,8 +711,142 @@ describe('ProvidersStep', () => {
         presetId: 'github_models',
         baseUrl: null,
         apiVersion: null,
+        region: null,
+        projectId: null,
         apiKey: secret,
         activate: true,
+      }),
+    )
+  })
+
+  it('saves Ollama onboarding profiles without app-local API-key state', async () => {
+    const onUpsertProviderProfile = vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles())
+
+    render(
+      <ProvidersStep
+        {...makeProvidersStepProps({
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    fireEvent.click(within(getProviderCard('Ollama')).getByRole('button', { name: 'Set up' }))
+
+    expect(
+      screen.getByText('Cadence treats Ollama as a local endpoint. No app-local API key is stored for this provider profile.'),
+    ).toBeVisible()
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Base URL'), {
+      target: { value: 'http://127.0.0.1:11434/v1' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'ollama-default',
+        providerId: 'ollama',
+        runtimeKind: 'openai_compatible',
+        label: 'Ollama',
+        modelId: 'llama3.2',
+        presetId: 'ollama',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        apiVersion: null,
+        region: null,
+        projectId: null,
+        apiKey: null,
+        activate: false,
+      }),
+    )
+  })
+
+  it('requires Bedrock ambient metadata without rendering API-key UI in onboarding', async () => {
+    const onUpsertProviderProfile = vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles())
+
+    render(
+      <ProvidersStep
+        {...makeProvidersStepProps({
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    fireEvent.click(within(getProviderCard('Amazon Bedrock')).getByRole('button', { name: 'Set up' }))
+
+    expect(
+      screen.getByText('Cadence uses ambient desktop credentials for Amazon Bedrock. No app-local API key is stored for this provider profile.'),
+    ).toBeVisible()
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('Amazon Bedrock requires a region.')).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: 'us-east-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'bedrock-default',
+        providerId: 'bedrock',
+        runtimeKind: 'anthropic',
+        label: 'Amazon Bedrock',
+        modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+        presetId: 'bedrock',
+        baseUrl: null,
+        apiVersion: null,
+        region: 'us-east-1',
+        projectId: null,
+        apiKey: null,
+        activate: false,
+      }),
+    )
+  })
+
+  it('requires Vertex ambient metadata without rendering API-key UI in onboarding', async () => {
+    const onUpsertProviderProfile = vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles())
+
+    render(
+      <ProvidersStep
+        {...makeProvidersStepProps({
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    fireEvent.click(within(getProviderCard('Google Vertex AI')).getByRole('button', { name: 'Set up' }))
+
+    expect(
+      screen.getByText('Cadence uses ambient desktop credentials for Google Vertex AI. No app-local API key is stored for this provider profile.'),
+    ).toBeVisible()
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Project ID'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('Google Vertex AI requires a region.')).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: 'us-central1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('Google Vertex AI requires a project ID.')).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('Project ID'), { target: { value: 'vertex-project' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'vertex-default',
+        providerId: 'vertex',
+        runtimeKind: 'anthropic',
+        label: 'Google Vertex AI',
+        modelId: 'claude-3-7-sonnet@20250219',
+        presetId: 'vertex',
+        baseUrl: null,
+        apiVersion: null,
+        region: 'us-central1',
+        projectId: 'vertex-project',
+        apiKey: null,
+        activate: false,
       }),
     )
   })

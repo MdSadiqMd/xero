@@ -1307,6 +1307,178 @@ describe('AgentRuntime current UI', () => {
     )
   })
 
+  it('keeps Ollama provider mismatch truthful without rendering provider-specific fallback UI', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          selectedProfileId: 'ollama-work',
+          selectedProfileLabel: 'Ollama Work',
+          selectedProviderId: 'ollama',
+          selectedProviderLabel: 'Ollama',
+          selectedModelId: 'llama3.2',
+          selectedProfileReadiness: {
+            ready: true,
+            status: 'ready',
+            proof: 'local',
+            proofUpdatedAt: '2026-04-20T12:00:00Z',
+            credentialUpdatedAt: '2026-04-20T12:00:00Z',
+          },
+          providerMismatch: true,
+          providerMismatchReason:
+            'Settings now select provider profile Ollama Work (ollama-work), but the persisted runtime session still reflects OpenAI Codex.',
+          providerMismatchRecoveryCopy:
+            'Rebind the selected profile so durable runtime truth matches Settings.',
+          sessionUnavailableReason:
+            'Settings now select provider profile Ollama Work (ollama-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile so durable runtime truth matches Settings.',
+          messagesUnavailableReason:
+            'Live runtime streaming is paused because Settings now select provider profile Ollama Work (ollama-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile before trusting new stream activity.',
+          runtimeSession: makeRuntimeSession({
+            providerId: 'openai_codex',
+            runtimeKind: 'openai_codex',
+            phase: 'authenticated',
+          }),
+        })}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+        onStartRuntimeSession={vi.fn(async () => null)}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Start OpenAI login' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
+      'placeholder',
+      'Rebind Ollama before trusting new live activity.',
+    )
+  })
+
+  it('renders Ollama setup guidance in the centered agent empty state', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          selectedProviderId: 'ollama',
+          selectedProviderLabel: 'Ollama',
+          selectedModelId: 'llama3.2',
+          selectedProfileReadiness: {
+            ready: false,
+            status: 'missing',
+            credentialUpdatedAt: null,
+          },
+          runtimeSession: null,
+          sessionUnavailableReason:
+            'Save the selected Ollama local endpoint profile in Settings before Cadence can bind a project runtime session.',
+          messagesUnavailableReason:
+            'Save the selected Ollama local endpoint profile in Settings before Cadence can establish a runtime session for this imported project.',
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Configure agent runtime')).toBeVisible()
+    expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
+      'placeholder',
+      'Save the selected Ollama local endpoint profile in Settings to start.',
+    )
+  })
+
+  it('keeps Bedrock provider mismatch truthful without rendering provider-specific fallback UI', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          selectedProfileId: 'bedrock-work',
+          selectedProfileLabel: 'Amazon Bedrock Work',
+          selectedProviderId: 'bedrock',
+          selectedProviderLabel: 'Amazon Bedrock',
+          selectedModelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+          selectedProfileReadiness: {
+            ready: true,
+            status: 'ready',
+            proof: 'ambient',
+            proofUpdatedAt: '2026-04-20T12:00:00Z',
+            credentialUpdatedAt: '2026-04-20T12:00:00Z',
+          },
+          providerMismatch: true,
+          providerMismatchReason:
+            'Settings now select provider profile Amazon Bedrock Work (bedrock-work), but the persisted runtime session still reflects OpenAI Codex.',
+          providerMismatchRecoveryCopy:
+            'Rebind the selected profile so durable runtime truth matches Settings.',
+          sessionUnavailableReason:
+            'Settings now select provider profile Amazon Bedrock Work (bedrock-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile so durable runtime truth matches Settings.',
+          messagesUnavailableReason:
+            'Live runtime streaming is paused because Settings now select provider profile Amazon Bedrock Work (bedrock-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile before trusting new stream activity.',
+          runtimeSession: makeRuntimeSession({
+            providerId: 'openai_codex',
+            runtimeKind: 'openai_codex',
+            phase: 'authenticated',
+          }),
+        })}
+        onStartRuntimeRun={vi.fn(async () => makeRuntimeRun())}
+        onStartRuntimeSession={vi.fn(async () => null)}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Start OpenAI login' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
+      'placeholder',
+      'Rebind Amazon Bedrock before trusting new live activity.',
+    )
+  })
+
+  it('renders Bedrock ambient-auth setup guidance in the centered agent empty state', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          selectedProviderId: 'bedrock',
+          selectedProviderLabel: 'Amazon Bedrock',
+          selectedModelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+          selectedProfileReadiness: {
+            ready: false,
+            status: 'missing',
+            credentialUpdatedAt: null,
+          },
+          runtimeSession: null,
+          sessionUnavailableReason:
+            'Save the selected Amazon Bedrock ambient-auth profile with region in Settings before Cadence can bind a project runtime session.',
+          messagesUnavailableReason:
+            'Save the selected Amazon Bedrock ambient-auth profile with region in Settings before Cadence can establish a runtime session for this imported project.',
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Configure agent runtime')).toBeVisible()
+    expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
+      'placeholder',
+      'Save the selected Amazon Bedrock ambient-auth profile with region in Settings to start.',
+    )
+  })
+
+  it('renders Vertex ambient-auth setup guidance in the centered agent empty state', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          selectedProviderId: 'vertex',
+          selectedProviderLabel: 'Google Vertex AI',
+          selectedModelId: 'claude-3-7-sonnet@20250219',
+          selectedProfileReadiness: {
+            ready: false,
+            status: 'missing',
+            credentialUpdatedAt: null,
+          },
+          runtimeSession: null,
+          sessionUnavailableReason:
+            'Save the selected Google Vertex AI ambient-auth profile with region and project ID in Settings before Cadence can bind a project runtime session.',
+          messagesUnavailableReason:
+            'Save the selected Google Vertex AI ambient-auth profile with region and project ID in Settings before Cadence can establish a runtime session for this imported project.',
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Configure agent runtime')).toBeVisible()
+    expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
+      'placeholder',
+      'Save the selected Google Vertex AI ambient-auth profile with region and project ID in Settings to start.',
+    )
+  })
+
   it('renders a first-class skill lane with truthful source, cache, and diagnostic detail', () => {
     const skillItems: RuntimeStreamView['skillItems'] = [
       {

@@ -87,6 +87,163 @@ export interface SnapshotMeta {
   path: string
 }
 
+export type PersonaRole =
+  | "whale"
+  | "lp"
+  | "voter"
+  | "liquidator"
+  | "new_user"
+  | "custom"
+
+export interface TokenAllocation {
+  symbol?: string | null
+  mint?: string | null
+  amount: number
+}
+
+export interface NftAllocation {
+  collection: string
+  count: number
+}
+
+export interface FundingDelta {
+  solLamports?: number
+  tokens?: TokenAllocation[]
+  nfts?: NftAllocation[]
+}
+
+export interface RolePreset {
+  displayLabel: string
+  description: string
+  lamports: number
+  tokens: TokenAllocation[]
+  nfts: NftAllocation[]
+}
+
+export interface RoleDescriptor {
+  id: PersonaRole
+  preset: RolePreset
+}
+
+export interface Persona {
+  name: string
+  role: PersonaRole
+  cluster: ClusterKind
+  pubkey: string
+  keypairPath: string
+  createdAtMs: number
+  seed: FundingDelta
+  note?: string | null
+}
+
+export type FundingStep =
+  | {
+      kind: "airdrop"
+      signature?: string | null
+      lamports: number
+      ok: boolean
+      error?: string | null
+    }
+  | {
+      kind: "tokenMint"
+      mint: string
+      amount: number
+      signature?: string | null
+      ok: boolean
+      error?: string | null
+    }
+  | {
+      kind: "tokenTransfer"
+      mint: string
+      amount: number
+      signature?: string | null
+      ok: boolean
+      error?: string | null
+    }
+  | {
+      kind: "nftFixture"
+      collection: string
+      mint?: string | null
+      signature?: string | null
+      ok: boolean
+      error?: string | null
+    }
+
+export interface FundingReceipt {
+  persona: string
+  cluster: string
+  steps: FundingStep[]
+  succeeded: boolean
+  startedAtMs: number
+  finishedAtMs: number
+}
+
+export interface PersonaCreateResponse {
+  persona: Persona
+  receipt: FundingReceipt
+}
+
+export interface PersonaSpec {
+  name: string
+  cluster: ClusterKind
+  role?: PersonaRole
+  seedOverride?: FundingDelta | null
+  note?: string | null
+}
+
+export type ScenarioKind = "self_contained" | "pipeline_required"
+
+export interface ScenarioDescriptor {
+  id: string
+  label: string
+  description: string
+  supportedClusters: ClusterKind[]
+  requiredClonePrograms: string[]
+  requiredRoles: PersonaRole[]
+  kind: ScenarioKind
+}
+
+export type ScenarioStatus = "succeeded" | "failed" | "pendingPipeline"
+
+export interface ScenarioRun {
+  id: string
+  cluster: ClusterKind
+  persona: string
+  status: ScenarioStatus
+  signatures: string[]
+  steps: string[]
+  fundingReceipts: FundingReceipt[]
+  pipelineHint?: string | null
+  startedAtMs: number
+  finishedAtMs: number
+}
+
+export interface ScenarioSpec {
+  id: string
+  cluster: ClusterKind
+  persona: string
+  params?: unknown
+}
+
+export interface PersonaEventPayload {
+  kind: "created" | "updated" | "funded" | "deleted" | "imported"
+  cluster: string
+  name: string
+  pubkey?: string | null
+  tsMs: number
+  message?: string | null
+}
+
+export interface ScenarioEventPayload {
+  kind: "started" | "progress" | "completed" | "failed" | "pending_pipeline"
+  id: string
+  cluster: string
+  persona: string
+  tsMs: number
+  message?: string | null
+  signatureCount: number
+}
+
 export interface StartOpts {
   clonePrograms?: string[]
   cloneAccounts?: string[]
@@ -114,9 +271,35 @@ export interface UseSolanaWorkbench {
   refreshSnapshots: () => Promise<void>
   start: (kind: ClusterKind, opts?: StartOpts) => Promise<ClusterHandle | null>
   stop: () => Promise<void>
+  // Phase 2 — personas
+  personas: Persona[]
+  personaRoles: RoleDescriptor[]
+  personaBusy: boolean
+  lastPersonaEvent: PersonaEventPayload | null
+  refreshPersonas: (cluster: ClusterKind) => Promise<void>
+  createPersona: (
+    spec: PersonaSpec,
+    rpcUrl?: string | null,
+  ) => Promise<PersonaCreateResponse | null>
+  fundPersona: (
+    cluster: ClusterKind,
+    name: string,
+    delta: FundingDelta,
+    rpcUrl?: string | null,
+  ) => Promise<FundingReceipt | null>
+  deletePersona: (cluster: ClusterKind, name: string) => Promise<boolean>
+  // Phase 2 — scenarios
+  scenarios: ScenarioDescriptor[]
+  lastScenarioRun: ScenarioRun | null
+  lastScenarioEvent: ScenarioEventPayload | null
+  scenarioBusy: boolean
+  refreshScenarios: () => Promise<void>
+  runScenario: (spec: ScenarioSpec) => Promise<ScenarioRun | null>
 }
 
 const SOLANA_VALIDATOR_STATUS_EVENT = "solana:validator:status"
+const SOLANA_PERSONA_EVENT = "solana:persona"
+const SOLANA_SCENARIO_EVENT = "solana:scenario"
 
 interface Options {
   /** When false, the hook releases listeners and doesn't probe. */
@@ -151,6 +334,17 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
   const [isStarting, setIsStarting] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const [personas, setPersonas] = useState<Persona[]>([])
+  const [personaRoles, setPersonaRoles] = useState<RoleDescriptor[]>([])
+  const [personaBusy, setPersonaBusy] = useState(false)
+  const [lastPersonaEvent, setLastPersonaEvent] = useState<PersonaEventPayload | null>(null)
+
+  const [scenarios, setScenarios] = useState<ScenarioDescriptor[]>([])
+  const [lastScenarioRun, setLastScenarioRun] = useState<ScenarioRun | null>(null)
+  const [lastScenarioEvent, setLastScenarioEvent] = useState<ScenarioEventPayload | null>(null)
+  const [scenarioBusy, setScenarioBusy] = useState(false)
+
   const activeRef = useRef(active)
   activeRef.current = active
 
@@ -191,14 +385,145 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     if (next) setSnapshots(next)
   }, [])
 
-  // Mount: probe toolchain + cluster catalogue + status.
+  const refreshPersonaRoles = useCallback(async () => {
+    if (!isTauri()) return
+    const next = await tauriInvoke<RoleDescriptor[]>("solana_persona_roles")
+    if (next) setPersonaRoles(next)
+  }, [])
+
+  const refreshPersonas = useCallback(async (cluster: ClusterKind) => {
+    if (!isTauri()) return
+    const next = await tauriInvoke<Persona[]>("solana_persona_list", {
+      request: { cluster },
+    })
+    if (next) setPersonas(next)
+  }, [])
+
+  const refreshScenarios = useCallback(async () => {
+    if (!isTauri()) return
+    const next = await tauriInvoke<ScenarioDescriptor[]>("solana_scenario_list")
+    if (next) setScenarios(next)
+  }, [])
+
+  const createPersona = useCallback(
+    async (
+      spec: PersonaSpec,
+      rpcUrl?: string | null,
+    ): Promise<PersonaCreateResponse | null> => {
+      if (!isTauri()) return null
+      setPersonaBusy(true)
+      setError(null)
+      try {
+        const response = await invoke<PersonaCreateResponse>("solana_persona_create", {
+          request: {
+            spec,
+            rpcUrl: rpcUrl ?? null,
+          },
+        })
+        await refreshPersonas(spec.cluster)
+        return response
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setPersonaBusy(false)
+      }
+    },
+    [refreshPersonas],
+  )
+
+  const fundPersona = useCallback(
+    async (
+      cluster: ClusterKind,
+      name: string,
+      delta: FundingDelta,
+      rpcUrl?: string | null,
+    ): Promise<FundingReceipt | null> => {
+      if (!isTauri()) return null
+      setPersonaBusy(true)
+      setError(null)
+      try {
+        const receipt = await invoke<FundingReceipt>("solana_persona_fund", {
+          request: {
+            cluster,
+            name,
+            delta,
+            rpcUrl: rpcUrl ?? null,
+          },
+        })
+        await refreshPersonas(cluster)
+        return receipt
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setPersonaBusy(false)
+      }
+    },
+    [refreshPersonas],
+  )
+
+  const deletePersona = useCallback(
+    async (cluster: ClusterKind, name: string): Promise<boolean> => {
+      if (!isTauri()) return false
+      setPersonaBusy(true)
+      setError(null)
+      try {
+        await invoke("solana_persona_delete", {
+          request: { cluster, name },
+        })
+        await refreshPersonas(cluster)
+        return true
+      } catch (err) {
+        setError(errorMessage(err))
+        return false
+      } finally {
+        setPersonaBusy(false)
+      }
+    },
+    [refreshPersonas],
+  )
+
+  const runScenario = useCallback(
+    async (spec: ScenarioSpec): Promise<ScenarioRun | null> => {
+      if (!isTauri()) return null
+      setScenarioBusy(true)
+      setError(null)
+      try {
+        const run = await invoke<ScenarioRun>("solana_scenario_run", {
+          request: { spec },
+        })
+        setLastScenarioRun(run)
+        await refreshPersonas(spec.cluster)
+        return run
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setScenarioBusy(false)
+      }
+    },
+    [refreshPersonas],
+  )
+
+  // Mount: probe toolchain + cluster catalogue + status + persona catalog.
   useEffect(() => {
     if (!active || !isTauri()) return
     void refreshClusters()
     void refreshToolchain()
     void refreshStatus()
     void refreshSnapshots()
-  }, [active, refreshClusters, refreshToolchain, refreshStatus, refreshSnapshots])
+    void refreshPersonaRoles()
+    void refreshScenarios()
+  }, [
+    active,
+    refreshClusters,
+    refreshToolchain,
+    refreshStatus,
+    refreshSnapshots,
+    refreshPersonaRoles,
+    refreshScenarios,
+  ])
 
   // Listen for status events while the sidebar is visible.
   useEffect(() => {
@@ -233,6 +558,28 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
         }
       },
     ).then((unsub) => {
+      if (cancelled) {
+        unsub()
+      } else {
+        unsubs.push(unsub)
+      }
+    })
+
+    void listen<PersonaEventPayload>(SOLANA_PERSONA_EVENT, (event) => {
+      if (cancelled) return
+      setLastPersonaEvent(event.payload)
+    }).then((unsub) => {
+      if (cancelled) {
+        unsub()
+      } else {
+        unsubs.push(unsub)
+      }
+    })
+
+    void listen<ScenarioEventPayload>(SOLANA_SCENARIO_EVENT, (event) => {
+      if (cancelled) return
+      setLastScenarioEvent(event.payload)
+    }).then((unsub) => {
       if (cancelled) {
         unsub()
       } else {
@@ -303,5 +650,19 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     refreshSnapshots,
     start,
     stop,
+    personas,
+    personaRoles,
+    personaBusy,
+    lastPersonaEvent,
+    refreshPersonas,
+    createPersona,
+    fundPersona,
+    deletePersona,
+    scenarios,
+    lastScenarioRun,
+    lastScenarioEvent,
+    scenarioBusy,
+    refreshScenarios,
+    runScenario,
   }
 }

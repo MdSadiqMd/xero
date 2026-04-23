@@ -4,9 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CircleCheckBig, CircleSlash, Loader2, Play, RefreshCw, Square, Waves } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SolanaMissingToolchain } from "./solana-missing-toolchain"
+import { SolanaPersonaPanel } from "./solana-persona-panel"
+import { SolanaScenarioPanel } from "./solana-scenario-panel"
 import {
   useSolanaWorkbench,
   type ClusterKind,
+  type FundingDelta,
+  type PersonaRole,
 } from "@/src/features/solana/use-solana-workbench"
 
 const MIN_WIDTH = 320
@@ -107,6 +111,34 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
   const selectedCluster = useMemo(
     () => workbench.clusters.find((c) => c.kind === selectedKind) ?? null,
     [workbench.clusters, selectedKind],
+  )
+
+  const refreshPersonasForCluster = useCallback(() => {
+    void workbench.refreshPersonas(selectedKind)
+  }, [workbench, selectedKind])
+
+  const handleCreatePersona = useCallback(
+    async (name: string, role: PersonaRole, note: string | null) => {
+      const response = await workbench.createPersona({
+        name,
+        cluster: selectedKind,
+        role,
+        note,
+      })
+      return response?.receipt ?? null
+    },
+    [workbench, selectedKind],
+  )
+
+  const handleDeletePersona = useCallback(
+    async (name: string) => workbench.deletePersona(selectedKind, name),
+    [workbench, selectedKind],
+  )
+
+  const handleFundPersona = useCallback(
+    async (name: string, delta: FundingDelta) =>
+      workbench.fundPersona(selectedKind, name, delta),
+    [workbench, selectedKind],
   )
 
   return (
@@ -260,6 +292,32 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
             <p className="mt-2 text-[11px] text-destructive">{workbench.error}</p>
           ) : null}
         </section>
+
+        <SolanaPersonaPanel
+          busy={workbench.personaBusy}
+          cluster={selectedKind}
+          clusterRunning={
+            workbench.status.running && workbench.status.kind === selectedKind
+          }
+          onCreate={handleCreatePersona}
+          onDelete={handleDeletePersona}
+          onFund={handleFundPersona}
+          onRefresh={refreshPersonasForCluster}
+          personas={workbench.personas}
+          roles={workbench.personaRoles}
+        />
+
+        <SolanaScenarioPanel
+          busy={workbench.scenarioBusy}
+          cluster={selectedKind}
+          clusterRunning={
+            workbench.status.running && workbench.status.kind === selectedKind
+          }
+          lastRun={workbench.lastScenarioRun}
+          onRunScenario={workbench.runScenario}
+          personas={workbench.personas}
+          scenarios={workbench.scenarios}
+        />
 
         <section className="border-b border-border/70 px-3 py-3">
           <div className="mb-2 flex items-center justify-between">

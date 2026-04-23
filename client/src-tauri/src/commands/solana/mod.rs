@@ -80,7 +80,7 @@ impl Default for SolanaState {
             let scratch = std::env::temp_dir().join("cadence-solana-personas");
             let keypairs = KeypairStore::new(
                 scratch.join("keypairs"),
-                Box::new(OsRngKeypairProvider::default()),
+                Box::new(OsRngKeypairProvider),
             );
             PersonaStore::new(scratch, keypairs, Box::new(DefaultFundingBackend::new()))
         });
@@ -109,7 +109,7 @@ impl SolanaState {
             let scratch = std::env::temp_dir().join("cadence-solana-personas-test");
             let keypairs = KeypairStore::new(
                 scratch.join("keypairs"),
-                Box::new(OsRngKeypairProvider::default()),
+                Box::new(OsRngKeypairProvider),
             );
             PersonaStore::new(scratch, keypairs, Box::new(DefaultFundingBackend::new()))
         });
