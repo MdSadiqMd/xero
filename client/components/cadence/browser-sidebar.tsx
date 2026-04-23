@@ -414,7 +414,9 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
     openUrl("https://www.google.com/", undefined)
   }, [openUrl])
 
-  const showTabs = tabs.length > 1
+  // Show the tab strip (and the + button) as soon as there's any tab — otherwise
+  // users have no way to open a second tab because the new-tab trigger lives there.
+  const showTabs = tabs.length > 0
 
   return (
     <aside

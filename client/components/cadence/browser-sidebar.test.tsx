@@ -161,6 +161,41 @@ describe("BrowserSidebar", () => {
     expect(forward).toBeDisabled()
   })
 
+  it("exposes the new-tab button as soon as a single tab exists", async () => {
+    registerInvoke("browser_tab_list", async () => [
+      {
+        id: "tab-1",
+        label: "cadence-browser",
+        title: null,
+        url: "https://example.com/",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      },
+    ])
+    const shownUrls: string[] = []
+    registerInvoke("browser_show", async (args) => {
+      shownUrls.push(String((args as { url?: string })?.url ?? ""))
+      return {
+        id: "tab-2",
+        label: "cadence-browser-tab-2",
+        title: null,
+        url: String((args as { url?: string })?.url ?? ""),
+        loading: true,
+        canGoBack: false,
+        canGoForward: false,
+        active: true,
+      }
+    })
+
+    render(<BrowserSidebar open />)
+    const newTabButton = await screen.findByLabelText("New tab")
+    expect(newTabButton).toBeVisible()
+    fireEvent.click(newTabButton)
+    await waitFor(() => expect(shownUrls.length).toBe(1))
+  })
+
   it("applies the resize handle inset to browser_show so the handle stays clickable", async () => {
     registerInvoke("browser_tab_list", async () => [])
     let recordedArgs: Record<string, unknown> | null = null
