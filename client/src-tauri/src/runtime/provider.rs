@@ -18,36 +18,87 @@ use crate::{
 pub const OPENAI_CODEX_PROVIDER_ID: &str = "openai_codex";
 pub const OPENROUTER_PROVIDER_ID: &str = "openrouter";
 pub const ANTHROPIC_PROVIDER_ID: &str = "anthropic";
+pub const OPENAI_API_PROVIDER_ID: &str = "openai_api";
+pub const AZURE_OPENAI_PROVIDER_ID: &str = "azure_openai";
+pub const GEMINI_AI_STUDIO_PROVIDER_ID: &str = "gemini_ai_studio";
+pub const OPENAI_COMPATIBLE_RUNTIME_KIND: &str = "openai_compatible";
+pub const GEMINI_RUNTIME_KIND: &str = "gemini";
 pub const OPENAI_CODEX_AUTH_STORE_FILE_NAME: &str = "openai-auth.json";
 pub const OPENROUTER_AUTH_STORE_FILE_NAME: &str = "openrouter-credentials.json";
 pub const ANTHROPIC_AUTH_STORE_FILE_NAME: &str = "provider-profile-credentials.json";
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum RuntimeProviderFamily {
+    OpenAiCodex,
+    OpenRouter,
+    Anthropic,
+    OpenAiCompatible,
+    Gemini,
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RuntimeProvider {
     OpenAiCodex,
     OpenRouter,
     Anthropic,
+    OpenAiApi,
+    AzureOpenAi,
+    GeminiAiStudio,
 }
 
 impl RuntimeProvider {
+    pub const fn family(self) -> RuntimeProviderFamily {
+        match self {
+            Self::OpenAiCodex => RuntimeProviderFamily::OpenAiCodex,
+            Self::OpenRouter => RuntimeProviderFamily::OpenRouter,
+            Self::Anthropic => RuntimeProviderFamily::Anthropic,
+            Self::OpenAiApi | Self::AzureOpenAi => RuntimeProviderFamily::OpenAiCompatible,
+            Self::GeminiAiStudio => RuntimeProviderFamily::Gemini,
+        }
+    }
+
     pub const fn resolve(self) -> ResolvedRuntimeProvider {
         match self {
             Self::OpenAiCodex => ResolvedRuntimeProvider {
                 provider: Self::OpenAiCodex,
+                family: RuntimeProviderFamily::OpenAiCodex,
                 provider_id: OPENAI_CODEX_PROVIDER_ID,
                 runtime_kind: OPENAI_CODEX_PROVIDER_ID,
                 auth_store_file_name: OPENAI_CODEX_AUTH_STORE_FILE_NAME,
             },
             Self::OpenRouter => ResolvedRuntimeProvider {
                 provider: Self::OpenRouter,
+                family: RuntimeProviderFamily::OpenRouter,
                 provider_id: OPENROUTER_PROVIDER_ID,
                 runtime_kind: OPENROUTER_PROVIDER_ID,
                 auth_store_file_name: OPENROUTER_AUTH_STORE_FILE_NAME,
             },
             Self::Anthropic => ResolvedRuntimeProvider {
                 provider: Self::Anthropic,
+                family: RuntimeProviderFamily::Anthropic,
                 provider_id: ANTHROPIC_PROVIDER_ID,
                 runtime_kind: ANTHROPIC_PROVIDER_ID,
+                auth_store_file_name: ANTHROPIC_AUTH_STORE_FILE_NAME,
+            },
+            Self::OpenAiApi => ResolvedRuntimeProvider {
+                provider: Self::OpenAiApi,
+                family: RuntimeProviderFamily::OpenAiCompatible,
+                provider_id: OPENAI_API_PROVIDER_ID,
+                runtime_kind: OPENAI_COMPATIBLE_RUNTIME_KIND,
+                auth_store_file_name: ANTHROPIC_AUTH_STORE_FILE_NAME,
+            },
+            Self::AzureOpenAi => ResolvedRuntimeProvider {
+                provider: Self::AzureOpenAi,
+                family: RuntimeProviderFamily::OpenAiCompatible,
+                provider_id: AZURE_OPENAI_PROVIDER_ID,
+                runtime_kind: OPENAI_COMPATIBLE_RUNTIME_KIND,
+                auth_store_file_name: ANTHROPIC_AUTH_STORE_FILE_NAME,
+            },
+            Self::GeminiAiStudio => ResolvedRuntimeProvider {
+                provider: Self::GeminiAiStudio,
+                family: RuntimeProviderFamily::Gemini,
+                provider_id: GEMINI_AI_STUDIO_PROVIDER_ID,
+                runtime_kind: GEMINI_RUNTIME_KIND,
                 auth_store_file_name: ANTHROPIC_AUTH_STORE_FILE_NAME,
             },
         }
@@ -57,6 +108,7 @@ impl RuntimeProvider {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ResolvedRuntimeProvider {
     pub provider: RuntimeProvider,
+    pub family: RuntimeProviderFamily,
     pub provider_id: &'static str,
     pub runtime_kind: &'static str,
     pub auth_store_file_name: &'static str,
@@ -95,6 +147,18 @@ pub const fn anthropic_provider() -> ResolvedRuntimeProvider {
     RuntimeProvider::Anthropic.resolve()
 }
 
+pub const fn openai_api_provider() -> ResolvedRuntimeProvider {
+    RuntimeProvider::OpenAiApi.resolve()
+}
+
+pub const fn azure_openai_provider() -> ResolvedRuntimeProvider {
+    RuntimeProvider::AzureOpenAi.resolve()
+}
+
+pub const fn gemini_ai_studio_provider() -> ResolvedRuntimeProvider {
+    RuntimeProvider::GeminiAiStudio.resolve()
+}
+
 pub const fn default_runtime_provider() -> ResolvedRuntimeProvider {
     openai_codex_provider()
 }
@@ -106,22 +170,39 @@ pub fn resolve_runtime_provider_identity(
     let provider_id = normalize_input(provider_id);
     let runtime_kind = normalize_input(runtime_kind);
 
-    let provider_from_id = provider_id.map(parse_provider).transpose()?;
-    let provider_from_kind = runtime_kind.map(parse_provider).transpose()?;
+    let provider_from_id = provider_id.map(parse_provider_id).transpose()?;
+    let runtime_from_kind = runtime_kind.map(parse_runtime_reference).transpose()?;
 
-    match (provider_from_id, provider_from_kind) {
-        (Some(provider_from_id), Some(provider_from_kind)) if provider_from_id != provider_from_kind => {
-            Err(AuthDiagnostic {
-                code: "runtime_provider_mismatch".into(),
-                message: format!(
-                    "Cadence rejected the runtime provider identity because providerId `{}` does not match runtimeKind `{}`.",
-                    provider_id.unwrap_or_default(),
-                    runtime_kind.unwrap_or_default()
-                ),
-                retryable: false,
-            })
+    match (provider_from_id, runtime_from_kind) {
+        (Some(provider), Some(reference)) => {
+            let resolved = provider.resolve();
+            let family_matches = resolved.family == reference.family();
+            let actual_matches = reference
+                .actual_provider_id()
+                .is_none_or(|actual_provider_id| actual_provider_id == resolved.provider_id);
+            if !family_matches || !actual_matches {
+                return Err(AuthDiagnostic {
+                    code: "runtime_provider_mismatch".into(),
+                    message: format!(
+                        "Cadence rejected the runtime provider identity because providerId `{}` does not match runtimeKind `{}`.",
+                        provider_id.unwrap_or_default(),
+                        runtime_kind.unwrap_or_default()
+                    ),
+                    retryable: false,
+                });
+            }
+            Ok(resolved)
         }
-        (Some(provider), _) | (_, Some(provider)) => Ok(provider.resolve()),
+        (Some(provider), None) => Ok(provider.resolve()),
+        (None, Some(RuntimeReference::Actual(provider))) => Ok(provider.resolve()),
+        (None, Some(RuntimeReference::Family(_))) => Err(AuthDiagnostic {
+            code: "runtime_provider_missing".into(),
+            message: format!(
+                "Cadence could not resolve the runtime provider because runtimeKind `{}` requires a non-blank providerId.",
+                runtime_kind.unwrap_or_default()
+            ),
+            retryable: false,
+        }),
         (None, None) => Err(AuthDiagnostic {
             code: "runtime_provider_missing".into(),
             message: "Cadence could not resolve the runtime provider because both providerId and runtimeKind were blank.".into(),
@@ -178,6 +259,12 @@ pub(crate) fn bind_provider_runtime_session<R: Runtime>(
                 }
             }
         }
+        RuntimeProvider::OpenAiApi
+        | RuntimeProvider::AzureOpenAi
+        | RuntimeProvider::GeminiAiStudio => Err(unavailable_cloud_provider_binding_error(
+            provider,
+            "bind",
+        )),
     }
 }
 
@@ -238,6 +325,12 @@ pub(crate) fn reconcile_provider_runtime_session<R: Runtime>(
                 }
             }
         }
+        RuntimeProvider::OpenAiApi
+        | RuntimeProvider::AzureOpenAi
+        | RuntimeProvider::GeminiAiStudio => Err(unavailable_cloud_provider_binding_error(
+            provider,
+            "reconcile",
+        )),
     }
 }
 
@@ -269,8 +362,26 @@ pub fn logout_provider_runtime_session<R: Runtime>(
             let latest = load_latest_openai_codex_session(&auth_store_path)?;
             sync_openai_profile_link(app, state, None, latest.as_ref())
         }
-        RuntimeProvider::OpenRouter | RuntimeProvider::Anthropic => Ok(()),
+        RuntimeProvider::OpenRouter
+        | RuntimeProvider::Anthropic
+        | RuntimeProvider::OpenAiApi
+        | RuntimeProvider::AzureOpenAi
+        | RuntimeProvider::GeminiAiStudio => Ok(()),
     }
+}
+
+fn unavailable_cloud_provider_binding_error(
+    provider: ResolvedRuntimeProvider,
+    operation: &str,
+) -> AuthFlowError {
+    AuthFlowError::terminal(
+        "runtime_provider_unavailable",
+        RuntimeAuthPhase::Failed,
+        format!(
+            "Cadence cannot {operation} runtime provider `{}` until provider-profile cloud bindings are available for its shared transport family `{}`.",
+            provider.provider_id, provider.runtime_kind
+        ),
+    )
 }
 
 fn bind_openai_codex_runtime_session<R: Runtime>(
@@ -463,18 +574,65 @@ fn binding_from_runtime_auth_session(
     }
 }
 
-fn parse_provider(value: &str) -> Result<RuntimeProvider, AuthDiagnostic> {
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum RuntimeReference {
+    Actual(RuntimeProvider),
+    Family(RuntimeProviderFamily),
+}
+
+impl RuntimeReference {
+    const fn family(self) -> RuntimeProviderFamily {
+        match self {
+            Self::Actual(provider) => provider.family(),
+            Self::Family(family) => family,
+        }
+    }
+
+    const fn actual_provider_id(self) -> Option<&'static str> {
+        match self {
+            Self::Actual(provider) => Some(provider.resolve().provider_id),
+            Self::Family(_) => None,
+        }
+    }
+}
+
+fn parse_provider_id(value: &str) -> Result<RuntimeProvider, AuthDiagnostic> {
     match value {
         OPENAI_CODEX_PROVIDER_ID => Ok(RuntimeProvider::OpenAiCodex),
         OPENROUTER_PROVIDER_ID => Ok(RuntimeProvider::OpenRouter),
         ANTHROPIC_PROVIDER_ID => Ok(RuntimeProvider::Anthropic),
-        other => Err(AuthDiagnostic {
-            code: "runtime_provider_unknown".into(),
-            message: format!(
-                "Cadence does not support runtime provider `{other}`. Allowed providers: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}, {ANTHROPIC_PROVIDER_ID}."
-            ),
-            retryable: false,
-        }),
+        OPENAI_API_PROVIDER_ID => Ok(RuntimeProvider::OpenAiApi),
+        AZURE_OPENAI_PROVIDER_ID => Ok(RuntimeProvider::AzureOpenAi),
+        GEMINI_AI_STUDIO_PROVIDER_ID => Ok(RuntimeProvider::GeminiAiStudio),
+        other => Err(unknown_runtime_provider_diagnostic(other)),
+    }
+}
+
+fn parse_runtime_reference(value: &str) -> Result<RuntimeReference, AuthDiagnostic> {
+    match value {
+        OPENAI_CODEX_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::OpenAiCodex)),
+        OPENROUTER_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::OpenRouter)),
+        ANTHROPIC_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::Anthropic)),
+        OPENAI_API_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::OpenAiApi)),
+        AZURE_OPENAI_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::AzureOpenAi)),
+        GEMINI_AI_STUDIO_PROVIDER_ID => {
+            Ok(RuntimeReference::Actual(RuntimeProvider::GeminiAiStudio))
+        }
+        OPENAI_COMPATIBLE_RUNTIME_KIND => {
+            Ok(RuntimeReference::Family(RuntimeProviderFamily::OpenAiCompatible))
+        }
+        GEMINI_RUNTIME_KIND => Ok(RuntimeReference::Family(RuntimeProviderFamily::Gemini)),
+        other => Err(unknown_runtime_provider_diagnostic(other)),
+    }
+}
+
+fn unknown_runtime_provider_diagnostic(value: &str) -> AuthDiagnostic {
+    AuthDiagnostic {
+        code: "runtime_provider_unknown".into(),
+        message: format!(
+            "Cadence does not support runtime provider `{value}`. Allowed providers: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}, {ANTHROPIC_PROVIDER_ID}, {OPENAI_API_PROVIDER_ID}, {AZURE_OPENAI_PROVIDER_ID}, {GEMINI_AI_STUDIO_PROVIDER_ID}. Allowed runtime kinds: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}, {ANTHROPIC_PROVIDER_ID}, {OPENAI_COMPATIBLE_RUNTIME_KIND}, {GEMINI_RUNTIME_KIND}."
+        ),
+        retryable: false,
     }
 }
 

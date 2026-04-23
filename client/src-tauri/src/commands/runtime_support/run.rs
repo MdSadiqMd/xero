@@ -76,7 +76,7 @@ pub(crate) fn runtime_run_dto_from_snapshot(snapshot: &RuntimeRunSnapshotRecord)
         project_id: snapshot.run.project_id.clone(),
         run_id: snapshot.run.run_id.clone(),
         runtime_kind: snapshot.run.runtime_kind.clone(),
-        provider_id: provider_id_from_runtime_kind(&snapshot.run.runtime_kind),
+        provider_id: snapshot.run.provider_id.clone(),
         supervisor_kind: snapshot.run.supervisor_kind.clone(),
         status: runtime_run_status_dto(snapshot.run.status.clone()),
         transport: RuntimeRunTransportDto {
@@ -304,12 +304,6 @@ pub(crate) fn ensure_runtime_run_auth_ready(phase: &RuntimeAuthPhase) -> Command
             ))
         }
     }
-}
-
-pub(super) fn provider_id_from_runtime_kind(runtime_kind: &str) -> String {
-    crate::runtime::resolve_runtime_provider_identity(Some(runtime_kind), Some(runtime_kind))
-        .map(|provider| provider.provider_id.to_string())
-        .unwrap_or_else(|_| runtime_kind.trim().to_string())
 }
 
 pub(super) fn runtime_run_diagnostic_dto(

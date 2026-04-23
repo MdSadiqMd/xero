@@ -115,6 +115,7 @@ pub struct RuntimeRunRecord {
     pub project_id: String,
     pub run_id: String,
     pub runtime_kind: String,
+    pub provider_id: String,
     pub supervisor_kind: String,
     pub status: RuntimeRunStatus,
     pub transport: RuntimeRunTransportRecord,
@@ -299,6 +300,8 @@ pub struct RuntimeRunSnapshotRecord {
 #[derive(Debug)]
 pub(crate) struct StoredRuntimeRunRow {
     pub(crate) run_id: String,
+    pub(crate) runtime_kind: String,
+    pub(crate) provider_id: String,
     pub(crate) last_checkpoint_sequence: u32,
     pub(crate) last_checkpoint_at: Option<String>,
     pub(crate) control_state_json: Option<String>,
@@ -309,6 +312,7 @@ struct RawRuntimeRunRow {
     project_id: String,
     run_id: String,
     runtime_kind: String,
+    provider_id: String,
     supervisor_kind: String,
     status: String,
     transport_kind: String,
@@ -618,6 +622,7 @@ pub fn upsert_runtime_run(
                 project_id,
                 run_id,
                 runtime_kind,
+                provider_id,
                 supervisor_kind,
                 status,
                 transport_kind,
@@ -633,10 +638,11 @@ pub fn upsert_runtime_run(
                 last_error_message,
                 updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
             ON CONFLICT(project_id) DO UPDATE SET
                 run_id = excluded.run_id,
                 runtime_kind = excluded.runtime_kind,
+                provider_id = excluded.provider_id,
                 supervisor_kind = excluded.supervisor_kind,
                 status = excluded.status,
                 transport_kind = excluded.transport_kind,
@@ -656,6 +662,7 @@ pub fn upsert_runtime_run(
                 payload.run.project_id.as_str(),
                 payload.run.run_id.as_str(),
                 payload.run.runtime_kind.as_str(),
+                payload.run.provider_id.as_str(),
                 payload.run.supervisor_kind.as_str(),
                 runtime_run_status_sql_value(&payload.run.status),
                 payload.run.transport.kind.as_str(),
@@ -873,6 +880,7 @@ pub(crate) fn read_runtime_run_snapshot(
                 project_id,
                 run_id,
                 runtime_kind,
+                provider_id,
                 supervisor_kind,
                 status,
                 transport_kind,
@@ -896,20 +904,21 @@ pub(crate) fn read_runtime_run_snapshot(
                 project_id: row.get(0)?,
                 run_id: row.get(1)?,
                 runtime_kind: row.get(2)?,
-                supervisor_kind: row.get(3)?,
-                status: row.get(4)?,
-                transport_kind: row.get(5)?,
-                transport_endpoint: row.get(6)?,
-                transport_liveness: row.get(7)?,
-                control_state_json: row.get(8)?,
-                last_checkpoint_sequence: row.get(9)?,
-                started_at: row.get(10)?,
-                last_heartbeat_at: row.get(11)?,
-                last_checkpoint_at: row.get(12)?,
-                stopped_at: row.get(13)?,
-                last_error_code: row.get(14)?,
-                last_error_message: row.get(15)?,
-                updated_at: row.get(16)?,
+                provider_id: row.get(3)?,
+                supervisor_kind: row.get(4)?,
+                status: row.get(5)?,
+                transport_kind: row.get(6)?,
+                transport_endpoint: row.get(7)?,
+                transport_liveness: row.get(8)?,
+                control_state_json: row.get(9)?,
+                last_checkpoint_sequence: row.get(10)?,
+                started_at: row.get(11)?,
+                last_heartbeat_at: row.get(12)?,
+                last_checkpoint_at: row.get(13)?,
+                stopped_at: row.get(14)?,
+                last_error_code: row.get(15)?,
+                last_error_message: row.get(16)?,
+                updated_at: row.get(17)?,
             })
         },
     );
@@ -992,6 +1001,8 @@ pub(crate) fn read_runtime_run_row(
         r#"
             SELECT
                 run_id,
+                runtime_kind,
+                provider_id,
                 last_checkpoint_sequence,
                 last_checkpoint_at,
                 control_state_json
@@ -1002,17 +1013,46 @@ pub(crate) fn read_runtime_run_row(
         |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, Option<String>>(2)?,
-                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         },
     );
 
     match row {
-        Ok((run_id, last_checkpoint_sequence, last_checkpoint_at, control_state_json)) => {
+        Ok((
+            run_id,
+            runtime_kind,
+            provider_id,
+            last_checkpoint_sequence,
+            last_checkpoint_at,
+            control_state_json,
+        )) => {
+            let run_id = require_runtime_run_non_empty_owned(run_id, "run_id", database_path)?;
+            let runtime_kind =
+                require_runtime_run_non_empty_owned(runtime_kind, "runtime_kind", database_path)?;
+            let provider_id =
+                require_runtime_run_non_empty_owned(provider_id, "provider_id", database_path)?;
+            crate::runtime::resolve_runtime_provider_identity(
+                Some(provider_id.as_str()),
+                Some(runtime_kind.as_str()),
+            )
+            .map_err(|diagnostic| {
+                map_runtime_run_decode_error(
+                    database_path,
+                    format!(
+                        "Runtime run identity is invalid because {}",
+                        diagnostic.message
+                    ),
+                )
+            })?;
             Ok(Some(StoredRuntimeRunRow {
-                run_id: require_runtime_run_non_empty_owned(run_id, "run_id", database_path)?,
+                run_id,
+                runtime_kind,
+                provider_id,
                 last_checkpoint_sequence: decode_runtime_run_checkpoint_sequence(
                     last_checkpoint_sequence,
                     "last_checkpoint_sequence",
@@ -1136,6 +1176,18 @@ fn decode_runtime_run_row(
     let run_id = require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?;
     let runtime_kind =
         require_runtime_run_non_empty_owned(raw_row.runtime_kind, "runtime_kind", database_path)?;
+    let provider_id =
+        require_runtime_run_non_empty_owned(raw_row.provider_id, "provider_id", database_path)?;
+    crate::runtime::resolve_runtime_provider_identity(
+        Some(provider_id.as_str()),
+        Some(runtime_kind.as_str()),
+    )
+    .map_err(|diagnostic| {
+        map_runtime_run_decode_error(
+            database_path,
+            format!("Runtime run provider identity is invalid because {}", diagnostic.message),
+        )
+    })?;
     let supervisor_kind = require_runtime_run_non_empty_owned(
         raw_row.supervisor_kind,
         "supervisor_kind",
@@ -1206,6 +1258,7 @@ fn decode_runtime_run_row(
         project_id,
         run_id,
         runtime_kind,
+        provider_id,
         supervisor_kind,
         status,
         transport: RuntimeRunTransportRecord {
@@ -1373,6 +1426,24 @@ fn validate_runtime_run_upsert_payload(
         "runtime_kind",
         "runtime_run_request_invalid",
     )?;
+    validate_non_empty_text(
+        &payload.run.provider_id,
+        "provider_id",
+        "runtime_run_request_invalid",
+    )?;
+    crate::runtime::resolve_runtime_provider_identity(
+        Some(payload.run.provider_id.as_str()),
+        Some(payload.run.runtime_kind.as_str()),
+    )
+    .map_err(|diagnostic| {
+        CommandError::user_fixable(
+            "runtime_run_request_invalid",
+            format!(
+                "Cadence rejected the durable runtime-run identity because {}",
+                diagnostic.message
+            ),
+        )
+    })?;
     validate_non_empty_text(
         &payload.run.supervisor_kind,
         "supervisor_kind",

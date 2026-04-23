@@ -102,6 +102,7 @@ pub(crate) fn detached_supervisor_probe_marks_unreachable_run_stale() {
                 project_id: project_id.into(),
                 run_id: "run-stale".into(),
                 runtime_kind: "openai_codex".into(),
+                provider_id: "openai_codex".into(),
                 supervisor_kind: "detached_pty".into(),
                 status: project_store::RuntimeRunStatus::Running,
                 transport: project_store::RuntimeRunTransportRecord {

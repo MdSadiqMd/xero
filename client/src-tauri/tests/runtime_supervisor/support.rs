@@ -265,6 +265,7 @@ pub(crate) fn seed_active_autonomous_run(repo_root: &Path, project_id: &str, run
             project_id: project_id.into(),
             run_id: run_id.into(),
             runtime_kind: "openai_codex".into(),
+            provider_id: "openai_codex".into(),
             supervisor_kind: "detached_pty".into(),
             status: project_store::AutonomousRunStatus::Running,
             active_unit_sequence: Some(1),
@@ -490,4 +491,6 @@ pub(crate) fn response_dump(frames: &[SupervisorControlResponse]) -> String {
         .map(|frame| serde_json::to_string(frame).expect("serialize frame"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+)
 }

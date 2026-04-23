@@ -225,6 +225,7 @@ pub struct AutonomousRunRecord {
     pub project_id: String,
     pub run_id: String,
     pub runtime_kind: String,
+    pub provider_id: String,
     pub supervisor_kind: String,
     pub status: AutonomousRunStatus,
     pub active_unit_sequence: Option<u32>,
@@ -333,6 +334,7 @@ struct RawAutonomousRunRow {
     project_id: String,
     run_id: String,
     runtime_kind: String,
+    provider_id: String,
     supervisor_kind: String,
     status: String,
     active_unit_sequence: Option<i64>,
@@ -493,6 +495,22 @@ pub fn upsert_autonomous_run(
         ));
     }
 
+    if runtime_row.runtime_kind != payload.run.runtime_kind
+        || runtime_row.provider_id != payload.run.provider_id
+    {
+        return Err(CommandError::retryable(
+            "autonomous_run_mismatch",
+            format!(
+                "Cadence refused to persist autonomous-run metadata for run `{}` because the durable runtime-run identity is `{}`/`{}` instead of `{}`/`{}`.",
+                payload.run.run_id,
+                runtime_row.provider_id,
+                runtime_row.runtime_kind,
+                payload.run.provider_id,
+                payload.run.runtime_kind
+            ),
+        ));
+    }
+
     let active_unit_sequence = payload.run.active_unit_sequence.map(i64::from);
     let duplicate_start_detected = if payload.run.duplicate_start_detected {
         1
@@ -547,6 +565,7 @@ pub fn upsert_autonomous_run(
                 project_id,
                 run_id,
                 runtime_kind,
+                provider_id,
                 supervisor_kind,
                 status,
                 active_unit_sequence,
@@ -571,10 +590,11 @@ pub fn upsert_autonomous_run(
                 last_error_message,
                 updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
             ON CONFLICT(project_id) DO UPDATE SET
                 run_id = excluded.run_id,
                 runtime_kind = excluded.runtime_kind,
+                provider_id = excluded.provider_id,
                 supervisor_kind = excluded.supervisor_kind,
                 status = excluded.status,
                 active_unit_sequence = excluded.active_unit_sequence,
@@ -603,6 +623,7 @@ pub fn upsert_autonomous_run(
                 payload.run.project_id.as_str(),
                 payload.run.run_id.as_str(),
                 payload.run.runtime_kind.as_str(),
+                payload.run.provider_id.as_str(),
                 payload.run.supervisor_kind.as_str(),
                 autonomous_run_status_sql_value(&payload.run.status),
                 active_unit_sequence,
@@ -1336,6 +1357,7 @@ fn read_autonomous_run_snapshot(
                 project_id,
                 run_id,
                 runtime_kind,
+                provider_id,
                 supervisor_kind,
                 status,
                 active_unit_sequence,
@@ -1368,29 +1390,30 @@ fn read_autonomous_run_snapshot(
                 project_id: row.get(0)?,
                 run_id: row.get(1)?,
                 runtime_kind: row.get(2)?,
-                supervisor_kind: row.get(3)?,
-                status: row.get(4)?,
-                active_unit_sequence: row.get(5)?,
-                duplicate_start_detected: row.get(6)?,
-                duplicate_start_run_id: row.get(7)?,
-                duplicate_start_reason: row.get(8)?,
-                started_at: row.get(9)?,
-                last_heartbeat_at: row.get(10)?,
-                last_checkpoint_at: row.get(11)?,
-                paused_at: row.get(12)?,
-                cancelled_at: row.get(13)?,
-                completed_at: row.get(14)?,
-                crashed_at: row.get(15)?,
-                stopped_at: row.get(16)?,
-                pause_reason_code: row.get(17)?,
-                pause_reason_message: row.get(18)?,
-                cancel_reason_code: row.get(19)?,
-                cancel_reason_message: row.get(20)?,
-                crash_reason_code: row.get(21)?,
-                crash_reason_message: row.get(22)?,
-                last_error_code: row.get(23)?,
-                last_error_message: row.get(24)?,
-                updated_at: row.get(25)?,
+                provider_id: row.get(3)?,
+                supervisor_kind: row.get(4)?,
+                status: row.get(5)?,
+                active_unit_sequence: row.get(6)?,
+                duplicate_start_detected: row.get(7)?,
+                duplicate_start_run_id: row.get(8)?,
+                duplicate_start_reason: row.get(9)?,
+                started_at: row.get(10)?,
+                last_heartbeat_at: row.get(11)?,
+                last_checkpoint_at: row.get(12)?,
+                paused_at: row.get(13)?,
+                cancelled_at: row.get(14)?,
+                completed_at: row.get(15)?,
+                crashed_at: row.get(16)?,
+                stopped_at: row.get(17)?,
+                pause_reason_code: row.get(18)?,
+                pause_reason_message: row.get(19)?,
+                cancel_reason_code: row.get(20)?,
+                cancel_reason_message: row.get(21)?,
+                crash_reason_code: row.get(22)?,
+                crash_reason_message: row.get(23)?,
+                last_error_code: row.get(24)?,
+                last_error_message: row.get(25)?,
+                updated_at: row.get(26)?,
             })
         },
     );
@@ -1989,6 +2012,21 @@ fn decode_autonomous_run_row(
     let run_id = require_runtime_run_non_empty_owned(raw_row.run_id, "run_id", database_path)?;
     let runtime_kind =
         require_runtime_run_non_empty_owned(raw_row.runtime_kind, "runtime_kind", database_path)?;
+    let provider_id =
+        require_runtime_run_non_empty_owned(raw_row.provider_id, "provider_id", database_path)?;
+    crate::runtime::resolve_runtime_provider_identity(
+        Some(provider_id.as_str()),
+        Some(runtime_kind.as_str()),
+    )
+    .map_err(|diagnostic| {
+        map_runtime_run_decode_error(
+            database_path,
+            format!(
+                "Autonomous run provider identity is invalid because {}",
+                diagnostic.message
+            ),
+        )
+    })?;
     let supervisor_kind = require_runtime_run_non_empty_owned(
         raw_row.supervisor_kind,
         "supervisor_kind",
@@ -2101,6 +2139,7 @@ fn decode_autonomous_run_row(
         project_id,
         run_id,
         runtime_kind,
+        provider_id,
         supervisor_kind,
         status,
         active_unit_sequence,
@@ -2456,6 +2495,24 @@ fn validate_autonomous_run_payload(payload: &AutonomousRunRecord) -> Result<(), 
         "runtime_kind",
         "autonomous_run_request_invalid",
     )?;
+    validate_non_empty_text(
+        &payload.provider_id,
+        "provider_id",
+        "autonomous_run_request_invalid",
+    )?;
+    crate::runtime::resolve_runtime_provider_identity(
+        Some(payload.provider_id.as_str()),
+        Some(payload.runtime_kind.as_str()),
+    )
+    .map_err(|diagnostic| {
+        CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            format!(
+                "Cadence rejected the durable autonomous-run identity because {}",
+                diagnostic.message
+            ),
+        )
+    })?;
     validate_non_empty_text(
         &payload.supervisor_kind,
         "supervisor_kind",

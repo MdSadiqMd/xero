@@ -105,6 +105,7 @@ struct SidecarSharedState {
     project_id: String,
     run_id: String,
     runtime_kind: String,
+    provider_id: String,
     session_id: String,
     flow_id: Option<String>,
     endpoint: String,
@@ -173,22 +174,19 @@ fn validate_runtime_supervisor_launch_context(
         crate::commands::validate_non_empty(flow_id, "launchContext.flowId")?;
     }
 
-    let expected_provider_id = crate::runtime::resolve_runtime_provider_identity(
-        Some(runtime_kind),
+    crate::runtime::resolve_runtime_provider_identity(
+        Some(launch_context.provider_id.as_str()),
         Some(runtime_kind),
     )
-    .map(|provider| provider.provider_id.to_string())
-    .unwrap_or_else(|_| runtime_kind.trim().to_string());
-
-    if launch_context.provider_id != expected_provider_id {
-        return Err(CommandError::user_fixable(
+    .map_err(|diagnostic| {
+        CommandError::user_fixable(
             "runtime_supervisor_provider_mismatch",
             format!(
-                "Cadence rejected detached runtime launch context because providerId `{}` did not match runtime kind `{}`.",
-                launch_context.provider_id, runtime_kind
+                "Cadence rejected detached runtime launch context because {}",
+                diagnostic.message
             ),
-        ));
-    }
+        )
+    })?;
 
     if launch_context.session_id != session_id {
         return Err(CommandError::user_fixable(

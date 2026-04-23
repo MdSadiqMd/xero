@@ -32,7 +32,7 @@ use super::{
         autonomous_skill_lifecycle_result_dto, autonomous_skill_lifecycle_source_dto_from_record,
         autonomous_skill_lifecycle_stage_dto, tool_result_summary_dto_from_protocol,
     },
-    run::{provider_id_from_runtime_kind, runtime_reason_dto, runtime_run_diagnostic_dto},
+    run::{runtime_reason_dto, runtime_run_diagnostic_dto},
 };
 
 pub(crate) fn load_persisted_autonomous_run(
@@ -194,7 +194,7 @@ fn autonomous_run_dto_from_snapshot(snapshot: &AutonomousRunSnapshotRecord) -> A
         project_id: snapshot.run.project_id.clone(),
         run_id: snapshot.run.run_id.clone(),
         runtime_kind: snapshot.run.runtime_kind.clone(),
-        provider_id: provider_id_from_runtime_kind(&snapshot.run.runtime_kind),
+        provider_id: snapshot.run.provider_id.clone(),
         supervisor_kind: snapshot.run.supervisor_kind.clone(),
         status: autonomous_run_status_dto(&snapshot.run.status),
         recovery_state: autonomous_run_recovery_state_dto(&snapshot.run.status),

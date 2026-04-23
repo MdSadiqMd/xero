@@ -284,6 +284,7 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
                 project_id: args.project_id.clone(),
                 run_id: args.run_id.clone(),
                 runtime_kind: args.runtime_kind.clone(),
+                provider_id: args.launch_context.provider_id.clone(),
                 supervisor_kind: SUPERVISOR_KIND_DETACHED_PTY.into(),
                 status: RuntimeRunStatus::Running,
                 transport: RuntimeRunTransportRecord {
@@ -313,6 +314,7 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
         project_id: args.project_id.clone(),
         run_id: args.run_id.clone(),
         runtime_kind: args.runtime_kind.clone(),
+        provider_id: args.launch_context.provider_id.clone(),
         session_id: args.launch_context.session_id.clone(),
         flow_id: args.launch_context.flow_id.clone(),
         endpoint: endpoint.clone(),

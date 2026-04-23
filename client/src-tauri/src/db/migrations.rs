@@ -698,6 +698,47 @@ pub fn migrations() -> &'static Migrations<'static> {
                 WHERE control_state_json IS NULL;
                 "#,
             ),
+            M::up(
+                r#"
+                ALTER TABLE runtime_runs
+                    ADD COLUMN provider_id TEXT;
+
+                UPDATE runtime_runs
+                SET provider_id = CASE runtime_kind
+                    WHEN 'openai_codex' THEN 'openai_codex'
+                    WHEN 'openrouter' THEN 'openrouter'
+                    WHEN 'anthropic' THEN 'anthropic'
+                    ELSE NULL
+                END
+                WHERE provider_id IS NULL;
+
+                CREATE INDEX IF NOT EXISTS idx_runtime_runs_provider_status_updated
+                    ON runtime_runs(provider_id, status, updated_at DESC);
+
+                ALTER TABLE autonomous_runs
+                    ADD COLUMN provider_id TEXT;
+
+                UPDATE autonomous_runs
+                SET provider_id = COALESCE(
+                    (
+                        SELECT runtime_runs.provider_id
+                        FROM runtime_runs
+                        WHERE runtime_runs.project_id = autonomous_runs.project_id
+                          AND runtime_runs.run_id = autonomous_runs.run_id
+                    ),
+                    CASE runtime_kind
+                        WHEN 'openai_codex' THEN 'openai_codex'
+                        WHEN 'openrouter' THEN 'openrouter'
+                        WHEN 'anthropic' THEN 'anthropic'
+                        ELSE NULL
+                    END
+                )
+                WHERE provider_id IS NULL;
+
+                CREATE INDEX IF NOT EXISTS idx_autonomous_runs_provider_status_updated
+                    ON autonomous_runs(provider_id, status, updated_at DESC);
+                "#,
+            ),
         ])
     });
 

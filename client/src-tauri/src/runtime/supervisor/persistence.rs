@@ -188,6 +188,7 @@ pub(super) fn persist_sidecar_checkpoint(
         project_id,
         run_id,
         runtime_kind,
+        provider_id,
         started_at,
         endpoint,
         heartbeat_at,
@@ -203,6 +204,7 @@ pub(super) fn persist_sidecar_checkpoint(
             snapshot.project_id.clone(),
             snapshot.run_id.clone(),
             snapshot.runtime_kind.clone(),
+            snapshot.provider_id.clone(),
             snapshot.started_at.clone(),
             snapshot.endpoint.clone(),
             snapshot.last_heartbeat_at.clone(),
@@ -227,6 +229,7 @@ pub(super) fn persist_sidecar_checkpoint(
                     project_id: project_id.clone(),
                     run_id: run_id.clone(),
                     runtime_kind: runtime_kind.clone(),
+                    provider_id: provider_id.clone(),
                     supervisor_kind: SUPERVISOR_KIND_DETACHED_PTY.into(),
                     status: status.clone(),
                     transport: RuntimeRunTransportRecord {
@@ -277,6 +280,11 @@ pub(super) fn persist_sidecar_checkpoint(
                         project_id: project_id.clone(),
                         run_id: run_id.clone(),
                         runtime_kind,
+                        provider_id: shared
+                            .lock()
+                            .expect("sidecar state lock poisoned")
+                            .provider_id
+                            .clone(),
                         supervisor_kind: SUPERVISOR_KIND_DETACHED_PTY.into(),
                         status,
                         transport: RuntimeRunTransportRecord {
@@ -349,6 +357,7 @@ pub(super) fn persist_runtime_row_from_shared(
                 project_id: snapshot.project_id,
                 run_id: snapshot.run_id,
                 runtime_kind: snapshot.runtime_kind,
+                provider_id: snapshot.provider_id,
                 supervisor_kind: SUPERVISOR_KIND_DETACHED_PTY.into(),
                 status: match snapshot.status {
                     SupervisorProcessStatus::Starting => RuntimeRunStatus::Starting,

@@ -229,6 +229,7 @@ pub fn reconcile_runtime_snapshot(
             project_id: runtime_snapshot.run.project_id.clone(),
             run_id: runtime_snapshot.run.run_id.clone(),
             runtime_kind: runtime_snapshot.run.runtime_kind.clone(),
+            provider_id: runtime_snapshot.run.provider_id.clone(),
             supervisor_kind: runtime_snapshot.run.supervisor_kind.clone(),
             status,
             active_unit_sequence: Some(sequence),
