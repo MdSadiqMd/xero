@@ -1432,8 +1432,7 @@ describe('CadenceApp current UI', () => {
 
     expect(await screen.findByRole('heading', { name: 'Configure providers' })).toBeVisible()
     expect(screen.getByText('Provider setup is app-wide. Choose the active profile for new runtime binds without rewriting project runtime history.')).toBeVisible()
-    expect(screen.getByText('Active profile')).toBeVisible()
-    expect(screen.getByText('Using this')).toBeVisible()
+    expect(screen.getByText('Active')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Set up' })).toBeVisible()
     expect(screen.getAllByText('Unavailable')).toHaveLength(2)
   })
@@ -2077,8 +2076,7 @@ describe('CadenceApp current UI', () => {
     fireEvent.click(screen.getByLabelText('Settings'))
     expect(await screen.findByRole('heading', { name: 'Providers' })).toBeVisible()
     expect(screen.getAllByText('OpenAI Codex').length).toBeGreaterThan(0)
-    expect(screen.getByText('Active profile')).toBeVisible()
-    expect(screen.getAllByText('Live catalog').length).toBeGreaterThan(0)
+    expect(screen.getByText('Active')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible()
     await waitFor(() => expect(setup.onRuntimeUpdated).toHaveBeenCalledTimes(1))
 

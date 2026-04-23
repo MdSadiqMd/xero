@@ -114,8 +114,8 @@ export function SettingsDialog({
         className="flex h-[min(640px,88vh)] w-[min(880px,94vw)] max-w-none flex-col gap-0 overflow-hidden border-border/70 p-0 sm:max-w-none"
         showCloseButton
       >
-        <DialogHeader className="shrink-0 border-b border-border/70 px-6 py-4">
-          <DialogTitle className="text-[14px] font-semibold tracking-tight">Settings</DialogTitle>
+        <DialogHeader className="shrink-0 border-b border-border/70 px-5 py-3">
+          <DialogTitle className="text-[13px] font-semibold tracking-tight">Settings</DialogTitle>
           <DialogDescription className="sr-only">
             Configure providers, notification routes, and development options.
           </DialogDescription>

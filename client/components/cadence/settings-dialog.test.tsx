@@ -328,9 +328,7 @@ describe('SettingsDialog', () => {
 
     await waitFor(() => expect(onRefreshProviderProfiles).toHaveBeenCalledWith({ force: true }))
     expect(
-      screen.getByText(
-        'Manage app-local provider profiles, readiness, and active selection. Projects are not assigned to a provider here.',
-      ),
+      screen.getByText('Pick a provider, manage its API key, and choose a model.'),
     ).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
@@ -513,7 +511,7 @@ describe('SettingsDialog', () => {
     )
 
     expect(screen.getByText('Ready')).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Edit setup' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
 
     const modelSelectorAfter = screen.getByLabelText('Model')
     const keyInputAfter = screen.getByLabelText('API Key') as HTMLInputElement
@@ -524,7 +522,7 @@ describe('SettingsDialog', () => {
     expect(screen.queryByText(secret)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Use this profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Use this' }))
 
     await waitFor(() => expect(onSetActiveProviderProfile).toHaveBeenCalledWith('openrouter-default'))
 
@@ -538,8 +536,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    expect(screen.getByText('Active profile')).toBeVisible()
-    expect(screen.getByText('Using this')).toBeVisible()
+    expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
   })
 
   it('limits OpenAI auth controls to the selected profile and keeps typed auth failures inline', async () => {
@@ -574,11 +571,6 @@ describe('SettingsDialog', () => {
 
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible()
     expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(1)
-    expect(
-      screen.getByText(
-        'OpenAI sign-in only runs against the selected profile OpenAI Alt (zz-openai-alt). Select this profile first to manage auth.',
-      ),
-    ).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
@@ -589,7 +581,7 @@ describe('SettingsDialog', () => {
       ),
     ).toBeVisible()
     expect(screen.getByText('OpenAI Alt')).toBeVisible()
-    expect(screen.getByText('Using this')).toBeVisible()
+    expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
   })
 
   it('keeps the last truthful provider snapshot visible when a typed load error is present', () => {
@@ -624,7 +616,7 @@ describe('SettingsDialog', () => {
     expect(screen.getByText('OpenRouter')).toBeVisible()
     expect(screen.getByText('OpenAI Codex')).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit setup' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
 
     expect(screen.getByLabelText('Model')).toHaveTextContent('openrouter/meta-llama/llama-3.1-8b-instruct')
     expect(screen.getByText('Ready')).toBeVisible()

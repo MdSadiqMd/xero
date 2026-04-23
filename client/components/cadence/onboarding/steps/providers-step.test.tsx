@@ -188,13 +188,11 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    expect(screen.getByText('Active profile')).toBeVisible()
+    expect(screen.getByText('Active')).toBeVisible()
     expect(screen.getByText('Ready')).toBeVisible()
-    expect(screen.getByText('Migrated')).toBeVisible()
-    expect(screen.getByText('Migrated 2026-04-20T00:00:00Z')).toBeVisible()
     expect(screen.getAllByText('Unavailable')).toHaveLength(2)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit setup' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
 
     const labelInput = screen.getByLabelText('Profile label') as HTMLInputElement
     const modelSelector = screen.getByLabelText('Model')
@@ -249,7 +247,7 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use this profile' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Use this' }))
     await waitFor(() => expect(onSetActiveProviderProfile).toHaveBeenCalledWith('openrouter-default'))
 
     rerender(
@@ -263,8 +261,7 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    expect(screen.getAllByText('Active profile')).toHaveLength(1)
-    expect(screen.getByText('Using this')).toBeVisible()
+    expect(screen.getAllByText('Active')).toHaveLength(1)
   })
 
   it('scopes OpenAI auth copy to the selected profile and uses onboarding project guidance when no project is selected', () => {
@@ -292,14 +289,6 @@ describe('ProvidersStep', () => {
     )
 
     expect(screen.getByText('Choose a project next')).toBeVisible()
-    expect(
-      screen.getByText('After you choose a project, Cadence can sign in the selected OpenAI profile.'),
-    ).toBeVisible()
-    expect(
-      screen.getByText(
-        'OpenAI sign-in only runs against the selected profile OpenAI Alt (zz-openai-alt). Select this profile first to manage auth.',
-      ),
-    ).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
   })
 
@@ -349,7 +338,7 @@ describe('ProvidersStep', () => {
       screen.getByText('Rebind the selected profile so durable runtime truth matches Settings.'),
     ).toBeVisible()
     expect(screen.getByText('OpenRouter Work')).toBeVisible()
-    expect(screen.getByText('Using this')).toBeVisible()
+    expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
   })
 
   it('shows typed save errors while keeping the last truthful provider snapshot visible', () => {

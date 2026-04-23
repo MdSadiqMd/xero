@@ -799,7 +799,6 @@ export function ProviderProfileForm({
           const isSelected = isCardSelected(providerProfiles, card)
           const readinessBadge = getOpenRouterReadinessBadge(card.profile)
           const hasSavedOpenRouterKey = Boolean(card.profile?.providerId === "openrouter" && card.profile.readiness.ready)
-          const migratedAt = card.profile?.migratedAt ?? null
           const shouldRenderOpenAiAuth = isOpenAi && isSelected && Boolean(onStartLogin && onLogout)
           const isSelectedRuntimeProvider = runtimeSession?.providerId === selectedProvider.providerId
           const selectedRuntimeErrorMessage = runtimeSession?.lastError?.message?.trim() || null
@@ -815,15 +814,6 @@ export function ProviderProfileForm({
               runtimeSession?.providerId === "openai_codex" &&
               runtimeSession.isLoginInProgress,
           )
-          const openAiScopeCopy = isOpenAi
-            ? !selectedProfile
-              ? "Select an OpenAI provider profile before starting sign-in."
-              : isSelected
-                ? hasSelectedProject
-                  ? `OpenAI sign-in applies to the selected profile ${selectedProfileReference}.`
-                  : openAiMissingProjectDescription
-                : `OpenAI sign-in only runs against the selected profile ${selectedProfileReference}. Select this profile first to manage auth.`
-            : null
           const inlineStatus = isSelected
             ? providerMismatchCopy
               ? {
@@ -856,23 +846,19 @@ export function ProviderProfileForm({
           const modelChoiceGroups = groupProviderModelChoices(cardCatalogState.choices)
           const isCatalogRefreshing = cardCatalogState.loadStatus === "loading"
           const canRefreshCatalog = Boolean(onRefreshProviderModelCatalog && card.profile)
-          const catalogBadgeClassName =
-            cardCatalogState.tone === "warning"
-              ? "border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-300"
-              : "border border-border bg-secondary text-muted-foreground"
 
           return (
             <div
               key={card.key}
               className={cn(
-                "rounded-lg border bg-card px-4 py-3 transition-colors",
+                "rounded-lg border bg-card px-5 py-4 transition-colors",
                 isSelected ? "border-primary/30 bg-primary/[0.03]" : "border-border",
               )}
             >
-              <div className="flex items-start gap-3">
+              <div className="flex items-start gap-3.5">
                 <div
                   className={cn(
-                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border bg-secondary/60",
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-secondary/60",
                     isSelected ? "border-primary/40 text-primary" : "border-border",
                   )}
                 >
@@ -880,78 +866,54 @@ export function ProviderProfileForm({
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <p className="text-[13px] font-medium text-foreground">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-[14px] font-medium text-foreground">
                       {card.profile?.label ?? card.catalog.label}
                     </p>
                     {isSelected ? (
-                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
-                        Active profile
+                      <Badge variant="secondary" className="px-2 py-0 text-[11px]">
+                        Active
                       </Badge>
                     ) : null}
                     {readinessBadge ? (
-                      <Badge className={cn("px-1.5 py-0 text-[10px] font-medium", readinessBadge.className)}>
+                      <Badge className={cn("px-2 py-0 text-[11px] font-medium", readinessBadge.className)}>
                         {readinessBadge.label}
                       </Badge>
                     ) : null}
-                    <Badge className={cn("px-1.5 py-0 text-[10px] font-medium", catalogBadgeClassName)}>
-                      {cardCatalogState.stateLabel}
-                    </Badge>
                     {isOpenAi && isOpenAiConnected ? (
                       <Badge
                         variant="secondary"
-                        className="gap-1 border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-500 dark:text-emerald-400"
+                        className="gap-1.5 border border-emerald-500/30 bg-emerald-500/10 px-2 py-0 text-[11px] font-medium text-emerald-500 dark:text-emerald-400"
                       >
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
                         Connected
                       </Badge>
                     ) : null}
-                    {card.profile?.migratedFromLegacy ? (
-                      <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                        Migrated
-                      </Badge>
-                    ) : null}
                   </div>
 
-                  <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
                     {card.catalog.description}
                   </p>
 
-                  {openAiScopeCopy ? (
-                    <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">{openAiScopeCopy}</p>
-                  ) : null}
-
-                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-                    <span>Model: {card.profile?.modelId ?? card.catalog.defaultModelId ?? "Not configured"}</span>
-                    {card.profile ? <span>Profile ID: {card.profile.profileId}</span> : null}
-                    {migratedAt ? <span>Migrated {migratedAt}</span> : null}
-                  </div>
-
-                  <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-                    <span className="font-medium text-foreground/80">{cardCatalogState.stateLabel}</span>
-                    {" · "}
-                    {cardCatalogState.detail}
+                  <p className="mt-1.5 text-[11.5px] text-muted-foreground">
+                    Model:{" "}
+                    <span className="font-medium text-foreground/80">
+                      {card.profile?.modelId ?? card.catalog.defaultModelId ?? "Not configured"}
+                    </span>
                   </p>
-
-                  {cardCatalogState.fetchedAt || cardCatalogState.lastSuccessAt ? (
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-                      {cardCatalogState.fetchedAt ? <span>Fetched {cardCatalogState.fetchedAt}</span> : null}
-                      {cardCatalogState.lastSuccessAt ? <span>Last success {cardCatalogState.lastSuccessAt}</span> : null}
-                    </div>
-                  ) : null}
 
                   {inlineStatus ? (
                     <Alert
                       variant={inlineStatus.tone === "error" ? "destructive" : "default"}
                       className={cn(
-                        "mt-2 py-2.5",
+                        "mt-2.5 py-3",
                         inlineStatus.tone === "warning"
                           ? "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-200"
                           : "border-destructive/30 bg-destructive/5",
                       )}
                     >
                       <AlertCircle className="h-4 w-4" />
-                      <AlertDescription className="text-[12px] leading-relaxed">
+                      <AlertDescription className="text-[13px] leading-relaxed">
                         <span>{inlineStatus.message}</span>
                         {inlineStatus.recovery ? <span className="mt-1 block">{inlineStatus.recovery}</span> : null}
                       </AlertDescription>
@@ -960,19 +922,15 @@ export function ProviderProfileForm({
                 </div>
 
                 <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                  {isSelected ? (
-                    <Badge variant="secondary" className="text-[10px]">
-                      Using this
-                    </Badge>
-                  ) : (
+                  {isSelected ? null : (
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-7 text-[11px]"
+                      className="h-8 text-[12px]"
                       disabled={isSaving || isRefreshing || !onUpsertProviderProfile}
                       onClick={() => void handleActivate(card)}
                     >
-                      Use this profile
+                      Use this
                     </Button>
                   )}
 
@@ -980,7 +938,7 @@ export function ProviderProfileForm({
                     <Button
                       size="sm"
                       variant="secondary"
-                      className="h-7 text-[11px]"
+                      className="h-8 text-[12px]"
                       disabled={isSaving || isRefreshing}
                       onClick={() => openEditor(card)}
                     >
@@ -990,11 +948,11 @@ export function ProviderProfileForm({
                     <Button
                       size="sm"
                       variant={hasSavedOpenRouterKey ? "secondary" : "outline"}
-                      className="h-7 text-[11px]"
+                      className="h-8 text-[12px]"
                       disabled={isSaving || isRefreshing}
                       onClick={() => openEditor(card)}
                     >
-                      {hasSavedOpenRouterKey ? "Edit setup" : "Set up"}
+                      {hasSavedOpenRouterKey ? "Edit" : "Set up"}
                     </Button>
                   )}
 
@@ -1003,37 +961,37 @@ export function ProviderProfileForm({
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-7 gap-1 text-[11px]"
+                        className="h-8 gap-1.5 text-[12px]"
                         disabled={pendingAuth !== null || isRefreshing || isSaving}
                         onClick={() => void handleOpenAiDisconnect()}
                       >
                         {pendingAuth === "logout" ? (
-                          <LoaderCircle className="h-3 w-3 animate-spin" />
+                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
                         ) : (
-                          <LogOut className="h-3 w-3" />
+                          <LogOut className="h-3.5 w-3.5" />
                         )}
                         Sign out
                       </Button>
                     ) : isOpenAiInProgress ? (
-                      <Badge variant="secondary" className="gap-1 text-[10px]">
+                      <Badge variant="secondary" className="gap-1.5 text-[11px]">
                         <LoaderCircle className="h-3 w-3 animate-spin" />
                         Connecting…
                       </Badge>
                     ) : !hasSelectedProject ? (
-                      <Badge variant="outline" className="text-[10px]">
+                      <Badge variant="outline" className="text-[11px]">
                         {openAiMissingProjectLabel}
                       </Badge>
                     ) : (
                       <Button
                         size="sm"
-                        className="h-7 gap-1 text-[11px]"
+                        className="h-8 gap-1.5 text-[12px]"
                         disabled={pendingAuth !== null || isRefreshing || isSaving}
                         onClick={() => void handleOpenAiConnect()}
                       >
                         {pendingAuth === "login" ? (
-                          <LoaderCircle className="h-3 w-3 animate-spin" />
+                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
                         ) : (
-                          <LogIn className="h-3 w-3" />
+                          <LogIn className="h-3.5 w-3.5" />
                         )}
                         Sign in
                       </Button>
@@ -1043,14 +1001,14 @@ export function ProviderProfileForm({
               </div>
 
               {isEditing ? (
-                <div className="mt-3 grid gap-3 rounded-md border border-dashed border-border/80 bg-background/80 p-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor={`${card.key}-label`} className="text-[11px]">
+                <div className="mt-3.5 grid gap-3.5 rounded-md border border-dashed border-border/80 bg-background/80 p-3.5">
+                  <div className="space-y-2">
+                    <Label htmlFor={`${card.key}-label`} className="text-[12px]">
                       Profile label
                     </Label>
                     <Input
                       id={`${card.key}-label`}
-                      className="h-8 text-[12px]"
+                      className="h-9 text-[13px]"
                       disabled={isSaving || isRefreshing}
                       onChange={(event) =>
                         setDraft(card, {
@@ -1063,9 +1021,9 @@ export function ProviderProfileForm({
                     />
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
-                      <Label htmlFor={`${card.key}-model`} className="text-[11px]">
+                      <Label htmlFor={`${card.key}-model`} className="text-[12px]">
                         Model
                       </Label>
                       {canRefreshCatalog ? (
@@ -1073,7 +1031,7 @@ export function ProviderProfileForm({
                           type="button"
                           variant="outline"
                           size="sm"
-                          className="h-6 gap-1 px-2 text-[10px]"
+                          className="h-7 gap-1.5 px-2.5 text-[11px]"
                           disabled={isSaving || isRefreshing || isCatalogRefreshing}
                           onClick={() => void handleRefreshCatalog(card)}
                         >
@@ -1084,13 +1042,10 @@ export function ProviderProfileForm({
                     </div>
 
                     {isOpenAi ? (
-                      <div className="rounded-md border border-border/80 bg-muted/25 p-3">
-                        <p className="text-[12px] font-medium text-foreground">OpenAI Codex</p>
-                        <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                      <div className="rounded-md border border-border/80 bg-muted/25 px-3.5 py-3">
+                        <p className="text-[13px] font-medium text-foreground">OpenAI Codex</p>
+                        <p className="mt-1 font-mono text-[12px] text-muted-foreground">
                           {card.catalog.defaultModelId ?? "openai_codex"}
-                        </p>
-                        <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
-                          OpenAI Codex stays pinned to the desktop runtime model and renders as a single catalog-backed choice.
                         </p>
                       </div>
                     ) : (
@@ -1104,8 +1059,8 @@ export function ProviderProfileForm({
                           })
                         }
                       >
-                        <SelectTrigger id={`${card.key}-model`} className="h-8 w-full text-[12px]" size="sm">
-                          <SelectValue placeholder="No discovered model available" />
+                        <SelectTrigger id={`${card.key}-model`} className="h-9 w-full text-[13px]" size="sm">
+                          <SelectValue placeholder="No models available" />
                         </SelectTrigger>
                         <SelectContent>
                           {modelChoiceGroups.map((group, index) => (
@@ -1124,37 +1079,17 @@ export function ProviderProfileForm({
                         </SelectContent>
                       </Select>
                     )}
-
-                    <p className="text-[10px] leading-relaxed text-muted-foreground">
-                      <span className="font-medium text-foreground/80">{cardCatalogState.stateLabel}</span>
-                      {" · "}
-                      {cardCatalogState.detail}
-                    </p>
-                    {cardCatalogState.selectedChoice?.availability === "orphaned" ? (
-                      <Badge
-                        variant="outline"
-                        className="mt-1 border-amber-500/30 bg-amber-500/10 px-1.5 py-0 text-[10px] text-amber-600 dark:text-amber-300"
-                      >
-                        {cardCatalogState.selectedChoice.availabilityLabel} choice
-                      </Badge>
-                    ) : null}
-                    {cardCatalogState.fetchedAt || cardCatalogState.lastSuccessAt ? (
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-                        {cardCatalogState.fetchedAt ? <span>Fetched {cardCatalogState.fetchedAt}</span> : null}
-                        {cardCatalogState.lastSuccessAt ? <span>Last success {cardCatalogState.lastSuccessAt}</span> : null}
-                      </div>
-                    ) : null}
                   </div>
 
                   {isOpenRouter ? (
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       <div className="flex items-center justify-between gap-3">
-                        <Label htmlFor={`${card.key}-api-key`} className="text-[11px]">
+                        <Label htmlFor={`${card.key}-api-key`} className="text-[12px]">
                           API Key
                         </Label>
                         {hasSavedOpenRouterKey ? (
-                          <Badge variant="secondary" className="gap-1 text-[10px]">
-                            <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                          <Badge variant="secondary" className="gap-1.5 text-[11px]">
+                            <Check className="h-3 w-3" strokeWidth={3} />
                             Key saved
                           </Badge>
                         ) : null}
@@ -1165,7 +1100,7 @@ export function ProviderProfileForm({
                           type="password"
                           autoComplete="off"
                           spellCheck={false}
-                          className="h-8 flex-1 font-mono text-[12px]"
+                          className="h-9 flex-1 font-mono text-[13px]"
                           disabled={isSaving || isRefreshing}
                           onChange={(event) =>
                             setDraft(card, {
@@ -1183,7 +1118,7 @@ export function ProviderProfileForm({
                             type="button"
                             variant="outline"
                             size="sm"
-                            className="h-8 px-2 text-[11px]"
+                            className="h-9 px-2.5 text-[12px]"
                             disabled={isSaving || isRefreshing}
                             onClick={() =>
                               setDraft(card, {
@@ -1199,7 +1134,7 @@ export function ProviderProfileForm({
                       </div>
                       <p
                         className={cn(
-                          "text-[10px]",
+                          "text-[11px]",
                           draft.clearOpenrouterApiKey ? "text-destructive/80" : "text-muted-foreground",
                         )}
                       >
@@ -1212,20 +1147,20 @@ export function ProviderProfileForm({
                     </div>
                   ) : null}
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2.5">
                     <Button
                       size="sm"
-                      className="h-7 gap-1 text-[11px]"
+                      className="h-8 gap-1.5 text-[12px]"
                       disabled={isSaving || isRefreshing || !onUpsertProviderProfile}
                       onClick={() => void handleSave(card)}
                     >
-                      {isSaving ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                      {isSaving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                       Save
                     </Button>
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="h-7 text-[11px]"
+                      className="h-8 text-[12px]"
                       disabled={isSaving || isRefreshing}
                       onClick={() => closeEditor(card.key)}
                     >
@@ -1239,20 +1174,20 @@ export function ProviderProfileForm({
         })}
 
         {unavailableProviders.map((provider) => (
-          <div key={provider.id} className="rounded-lg border border-border/70 bg-card/30 px-4 py-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/40">
+          <div key={provider.id} className="rounded-lg border border-border/70 bg-card/30 px-5 py-4">
+            <div className="flex items-center gap-3.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/40">
                 <provider.Icon className="h-4 w-4 text-muted-foreground" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <p className="text-[13px] font-medium text-muted-foreground">{provider.label}</p>
-                  <Badge variant="outline" className="gap-1 text-[10px]">
-                    <Lock className="h-2.5 w-2.5" />
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-[14px] font-medium text-muted-foreground">{provider.label}</p>
+                  <Badge variant="outline" className="gap-1.5 text-[11px]">
+                    <Lock className="h-3 w-3" />
                     Unavailable
                   </Badge>
                 </div>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{provider.description}</p>
+                <p className="mt-1 text-[12px] text-muted-foreground">{provider.description}</p>
               </div>
             </div>
           </div>

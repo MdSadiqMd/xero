@@ -7,16 +7,16 @@ export function ThemesSection() {
   const { themes, themeId, setThemeId } = useTheme()
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       <div>
-        <h3 className="text-[13px] font-semibold text-foreground">Themes</h3>
-        <p className="mt-1 text-[12px] text-muted-foreground">
+        <h3 className="text-[14px] font-semibold text-foreground">Themes</h3>
+        <p className="mt-1.5 text-[13px] text-muted-foreground">
           Pick a palette for the entire app. Editor syntax highlighting and diff
           rendering follow the selected theme.
         </p>
       </div>
 
-      <div className="grid gap-2.5">
+      <div className="grid gap-3">
         {themes.map((theme) => (
           <ThemeCard
             key={theme.id}
@@ -44,7 +44,7 @@ function ThemeCard({ theme, active, onSelect }: ThemeCardProps) {
       onClick={onSelect}
       aria-pressed={active}
       className={cn(
-        "group flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors",
+        "group flex items-center gap-3.5 rounded-lg border px-3.5 py-3 text-left transition-colors",
         active
           ? "border-primary/60 bg-primary/[0.06]"
           : "border-border bg-card hover:border-border/80 hover:bg-secondary/30",
@@ -52,17 +52,17 @@ function ThemeCard({ theme, active, onSelect }: ThemeCardProps) {
     >
       <ThemeSwatch theme={theme} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
           <Icon
             className={cn(
-              "h-3 w-3 shrink-0",
+              "h-3.5 w-3.5 shrink-0",
               active ? "text-primary" : "text-muted-foreground",
             )}
           />
-          <p className="text-[12.5px] font-medium text-foreground">{theme.name}</p>
+          <p className="text-[13.5px] font-medium text-foreground">{theme.name}</p>
           <span
             className={cn(
-              "rounded-sm px-1 py-px text-[9.5px] font-medium uppercase tracking-[0.08em]",
+              "rounded-sm px-1.5 py-px text-[10.5px] font-medium uppercase tracking-[0.08em]",
               theme.appearance === "light"
                 ? "bg-amber-500/10 text-amber-600 dark:text-amber-300"
                 : "bg-slate-500/10 text-muted-foreground",
@@ -71,18 +71,18 @@ function ThemeCard({ theme, active, onSelect }: ThemeCardProps) {
             {theme.appearance}
           </span>
         </div>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">{theme.description}</p>
+        <p className="mt-1 text-[12px] text-muted-foreground">{theme.description}</p>
       </div>
       <div
         className={cn(
-          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors",
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-colors",
           active
             ? "border-primary bg-primary text-primary-foreground"
             : "border-border bg-transparent text-transparent group-hover:border-border/80",
         )}
         aria-hidden
       >
-        <Check className="h-3 w-3" />
+        <Check className="h-3.5 w-3.5" />
       </div>
     </button>
   )
