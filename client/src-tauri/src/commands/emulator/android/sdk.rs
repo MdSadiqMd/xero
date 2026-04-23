@@ -34,12 +34,45 @@ impl AndroidSdk {
     }
 }
 
-/// Like [`probe`] but threads the Tauri `AppHandle` through for callers
-/// that want to merge app-managed SDK locations on top of the host
-/// defaults. Phase 1 keeps this a thin passthrough; the Android
-/// auto-provisioning flow in a later phase extends the fallback chain.
-pub fn probe_with_app<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) -> AndroidSdk {
-    probe()
+/// Like [`probe`] but threads the Tauri `AppHandle` through so the
+/// app-managed SDK root (populated by `emulator::android::provision`)
+/// can be merged on top of host discovery. When the host already has a
+/// usable SDK the managed root is ignored; otherwise its binaries fill
+/// in the gaps so freshly-provisioned installs light up without an app
+/// restart.
+pub fn probe_with_app<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> AndroidSdk {
+    let mut sdk = probe();
+    if sdk.is_usable() {
+        return sdk;
+    }
+    if let Some(managed_root) = super::provision::managed_sdk_root(app) {
+        if managed_root.exists() {
+            merge_from_managed_root(&mut sdk, &managed_root);
+        }
+    }
+    sdk
+}
+
+fn merge_from_managed_root(sdk: &mut AndroidSdk, root: &Path) {
+    let roots = [root.to_path_buf()];
+    if sdk.adb.is_none() {
+        sdk.adb = find_in_roots(&roots, &["platform-tools/adb"]);
+    }
+    if sdk.emulator.is_none() {
+        sdk.emulator = find_in_roots(&roots, &["emulator/emulator"]);
+    }
+    if sdk.avdmanager.is_none() {
+        sdk.avdmanager = find_in_roots(
+            &roots,
+            &[
+                "cmdline-tools/latest/bin/avdmanager",
+                "tools/bin/avdmanager",
+            ],
+        );
+    }
+    if sdk.sdk_root.is_none() && (sdk.adb.is_some() || sdk.emulator.is_some()) {
+        sdk.sdk_root = Some(root.to_path_buf());
+    }
 }
 
 /// Probe the host for an Android SDK. Order of precedence:

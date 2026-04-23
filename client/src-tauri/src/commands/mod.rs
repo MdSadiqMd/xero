@@ -55,8 +55,9 @@ pub use browser::{
 };
 pub use cancel_autonomous_run::cancel_autonomous_run;
 pub use emulator::{
-    emulator_input, emulator_list_devices, emulator_rotate, emulator_sdk_status, emulator_start,
-    emulator_stop, emulator_subscribe_ready, EmulatorState,
+    emulator_android_provision, emulator_android_provision_status, emulator_input,
+    emulator_list_devices, emulator_rotate, emulator_sdk_status, emulator_start, emulator_stop,
+    emulator_subscribe_ready, EmulatorState,
 };
 pub use get_autonomous_run::get_autonomous_run;
 pub use get_project_snapshot::get_project_snapshot;

@@ -4,6 +4,7 @@ pub mod adb;
 pub mod avd;
 pub mod emulator_process;
 pub mod input;
+pub mod provision;
 pub mod scrcpy;
 pub mod sdk;
 
@@ -60,8 +61,8 @@ impl AndroidSession {
 
 /// Attempt to enumerate AVDs on this host. Errors become an empty list in the
 /// frontend — the missing-SDK panel surfaces the same information via `sdk_status`.
-pub fn list_devices() -> Vec<AndroidAvd> {
-    let sdk = sdk::probe();
+pub fn list_devices<R: Runtime>(app: &AppHandle<R>) -> Vec<AndroidAvd> {
+    let sdk = sdk::probe_with_app(app);
     if !sdk.is_usable() {
         return Vec::new();
     }
@@ -85,7 +86,7 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<AndroidSession,
         scrcpy_jar,
     } = args;
 
-    let sdk = sdk::probe();
+    let sdk = sdk::probe_with_app(&app);
     let emulator_bin = sdk
         .emulator_path()
         .ok_or_else(|| missing_sdk("emulator binary not found on PATH or ANDROID_HOME"))?
@@ -94,6 +95,7 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<AndroidSession,
         .adb_path()
         .ok_or_else(|| missing_sdk("adb binary not found on PATH or ANDROID_HOME"))?
         .to_path_buf();
+    let sdk_root_env = sdk.sdk_root.clone();
 
     emit_status(
         &app,
@@ -103,8 +105,14 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<AndroidSession,
     );
 
     let launch = EmulatorLaunch::new(device_id.clone());
-    let (emulator, adb) = emulator_process::spawn(&emulator_bin, &adb_bin, &launch, BOOT_TIMEOUT)
-        .map_err(|err| {
+    let (emulator, adb) = emulator_process::spawn(
+        &emulator_bin,
+        &adb_bin,
+        &launch,
+        BOOT_TIMEOUT,
+        sdk_root_env.as_deref(),
+    )
+    .map_err(|err| {
         CommandError::system_fault(
             "android_emulator_boot_failed",
             format!("failed to boot {device_id}: {err}"),

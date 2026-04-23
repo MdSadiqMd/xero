@@ -27,6 +27,9 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::commands::{CommandError, CommandResult};
 
+pub use android::provision::{
+    emulator_android_provision, emulator_android_provision_status, EMULATOR_PROVISION_EVENT,
+};
 pub use events::{
     FramePayload, StatusPayload, StatusPhase, EMULATOR_FRAME_EVENT,
     EMULATOR_SDK_STATUS_CHANGED_EVENT, EMULATOR_STATUS_EVENT,
@@ -230,13 +233,14 @@ pub fn emulator_sdk_status<R: Runtime>(app: AppHandle<R>) -> CommandResult<SdkSt
 }
 
 #[tauri::command]
-pub fn emulator_list_devices(
+pub fn emulator_list_devices<R: Runtime>(
+    app: AppHandle<R>,
     request: EmulatorListDevicesRequest,
 ) -> CommandResult<Vec<DeviceDescriptor>> {
     match request.platform {
         EmulatorPlatform::Android => {
             #[allow(unused_mut)]
-            let mut out: Vec<DeviceDescriptor> = android::list_devices()
+            let mut out: Vec<DeviceDescriptor> = android::list_devices(&app)
                 .into_iter()
                 .map(|avd| DeviceDescriptor {
                     id: avd.name,

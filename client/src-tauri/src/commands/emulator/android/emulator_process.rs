@@ -43,11 +43,18 @@ impl EmulatorLaunch {
 /// Boot an emulator and return a guarded handle to the process plus the serial
 /// ADB should use. Blocks for up to `boot_timeout` waiting for
 /// `sys.boot_completed=1`.
+///
+/// `sdk_root` — when provided, we export it as `ANDROID_SDK_ROOT` /
+/// `ANDROID_HOME` into the emulator's environment. The managed SDK
+/// provisioning path requires this so the emulator resolves its sibling
+/// `system-images/` directory instead of reaching for some stale
+/// `ANDROID_HOME` inherited from the user's shell.
 pub fn spawn(
     emulator_bin: &Path,
     adb_bin: &Path,
     launch: &EmulatorLaunch,
     boot_timeout: Duration,
+    sdk_root: Option<&Path>,
 ) -> Result<(ChildGuard, Adb)> {
     let serial = launch.serial();
 
@@ -67,6 +74,10 @@ pub fn spawn(
         .args(&launch.extra_args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    if let Some(root) = sdk_root {
+        cmd.env("ANDROID_SDK_ROOT", root);
+        cmd.env("ANDROID_HOME", root);
+    }
 
     let child = cmd.spawn()?;
     let mut guard = ChildGuard::new("android-emulator", child);
