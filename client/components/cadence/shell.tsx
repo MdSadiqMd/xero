@@ -2,7 +2,18 @@
 
 import { isTauri } from "@tauri-apps/api/core"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import { Gamepad2, Globe, Maximize2, Minus, PanelLeftClose, PanelLeftOpen, Settings, X } from "lucide-react"
+import {
+  Apple,
+  Gamepad2,
+  Globe,
+  Maximize2,
+  Minus,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Settings,
+  Smartphone,
+  X,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { View } from "./data"
 import { StatusFooter, type StatusFooterProps } from "./status-footer"
@@ -35,6 +46,10 @@ interface CadenceShellProps {
   gamesOpen?: boolean
   onToggleBrowser?: () => void
   browserOpen?: boolean
+  onToggleIos?: () => void
+  iosOpen?: boolean
+  onToggleAndroid?: () => void
+  androidOpen?: boolean
   sidebarCollapsed?: boolean
   onToggleSidebar?: () => void
   /** Dev override — null means auto-detect */
@@ -65,6 +80,10 @@ export function CadenceShell({
   gamesOpen = false,
   onToggleBrowser,
   browserOpen = false,
+  onToggleIos,
+  iosOpen = false,
+  onToggleAndroid,
+  androidOpen = false,
   sidebarCollapsed = false,
   onToggleSidebar,
   platformOverride,
@@ -178,6 +197,41 @@ export function CadenceShell({
       type="button"
     >
       <Globe className="h-4 w-4" />
+    </button>
+  )
+
+  // iOS Simulator requires Xcode — surface the button only on macOS hosts.
+  const IosBtn = platform === "macos" ? (
+    <button
+      aria-label={iosOpen ? "Close iOS simulator" : "Open iOS simulator"}
+      aria-pressed={iosOpen}
+      className={cn(
+        "rounded-md p-1.5 transition-colors",
+        iosOpen
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+      )}
+      onClick={onToggleIos}
+      type="button"
+    >
+      <Apple className="h-4 w-4" />
+    </button>
+  ) : null
+
+  const AndroidBtn = (
+    <button
+      aria-label={androidOpen ? "Close Android emulator" : "Open Android emulator"}
+      aria-pressed={androidOpen}
+      className={cn(
+        "rounded-md p-1.5 transition-colors",
+        androidOpen
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+      )}
+      onClick={onToggleAndroid}
+      type="button"
+    >
+      <Smartphone className="h-4 w-4" />
     </button>
   )
 
@@ -324,6 +378,8 @@ export function CadenceShell({
           >
             {NavButtons}
             <div className="mx-1.5 h-4 w-px bg-border" />
+            {IosBtn}
+            {AndroidBtn}
             {BrowserBtn}
             {GamesBtn}
             {SettingsBtn}
@@ -360,6 +416,8 @@ export function CadenceShell({
         >
           {!chromeOnly ? (
             <>
+              {IosBtn}
+              {AndroidBtn}
               {BrowserBtn}
               {GamesBtn}
               {SettingsBtn}

@@ -22,6 +22,11 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
     builder
         .manage(desktop_state)
         .manage(commands::BrowserState::default())
+        .manage(commands::EmulatorState::default())
+        .register_asynchronous_uri_scheme_protocol(
+            commands::emulator::URI_SCHEME,
+            commands::emulator::handle_uri_scheme,
+        )
         .setup(|app| {
             window_state::configure_main_window(app.handle().clone());
             Ok(())
@@ -105,6 +110,13 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::browser::browser_internal_event,
             commands::browser::cookie_import::browser_list_cookie_sources,
             commands::browser::cookie_import::browser_import_cookies,
+            commands::emulator::emulator_sdk_status,
+            commands::emulator::emulator_list_devices,
+            commands::emulator::emulator_start,
+            commands::emulator::emulator_stop,
+            commands::emulator::emulator_input,
+            commands::emulator::emulator_rotate,
+            commands::emulator::emulator_subscribe_ready,
         ])
 }
 

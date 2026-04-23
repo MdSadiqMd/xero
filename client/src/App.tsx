@@ -12,6 +12,8 @@ import { CadenceShell, type PlatformVariant } from '@/components/cadence/shell'
 import type { FooterRuntimeState, StatusFooterProps } from '@/components/cadence/status-footer'
 import { GamesSidebar } from '@/components/cadence/games-sidebar'
 import { BrowserSidebar } from '@/components/cadence/browser-sidebar'
+import { IosEmulatorSidebar } from '@/components/cadence/ios-emulator-sidebar'
+import { AndroidEmulatorSidebar } from '@/components/cadence/android-emulator-sidebar'
 import { SettingsDialog } from '@/components/cadence/settings-dialog'
 import { type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import { useCadenceDesktopState } from '@/src/features/cadence/use-cadence-desktop-state'
@@ -96,11 +98,17 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [gamesOpen, setGamesOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
+  const [iosOpen, setIosOpen] = useState(false)
+  const [androidOpen, setAndroidOpen] = useState(false)
 
   const toggleGames = () => {
     setGamesOpen((current) => {
       const next = !current
-      if (next) setBrowserOpen(false)
+      if (next) {
+        setBrowserOpen(false)
+        setIosOpen(false)
+        setAndroidOpen(false)
+      }
       return next
     })
   }
@@ -108,7 +116,35 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const toggleBrowser = () => {
     setBrowserOpen((current) => {
       const next = !current
-      if (next) setGamesOpen(false)
+      if (next) {
+        setGamesOpen(false)
+        setIosOpen(false)
+        setAndroidOpen(false)
+      }
+      return next
+    })
+  }
+
+  const toggleIos = () => {
+    setIosOpen((current) => {
+      const next = !current
+      if (next) {
+        setGamesOpen(false)
+        setBrowserOpen(false)
+        setAndroidOpen(false)
+      }
+      return next
+    })
+  }
+
+  const toggleAndroid = () => {
+    setAndroidOpen((current) => {
+      const next = !current
+      if (next) {
+        setGamesOpen(false)
+        setBrowserOpen(false)
+        setIosOpen(false)
+      }
       return next
     })
   }
@@ -305,6 +341,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         gamesOpen={gamesOpen}
         onToggleBrowser={toggleBrowser}
         browserOpen={browserOpen}
+        onToggleIos={toggleIos}
+        iosOpen={iosOpen}
+        onToggleAndroid={toggleAndroid}
+        androidOpen={androidOpen}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         platformOverride={platformOverride}
@@ -383,6 +423,8 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       {renderBody()}
       <GamesSidebar open={gamesOpen} />
       <BrowserSidebar open={browserOpen} />
+      <IosEmulatorSidebar open={iosOpen} />
+      <AndroidEmulatorSidebar open={androidOpen} />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

@@ -27,12 +27,20 @@ doctest = false
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+default = []
+# When enabled, `emulator_start` spins up a color-cycling frame generator
+# instead of launching a real device. Used for end-to-end testing of the
+# frame pipeline without an Android SDK / Xcode.
+emulator-synthetic = []
+
 [dependencies]
+arc-swap = "1"
 base64 = "0.22"
 dirs = "5"
 git2 = "0.20"
 globset = "0.4"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 xcap = "0.6"
 ignore = "0.4"
 rand = "0.8"
