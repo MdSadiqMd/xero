@@ -47,6 +47,14 @@ pub(crate) const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 pub(crate) const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 pub(crate) const OPENAI_BASE_URL_ENV: &str = "OPENAI_BASE_URL";
 pub(crate) const OPENAI_API_VERSION_ENV: &str = "OPENAI_API_VERSION";
+pub(crate) const BEDROCK_ENABLE_ENV: &str = "CLAUDE_CODE_USE_BEDROCK";
+pub(crate) const BEDROCK_REGION_ENV: &str = "AWS_REGION";
+pub(crate) const BEDROCK_DEFAULT_REGION_ENV: &str = "AWS_DEFAULT_REGION";
+pub(crate) const BEDROCK_BASE_URL_ENV: &str = "ANTHROPIC_BEDROCK_BASE_URL";
+pub(crate) const VERTEX_ENABLE_ENV: &str = "CLAUDE_CODE_USE_VERTEX";
+pub(crate) const VERTEX_REGION_ENV: &str = "CLOUD_ML_REGION";
+pub(crate) const VERTEX_PROJECT_ENV: &str = "ANTHROPIC_VERTEX_PROJECT_ID";
+pub(crate) const VERTEX_BASE_URL_ENV: &str = "ANTHROPIC_VERTEX_BASE_URL";
 
 mod boundary;
 mod control;

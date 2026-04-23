@@ -14,7 +14,10 @@ use crate::{
         ProviderProfileReadinessProof, ProviderProfileReadinessStatus, ProviderProfileRecord,
         ProviderProfilesSnapshot,
     },
-    runtime::{resolve_runtime_provider_identity, OPENAI_CODEX_PROVIDER_ID},
+    runtime::{
+        resolve_runtime_provider_identity, BEDROCK_PROVIDER_ID, OLLAMA_PROVIDER_ID,
+        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, VERTEX_PROVIDER_ID,
+    },
     state::DesktopState,
 };
 
@@ -208,7 +211,10 @@ fn apply_provider_profile_upsert(
         }
     }
 
-    let supports_api_key = !matches!(provider.provider_id, "openai_codex" | "ollama" | "bedrock" | "vertex");
+    let supports_api_key = !matches!(
+        provider.provider_id,
+        "openai_codex" | "ollama" | "bedrock" | "vertex"
+    );
     if !supports_api_key
         && request
             .api_key
@@ -257,22 +263,12 @@ fn apply_provider_profile_upsert(
         None
     };
 
-    let next_credential_link = if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
-        current_profile
-            .as_ref()
-            .and_then(|profile| match profile.credential_link.as_ref() {
-                Some(ProviderProfileCredentialLink::OpenAiCodex { .. }) => {
-                    profile.credential_link.clone()
-                }
-                _ => None,
-            })
-    } else {
-        next_api_key_secret
-            .as_ref()
-            .map(|entry| ProviderProfileCredentialLink::ApiKey {
-                updated_at: entry.updated_at.clone(),
-            })
-    };
+    let next_credential_link = next_provider_profile_credential_link(
+        provider.provider_id,
+        current_profile.as_ref(),
+        next_api_key_secret.as_ref(),
+        request.base_url.as_deref(),
+    );
 
     let mut next = current.clone();
     let next_profile = ProviderProfileRecord {
@@ -315,22 +311,12 @@ fn apply_provider_profile_upsert(
                     && profile.region == normalize_optional_text(request.region.clone())
                     && profile.project_id == normalize_optional_text(request.project_id.clone())
                     && profile.credential_link
-                        == if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
-                            current_profile.as_ref().and_then(|profile| {
-                                match profile.credential_link.as_ref() {
-                                    Some(ProviderProfileCredentialLink::OpenAiCodex { .. }) => {
-                                        profile.credential_link.clone()
-                                    }
-                                    _ => None,
-                                }
-                            })
-                        } else {
-                            next_api_key_secret.as_ref().map(|entry| {
-                                ProviderProfileCredentialLink::ApiKey {
-                                    updated_at: entry.updated_at.clone(),
-                                }
-                            })
-                        }
+                        == next_provider_profile_credential_link(
+                            provider.provider_id,
+                            current_profile.as_ref(),
+                            next_api_key_secret.as_ref(),
+                            request.base_url.as_deref(),
+                        )
             })
             .map(|profile| profile.updated_at.clone())
             .unwrap_or_else(|| now.clone()),
@@ -387,6 +373,65 @@ fn apply_active_profile_switch(
     next.metadata.active_profile_id = profile_id.to_owned();
     next.metadata.updated_at = crate::auth::now_timestamp();
     Ok(next)
+}
+
+fn next_provider_profile_credential_link(
+    provider_id: &str,
+    current_profile: Option<&ProviderProfileRecord>,
+    next_api_key_secret: Option<&ProviderApiKeyCredentialEntry>,
+    base_url: Option<&str>,
+) -> Option<ProviderProfileCredentialLink> {
+    if provider_id == OPENAI_CODEX_PROVIDER_ID {
+        return current_profile.and_then(|profile| match profile.credential_link.as_ref() {
+            Some(ProviderProfileCredentialLink::OpenAiCodex { .. }) => {
+                profile.credential_link.clone()
+            }
+            _ => None,
+        });
+    }
+
+    if provider_uses_local_readiness(provider_id, base_url) && next_api_key_secret.is_none() {
+        let updated_at = current_profile
+            .and_then(|profile| match profile.credential_link.as_ref() {
+                Some(ProviderProfileCredentialLink::Local { updated_at }) => Some(updated_at.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(crate::auth::now_timestamp);
+        return Some(ProviderProfileCredentialLink::Local { updated_at });
+    }
+
+    if provider_uses_ambient_readiness(provider_id) {
+        let updated_at = current_profile
+            .and_then(|profile| match profile.credential_link.as_ref() {
+                Some(ProviderProfileCredentialLink::Ambient { updated_at }) => {
+                    Some(updated_at.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(crate::auth::now_timestamp);
+        return Some(ProviderProfileCredentialLink::Ambient { updated_at });
+    }
+
+    next_api_key_secret.map(|entry| ProviderProfileCredentialLink::ApiKey {
+        updated_at: entry.updated_at.clone(),
+    })
+}
+
+fn provider_uses_local_readiness(provider_id: &str, base_url: Option<&str>) -> bool {
+    provider_id == OLLAMA_PROVIDER_ID
+        || (provider_id == OPENAI_API_PROVIDER_ID
+            && base_url.is_some_and(is_local_openai_base_url))
+}
+
+fn provider_uses_ambient_readiness(provider_id: &str) -> bool {
+    matches!(provider_id, BEDROCK_PROVIDER_ID | VERTEX_PROVIDER_ID)
+}
+
+fn is_local_openai_base_url(base_url: &str) -> bool {
+    url::Url::parse(base_url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
+        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
 }
 
 fn upsert_profile(profiles: &mut Vec<ProviderProfileRecord>, next: ProviderProfileRecord) {

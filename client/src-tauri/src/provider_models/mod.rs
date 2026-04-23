@@ -12,7 +12,8 @@ use url::Url;
 use crate::{
     auth::{
         anthropic::{
-            fetch_anthropic_models, AnthropicDiscoveredModel, AnthropicDiscoveredThinkingEffort,
+            discovered_anthropic_family_models, AnthropicDiscoveredModel,
+            AnthropicDiscoveredThinkingEffort, AnthropicFamilyProfileInput,
         },
         openai_compatible::{
             fetch_openai_compatible_models, missing_openai_compatible_api_key_error,
@@ -30,9 +31,10 @@ use crate::{
         ProviderProfileReadinessStatus, ProviderProfileRecord, ProviderProfilesSnapshot,
     },
     runtime::{
-        ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
-        GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
-        OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
+        ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID,
+        GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
+        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
+        VERTEX_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -177,6 +179,7 @@ enum ProviderModelCatalogRefreshTarget {
     OpenAiCodex,
     OpenRouter,
     Anthropic,
+    AnthropicAmbient,
     OpenAiCompatible(ResolvedOpenAiCompatibleEndpoint),
 }
 
@@ -365,17 +368,14 @@ fn refresh_provider_model_catalog(
                 .map_err(diagnostic_from_auth_error)
         }
         ProviderModelCatalogRefreshTarget::Anthropic => {
-            let Some(secret) = provider_profiles.anthropic_credential(&profile.profile_id) else {
-                let diagnostic = missing_anthropic_credential_diagnostic(profile);
-                return match refresh_context.cached_row.as_ref() {
-                    Some(cached) => catalog_from_cached_row(profile, cached, Some(diagnostic)),
-                    None => {
-                        unavailable_or_manual_catalog(profile, refresh_target, Some(diagnostic))
-                    }
-                };
-            };
-
-            fetch_anthropic_models(&secret.api_key, &state.anthropic_auth_config())
+            let profile_input = anthropic_family_profile_input(profile, provider_profiles);
+            discovered_anthropic_family_models(&profile_input, &state.anthropic_auth_config())
+                .map(normalize_anthropic_models)
+                .map_err(diagnostic_from_auth_error)
+        }
+        ProviderModelCatalogRefreshTarget::AnthropicAmbient => {
+            let profile_input = anthropic_family_profile_input(profile, provider_profiles);
+            discovered_anthropic_family_models(&profile_input, &state.anthropic_auth_config())
                 .map(normalize_anthropic_models)
                 .map_err(diagnostic_from_auth_error)
         }
@@ -422,12 +422,13 @@ fn refresh_provider_model_catalog(
             let now = crate::auth::now_timestamp();
             let source = if matches!(
                 refresh_target,
-                ProviderModelCatalogRefreshTarget::OpenAiCompatible(
-                    ResolvedOpenAiCompatibleEndpoint {
-                        model_list_strategy: OpenAiCompatibleModelListStrategy::Manual,
-                        ..
-                    }
-                )
+                ProviderModelCatalogRefreshTarget::AnthropicAmbient
+                    | ProviderModelCatalogRefreshTarget::OpenAiCompatible(
+                        ResolvedOpenAiCompatibleEndpoint {
+                            model_list_strategy: OpenAiCompatibleModelListStrategy::Manual,
+                            ..
+                        }
+                    )
             ) {
                 ProviderModelCatalogSource::Manual
             } else {
@@ -557,6 +558,13 @@ fn normalize_openai_compatible_models(
     normalized
 }
 
+fn manual_provider_projection(profile: &ProviderProfileRecord) -> Vec<ProviderModelRecord> {
+    match profile.provider_id.as_str() {
+        BEDROCK_PROVIDER_ID | VERTEX_PROVIDER_ID => manual_anthropic_family_projection(profile),
+        _ => manual_openai_compatible_projection(profile),
+    }
+}
+
 fn manual_openai_compatible_projection(
     profile: &ProviderProfileRecord,
 ) -> Vec<ProviderModelRecord> {
@@ -564,6 +572,27 @@ fn manual_openai_compatible_projection(
         model_id: profile.model_id.clone(),
         display_name: profile.model_id.clone(),
         thinking: unsupported_thinking_capability(),
+    }]
+}
+
+fn manual_anthropic_family_projection(
+    profile: &ProviderProfileRecord,
+) -> Vec<ProviderModelRecord> {
+    let supports_thinking = profile.model_id.to_ascii_lowercase().contains("claude");
+    let thinking = if supports_thinking {
+        supported_thinking_capability(vec![
+            ProviderModelThinkingEffort::Low,
+            ProviderModelThinkingEffort::Medium,
+            ProviderModelThinkingEffort::High,
+        ])
+    } else {
+        unsupported_thinking_capability()
+    };
+
+    vec![ProviderModelRecord {
+        model_id: profile.model_id.clone(),
+        display_name: profile.model_id.clone(),
+        thinking,
     }]
 }
 
@@ -700,7 +729,8 @@ fn unavailable_or_manual_catalog(
     diagnostic: Option<ProviderModelCatalogDiagnostic>,
 ) -> ProviderModelCatalog {
     match refresh_target {
-        ProviderModelCatalogRefreshTarget::OpenAiCompatible(ResolvedOpenAiCompatibleEndpoint {
+        ProviderModelCatalogRefreshTarget::AnthropicAmbient
+        | ProviderModelCatalogRefreshTarget::OpenAiCompatible(ResolvedOpenAiCompatibleEndpoint {
             model_list_strategy: OpenAiCompatibleModelListStrategy::Manual,
             ..
         }) => ProviderModelCatalog {
@@ -711,7 +741,7 @@ fn unavailable_or_manual_catalog(
             fetched_at: Some(profile.updated_at.clone()),
             last_success_at: Some(profile.updated_at.clone()),
             last_refresh_error: diagnostic,
-            models: manual_openai_compatible_projection(profile),
+            models: manual_provider_projection(profile),
         },
         _ => unavailable_catalog(profile, diagnostic),
     }
@@ -741,6 +771,9 @@ fn resolve_provider_model_catalog_refresh_target(
         OPENAI_CODEX_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::OpenAiCodex),
         OPENROUTER_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::OpenRouter),
         ANTHROPIC_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::Anthropic),
+        BEDROCK_PROVIDER_ID | VERTEX_PROVIDER_ID => {
+            Ok(ProviderModelCatalogRefreshTarget::AnthropicAmbient)
+        }
         OPENAI_API_PROVIDER_ID
         | OLLAMA_PROVIDER_ID
         | AZURE_OPENAI_PROVIDER_ID
@@ -980,6 +1013,8 @@ fn readiness_diagnostic(
         profile.provider_id.as_str(),
         OPENROUTER_PROVIDER_ID
             | ANTHROPIC_PROVIDER_ID
+            | BEDROCK_PROVIDER_ID
+            | VERTEX_PROVIDER_ID
             | OPENAI_API_PROVIDER_ID
             | OLLAMA_PROVIDER_ID
             | AZURE_OPENAI_PROVIDER_ID
@@ -992,17 +1027,19 @@ fn readiness_diagnostic(
     let readiness = profile.readiness(&provider_profiles.credentials);
     match readiness.status {
         ProviderProfileReadinessStatus::Ready => None,
-        ProviderProfileReadinessStatus::Missing if openai_compatible_profile_uses_local_auth(profile) => {
-            None
-        }
         ProviderProfileReadinessStatus::Missing => Some(match profile.provider_id.as_str() {
             OPENROUTER_PROVIDER_ID => missing_openrouter_credential_diagnostic(profile),
             ANTHROPIC_PROVIDER_ID => missing_anthropic_credential_diagnostic(profile),
+            BEDROCK_PROVIDER_ID => missing_bedrock_ambient_diagnostic(profile),
+            VERTEX_PROVIDER_ID => missing_vertex_ambient_diagnostic(profile),
             OPENAI_API_PROVIDER_ID
             | OLLAMA_PROVIDER_ID
             | AZURE_OPENAI_PROVIDER_ID
             | GITHUB_MODELS_PROVIDER_ID
             | GEMINI_AI_STUDIO_PROVIDER_ID => {
+                if openai_compatible_profile_uses_local_auth(profile) {
+                    return None;
+                }
                 diagnostic_from_auth_error(missing_openai_compatible_api_key_error(
                     profile.provider_id.as_str(),
                     "discover",
@@ -1062,6 +1099,25 @@ fn is_local_openai_compatible_base_url(base_url: &str) -> bool {
         .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
 }
 
+fn anthropic_family_profile_input(
+    profile: &ProviderProfileRecord,
+    provider_profiles: &ProviderProfilesSnapshot,
+) -> AnthropicFamilyProfileInput {
+    AnthropicFamilyProfileInput {
+        provider_id: profile.provider_id.clone(),
+        model_id: profile.model_id.clone(),
+        updated_at: profile.updated_at.clone(),
+        region: profile.region.clone(),
+        project_id: profile.project_id.clone(),
+        api_key: provider_profiles
+            .anthropic_credential(&profile.profile_id)
+            .map(|entry| entry.api_key.clone()),
+        api_key_updated_at: provider_profiles
+            .anthropic_credential(&profile.profile_id)
+            .map(|entry| entry.updated_at.clone()),
+    }
+}
+
 fn missing_openrouter_credential_diagnostic(
     profile: &ProviderProfileRecord,
 ) -> ProviderModelCatalogDiagnostic {
@@ -1082,6 +1138,32 @@ fn missing_anthropic_credential_diagnostic(
         code: "anthropic_api_key_missing".into(),
         message: format!(
             "Cadence cannot discover Anthropic models for provider profile `{}` because no app-local API key is configured for that profile.",
+            profile.profile_id
+        ),
+        retryable: false,
+    }
+}
+
+fn missing_bedrock_ambient_diagnostic(
+    profile: &ProviderProfileRecord,
+) -> ProviderModelCatalogDiagnostic {
+    ProviderModelCatalogDiagnostic {
+        code: "bedrock_ambient_proof_missing".into(),
+        message: format!(
+            "Cadence cannot validate Amazon Bedrock model availability for provider profile `{}` because the profile is missing its ambient readiness proof link. Save the profile again so Cadence records ambient-auth intent.",
+            profile.profile_id
+        ),
+        retryable: false,
+    }
+}
+
+fn missing_vertex_ambient_diagnostic(
+    profile: &ProviderProfileRecord,
+) -> ProviderModelCatalogDiagnostic {
+    ProviderModelCatalogDiagnostic {
+        code: "vertex_ambient_proof_missing".into(),
+        message: format!(
+            "Cadence cannot validate Google Vertex AI model availability for provider profile `{}` because the profile is missing its ambient readiness proof link. Save the profile again so Cadence records ambient-auth intent.",
             profile.profile_id
         ),
         retryable: false,

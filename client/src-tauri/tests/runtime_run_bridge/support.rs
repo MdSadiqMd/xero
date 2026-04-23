@@ -85,6 +85,32 @@ pub(crate) fn supervisor_test_guard() -> SupervisorTestGuard {
     }
 }
 
+pub(crate) fn with_scoped_env<T>(entries: &[(&str, Option<&str>)], operation: impl FnOnce() -> T) -> T {
+    let _guard = supervisor_test_guard();
+    let previous = entries
+        .iter()
+        .map(|(key, _)| ((*key).to_string(), std::env::var(key).ok()))
+        .collect::<Vec<_>>();
+
+    for (key, value) in entries {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    let result = operation();
+
+    for (key, value) in previous {
+        match value {
+            Some(value) => std::env::set_var(&key, value),
+            None => std::env::remove_var(&key),
+        }
+    }
+
+    result
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct EventRecorder {
     project_updates: Arc<Mutex<Vec<ProjectUpdatedPayloadDto>>>,
@@ -245,6 +271,35 @@ pub(crate) fn seed_anthropic_profile(
         },
     )
     .expect("seed anthropic profile");
+}
+
+pub(crate) fn seed_ambient_anthropic_family_profile(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    profile_id: &str,
+    provider_id: &str,
+    model_id: &str,
+    region: &str,
+    project_id: Option<&str>,
+) {
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: profile_id.into(),
+            provider_id: provider_id.into(),
+            runtime_kind: "anthropic".into(),
+            label: profile_id.into(),
+            model_id: model_id.into(),
+            preset_id: Some(provider_id.into()),
+            base_url: None,
+            api_version: None,
+            region: Some(region.into()),
+            project_id: project_id.map(str::to_string),
+            api_key: None,
+            activate: true,
+        },
+    )
+    .expect("seed ambient anthropic-family profile");
 }
 
 pub(crate) fn seed_openai_compatible_profile(

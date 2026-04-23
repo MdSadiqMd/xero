@@ -56,6 +56,66 @@ fn openai_compatible_environment_report_script() -> String {
     }
 }
 
+fn bedrock_environment_report_script() -> String {
+    if cfg!(windows) {
+        [
+            "if not \"%AWS_ACCESS_KEY_ID%\"==\"\" (echo aws-auth-present) else (echo aws-auth-missing)".to_string(),
+            "echo mode:%CLAUDE_CODE_USE_BEDROCK%".to_string(),
+            "echo region:%AWS_REGION%".to_string(),
+            "echo default-region:%AWS_DEFAULT_REGION%".to_string(),
+            "echo provider:%CADENCE_RUNTIME_PROVIDER_ID%".to_string(),
+            "echo session:%CADENCE_RUNTIME_SESSION_ID%".to_string(),
+            "echo model:%CADENCE_RUNTIME_MODEL_ID%".to_string(),
+            "echo thinking:%CADENCE_RUNTIME_THINKING_EFFORT%".to_string(),
+            "timeout /T 5 /NOBREAK > NUL".to_string(),
+        ]
+        .join(" & ")
+    } else {
+        [
+            "if [ -n \"$AWS_ACCESS_KEY_ID\" ] || [ -n \"$AWS_PROFILE\" ]; then printf '%s\\n' 'aws-auth-present'; else printf '%s\\n' 'aws-auth-missing'; fi".to_string(),
+            "printf '%s\\n' \"mode:$CLAUDE_CODE_USE_BEDROCK\"".to_string(),
+            "printf '%s\\n' \"region:$AWS_REGION\"".to_string(),
+            "printf '%s\\n' \"default-region:$AWS_DEFAULT_REGION\"".to_string(),
+            "printf '%s\\n' \"provider:$CADENCE_RUNTIME_PROVIDER_ID\"".to_string(),
+            "printf '%s\\n' \"session:$CADENCE_RUNTIME_SESSION_ID\"".to_string(),
+            "printf '%s\\n' \"model:$CADENCE_RUNTIME_MODEL_ID\"".to_string(),
+            "printf '%s\\n' \"thinking:$CADENCE_RUNTIME_THINKING_EFFORT\"".to_string(),
+            "sleep 5".to_string(),
+        ]
+        .join("; ")
+    }
+}
+
+fn vertex_environment_report_script() -> String {
+    if cfg!(windows) {
+        [
+            "if not \"%GOOGLE_APPLICATION_CREDENTIALS%\"==\"\" (echo adc-present) else (echo adc-missing)".to_string(),
+            "echo mode:%CLAUDE_CODE_USE_VERTEX%".to_string(),
+            "echo region:%CLOUD_ML_REGION%".to_string(),
+            "echo project:%ANTHROPIC_VERTEX_PROJECT_ID%".to_string(),
+            "echo provider:%CADENCE_RUNTIME_PROVIDER_ID%".to_string(),
+            "echo session:%CADENCE_RUNTIME_SESSION_ID%".to_string(),
+            "echo model:%CADENCE_RUNTIME_MODEL_ID%".to_string(),
+            "echo thinking:%CADENCE_RUNTIME_THINKING_EFFORT%".to_string(),
+            "timeout /T 5 /NOBREAK > NUL".to_string(),
+        ]
+        .join(" & ")
+    } else {
+        [
+            "if [ -n \"$GOOGLE_APPLICATION_CREDENTIALS\" ]; then printf '%s\\n' 'adc-present'; else printf '%s\\n' 'adc-missing'; fi".to_string(),
+            "printf '%s\\n' \"mode:$CLAUDE_CODE_USE_VERTEX\"".to_string(),
+            "printf '%s\\n' \"region:$CLOUD_ML_REGION\"".to_string(),
+            "printf '%s\\n' \"project:$ANTHROPIC_VERTEX_PROJECT_ID\"".to_string(),
+            "printf '%s\\n' \"provider:$CADENCE_RUNTIME_PROVIDER_ID\"".to_string(),
+            "printf '%s\\n' \"session:$CADENCE_RUNTIME_SESSION_ID\"".to_string(),
+            "printf '%s\\n' \"model:$CADENCE_RUNTIME_MODEL_ID\"".to_string(),
+            "printf '%s\\n' \"thinking:$CADENCE_RUNTIME_THINKING_EFFORT\"".to_string(),
+            "sleep 5".to_string(),
+        ]
+        .join("; ")
+    }
+}
+
 pub(crate) fn detached_supervisor_launches_and_recovers_after_fresh_host_probe() {
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");
@@ -420,6 +480,218 @@ pub(crate) fn detached_supervisor_rejects_anthropic_launch_without_api_key_env()
             .as_ref()
             .map(|error| error.code.as_str()),
         Some("anthropic_api_key_missing")
+    );
+}
+
+pub(crate) fn detached_supervisor_launches_bedrock_child_with_context_env_and_ambient_auth() {
+    with_scoped_env(
+        &[
+            ("AWS_ACCESS_KEY_ID", Some("test-bedrock-access-key")),
+            ("AWS_SECRET_ACCESS_KEY", Some("test-bedrock-secret-key")),
+            ("AWS_SESSION_TOKEN", None),
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let project_id = "project-bedrock";
+            let repo_root = seed_project(&root, project_id, "repo-bedrock", "repo");
+            let state = DesktopState::default();
+
+            let launched = launch_detached_runtime_supervisor(
+                &state,
+                bedrock_launch_request(
+                    project_id,
+                    &repo_root,
+                    "run-bedrock",
+                    "anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    "us-east-1",
+                    Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::High),
+                    &bedrock_environment_report_script(),
+                ),
+            )
+            .expect("launch bedrock detached runtime supervisor");
+
+            assert_eq!(launched.run.provider_id, "bedrock");
+            assert_eq!(launched.run.runtime_kind, "anthropic");
+
+            let running = wait_for_runtime_run(&state, &repo_root, project_id, |snapshot| {
+                snapshot.run.status == project_store::RuntimeRunStatus::Running
+                    && snapshot.run.transport.liveness
+                        == project_store::RuntimeRunTransportLiveness::Reachable
+                    && snapshot.last_checkpoint_sequence >= 1
+            });
+
+            let mut reader = attach_reader(
+                &running.run.transport.endpoint,
+                SupervisorControlRequest::attach(project_id, "run-bedrock", None),
+            );
+            let attached = expect_attach_ack(read_supervisor_response(&mut reader));
+            let frames = read_event_frames(&mut reader, attached.replayed_count);
+            assert_monotonic_sequences(&frames, "run-bedrock");
+            let transcripts = frames
+                .iter()
+                .filter_map(|frame| match frame {
+                    SupervisorControlResponse::Event {
+                        item: SupervisorLiveEventPayload::Transcript { text },
+                        ..
+                    } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert!(transcripts.iter().any(|text| *text == "aws-auth-present"));
+            assert!(transcripts.iter().any(|text| *text == "mode:1"));
+            assert!(transcripts.iter().any(|text| *text == "region:us-east-1"));
+            assert!(transcripts.iter().any(|text| *text == "default-region:us-east-1"));
+            assert!(transcripts.iter().any(|text| *text == "provider:bedrock"));
+            assert!(transcripts.iter().any(|text| *text == "model:anthropic.claude-3-7-sonnet-20250219-v1:0"));
+            assert!(transcripts.iter().any(|text| *text == "thinking:high"));
+
+            let stopped = stop_runtime_run(&state, stop_request(project_id, &repo_root))
+                .expect("stop bedrock detached runtime supervisor")
+                .expect("bedrock runtime run should exist after stop");
+            assert_eq!(stopped.run.status, project_store::RuntimeRunStatus::Stopped);
+        },
+    );
+}
+
+pub(crate) fn detached_supervisor_rejects_bedrock_launch_without_aws_credentials() {
+    with_scoped_env(
+        &[
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+            ("AWS_PROFILE", None),
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let project_id = "project-bedrock-missing";
+            let repo_root = seed_project(&root, project_id, "repo-bedrock-missing", "repo");
+            let state = DesktopState::default();
+
+            let error = launch_detached_runtime_supervisor(
+                &state,
+                bedrock_launch_request(
+                    project_id,
+                    &repo_root,
+                    "run-bedrock-missing",
+                    "anthropic.claude-3-7-sonnet-20250219-v1:0",
+                    "us-east-1",
+                    Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+                    &runtime_shell::script_sleep(5),
+                ),
+            )
+            .expect_err("bedrock detached launch should require ambient aws credentials");
+            assert_eq!(error.code, "bedrock_aws_credentials_missing");
+        },
+    );
+}
+
+pub(crate) fn detached_supervisor_launches_vertex_child_with_context_env_and_ambient_auth() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let adc_path = root.path().join("vertex-adc.json");
+    std::fs::write(&adc_path, "{}\n").expect("write fake adc file");
+    let adc_env = adc_path.to_string_lossy().into_owned();
+
+    with_scoped_env(
+        &[
+            ("GOOGLE_APPLICATION_CREDENTIALS", Some(adc_env.as_str())),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+        ],
+        || {
+            let project_id = "project-vertex";
+            let repo_root = seed_project(&root, project_id, "repo-vertex", "repo");
+            let state = DesktopState::default();
+
+            let launched = launch_detached_runtime_supervisor(
+                &state,
+                vertex_launch_request(
+                    project_id,
+                    &repo_root,
+                    "run-vertex",
+                    "claude-3-7-sonnet@20250219",
+                    "us-central1",
+                    "vertex-project",
+                    Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+                    &vertex_environment_report_script(),
+                ),
+            )
+            .expect("launch vertex detached runtime supervisor");
+
+            assert_eq!(launched.run.provider_id, "vertex");
+            assert_eq!(launched.run.runtime_kind, "anthropic");
+
+            let running = wait_for_runtime_run(&state, &repo_root, project_id, |snapshot| {
+                snapshot.run.status == project_store::RuntimeRunStatus::Running
+                    && snapshot.run.transport.liveness
+                        == project_store::RuntimeRunTransportLiveness::Reachable
+                    && snapshot.last_checkpoint_sequence >= 1
+            });
+
+            let mut reader = attach_reader(
+                &running.run.transport.endpoint,
+                SupervisorControlRequest::attach(project_id, "run-vertex", None),
+            );
+            let attached = expect_attach_ack(read_supervisor_response(&mut reader));
+            let frames = read_event_frames(&mut reader, attached.replayed_count);
+            assert_monotonic_sequences(&frames, "run-vertex");
+            let transcripts = frames
+                .iter()
+                .filter_map(|frame| match frame {
+                    SupervisorControlResponse::Event {
+                        item: SupervisorLiveEventPayload::Transcript { text },
+                        ..
+                    } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert!(transcripts.iter().any(|text| *text == "adc-present"));
+            assert!(transcripts.iter().any(|text| *text == "mode:1"));
+            assert!(transcripts.iter().any(|text| *text == "region:us-central1"));
+            assert!(transcripts.iter().any(|text| *text == "project:vertex-project"));
+            assert!(transcripts.iter().any(|text| *text == "provider:vertex"));
+            assert!(transcripts.iter().any(|text| *text == "model:claude-3-7-sonnet@20250219"));
+            assert!(transcripts.iter().any(|text| *text == "thinking:medium"));
+
+            let stopped = stop_runtime_run(&state, stop_request(project_id, &repo_root))
+                .expect("stop vertex detached runtime supervisor")
+                .expect("vertex runtime run should exist after stop");
+            assert_eq!(stopped.run.status, project_store::RuntimeRunStatus::Stopped);
+        },
+    );
+}
+
+pub(crate) fn detached_supervisor_rejects_vertex_launch_without_adc() {
+    with_scoped_env(
+        &[
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let project_id = "project-vertex-missing";
+            let repo_root = seed_project(&root, project_id, "repo-vertex-missing", "repo");
+            let state = DesktopState::default();
+
+            let error = launch_detached_runtime_supervisor(
+                &state,
+                vertex_launch_request(
+                    project_id,
+                    &repo_root,
+                    "run-vertex-missing",
+                    "claude-3-7-sonnet@20250219",
+                    "us-central1",
+                    "vertex-project",
+                    Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+                    &runtime_shell::script_sleep(5),
+                ),
+            )
+            .expect_err("vertex detached launch should require adc");
+            assert_eq!(error.code, "vertex_adc_missing");
+        },
     );
 }
 

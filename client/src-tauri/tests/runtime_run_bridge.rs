@@ -189,6 +189,21 @@ fn start_runtime_run_launches_anthropic_with_truthful_provider_identity_and_secr
 }
 
 #[test]
+fn start_runtime_run_launches_bedrock_with_truthful_provider_identity_and_ambient_launch_metadata() {
+    runtime_recovery::start_runtime_run_launches_bedrock_with_truthful_provider_identity_and_ambient_launch_metadata();
+}
+
+#[test]
+fn start_runtime_run_launches_vertex_with_truthful_provider_identity_and_ambient_launch_metadata() {
+    runtime_recovery::start_runtime_run_launches_vertex_with_truthful_provider_identity_and_ambient_launch_metadata();
+}
+
+#[test]
+fn start_runtime_run_surfaces_typed_vertex_adc_missing_diagnostic_before_launch() {
+    runtime_recovery::start_runtime_run_surfaces_typed_vertex_adc_missing_diagnostic_before_launch();
+}
+
+#[test]
 fn start_runtime_run_launches_openai_compatible_with_truthful_provider_identity_and_secret_free_persistence(
 ) {
     runtime_recovery::start_runtime_run_launches_openai_compatible_with_truthful_provider_identity_and_secret_free_persistence();

@@ -788,8 +788,14 @@ impl From<OpenRouterRuntimeSessionBinding> for RuntimeProviderSessionBinding {
 
 impl From<AnthropicRuntimeSessionBinding> for RuntimeProviderSessionBinding {
     fn from(binding: AnthropicRuntimeSessionBinding) -> Self {
+        let provider = resolve_runtime_provider_identity(
+            Some(binding.provider_id.as_str()),
+            Some(ANTHROPIC_RUNTIME_KIND),
+        )
+        .expect("anthropic-family binding provider id should resolve");
+
         Self {
-            provider: anthropic_provider(),
+            provider,
             session_id: binding.session_id,
             account_id: binding.account_id,
             updated_at: binding.updated_at,

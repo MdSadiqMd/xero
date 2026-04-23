@@ -447,6 +447,211 @@ pub(crate) fn start_runtime_run_launches_anthropic_with_truthful_provider_identi
     assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
 }
 
+pub(crate) fn start_runtime_run_launches_bedrock_with_truthful_provider_identity_and_ambient_launch_metadata(
+) {
+    with_scoped_env(
+        &[
+            ("AWS_ACCESS_KEY_ID", Some("test-bedrock-access-key")),
+            ("AWS_SECRET_ACCESS_KEY", Some("test-bedrock-secret-key")),
+            ("AWS_SESSION_TOKEN", None),
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let (state, _registry_path, _auth_store_path) = create_state(&root);
+            let app = build_mock_app(state);
+            let (project_id, repo_root) = seed_project(&root, &app);
+
+            seed_ambient_anthropic_family_profile(
+                &app,
+                "bedrock-work",
+                "bedrock",
+                "anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "us-east-1",
+                None,
+            );
+
+            let runtime = start_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("bind bedrock runtime session before run start");
+            assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+            assert_eq!(runtime.provider_id, "bedrock");
+            assert_eq!(runtime.runtime_kind, "anthropic");
+
+            let launched = start_runtime_run(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                StartRuntimeRunRequestDto {
+                    project_id: project_id.clone(),
+                    initial_controls: None,
+                    initial_prompt: None,
+                },
+            )
+            .expect("start bedrock runtime run");
+            assert_eq!(launched.provider_id, "bedrock");
+            assert_eq!(launched.runtime_kind, "anthropic");
+
+            let running = wait_for_runtime_run(&app, &project_id, |runtime_run| {
+                runtime_run.status == RuntimeRunStatusDto::Running
+                    && runtime_run.transport.liveness == RuntimeRunTransportLivenessDto::Reachable
+            });
+            assert_eq!(running.run_id, launched.run_id);
+            assert_eq!(running.provider_id, "bedrock");
+            assert_eq!(running.runtime_kind, "anthropic");
+            assert_eq!(
+                running.controls.active.model_id,
+                "anthropic.claude-3-7-sonnet-20250219-v1:0"
+            );
+
+            let database_bytes =
+                std::fs::read(database_path_for_repo(&repo_root)).expect("read runtime db bytes");
+            let database_text = String::from_utf8_lossy(&database_bytes);
+            assert!(!database_text.contains("test-bedrock-secret-key"));
+
+            let stopped = stop_runtime_run(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                StopRuntimeRunRequestDto {
+                    project_id,
+                    run_id: launched.run_id,
+                },
+            )
+            .expect("stop bedrock runtime run")
+            .expect("bedrock runtime run should still exist");
+            assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
+        },
+    );
+}
+
+pub(crate) fn start_runtime_run_launches_vertex_with_truthful_provider_identity_and_ambient_launch_metadata(
+) {
+    let root = tempfile::tempdir().expect("temp dir");
+    let adc_path = root.path().join("vertex-adc.json");
+    std::fs::write(&adc_path, "{}\n").expect("write fake adc file");
+    let adc_env = adc_path.to_string_lossy().into_owned();
+
+    with_scoped_env(
+        &[
+            ("GOOGLE_APPLICATION_CREDENTIALS", Some(adc_env.as_str())),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+        ],
+        || {
+            let (state, _registry_path, _auth_store_path) = create_state(&root);
+            let app = build_mock_app(state);
+            let (project_id, _repo_root) = seed_project(&root, &app);
+
+            seed_ambient_anthropic_family_profile(
+                &app,
+                "vertex-work",
+                "vertex",
+                "claude-3-7-sonnet@20250219",
+                "us-central1",
+                Some("vertex-project"),
+            );
+
+            let runtime = start_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("bind vertex runtime session before run start");
+            assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+            assert_eq!(runtime.provider_id, "vertex");
+            assert_eq!(runtime.runtime_kind, "anthropic");
+
+            let launched = start_runtime_run(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                StartRuntimeRunRequestDto {
+                    project_id: project_id.clone(),
+                    initial_controls: None,
+                    initial_prompt: None,
+                },
+            )
+            .expect("start vertex runtime run");
+            assert_eq!(launched.provider_id, "vertex");
+            assert_eq!(launched.runtime_kind, "anthropic");
+
+            let running = wait_for_runtime_run(&app, &project_id, |runtime_run| {
+                runtime_run.status == RuntimeRunStatusDto::Running
+                    && runtime_run.transport.liveness == RuntimeRunTransportLivenessDto::Reachable
+            });
+            assert_eq!(running.run_id, launched.run_id);
+            assert_eq!(running.provider_id, "vertex");
+            assert_eq!(running.runtime_kind, "anthropic");
+            assert_eq!(running.controls.active.model_id, "claude-3-7-sonnet@20250219");
+
+            let stopped = stop_runtime_run(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                StopRuntimeRunRequestDto {
+                    project_id,
+                    run_id: launched.run_id,
+                },
+            )
+            .expect("stop vertex runtime run")
+            .expect("vertex runtime run should still exist");
+            assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
+        },
+    );
+}
+
+pub(crate) fn start_runtime_run_surfaces_typed_vertex_adc_missing_diagnostic_before_launch() {
+    with_scoped_env(
+        &[
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let (state, _registry_path, _auth_store_path) = create_state(&root);
+            let app = build_mock_app(state);
+            let (project_id, _repo_root) = seed_project(&root, &app);
+
+            seed_ambient_anthropic_family_profile(
+                &app,
+                "vertex-work",
+                "vertex",
+                "claude-3-7-sonnet@20250219",
+                "us-central1",
+                Some("vertex-project"),
+            );
+
+            let runtime = start_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("surface vertex adc diagnostic before run start");
+            assert_eq!(runtime.phase, RuntimeAuthPhase::Idle);
+            assert_eq!(runtime.last_error_code.as_deref(), Some("vertex_adc_missing"));
+
+            let error = start_runtime_run(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                StartRuntimeRunRequestDto {
+                    project_id,
+                    initial_controls: None,
+                    initial_prompt: None,
+                },
+            )
+            .expect_err("vertex run start should fail before detached launch without adc");
+            assert_eq!(error.code, "runtime_run_auth_required");
+        },
+    );
+}
+
 pub(crate) fn start_runtime_run_launches_openai_compatible_with_truthful_provider_identity_and_secret_free_persistence(
 ) {
     let root = tempfile::tempdir().expect("temp dir");

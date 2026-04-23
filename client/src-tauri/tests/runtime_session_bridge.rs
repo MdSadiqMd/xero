@@ -2,7 +2,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
     thread,
     time::Duration,
 };
@@ -100,6 +100,40 @@ fn attach_event_recorder(app: &tauri::App<tauri::test::MockRuntime>) -> EventRec
             .push(payload);
     });
     recorder
+}
+
+fn ambient_env_guard() -> MutexGuard<'static, ()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn with_scoped_env<T>(entries: &[(&str, Option<&str>)], operation: impl FnOnce() -> T) -> T {
+    let _guard = ambient_env_guard();
+    let previous = entries
+        .iter()
+        .map(|(key, _)| ((*key).to_string(), std::env::var(key).ok()))
+        .collect::<Vec<_>>();
+
+    for (key, value) in entries {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    let result = operation();
+
+    for (key, value) in previous {
+        match value {
+            Some(value) => std::env::set_var(&key, value),
+            None => std::env::remove_var(&key),
+        }
+    }
+
+    result
 }
 
 fn jwt_with_account_id(account_id: &str) -> String {
@@ -1559,6 +1593,174 @@ fn get_runtime_session_rejects_stale_anthropic_binding_after_key_rotation() {
         Some("anthropic_binding_stale")
     );
     assert!(reconciled.session_id.is_none());
+}
+
+#[test]
+fn start_runtime_session_binds_bedrock_from_ambient_profile_without_secret_leakage() {
+    with_scoped_env(
+        &[
+            ("AWS_ACCESS_KEY_ID", Some("test-bedrock-access-key")),
+            ("AWS_SECRET_ACCESS_KEY", Some("test-bedrock-secret-key")),
+            ("AWS_SESSION_TOKEN", None),
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let (state, _registry_path, _auth_store_path) = create_state(&root);
+            let app = build_mock_app(state);
+            let (project_id, repo_root) = seed_project(&root, &app);
+
+            upsert_provider_profile(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                UpsertProviderProfileRequestDto {
+                    profile_id: "bedrock-default".into(),
+                    provider_id: "bedrock".into(),
+                    runtime_kind: "anthropic".into(),
+                    label: "Bedrock".into(),
+                    model_id: "anthropic.claude-3-7-sonnet-20250219-v1:0".into(),
+                    preset_id: Some("bedrock".into()),
+                    base_url: None,
+                    api_version: None,
+                    region: Some("us-east-1".into()),
+                    project_id: None,
+                    api_key: None,
+                    activate: true,
+                },
+            )
+            .expect("save bedrock provider profile");
+
+            let runtime = start_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("bind bedrock runtime session");
+
+            assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+            assert_eq!(runtime.provider_id, "bedrock");
+            assert_eq!(runtime.runtime_kind, "anthropic");
+            assert!(runtime.session_id.is_some());
+            assert!(runtime.account_id.is_some());
+            assert!(runtime.last_error.is_none());
+
+            let database_bytes =
+                std::fs::read(database_path_for_repo(&repo_root)).expect("read runtime db bytes");
+            let database_text = String::from_utf8_lossy(&database_bytes);
+            assert!(!database_text.contains("test-bedrock-secret-key"));
+        },
+    );
+}
+
+#[test]
+fn start_runtime_session_binds_vertex_from_adc_profile_without_secret_flags() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let adc_path = root.path().join("vertex-adc.json");
+    std::fs::write(&adc_path, "{}\n").expect("write fake adc file");
+    let adc_env = adc_path.to_string_lossy().into_owned();
+
+    with_scoped_env(
+        &[
+            ("GOOGLE_APPLICATION_CREDENTIALS", Some(adc_env.as_str())),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+        ],
+        || {
+            let (state, _registry_path, _auth_store_path) = create_state(&root);
+            let app = build_mock_app(state);
+            let (project_id, _repo_root) = seed_project(&root, &app);
+
+            upsert_provider_profile(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                UpsertProviderProfileRequestDto {
+                    profile_id: "vertex-default".into(),
+                    provider_id: "vertex".into(),
+                    runtime_kind: "anthropic".into(),
+                    label: "Vertex".into(),
+                    model_id: "claude-3-7-sonnet@20250219".into(),
+                    preset_id: Some("vertex".into()),
+                    base_url: None,
+                    api_version: None,
+                    region: Some("us-central1".into()),
+                    project_id: Some("vertex-project".into()),
+                    api_key: None,
+                    activate: true,
+                },
+            )
+            .expect("save vertex provider profile");
+
+            let runtime = start_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("bind vertex runtime session");
+
+            assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+            assert_eq!(runtime.provider_id, "vertex");
+            assert_eq!(runtime.runtime_kind, "anthropic");
+            assert!(runtime.session_id.is_some());
+            assert!(runtime.account_id.is_some());
+            assert!(runtime.last_error.is_none());
+        },
+    );
+}
+
+#[test]
+fn start_runtime_session_surfaces_typed_vertex_adc_missing_diagnostic() {
+    with_scoped_env(
+        &[
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let (state, _registry_path, _auth_store_path) = create_state(&root);
+            let app = build_mock_app(state);
+            let (project_id, _repo_root) = seed_project(&root, &app);
+
+            upsert_provider_profile(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                UpsertProviderProfileRequestDto {
+                    profile_id: "vertex-default".into(),
+                    provider_id: "vertex".into(),
+                    runtime_kind: "anthropic".into(),
+                    label: "Vertex".into(),
+                    model_id: "claude-3-7-sonnet@20250219".into(),
+                    preset_id: Some("vertex".into()),
+                    base_url: None,
+                    api_version: None,
+                    region: Some("us-central1".into()),
+                    project_id: Some("vertex-project".into()),
+                    api_key: None,
+                    activate: true,
+                },
+            )
+            .expect("save vertex provider profile without adc");
+
+            let runtime = start_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("surface vertex adc diagnostic");
+
+            assert_eq!(runtime.phase, RuntimeAuthPhase::Idle);
+            assert_eq!(runtime.provider_id, "vertex");
+            assert_eq!(runtime.runtime_kind, "anthropic");
+            assert_eq!(runtime.last_error_code.as_deref(), Some("vertex_adc_missing"));
+            assert!(runtime.session_id.is_none());
+        },
+    );
 }
 
 #[test]

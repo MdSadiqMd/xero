@@ -46,6 +46,26 @@ fn detached_supervisor_rejects_anthropic_launch_without_api_key_env() {
 }
 
 #[test]
+fn detached_supervisor_launches_bedrock_child_with_context_env_and_ambient_auth() {
+    launch_probe_stop::detached_supervisor_launches_bedrock_child_with_context_env_and_ambient_auth();
+}
+
+#[test]
+fn detached_supervisor_rejects_bedrock_launch_without_aws_credentials() {
+    launch_probe_stop::detached_supervisor_rejects_bedrock_launch_without_aws_credentials();
+}
+
+#[test]
+fn detached_supervisor_launches_vertex_child_with_context_env_and_ambient_auth() {
+    launch_probe_stop::detached_supervisor_launches_vertex_child_with_context_env_and_ambient_auth();
+}
+
+#[test]
+fn detached_supervisor_rejects_vertex_launch_without_adc() {
+    launch_probe_stop::detached_supervisor_rejects_vertex_launch_without_adc();
+}
+
+#[test]
 fn detached_supervisor_launches_openai_compatible_child_with_context_env_and_secret_free_persistence(
 ) {
     launch_probe_stop::detached_supervisor_launches_openai_compatible_child_with_context_env_and_secret_free_persistence();

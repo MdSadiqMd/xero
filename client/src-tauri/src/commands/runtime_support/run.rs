@@ -4,12 +4,19 @@ use rand::RngCore;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::{
-    auth::openai_compatible::{
-        resolve_openai_compatible_endpoint_for_profile, resolve_openai_compatible_launch_env,
+    auth::{
+        anthropic::{
+            resolve_anthropic_family_launch_env, AnthropicFamilyProfileInput,
+        },
+        openai_compatible::{
+            resolve_openai_compatible_endpoint_for_profile, resolve_openai_compatible_launch_env,
+        },
     },
     commands::{
         get_runtime_session::reconcile_runtime_session,
-        get_runtime_settings::runtime_settings_file_from_request,
+        get_runtime_settings::{
+            runtime_settings_file_from_request, runtime_settings_snapshot_from_provider_profiles,
+        },
         provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult,
         RuntimeAuthPhase, RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
         RuntimeRunCheckpointDto, RuntimeRunCheckpointKindDto, RuntimeRunControlInputDto,
@@ -31,8 +38,8 @@ use crate::{
         launch_detached_runtime_supervisor, probe_runtime_run, resolve_runtime_shell_selection,
         RuntimeSupervisorLaunchContext, RuntimeSupervisorLaunchEnv, RuntimeSupervisorLaunchRequest,
         RuntimeSupervisorProbeRequest, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID,
-        GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
-        OPENAI_API_PROVIDER_ID,
+        BEDROCK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID,
+        OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID, VERTEX_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -388,41 +395,43 @@ fn prepare_runtime_supervisor_launch<R: Runtime>(
     }
 
     let mut launch_env = RuntimeSupervisorLaunchEnv::default();
-    if runtime.provider_id == ANTHROPIC_PROVIDER_ID {
-        let readiness = active_profile.readiness(&provider_profiles.credentials);
-        match readiness.status {
-            ProviderProfileReadinessStatus::Ready => {
-                let secret = provider_profiles
-                    .anthropic_credential(&active_profile.profile_id)
-                    .ok_or_else(|| {
-                        CommandError::user_fixable(
-                            "provider_profile_credentials_unavailable",
-                            format!(
-                                "Cadence cannot launch the detached Anthropic runtime because provider profile `{}` no longer matches the saved app-local secret state.",
-                                active_profile.profile_id
-                            ),
-                        )
-                    })?;
-                launch_env.insert("ANTHROPIC_API_KEY", secret.api_key.clone());
+    if matches!(
+        runtime.provider_id.as_str(),
+        ANTHROPIC_PROVIDER_ID | BEDROCK_PROVIDER_ID | VERTEX_PROVIDER_ID
+    ) {
+        if runtime.provider_id == ANTHROPIC_PROVIDER_ID {
+            match active_profile.readiness(&provider_profiles.credentials).status {
+                ProviderProfileReadinessStatus::Ready => {}
+                ProviderProfileReadinessStatus::Missing => {
+                    return Err(CommandError::user_fixable(
+                        "anthropic_api_key_missing",
+                        format!(
+                            "Cadence cannot launch the detached Anthropic runtime because provider profile `{}` has no app-local API key configured.",
+                            active_profile.profile_id
+                        ),
+                    ));
+                }
+                ProviderProfileReadinessStatus::Malformed => {
+                    return Err(CommandError::user_fixable(
+                        "provider_profile_credentials_unavailable",
+                        format!(
+                            "Cadence cannot launch the detached Anthropic runtime because provider profile `{}` no longer matches the saved app-local secret state.",
+                            active_profile.profile_id
+                        ),
+                    ));
+                }
             }
-            ProviderProfileReadinessStatus::Missing => {
-                return Err(CommandError::user_fixable(
-                    "anthropic_api_key_missing",
-                    format!(
-                        "Cadence cannot launch the detached Anthropic runtime because provider profile `{}` has no app-local API key configured.",
-                        active_profile.profile_id
-                    ),
-                ));
-            }
-            ProviderProfileReadinessStatus::Malformed => {
-                return Err(CommandError::user_fixable(
-                    "provider_profile_credentials_unavailable",
-                    format!(
-                        "Cadence cannot launch the detached Anthropic runtime because provider profile `{}` no longer matches the saved app-local secret state.",
-                        active_profile.profile_id
-                    ),
-                ));
-            }
+        }
+
+        let runtime_settings =
+            runtime_settings_snapshot_from_provider_profiles(&provider_profiles).map_err(|error| {
+                CommandError::user_fixable(error.code, error.message)
+            })?;
+        let profile_input = AnthropicFamilyProfileInput::from(&runtime_settings);
+        let launch_vars =
+            resolve_anthropic_family_launch_env(&profile_input).map_err(command_error_from_auth)?;
+        for (key, value) in launch_vars {
+            launch_env.insert(key, value);
         }
     } else if matches!(
         runtime.provider_id.as_str(),

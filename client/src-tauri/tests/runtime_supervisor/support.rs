@@ -58,6 +58,32 @@ pub(crate) fn supervisor_test_guard() -> SupervisorTestGuard {
     }
 }
 
+pub(crate) fn with_scoped_env<T>(entries: &[(&str, Option<&str>)], operation: impl FnOnce() -> T) -> T {
+    let _guard = supervisor_test_guard();
+    let previous = entries
+        .iter()
+        .map(|(key, _)| ((*key).to_string(), std::env::var(key).ok()))
+        .collect::<Vec<_>>();
+
+    for (key, value) in entries {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    let result = operation();
+
+    for (key, value) in previous {
+        match value {
+            Some(value) => std::env::set_var(&key, value),
+            None => std::env::remove_var(&key),
+        }
+    }
+
+    result
+}
+
 pub(crate) fn seed_project(
     root: &TempDir,
     project_id: &str,
@@ -217,6 +243,69 @@ pub(crate) fn anthropic_launch_request(
             "anthropic",
             "anthropic-session-1",
             Some("anthropic-flow-1"),
+            model_id,
+            thinking_effort,
+        ),
+        launch_env,
+        command,
+    )
+}
+
+pub(crate) fn bedrock_launch_request(
+    project_id: &str,
+    repo_root: &Path,
+    run_id: &str,
+    model_id: &str,
+    region: &str,
+    thinking_effort: Option<cadence_desktop_lib::commands::ProviderModelThinkingEffortDto>,
+    command: &str,
+) -> RuntimeSupervisorLaunchRequest {
+    let mut launch_env = RuntimeSupervisorLaunchEnv::default();
+    launch_env.insert("CLAUDE_CODE_USE_BEDROCK", "1");
+    launch_env.insert("AWS_REGION", region);
+    launch_env.insert("AWS_DEFAULT_REGION", region);
+
+    launch_request_with_context(
+        project_id,
+        repo_root,
+        run_id,
+        "anthropic",
+        sample_launch_context(
+            "bedrock",
+            "bedrock-session-1",
+            Some("bedrock-flow-1"),
+            model_id,
+            thinking_effort,
+        ),
+        launch_env,
+        command,
+    )
+}
+
+pub(crate) fn vertex_launch_request(
+    project_id: &str,
+    repo_root: &Path,
+    run_id: &str,
+    model_id: &str,
+    region: &str,
+    project_name: &str,
+    thinking_effort: Option<cadence_desktop_lib::commands::ProviderModelThinkingEffortDto>,
+    command: &str,
+) -> RuntimeSupervisorLaunchRequest {
+    let mut launch_env = RuntimeSupervisorLaunchEnv::default();
+    launch_env.insert("CLAUDE_CODE_USE_VERTEX", "1");
+    launch_env.insert("CLOUD_ML_REGION", region);
+    launch_env.insert("ANTHROPIC_VERTEX_PROJECT_ID", project_name);
+
+    launch_request_with_context(
+        project_id,
+        repo_root,
+        run_id,
+        "anthropic",
+        sample_launch_context(
+            "vertex",
+            "vertex-session-1",
+            Some("vertex-flow-1"),
             model_id,
             thinking_effort,
         ),

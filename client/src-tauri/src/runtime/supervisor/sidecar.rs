@@ -29,10 +29,13 @@ use super::{
     control::spawn_control_listener, runtime_supervisor_thinking_effort_env_value,
     validate_runtime_supervisor_launch_context, write_json_line, PtyEventNormalizer,
     RuntimeSupervisorSidecarArgs, SharedPtyWriter, SidecarSharedState, SupervisorEventHub,
-    ANTHROPIC_API_KEY_ENV, CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
-    CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
-    CADENCE_RUNTIME_THINKING_EFFORT_ENV, HEARTBEAT_INTERVAL, OPENAI_API_KEY_ENV,
-    OPENAI_API_VERSION_ENV, OPENAI_BASE_URL_ENV, TERMINAL_ATTACH_GRACE_PERIOD,
+    ANTHROPIC_API_KEY_ENV, BEDROCK_BASE_URL_ENV, BEDROCK_DEFAULT_REGION_ENV,
+    BEDROCK_ENABLE_ENV, BEDROCK_REGION_ENV, CADENCE_RUNTIME_FLOW_ID_ENV,
+    CADENCE_RUNTIME_MODEL_ID_ENV, CADENCE_RUNTIME_PROVIDER_ID_ENV,
+    CADENCE_RUNTIME_SESSION_ID_ENV, CADENCE_RUNTIME_THINKING_EFFORT_ENV,
+    HEARTBEAT_INTERVAL, OPENAI_API_KEY_ENV, OPENAI_API_VERSION_ENV, OPENAI_BASE_URL_ENV,
+    TERMINAL_ATTACH_GRACE_PERIOD, VERTEX_BASE_URL_ENV, VERTEX_ENABLE_ENV,
+    VERTEX_PROJECT_ENV, VERTEX_REGION_ENV,
 };
 use crate::runtime::protocol::{
     RuntimeSupervisorLaunchContext, SupervisorProcessStatus, SupervisorStartupMessage,
@@ -168,6 +171,86 @@ fn validate_inherited_launch_environment(
                 ));
             }
         }
+        crate::runtime::BEDROCK_PROVIDER_ID => {
+            let region = std::env::var(BEDROCK_REGION_ENV)
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    CommandError::user_fixable(
+                        "bedrock_region_missing",
+                        "Cadence cannot launch the detached Amazon Bedrock runtime because AWS_REGION was not injected into the launch environment.",
+                    )
+                })?;
+            if !bedrock_ambient_credentials_available() {
+                return Err(CommandError::user_fixable(
+                    "bedrock_aws_credentials_missing",
+                    "Cadence cannot launch the detached Amazon Bedrock runtime because no ambient AWS credential source was available to the supervisor process.",
+                ));
+            }
+            if std::env::var(BEDROCK_ENABLE_ENV)
+                .ok()
+                .map(|value| value.trim() == "1")
+                != Some(true)
+            {
+                return Err(CommandError::user_fixable(
+                    "bedrock_launch_env_invalid",
+                    "Cadence cannot launch the detached Amazon Bedrock runtime because CLAUDE_CODE_USE_BEDROCK was not injected into the launch environment.",
+                ));
+            }
+            if std::env::var(BEDROCK_DEFAULT_REGION_ENV)
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .is_none()
+            {
+                return Err(CommandError::user_fixable(
+                    "bedrock_region_missing",
+                    format!(
+                        "Cadence cannot launch the detached Amazon Bedrock runtime because AWS_DEFAULT_REGION was not injected alongside AWS_REGION `{region}`."
+                    ),
+                ));
+            }
+        }
+        crate::runtime::VERTEX_PROVIDER_ID => {
+            let region = std::env::var(VERTEX_REGION_ENV)
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    CommandError::user_fixable(
+                        "vertex_region_missing",
+                        "Cadence cannot launch the detached Google Vertex AI runtime because CLOUD_ML_REGION was not injected into the launch environment.",
+                    )
+                })?;
+            let project_id = std::env::var(VERTEX_PROJECT_ENV)
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    CommandError::user_fixable(
+                        "vertex_project_id_missing",
+                        "Cadence cannot launch the detached Google Vertex AI runtime because ANTHROPIC_VERTEX_PROJECT_ID was not injected into the launch environment.",
+                    )
+                })?;
+            if !vertex_adc_available() {
+                return Err(CommandError::user_fixable(
+                    "vertex_adc_missing",
+                    "Cadence cannot launch the detached Google Vertex AI runtime because Application Default Credentials were not available to the supervisor process.",
+                ));
+            }
+            if std::env::var(VERTEX_ENABLE_ENV)
+                .ok()
+                .map(|value| value.trim() == "1")
+                != Some(true)
+            {
+                return Err(CommandError::user_fixable(
+                    "vertex_launch_env_invalid",
+                    "Cadence cannot launch the detached Google Vertex AI runtime because CLAUDE_CODE_USE_VERTEX was not injected into the launch environment.",
+                ));
+            }
+            let _ = (region, project_id);
+        }
         crate::runtime::OPENAI_API_PROVIDER_ID
         | crate::runtime::OLLAMA_PROVIDER_ID
         | crate::runtime::AZURE_OPENAI_PROVIDER_ID
@@ -241,6 +324,57 @@ fn is_local_openai_compatible_base_url(base_url: &str) -> bool {
         .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
 }
 
+fn bedrock_ambient_credentials_available() -> bool {
+    (env_var_present("AWS_ACCESS_KEY_ID") && env_var_present("AWS_SECRET_ACCESS_KEY"))
+        || env_var_present("AWS_PROFILE")
+        || env_var_present("AWS_DEFAULT_PROFILE")
+        || (env_var_present("AWS_WEB_IDENTITY_TOKEN_FILE") && env_var_present("AWS_ROLE_ARN"))
+        || env_var_present("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        || env_var_present("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+        || existing_env_path("AWS_SHARED_CREDENTIALS_FILE").is_some()
+        || existing_env_path("AWS_CONFIG_FILE").is_some()
+        || dirs::home_dir().is_some_and(|home| {
+            home.join(".aws").join("credentials").is_file()
+                || home.join(".aws").join("config").is_file()
+        })
+}
+
+fn vertex_adc_available() -> bool {
+    existing_env_path("GOOGLE_APPLICATION_CREDENTIALS").is_some()
+        || default_vertex_adc_path().is_some_and(|path| path.is_file())
+}
+
+fn env_var_present(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn existing_env_path(key: &str) -> Option<PathBuf> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+}
+
+fn default_vertex_adc_path() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        std::env::var("APPDATA")
+            .ok()
+            .map(PathBuf::from)
+            .map(|base| base.join("gcloud").join("application_default_credentials.json"))
+    } else {
+        dirs::home_dir().map(|home| {
+            home.join(".config")
+                .join("gcloud")
+                .join("application_default_credentials.json")
+        })
+    }
+}
+
 fn apply_launch_context_to_child_environment(
     builder: &mut CommandBuilder,
     launch_context: &RuntimeSupervisorLaunchContext,
@@ -254,6 +388,14 @@ fn apply_launch_context_to_child_environment(
     builder.env_remove(OPENAI_API_KEY_ENV);
     builder.env_remove(OPENAI_BASE_URL_ENV);
     builder.env_remove(OPENAI_API_VERSION_ENV);
+    builder.env_remove(BEDROCK_ENABLE_ENV);
+    builder.env_remove(BEDROCK_REGION_ENV);
+    builder.env_remove(BEDROCK_DEFAULT_REGION_ENV);
+    builder.env_remove(BEDROCK_BASE_URL_ENV);
+    builder.env_remove(VERTEX_ENABLE_ENV);
+    builder.env_remove(VERTEX_REGION_ENV);
+    builder.env_remove(VERTEX_PROJECT_ENV);
+    builder.env_remove(VERTEX_BASE_URL_ENV);
 
     builder.env(CADENCE_RUNTIME_PROVIDER_ID_ENV, &launch_context.provider_id);
     builder.env(CADENCE_RUNTIME_SESSION_ID_ENV, &launch_context.session_id);
@@ -273,6 +415,32 @@ fn apply_launch_context_to_child_environment(
     if launch_context.provider_id == crate::runtime::ANTHROPIC_PROVIDER_ID {
         if let Ok(api_key) = std::env::var(ANTHROPIC_API_KEY_ENV) {
             builder.env(ANTHROPIC_API_KEY_ENV, api_key);
+        }
+        return;
+    }
+
+    if launch_context.provider_id == crate::runtime::BEDROCK_PROVIDER_ID {
+        builder.env(BEDROCK_ENABLE_ENV, "1");
+        if let Ok(region) = std::env::var(BEDROCK_REGION_ENV) {
+            builder.env(BEDROCK_REGION_ENV, region.clone());
+            builder.env(BEDROCK_DEFAULT_REGION_ENV, region);
+        }
+        if let Ok(base_url) = std::env::var(BEDROCK_BASE_URL_ENV) {
+            builder.env(BEDROCK_BASE_URL_ENV, base_url);
+        }
+        return;
+    }
+
+    if launch_context.provider_id == crate::runtime::VERTEX_PROVIDER_ID {
+        builder.env(VERTEX_ENABLE_ENV, "1");
+        if let Ok(region) = std::env::var(VERTEX_REGION_ENV) {
+            builder.env(VERTEX_REGION_ENV, region);
+        }
+        if let Ok(project_id) = std::env::var(VERTEX_PROJECT_ENV) {
+            builder.env(VERTEX_PROJECT_ENV, project_id);
+        }
+        if let Ok(base_url) = std::env::var(VERTEX_BASE_URL_ENV) {
+            builder.env(VERTEX_BASE_URL_ENV, base_url);
         }
         return;
     }

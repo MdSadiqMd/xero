@@ -2,6 +2,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     net::TcpListener,
     path::PathBuf,
+    sync::{Mutex, MutexGuard, OnceLock},
     thread,
     time::Duration,
 };
@@ -46,6 +47,40 @@ fn catalog_cache_path(root: &TempDir) -> PathBuf {
     root.path()
         .join("app-data")
         .join("provider-model-catalogs.json")
+}
+
+fn ambient_env_guard() -> MutexGuard<'static, ()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn with_scoped_env<T>(entries: &[(&str, Option<&str>)], operation: impl FnOnce() -> T) -> T {
+    let _guard = ambient_env_guard();
+    let previous = entries
+        .iter()
+        .map(|(key, _)| ((*key).to_string(), std::env::var(key).ok()))
+        .collect::<Vec<_>>();
+
+    for (key, value) in entries {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    let result = operation();
+
+    for (key, value) in previous {
+        match value {
+            Some(value) => std::env::set_var(&key, value),
+            None => std::env::remove_var(&key),
+        }
+    }
+
+    result
 }
 
 fn openrouter_auth_config(models_url: String) -> OpenRouterAuthConfig {
@@ -159,6 +194,35 @@ fn seed_anthropic_profile(
         },
     )
     .expect("seed anthropic profile");
+}
+
+fn seed_ambient_anthropic_family_profile(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    profile_id: &str,
+    provider_id: &str,
+    model_id: &str,
+    region: &str,
+    project_id: Option<&str>,
+) {
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: profile_id.into(),
+            provider_id: provider_id.into(),
+            runtime_kind: "anthropic".into(),
+            label: profile_id.into(),
+            model_id: model_id.into(),
+            preset_id: Some(provider_id.into()),
+            base_url: None,
+            api_version: None,
+            region: Some(region.into()),
+            project_id: project_id.map(str::to_string),
+            api_key: None,
+            activate: false,
+        },
+    )
+    .expect("seed ambient anthropic-family profile");
 }
 
 fn seed_openai_compatible_profile(
@@ -605,6 +669,93 @@ fn get_provider_model_catalog_returns_cached_anthropic_snapshot_when_live_refres
             .as_ref()
             .map(|error| error.code.as_str()),
         Some("anthropic_rate_limited")
+    );
+}
+
+#[test]
+fn get_provider_model_catalog_projects_bedrock_profile_through_manual_ambient_catalog() {
+    with_scoped_env(
+        &[
+            ("AWS_ACCESS_KEY_ID", Some("test-bedrock-access-key")),
+            ("AWS_SECRET_ACCESS_KEY", Some("test-bedrock-secret-key")),
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let app = build_mock_app(create_state(&root));
+            seed_ambient_anthropic_family_profile(
+                &app,
+                "bedrock-work",
+                "bedrock",
+                "anthropic.claude-3-7-sonnet-20250219-v1:0",
+                "us-east-1",
+                None,
+            );
+
+            let catalog = get_provider_model_catalog(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                GetProviderModelCatalogRequestDto {
+                    profile_id: "bedrock-work".into(),
+                    force_refresh: true,
+                },
+            )
+            .expect("discover bedrock catalog");
+
+            assert_eq!(catalog.source, ProviderModelCatalogSourceDto::Manual);
+            assert_eq!(catalog.provider_id, "bedrock");
+            assert_eq!(
+                catalog.configured_model_id,
+                "anthropic.claude-3-7-sonnet-20250219-v1:0"
+            );
+            assert_eq!(catalog.models.len(), 1);
+            assert!(catalog.models[0].thinking.supported);
+            assert!(catalog.last_refresh_error.is_none());
+        },
+    );
+}
+
+#[test]
+fn get_provider_model_catalog_surfaces_typed_vertex_adc_missing_error_without_fake_secret_state() {
+    with_scoped_env(
+        &[
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let app = build_mock_app(create_state(&root));
+            seed_ambient_anthropic_family_profile(
+                &app,
+                "vertex-work",
+                "vertex",
+                "claude-3-7-sonnet@20250219",
+                "us-central1",
+                Some("vertex-project"),
+            );
+
+            let catalog = get_provider_model_catalog(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                GetProviderModelCatalogRequestDto {
+                    profile_id: "vertex-work".into(),
+                    force_refresh: true,
+                },
+            )
+            .expect("surface vertex ambient auth diagnostic");
+
+            assert_eq!(catalog.source, ProviderModelCatalogSourceDto::Manual);
+            assert_eq!(catalog.provider_id, "vertex");
+            assert_eq!(catalog.models.len(), 1);
+            assert_eq!(
+                catalog
+                    .last_refresh_error
+                    .as_ref()
+                    .map(|error| error.code.as_str()),
+                Some("vertex_adc_missing")
+            );
+        },
     );
 }
 
