@@ -196,7 +196,7 @@ describe("BrowserSidebar", () => {
     await waitFor(() => expect(shownUrls.length).toBe(1))
   })
 
-  it("sends new_tab=true and no tab_id when the + button is clicked so the existing tab is not reused", async () => {
+  it("sends newTab=true and no tabId when the + button is clicked so the existing tab is not reused", async () => {
     registerInvoke("browser_tab_list", async () => [
       {
         id: "tab-1",
@@ -228,8 +228,8 @@ describe("BrowserSidebar", () => {
     const newTabButton = await screen.findByLabelText("New tab")
     fireEvent.click(newTabButton)
     await waitFor(() => expect(recordedArgs).not.toBeNull())
-    expect(recordedArgs!.new_tab).toBe(true)
-    expect(recordedArgs!.tab_id).toBeNull()
+    expect(recordedArgs!.newTab).toBe(true)
+    expect(recordedArgs!.tabId).toBeNull()
   })
 
   it("applies the resize handle inset to browser_show so the handle stays clickable", async () => {

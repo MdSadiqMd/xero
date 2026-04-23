@@ -132,7 +132,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
         }
         if (next.width > 0 && next.height > 0 && !rectsEqual(lastSyncedRectRef.current, next)) {
           lastSyncedRectRef.current = next
-          void invoke("browser_resize", { ...next, tab_id: activeTabId ?? null }).catch(() => {
+          void invoke("browser_resize", { ...next, tabId: activeTabId ?? null }).catch(() => {
             /* swallow */
           })
         }
@@ -314,8 +314,8 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
         y: Math.round(rect.top),
         width: Math.max(1, Math.round(rect.width) - RESIZE_HANDLE_INSET),
         height: Math.max(1, Math.round(rect.height)),
-        tab_id: forceNew ? null : options?.tabId ?? activeTabId ?? null,
-        new_tab: forceNew,
+        tabId: forceNew ? null : options?.tabId ?? activeTabId ?? null,
+        newTab: forceNew,
       }
       lastSyncedRectRef.current = {
         x: payload.x,
@@ -371,7 +371,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
 
   const handleReload = useCallback(() => {
     if (!isTauri()) return
-    void invoke("browser_reload", { tab_id: activeTabId ?? null }).catch(() => {
+    void invoke("browser_reload", { tabId: activeTabId ?? null }).catch(() => {
       /* swallow */
     })
   }, [activeTabId])
@@ -379,7 +379,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const handleTabFocus = useCallback(
     (tabId: string) => {
       if (!isTauri() || tabId === activeTabId) return
-      void invoke<BrowserTabMeta>("browser_tab_focus", { tab_id: tabId })
+      void invoke<BrowserTabMeta>("browser_tab_focus", { tabId })
         .then((meta) => {
           if (meta) {
             setActiveTabId(meta.id)
@@ -396,7 +396,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const handleTabClose = useCallback(
     (tabId: string) => {
       if (!isTauri()) return
-      void invoke<BrowserTabMeta[]>("browser_tab_close", { tab_id: tabId })
+      void invoke<BrowserTabMeta[]>("browser_tab_close", { tabId })
         .then((list) => {
           if (!list) return
           setTabs(list)
@@ -455,12 +455,12 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
       />
 
       {showTabs ? (
-        <div className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60 px-2">
+        <div className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/60">
           {tabs.map((tab) => (
             <div
               key={tab.id}
               className={cn(
-                "group flex h-6 max-w-[160px] shrink-0 items-center gap-1 rounded-md border px-2 text-[11px]",
+                "group flex h-8 max-w-[160px] shrink-0 items-center gap-1 border px-2 text-[11px]",
                 tab.id === activeTabId
                   ? "border-primary/40 bg-background/80 text-foreground"
                   : "border-border/50 bg-sidebar/60 text-muted-foreground hover:text-foreground",
