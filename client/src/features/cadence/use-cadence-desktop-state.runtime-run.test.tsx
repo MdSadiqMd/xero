@@ -1457,7 +1457,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
       'Cadence recovered a supervised harness run and its durable checkpoints before the live runtime feed resumed.',
     )
     expect(screen.getByTestId('messages-reason')).toHaveTextContent(
-      'Cadence recovered durable supervised-run state for this project, but live streaming still requires a desktop-authenticated runtime session.',
+      'Cadence recovered durable supervised-run state for this project, but live streaming still requires a Azure OpenAI runtime bind for the recovered provider.',
     )
     expect(screen.getByTestId('error')).toHaveTextContent('runtime auth failed')
   })
