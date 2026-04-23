@@ -1,13 +1,16 @@
 //! Emulator sidebar backend — iOS Simulator and Android Emulator bring-up.
 //!
-//! Phase 2 scaffolds the frame pipeline (FrameBus + `emulator://` URI scheme)
-//! and a synthetic frame driver that exercises it end-to-end without a real
-//! device. Phases 3 and 4 replace the synthetic driver with scrcpy and
-//! `idb_companion` sidecars respectively.
+//! Phase 2 scaffolded the frame pipeline (FrameBus + `emulator://` URI
+//! scheme) and a synthetic frame driver. Phase 3 wires in the real Android
+//! pipeline (emulator process + scrcpy). Phase 4 adds the iOS pipeline.
 
+pub mod android;
 pub mod codec;
+pub mod decoder;
 pub mod events;
 pub mod frame_bus;
+pub mod ios;
+pub mod process;
 pub mod sdk;
 #[cfg(feature = "emulator-synthetic")]
 pub mod synthetic;
@@ -67,23 +70,47 @@ impl EmulatorPlatform {
     }
 }
 
-/// The backing session for the currently-running device. Phase 2 only
-/// implements the synthetic variant; Phases 3 and 4 add the real variants.
+/// The backing session for the currently-running device.
 enum ActiveDevice {
+    Android {
+        device_id: String,
+        session: android::AndroidSession,
+    },
+    #[cfg(target_os = "macos")]
+    Ios {
+        device_id: String,
+        session: ios::IosSession,
+    },
     #[cfg(feature = "emulator-synthetic")]
     Synthetic {
         platform: EmulatorPlatform,
         device_id: String,
-        // Field is only held for its Drop impl (joins the producer thread);
-        // direct access isn't needed beyond that.
+        // Dropping this joins the producer thread.
         #[allow(dead_code)]
         session: synthetic::SyntheticSession,
     },
-    // Android { session: android::AndroidSession }  // phase 3
-    // Ios     { session: ios::IosSession }          // phase 4
-    #[cfg(not(feature = "emulator-synthetic"))]
-    #[allow(dead_code)]
-    Placeholder,
+}
+
+impl ActiveDevice {
+    fn platform(&self) -> EmulatorPlatform {
+        match self {
+            ActiveDevice::Android { .. } => EmulatorPlatform::Android,
+            #[cfg(target_os = "macos")]
+            ActiveDevice::Ios { .. } => EmulatorPlatform::Ios,
+            #[cfg(feature = "emulator-synthetic")]
+            ActiveDevice::Synthetic { platform, .. } => *platform,
+        }
+    }
+
+    fn device_id(&self) -> &str {
+        match self {
+            ActiveDevice::Android { device_id, .. } => device_id,
+            #[cfg(target_os = "macos")]
+            ActiveDevice::Ios { device_id, .. } => device_id,
+            #[cfg(feature = "emulator-synthetic")]
+            ActiveDevice::Synthetic { device_id, .. } => device_id,
+        }
+    }
 }
 
 // ---------- Request/response shapes ----------------------------------------
@@ -121,6 +148,10 @@ pub struct EmulatorInputRequest {
     pub key: Option<String>,
     #[serde(default)]
     pub button: Option<String>,
+    #[serde(default)]
+    pub dx: Option<f32>,
+    #[serde(default)]
+    pub dy: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -183,28 +214,80 @@ pub fn emulator_sdk_status() -> CommandResult<SdkStatus> {
 pub fn emulator_list_devices(
     request: EmulatorListDevicesRequest,
 ) -> CommandResult<Vec<DeviceDescriptor>> {
-    // Phase 2: no real enumeration yet. Under the synthetic feature we surface
-    // a single stub device so the frontend can drive the pipeline.
-    #[cfg(feature = "emulator-synthetic")]
-    {
-        let (id, name, kind) = match request.platform {
-            EmulatorPlatform::Android => ("synthetic-pixel", "Synthetic Pixel", DeviceKind::Phone),
-            EmulatorPlatform::Ios => ("synthetic-iphone", "Synthetic iPhone", DeviceKind::Phone),
-        };
-        Ok(vec![DeviceDescriptor {
-            id: id.to_string(),
-            display_name: name.to_string(),
-            kind,
-            width: synthetic::synthetic_width(),
-            height: synthetic::synthetic_height(),
-            device_pixel_ratio: 2.0,
-        }])
-    }
+    match request.platform {
+        EmulatorPlatform::Android => {
+            #[allow(unused_mut)]
+            let mut out: Vec<DeviceDescriptor> = android::list_devices()
+                .into_iter()
+                .map(|avd| DeviceDescriptor {
+                    id: avd.name,
+                    display_name: avd.display_name,
+                    kind: match avd.kind {
+                        android::avd::AvdKind::Phone => DeviceKind::Phone,
+                        android::avd::AvdKind::Tablet => DeviceKind::Tablet,
+                    },
+                    width: avd.width.unwrap_or(0),
+                    height: avd.height.unwrap_or(0),
+                    device_pixel_ratio: avd
+                        .density
+                        .map(|d| d as f32 / 160.0)
+                        .unwrap_or(2.0),
+                })
+                .collect();
 
-    #[cfg(not(feature = "emulator-synthetic"))]
-    {
-        let _ = request;
-        Ok(Vec::new())
+            #[cfg(feature = "emulator-synthetic")]
+            if out.is_empty() {
+                out.push(DeviceDescriptor {
+                    id: "synthetic-pixel".to_string(),
+                    display_name: "Synthetic Pixel".to_string(),
+                    kind: DeviceKind::Phone,
+                    width: synthetic::synthetic_width(),
+                    height: synthetic::synthetic_height(),
+                    device_pixel_ratio: 2.0,
+                });
+            }
+
+            Ok(out)
+        }
+        EmulatorPlatform::Ios => {
+            #[cfg(target_os = "macos")]
+            {
+                #[allow(unused_mut)]
+                let mut out: Vec<DeviceDescriptor> = ios::list_devices()
+                    .into_iter()
+                    .map(|sim| DeviceDescriptor {
+                        id: sim.udid,
+                        display_name: sim.display_name,
+                        kind: if sim.is_tablet {
+                            DeviceKind::Tablet
+                        } else {
+                            DeviceKind::Phone
+                        },
+                        width: sim.width.unwrap_or(0),
+                        height: sim.height.unwrap_or(0),
+                        device_pixel_ratio: sim.scale.unwrap_or(3.0),
+                    })
+                    .collect();
+
+                #[cfg(feature = "emulator-synthetic")]
+                if out.is_empty() {
+                    out.push(DeviceDescriptor {
+                        id: "synthetic-iphone".to_string(),
+                        display_name: "Synthetic iPhone".to_string(),
+                        kind: DeviceKind::Phone,
+                        width: synthetic::synthetic_width(),
+                        height: synthetic::synthetic_height(),
+                        device_pixel_ratio: 3.0,
+                    });
+                }
+
+                Ok(out)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Ok(Vec::new())
+            }
+        }
     }
 }
 
@@ -218,50 +301,140 @@ pub fn emulator_start<R: Runtime>(
         return Err(CommandError::invalid_request("deviceId"));
     }
 
-    // Single-active-device invariant — shut down any previous session first
-    // so starting a new device is idempotent from the caller's perspective.
+    // Single-active-device invariant — shut down any previous session first.
     stop_active(&app, &state)?;
 
     #[cfg(feature = "emulator-synthetic")]
-    {
-        let _ = app.emit(
-            EMULATOR_STATUS_EVENT,
-            StatusPayload::new(StatusPhase::Booting)
-                .with_platform(request.platform.as_str())
-                .with_device(&request.device_id)
-                .with_message("starting synthetic frame source"),
-        );
-
-        let session = synthetic::SyntheticSession::spawn(
-            app.clone(),
-            state.frame_bus(),
-            request.platform.as_str().to_string(),
-            request.device_id.clone(),
-        );
-        let mut active = state.active.lock().expect("emulator active mutex poisoned");
-        *active = Some(ActiveDevice::Synthetic {
-            platform: request.platform,
-            device_id: request.device_id.clone(),
-            session,
-        });
-
-        Ok(EmulatorStartResponse {
-            platform: request.platform,
-            device_id: request.device_id,
-            width: synthetic::synthetic_width(),
-            height: synthetic::synthetic_height(),
-            device_pixel_ratio: 2.0,
-            frame_url: "emulator://localhost/frame".to_string(),
-        })
+    if request.device_id.starts_with("synthetic-") {
+        return start_synthetic(&app, &state, request);
     }
 
-    #[cfg(not(feature = "emulator-synthetic"))]
-    {
-        Err(not_implemented(
-            "emulator_start",
-            "real device support arrives in Phase 3 (Android) and Phase 4 (iOS). Rebuild with --features emulator-synthetic to exercise the frame pipeline.",
-        ))
+    match request.platform {
+        EmulatorPlatform::Android => start_android(&app, &state, request),
+        EmulatorPlatform::Ios => start_ios(&app, &state, request),
     }
+}
+
+fn start_android<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, EmulatorState>,
+    request: EmulatorStartRequest,
+) -> CommandResult<EmulatorStartResponse> {
+    let scrcpy_jar = android::scrcpy::bundled_jar_path(app).map_err(|err| {
+        CommandError::user_fixable(
+            "scrcpy_jar_missing",
+            format!(
+                "scrcpy-server.jar is not bundled with this Cadence build: {err}. Drop the jar \
+                 into client/src-tauri/resources/ and rebuild."
+            ),
+        )
+    })?;
+
+    let session = android::spawn(android::SpawnArgs {
+        app: app.clone(),
+        frame_bus: state.frame_bus(),
+        device_id: request.device_id.clone(),
+        scrcpy_jar,
+    })?;
+
+    let width = session.width();
+    let height = session.height();
+
+    let mut active = state.active.lock().expect("emulator active mutex poisoned");
+    *active = Some(ActiveDevice::Android {
+        device_id: request.device_id.clone(),
+        session,
+    });
+
+    Ok(EmulatorStartResponse {
+        platform: request.platform,
+        device_id: request.device_id,
+        width,
+        height,
+        device_pixel_ratio: 2.0,
+        frame_url: "emulator://localhost/frame".to_string(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn start_ios<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, EmulatorState>,
+    request: EmulatorStartRequest,
+) -> CommandResult<EmulatorStartResponse> {
+    let session = ios::spawn(ios::SpawnArgs {
+        app: app.clone(),
+        frame_bus: state.frame_bus(),
+        device_id: request.device_id.clone(),
+    })?;
+
+    let width = session.width();
+    let height = session.height();
+
+    let mut active = state.active.lock().expect("emulator active mutex poisoned");
+    *active = Some(ActiveDevice::Ios {
+        device_id: request.device_id.clone(),
+        session,
+    });
+
+    Ok(EmulatorStartResponse {
+        platform: request.platform,
+        device_id: request.device_id,
+        width,
+        height,
+        device_pixel_ratio: 3.0,
+        frame_url: "emulator://localhost/frame".to_string(),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_ios<R: Runtime>(
+    _app: &AppHandle<R>,
+    _state: &State<'_, EmulatorState>,
+    _request: EmulatorStartRequest,
+) -> CommandResult<EmulatorStartResponse> {
+    Err(CommandError::user_fixable(
+        "ios_unsupported",
+        "iOS Simulator is only available on macOS.",
+    ))
+}
+
+#[cfg(feature = "emulator-synthetic")]
+fn start_synthetic<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, EmulatorState>,
+    request: EmulatorStartRequest,
+) -> CommandResult<EmulatorStartResponse> {
+    let _ = app.emit(
+        EMULATOR_STATUS_EVENT,
+        StatusPayload::new(StatusPhase::Booting)
+            .with_platform(request.platform.as_str())
+            .with_device(&request.device_id)
+            .with_message("starting synthetic frame source"),
+    );
+
+    let session = synthetic::SyntheticSession::spawn(
+        app.clone(),
+        state.frame_bus(),
+        request.platform.as_str().to_string(),
+        request.device_id.clone(),
+    );
+
+    let mut active = state.active.lock().expect("emulator active mutex poisoned");
+    *active = Some(ActiveDevice::Synthetic {
+        platform: request.platform,
+        device_id: request.device_id.clone(),
+        session,
+    });
+
+    Ok(EmulatorStartResponse {
+        platform: request.platform,
+        device_id: request.device_id,
+        width: synthetic::synthetic_width(),
+        height: synthetic::synthetic_height(),
+        device_pixel_ratio: 2.0,
+        frame_url: "emulator://localhost/frame".to_string(),
+    })
 }
 
 #[tauri::command]
@@ -278,28 +451,99 @@ pub fn emulator_input(
     request: EmulatorInputRequest,
 ) -> CommandResult<()> {
     let active = state.active.lock().expect("emulator active mutex poisoned");
-    if active.is_none() {
-        return Err(CommandError::user_fixable(
+    let active = active.as_ref().ok_or_else(|| {
+        CommandError::user_fixable(
             "emulator_not_running",
             "No emulator device is currently running.",
-        ));
-    }
+        )
+    })?;
 
-    #[cfg(feature = "emulator-synthetic")]
-    {
-        // Synthetic driver has no concept of input — acknowledge without
-        // doing anything so frontend wiring can be exercised.
-        let _ = request;
-        Ok(())
+    match active {
+        ActiveDevice::Android { session, .. } => dispatch_android_input(session, &request),
+        #[cfg(target_os = "macos")]
+        ActiveDevice::Ios { session, .. } => dispatch_ios_input(session, &request),
+        #[cfg(feature = "emulator-synthetic")]
+        ActiveDevice::Synthetic { .. } => Ok(()),
     }
+}
 
-    #[cfg(not(feature = "emulator-synthetic"))]
-    {
-        let _ = request;
-        Err(not_implemented(
-            "emulator_input",
-            "input dispatch lands with the Android/iOS pipelines in Phases 3 and 4.",
-        ))
+fn dispatch_android_input(
+    session: &android::AndroidSession,
+    request: &EmulatorInputRequest,
+) -> CommandResult<()> {
+    use android::input::MotionAction;
+
+    match request.kind {
+        InputKind::TouchDown => {
+            let x = request.x.unwrap_or(0.0);
+            let y = request.y.unwrap_or(0.0);
+            session.send_touch(MotionAction::Down, x, y)
+        }
+        InputKind::TouchMove => {
+            let x = request.x.unwrap_or(0.0);
+            let y = request.y.unwrap_or(0.0);
+            session.send_touch(MotionAction::Move, x, y)
+        }
+        InputKind::TouchUp => {
+            let x = request.x.unwrap_or(0.0);
+            let y = request.y.unwrap_or(0.0);
+            session.send_touch(MotionAction::Up, x, y)
+        }
+        InputKind::Scroll => {
+            let x = request.x.unwrap_or(0.5);
+            let y = request.y.unwrap_or(0.5);
+            let dx = (request.dx.unwrap_or(0.0) * 32.0) as i16;
+            let dy = (request.dy.unwrap_or(0.0) * 32.0) as i16;
+            session.send_scroll(x, y, dx, dy)
+        }
+        InputKind::Key | InputKind::HwButton => {
+            let name = request
+                .button
+                .as_deref()
+                .or(request.key.as_deref())
+                .unwrap_or("");
+            let keycode = map_hardware_key(name).ok_or_else(|| {
+                CommandError::user_fixable(
+                    "emulator_unknown_key",
+                    format!("Unknown hardware key: {name}"),
+                )
+            })?;
+            session.send_key(keycode)
+        }
+        InputKind::Text => {
+            let text = request.text.as_deref().unwrap_or("");
+            session.send_text(text)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn dispatch_ios_input(
+    session: &ios::IosSession,
+    request: &EmulatorInputRequest,
+) -> CommandResult<()> {
+    session.dispatch(request)
+}
+
+fn map_hardware_key(name: &str) -> Option<android::input::Keycode> {
+    use android::input::Keycode;
+    match name {
+        "home" => Some(Keycode::Home),
+        "back" => Some(Keycode::Back),
+        "recents" | "app_switch" | "menu" => Some(Keycode::AppSwitch),
+        "vol_up" | "volume_up" => Some(Keycode::VolumeUp),
+        "vol_down" | "volume_down" => Some(Keycode::VolumeDown),
+        "power" | "lock" => Some(Keycode::Power),
+        "enter" => Some(Keycode::Enter),
+        "backspace" | "delete" | "del" => Some(Keycode::Del),
+        "tab" => Some(Keycode::Tab),
+        "escape" => Some(Keycode::Escape),
+        "search" => Some(Keycode::Search),
+        "dpad_left" | "left" => Some(Keycode::DpadLeft),
+        "dpad_right" | "right" => Some(Keycode::DpadRight),
+        "dpad_up" | "up" => Some(Keycode::DpadUp),
+        "dpad_down" | "down" => Some(Keycode::DpadDown),
+        _ => None,
     }
 }
 
@@ -309,18 +553,26 @@ pub fn emulator_rotate(
     request: EmulatorRotateRequest,
 ) -> CommandResult<()> {
     let active = state.active.lock().expect("emulator active mutex poisoned");
-    if active.is_none() {
-        return Err(CommandError::user_fixable(
+    let active = active.as_ref().ok_or_else(|| {
+        CommandError::user_fixable(
             "emulator_not_running",
             "No emulator device is currently running.",
-        ));
-    }
+        )
+    })?;
 
-    let _ = request;
-    Err(not_implemented(
-        "emulator_rotate",
-        "rotation lands with the Android/iOS pipelines in Phases 3 and 4.",
-    ))
+    match active {
+        ActiveDevice::Android { session, .. } => {
+            let rotation = match request.orientation {
+                Orientation::Portrait => 0,
+                Orientation::Landscape => 1,
+            };
+            session.send_rotate(rotation)
+        }
+        #[cfg(target_os = "macos")]
+        ActiveDevice::Ios { session, .. } => session.set_orientation(request.orientation),
+        #[cfg(feature = "emulator-synthetic")]
+        ActiveDevice::Synthetic { .. } => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -330,19 +582,11 @@ pub fn emulator_subscribe_ready<R: Runtime>(
 ) -> CommandResult<StatusPayload> {
     let active = state.active.lock().expect("emulator active mutex poisoned");
     let payload = match active.as_ref() {
-        #[cfg(feature = "emulator-synthetic")]
-        Some(ActiveDevice::Synthetic {
-            platform,
-            device_id,
-            ..
-        }) => StatusPayload::new(StatusPhase::Streaming)
-            .with_platform(platform.as_str())
-            .with_device(device_id.clone()),
-        #[cfg(not(feature = "emulator-synthetic"))]
-        Some(ActiveDevice::Placeholder) => StatusPayload::new(StatusPhase::Stopped),
+        Some(device) => StatusPayload::new(StatusPhase::Streaming)
+            .with_platform(device.platform().as_str())
+            .with_device(device.device_id().to_string()),
         None => StatusPayload::new(StatusPhase::Stopped),
     };
-    // Re-emit so any new listener sees the current phase.
     let _ = app.emit(EMULATOR_STATUS_EVENT, payload.clone());
     Ok(payload)
 }
@@ -358,13 +602,11 @@ fn stop_active<R: Runtime>(
     drop(active);
 
     let (platform, device_id) = match &taken {
-        #[cfg(feature = "emulator-synthetic")]
-        Some(ActiveDevice::Synthetic {
-            platform,
-            device_id,
-            ..
-        }) => (Some(platform.as_str().to_string()), Some(device_id.clone())),
-        _ => (None, None),
+        Some(device) => (
+            Some(device.platform().as_str().to_string()),
+            Some(device.device_id().to_string()),
+        ),
+        None => (None, None),
     };
 
     if taken.is_some() {
@@ -379,8 +621,7 @@ fn stop_active<R: Runtime>(
         );
     }
 
-    // Dropping the ActiveDevice joins the synthetic thread.
-    drop(taken);
+    drop(taken); // Joins the decoder thread + kills child processes.
 
     state.frame_bus().clear();
 
@@ -394,11 +635,4 @@ fn stop_active<R: Runtime>(
         },
     );
     Ok(())
-}
-
-fn not_implemented(command: &'static str, detail: &'static str) -> CommandError {
-    CommandError::system_fault(
-        format!("{command}_not_implemented"),
-        format!("{command} is not implemented yet. {detail}"),
-    )
 }

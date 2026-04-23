@@ -1,8 +1,9 @@
-use std::env;
-use std::path::PathBuf;
-use std::process::Command;
+//! Top-level SDK probe. Delegates to platform-specific modules so the
+//! frontend can render a single combined status payload.
 
 use serde::{Deserialize, Serialize};
+
+use super::android::sdk as android_sdk;
 
 /// Result of probing the host machine for each platform's SDK. Surfaced to
 /// the frontend so the missing-SDK panel can render without blocking the
@@ -21,6 +22,7 @@ pub struct AndroidSdkStatus {
     pub sdk_root: Option<String>,
     pub emulator_path: Option<String>,
     pub adb_path: Option<String>,
+    pub avdmanager_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,110 +30,54 @@ pub struct AndroidSdkStatus {
 pub struct IosSdkStatus {
     pub present: bool,
     pub xcrun_path: Option<String>,
+    pub simctl_path: Option<String>,
+    pub idb_companion_present: bool,
     /// Host OS supports iOS Simulator (only macOS does).
     pub supported: bool,
 }
 
 pub fn probe_sdks() -> SdkStatus {
     SdkStatus {
-        android: probe_android(),
-        ios: probe_ios(),
+        android: probe_android_status(),
+        ios: probe_ios_status(),
     }
 }
 
-fn probe_android() -> AndroidSdkStatus {
-    let sdk_root = env::var("ANDROID_HOME")
-        .ok()
-        .or_else(|| env::var("ANDROID_SDK_ROOT").ok());
-
-    let emulator_path = which_binary("emulator")
-        .or_else(|| sdk_root.as_deref().and_then(|root| sdk_bin(root, "emulator/emulator")));
-    let adb_path = which_binary("adb")
-        .or_else(|| sdk_root.as_deref().and_then(|root| sdk_bin(root, "platform-tools/adb")));
-
+fn probe_android_status() -> AndroidSdkStatus {
+    let sdk = android_sdk::probe();
     AndroidSdkStatus {
-        present: emulator_path.is_some() && adb_path.is_some(),
-        sdk_root,
-        emulator_path,
-        adb_path,
+        present: sdk.is_usable(),
+        sdk_root: sdk.sdk_root.map(path_to_string),
+        emulator_path: sdk.emulator.map(path_to_string),
+        adb_path: sdk.adb.map(path_to_string),
+        avdmanager_path: sdk.avdmanager.map(path_to_string),
     }
 }
 
-fn probe_ios() -> IosSdkStatus {
-    let supported = cfg!(target_os = "macos");
-    if !supported {
-        return IosSdkStatus {
+fn probe_ios_status() -> IosSdkStatus {
+    #[cfg(target_os = "macos")]
+    {
+        let ios = super::ios::sdk::probe();
+        IosSdkStatus {
+            present: ios.is_usable(),
+            xcrun_path: ios.xcrun.map(path_to_string),
+            simctl_path: ios.simctl.map(path_to_string),
+            idb_companion_present: ios.idb_companion.is_some(),
+            supported: true,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        IosSdkStatus {
             present: false,
             xcrun_path: None,
-            supported,
-        };
-    }
-
-    let xcrun_path = which_binary("xcrun");
-    IosSdkStatus {
-        present: xcrun_path.is_some(),
-        xcrun_path,
-        supported,
-    }
-}
-
-fn which_binary(name: &str) -> Option<String> {
-    // Use `which` on Unix and `where` on Windows. Fall back to walking PATH
-    // manually if neither exits cleanly, since some environments ship with a
-    // stripped-down /usr/bin.
-    #[cfg(target_family = "unix")]
-    let locator = "which";
-    #[cfg(target_family = "windows")]
-    let locator = "where";
-
-    if let Ok(out) = Command::new(locator).arg(name).output() {
-        if out.status.success() {
-            let path = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if !path.is_empty() {
-                return Some(path);
-            }
+            simctl_path: None,
+            idb_companion_present: false,
+            supported: false,
         }
     }
-
-    env::var_os("PATH").and_then(|paths| {
-        env::split_paths(&paths).find_map(|dir| {
-            let candidate = dir.join(exe_name(name));
-            if candidate.is_file() {
-                Some(candidate.to_string_lossy().into_owned())
-            } else {
-                None
-            }
-        })
-    })
 }
 
-fn exe_name(name: &str) -> PathBuf {
-    #[cfg(target_family = "windows")]
-    {
-        PathBuf::from(format!("{name}.exe"))
-    }
-    #[cfg(not(target_family = "windows"))]
-    {
-        PathBuf::from(name)
-    }
-}
-
-fn sdk_bin(root: &str, relative: &str) -> Option<String> {
-    let path = PathBuf::from(root).join(relative);
-    let with_ext = if cfg!(target_os = "windows") {
-        path.with_extension("exe")
-    } else {
-        path.clone()
-    };
-    for candidate in [with_ext, path] {
-        if candidate.is_file() {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-    None
+fn path_to_string(p: std::path::PathBuf) -> String {
+    p.to_string_lossy().into_owned()
 }

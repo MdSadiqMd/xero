@@ -33,16 +33,27 @@ default = []
 # instead of launching a real device. Used for end-to-end testing of the
 # frame pipeline without an Android SDK / Xcode.
 emulator-synthetic = []
+# When enabled, links the `openh264` crate so scrcpy / idb H.264 frames decode
+# to RGBA before being re-encoded as JPEG. Without this feature, the Android
+# and iOS pipelines can still boot devices, dispatch input, and stream NAL
+# units — but frames are not rendered until a decoder is plugged in.
+# Gated because `openh264-sys2` requires a C++ toolchain and adds ~30 MB to
+# the build artifact.
+emulator-live = ["openh264"]
 
 [dependencies]
 arc-swap = "1"
 base64 = "0.22"
+byteorder = "1"
 dirs = "5"
 git2 = "0.20"
 globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 xcap = "0.6"
 ignore = "0.4"
+libc = "0.2"
+openh264 = { version = "0.6", optional = true }
+quick-xml = "0.36"
 rand = "0.8"
 regex = "1"
 portable-pty = "0.9"
