@@ -310,20 +310,41 @@ pub fn history_state<R: Runtime>(
 pub fn history_navigate<R: Runtime>(
     app: &AppHandle<R>,
     tabs: &Arc<BrowserTabs>,
-    waiters: &Arc<BridgeWaiters>,
+    _waiters: &Arc<BridgeWaiters>,
     delta: i32,
 ) -> CommandResult<JsonValue> {
-    let body = format!("history.go({delta}); return {{ delta: {delta} }};", delta = delta);
-    run_script(app, tabs, waiters, &body, 2_000)
+    // Must NOT round-trip through the bridge: history.go() starts tearing the
+    // current page down, so any pending browser_internal_reply IPC is discarded
+    // when the bridge unloads. We'd block until the bridge timeout (2s+) waiting
+    // for a reply that never arrives, which makes the button feel frozen.
+    let webview = tabs.active_webview(app)?;
+    let script = format!("try {{ window.history.go({delta}); }} catch (_e) {{}}");
+    webview.eval(&script).map_err(|error| {
+        CommandError::system_fault(
+            "browser_history_navigate_failed",
+            format!("Cadence could not run the browser history action: {error}"),
+        )
+    })?;
+    Ok(serde_json::json!({ "delta": delta }))
 }
 
 pub fn stop<R: Runtime>(
     app: &AppHandle<R>,
     tabs: &Arc<BrowserTabs>,
-    waiters: &Arc<BridgeWaiters>,
+    _waiters: &Arc<BridgeWaiters>,
 ) -> CommandResult<JsonValue> {
-    let body = "if (typeof window.stop === 'function') window.stop(); return { stopped: true };".to_string();
-    run_script(app, tabs, waiters, &body, 2_000)
+    // Same rationale as history_navigate: window.stop() may abort an in-flight
+    // load whose bridge context is about to be discarded.
+    let webview = tabs.active_webview(app)?;
+    webview
+        .eval("try { if (typeof window.stop === 'function') window.stop(); } catch (_e) {}")
+        .map_err(|error| {
+            CommandError::system_fault(
+                "browser_stop_failed",
+                format!("Cadence could not run window.stop(): {error}"),
+            )
+        })?;
+    Ok(serde_json::json!({ "stopped": true }))
 }
 
 pub fn cookies_get<R: Runtime>(
