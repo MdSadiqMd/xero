@@ -8,11 +8,14 @@
 
 pub mod cluster;
 pub mod events;
+pub mod persona;
 pub mod rpc_router;
+pub mod scenario;
 pub mod snapshot;
 pub mod toolchain;
 pub mod validator;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -22,11 +25,26 @@ use crate::commands::{CommandError, CommandResult};
 
 pub use cluster::{descriptors as cluster_descriptors, ClusterDescriptor, ClusterKind};
 pub use events::{
+    PersonaEventKind, PersonaEventPayload, ScenarioEventKind, ScenarioEventPayload,
     ValidatorLogLevel, ValidatorLogPayload, ValidatorPhase, ValidatorStatusPayload,
-    SOLANA_RPC_HEALTH_EVENT, SOLANA_TOOLCHAIN_STATUS_CHANGED_EVENT, SOLANA_VALIDATOR_LOG_EVENT,
+    SOLANA_PERSONA_EVENT, SOLANA_RPC_HEALTH_EVENT, SOLANA_SCENARIO_EVENT,
+    SOLANA_TOOLCHAIN_STATUS_CHANGED_EVENT, SOLANA_VALIDATOR_LOG_EVENT,
     SOLANA_VALIDATOR_STATUS_EVENT,
 };
+pub use persona::fund::{
+    DefaultFundingBackend, FundingBackend, FundingDelta, FundingReceipt, FundingStep,
+};
+pub use persona::keygen::{KeypairBytes, KeypairStore, OsRngKeypairProvider};
+pub use persona::roles::{
+    descriptors as persona_role_descriptors, mint_for_symbol, NftAllocation, PersonaRole,
+    RoleDescriptor, RolePreset, TokenAllocation,
+};
+pub use persona::{Persona, PersonaSpec, PersonaStore};
 pub use rpc_router::{EndpointHealth, EndpointSpec, RpcRouter};
+pub use scenario::{
+    scenarios as scenario_descriptors, ScenarioDescriptor, ScenarioEngine, ScenarioKind,
+    ScenarioRun, ScenarioSpec, ScenarioStatus,
+};
 pub use snapshot::{
     AccountFetcher, AccountRecord, RpcAccountFetcher, SnapshotManifest, SnapshotMeta, SnapshotStore,
 };
@@ -42,6 +60,8 @@ pub struct SolanaState {
     supervisor: Arc<ValidatorSupervisor>,
     rpc_router: Arc<RpcRouter>,
     snapshots: Arc<SnapshotStore>,
+    personas: Arc<PersonaStore>,
+    scenarios: Arc<ScenarioEngine>,
 }
 
 impl Default for SolanaState {
@@ -53,10 +73,28 @@ impl Default for SolanaState {
                 let scratch = std::env::temp_dir().join("cadence-solana-snapshots");
                 SnapshotStore::new(scratch, Box::new(RpcAccountFetcher))
             });
+        let supervisor = Arc::new(ValidatorSupervisor::with_default_launcher());
+        let personas = PersonaStore::with_default_root().unwrap_or_else(|_| {
+            // Same fallback reasoning as snapshots: never block the app
+            // from booting because the OS data dir is missing.
+            let scratch = std::env::temp_dir().join("cadence-solana-personas");
+            let keypairs = KeypairStore::new(
+                scratch.join("keypairs"),
+                Box::new(OsRngKeypairProvider::default()),
+            );
+            PersonaStore::new(scratch, keypairs, Box::new(DefaultFundingBackend::new()))
+        });
+        let personas = Arc::new(personas);
+        let scenarios = Arc::new(ScenarioEngine::new(
+            Arc::clone(&personas),
+            Arc::clone(&supervisor),
+        ));
         Self {
-            supervisor: Arc::new(ValidatorSupervisor::with_default_launcher()),
+            supervisor,
             rpc_router: Arc::new(RpcRouter::new_with_default_pool()),
             snapshots: Arc::new(snapshots),
+            personas,
+            scenarios,
         }
     }
 }
@@ -67,10 +105,46 @@ impl SolanaState {
         rpc_router: Arc<RpcRouter>,
         snapshots: Arc<SnapshotStore>,
     ) -> Self {
+        let personas = PersonaStore::with_default_root().unwrap_or_else(|_| {
+            let scratch = std::env::temp_dir().join("cadence-solana-personas-test");
+            let keypairs = KeypairStore::new(
+                scratch.join("keypairs"),
+                Box::new(OsRngKeypairProvider::default()),
+            );
+            PersonaStore::new(scratch, keypairs, Box::new(DefaultFundingBackend::new()))
+        });
+        let personas = Arc::new(personas);
+        let scenarios = Arc::new(ScenarioEngine::new(
+            Arc::clone(&personas),
+            Arc::clone(&supervisor),
+        ));
         Self {
             supervisor,
             rpc_router,
             snapshots,
+            personas,
+            scenarios,
+        }
+    }
+
+    /// Explicit constructor for tests that want to inject a persona store
+    /// (and a scenario engine wired to it) instead of the default one.
+    pub fn with_personas(
+        supervisor: Arc<ValidatorSupervisor>,
+        rpc_router: Arc<RpcRouter>,
+        snapshots: Arc<SnapshotStore>,
+        personas: Arc<PersonaStore>,
+    ) -> Self {
+        let scenarios = Arc::new(ScenarioEngine::new(
+            Arc::clone(&personas),
+            Arc::clone(&supervisor),
+        ));
+        Self {
+            supervisor,
+            rpc_router,
+            snapshots,
+            personas,
+            scenarios,
         }
     }
 
@@ -84,6 +158,27 @@ impl SolanaState {
 
     pub fn snapshots(&self) -> Arc<SnapshotStore> {
         Arc::clone(&self.snapshots)
+    }
+
+    pub fn personas(&self) -> Arc<PersonaStore> {
+        Arc::clone(&self.personas)
+    }
+
+    pub fn scenarios(&self) -> Arc<ScenarioEngine> {
+        Arc::clone(&self.scenarios)
+    }
+
+    /// Resolve the RPC URL the persona / scenario commands should use when
+    /// the caller hasn't supplied one. Prefers the active supervisor's URL;
+    /// falls back to whichever endpoint the router considers healthy.
+    pub fn resolve_rpc_url(&self, cluster: ClusterKind) -> Option<String> {
+        let status = self.supervisor.status();
+        if status.kind == Some(cluster) {
+            if let Some(url) = status.rpc_url.clone() {
+                return Some(url);
+            }
+        }
+        self.rpc_router.pick_healthy(cluster).map(|e| e.url)
     }
 }
 
@@ -257,6 +352,262 @@ pub fn solana_rpc_endpoints_set(
         .rpc_router
         .set_endpoints(request.cluster, request.endpoints)?;
     Ok(state.rpc_router.snapshot_all())
+}
+
+// ---------- Persona commands -----------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonaListRequest {
+    pub cluster: ClusterKind,
+}
+
+#[tauri::command]
+pub fn solana_persona_list(
+    state: State<'_, SolanaState>,
+    request: PersonaListRequest,
+) -> CommandResult<Vec<Persona>> {
+    state.personas.list(request.cluster)
+}
+
+#[tauri::command]
+pub fn solana_persona_roles() -> CommandResult<Vec<RoleDescriptor>> {
+    Ok(persona_role_descriptors())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonaCreateRequest {
+    pub spec: PersonaSpec,
+    /// Optional RPC override. When None, the workbench resolves the active
+    /// supervisor's URL, or the first healthy router endpoint, or no URL
+    /// (in which case funding is skipped and the caller must call
+    /// `solana_persona_fund` once a validator is running).
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonaCreateResponse {
+    pub persona: Persona,
+    pub receipt: FundingReceipt,
+}
+
+#[tauri::command]
+pub fn solana_persona_create<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: PersonaCreateRequest,
+) -> CommandResult<PersonaCreateResponse> {
+    let rpc_url = request
+        .rpc_url
+        .or_else(|| state.resolve_rpc_url(request.spec.cluster));
+    let cluster = request.spec.cluster;
+    let (persona, receipt) = state.personas.create(request.spec, rpc_url)?;
+    let payload = PersonaEventPayload::new(PersonaEventKind::Created, cluster.as_str(), &persona.name)
+        .with_pubkey(&persona.pubkey)
+        .with_message(format!(
+            "funded {} steps, success={}",
+            receipt.steps.len(),
+            receipt.succeeded
+        ));
+    let _ = app.emit(SOLANA_PERSONA_EVENT, payload);
+    Ok(PersonaCreateResponse { persona, receipt })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonaFundRequest {
+    pub cluster: ClusterKind,
+    pub name: String,
+    pub delta: FundingDelta,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[tauri::command]
+pub fn solana_persona_fund<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: PersonaFundRequest,
+) -> CommandResult<FundingReceipt> {
+    if request.delta.is_empty() {
+        return Err(CommandError::user_fixable(
+            "solana_persona_fund_empty_delta",
+            "Funding request is empty — specify at least one of solLamports, tokens, or nfts.",
+        ));
+    }
+    let rpc_url = request
+        .rpc_url
+        .or_else(|| state.resolve_rpc_url(request.cluster))
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "solana_persona_fund_no_rpc",
+                "No RPC URL available — start a cluster or provide rpcUrl explicitly.",
+            )
+        })?;
+
+    let receipt = state
+        .personas
+        .fund(request.cluster, &request.name, &request.delta, &rpc_url)?;
+    let payload = PersonaEventPayload::new(
+        PersonaEventKind::Funded,
+        request.cluster.as_str(),
+        &request.name,
+    )
+    .with_message(format!(
+        "delta: sol={} tokens={} nfts={}, ok={}",
+        request.delta.sol_lamports,
+        request.delta.tokens.len(),
+        request.delta.nfts.iter().map(|n| n.count).sum::<u32>(),
+        receipt.succeeded,
+    ));
+    let _ = app.emit(SOLANA_PERSONA_EVENT, payload);
+    Ok(receipt)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonaDeleteRequest {
+    pub cluster: ClusterKind,
+    pub name: String,
+}
+
+#[tauri::command]
+pub fn solana_persona_delete<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: PersonaDeleteRequest,
+) -> CommandResult<()> {
+    state.personas.delete(request.cluster, &request.name)?;
+    let payload = PersonaEventPayload::new(
+        PersonaEventKind::Deleted,
+        request.cluster.as_str(),
+        &request.name,
+    );
+    let _ = app.emit(SOLANA_PERSONA_EVENT, payload);
+    Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersonaImportKeypairRequest {
+    pub cluster: ClusterKind,
+    pub name: String,
+    #[serde(default = "default_import_role")]
+    pub role: PersonaRole,
+    /// Absolute filesystem path to a `solana-keygen` JSON keypair file.
+    pub keypair_path: PathBuf,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+fn default_import_role() -> PersonaRole {
+    PersonaRole::Custom
+}
+
+#[tauri::command]
+pub fn solana_persona_import_keypair<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: PersonaImportKeypairRequest,
+) -> CommandResult<Persona> {
+    let bytes = std::fs::read(&request.keypair_path).map_err(|err| {
+        CommandError::user_fixable(
+            "solana_persona_import_read_failed",
+            format!(
+                "Could not read keypair file {}: {err}",
+                request.keypair_path.display()
+            ),
+        )
+    })?;
+    let keypair = KeypairBytes::from_solana_keygen_json(&bytes)?;
+    let persona = state.personas.import_keypair(
+        request.cluster,
+        &request.name,
+        request.role,
+        keypair,
+        request.note,
+    )?;
+    let payload = PersonaEventPayload::new(
+        PersonaEventKind::Imported,
+        request.cluster.as_str(),
+        &persona.name,
+    )
+    .with_pubkey(&persona.pubkey);
+    let _ = app.emit(SOLANA_PERSONA_EVENT, payload);
+    Ok(persona)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonaExportKeypairResponse {
+    pub path: String,
+}
+
+#[tauri::command]
+pub fn solana_persona_export_keypair(
+    state: State<'_, SolanaState>,
+    request: PersonaDeleteRequest, // same shape: cluster + name
+) -> CommandResult<PersonaExportKeypairResponse> {
+    let path = state
+        .personas
+        .export_keypair_path(request.cluster, &request.name)?;
+    Ok(PersonaExportKeypairResponse {
+        path: path.display().to_string(),
+    })
+}
+
+// ---------- Scenario commands ----------------------------------------------
+
+#[tauri::command]
+pub fn solana_scenario_list() -> CommandResult<Vec<ScenarioDescriptor>> {
+    Ok(scenario_descriptors())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScenarioRunRequest {
+    pub spec: ScenarioSpec,
+}
+
+#[tauri::command]
+pub fn solana_scenario_run<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: ScenarioRunRequest,
+) -> CommandResult<ScenarioRun> {
+    let spec = request.spec;
+    let _ = app.emit(
+        SOLANA_SCENARIO_EVENT,
+        ScenarioEventPayload::new(
+            ScenarioEventKind::Started,
+            &spec.id,
+            spec.cluster.as_str(),
+            &spec.persona,
+        ),
+    );
+    let run = state.scenarios.run(spec)?;
+
+    let finished_kind = match run.status {
+        ScenarioStatus::Succeeded => ScenarioEventKind::Completed,
+        ScenarioStatus::Failed => ScenarioEventKind::Failed,
+        ScenarioStatus::PendingPipeline => ScenarioEventKind::PendingPipeline,
+    };
+    let message = run.pipeline_hint.clone().unwrap_or_else(|| {
+        format!("{} steps completed", run.steps.len())
+    });
+    let payload = ScenarioEventPayload::new(
+        finished_kind,
+        &run.id,
+        run.cluster.as_str(),
+        &run.persona,
+    )
+    .with_message(message)
+    .with_signature_count(run.signatures.len().min(u32::MAX as usize) as u32);
+    let _ = app.emit(SOLANA_SCENARIO_EVENT, payload);
+    Ok(run)
 }
 
 /// Lightweight acknowledgement that the frontend can call when it opens

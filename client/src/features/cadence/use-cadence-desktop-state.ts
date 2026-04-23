@@ -265,9 +265,12 @@ function getProviderModelCatalogDependencyKey(
     profile.presetId?.trim() || 'none',
     profile.baseUrl?.trim() || 'none',
     profile.apiVersion?.trim() || 'none',
+    profile.region?.trim() || 'none',
+    profile.projectId?.trim() || 'none',
     profile.readiness.status,
     profile.readiness.ready ? 'ready' : 'not_ready',
-    profile.readiness.credentialUpdatedAt ?? 'none',
+    profile.readiness.proof ?? 'none',
+    profile.readiness.proofUpdatedAt ?? 'none',
   ].join('|')
 }
 

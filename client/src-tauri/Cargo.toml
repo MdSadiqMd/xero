@@ -57,8 +57,10 @@ ios-grpc = ["dep:tonic", "dep:tonic-build", "dep:protoc-bin-vendored", "dep:pros
 [dependencies]
 arc-swap = "1"
 base64 = "0.22"
+bs58 = "0.5"
 byteorder = "1"
 dirs = "5"
+ed25519-dalek = { version = "2", default-features = false, features = ["fast", "std", "rand_core"] }
 git2 = "0.20"
 globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

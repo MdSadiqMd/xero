@@ -78,8 +78,6 @@ export function ProvidersStep({
           onStartLogin={onStartLogin}
           onLogout={onLogout}
           openAiMissingProjectLabel="Choose a project next"
-          openAiMissingProjectDescription="After you choose a project, Cadence can sign in the selected OpenAI profile."
-          showUnavailableProviders
         />
       </div>
     </div>

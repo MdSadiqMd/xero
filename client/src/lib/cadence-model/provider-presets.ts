@@ -3,7 +3,9 @@ import type { RuntimeProviderIdDto } from './runtime'
 
 export type ProviderBaseUrlMode = 'none' | 'optional' | 'required'
 export type ProviderApiVersionMode = 'none' | 'optional' | 'required'
-export type ProviderAuthMode = 'oauth' | 'api_key'
+export type ProviderRegionMode = 'none' | 'required'
+export type ProviderProjectIdMode = 'none' | 'required'
+export type ProviderAuthMode = 'oauth' | 'api_key' | 'local' | 'ambient'
 
 export interface CloudProviderPreset {
   providerId: RuntimeProviderIdDto
@@ -17,9 +19,11 @@ export interface CloudProviderPreset {
   authMode: ProviderAuthMode
   baseUrlMode: ProviderBaseUrlMode
   apiVersionMode: ProviderApiVersionMode
+  regionMode: ProviderRegionMode
+  projectIdMode: ProviderProjectIdMode
   manualModelAllowed: boolean
   supportsCatalogRefresh: boolean
-  endpointHint: string
+  connectionHint: string
 }
 
 const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
@@ -35,9 +39,11 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     authMode: 'oauth',
     baseUrlMode: 'none',
     apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
     manualModelAllowed: false,
     supportsCatalogRefresh: false,
-    endpointHint: 'Browser sign-in happens when you bind a runtime session.',
+    connectionHint: 'Browser sign-in happens when you bind a runtime session.',
   },
   {
     providerId: 'openrouter',
@@ -51,9 +57,11 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     authMode: 'api_key',
     baseUrlMode: 'none',
     apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
-    endpointHint: 'Uses the built-in OpenRouter endpoint preset.',
+    connectionHint: 'Uses the built-in OpenRouter endpoint preset.',
   },
   {
     providerId: 'anthropic',
@@ -67,9 +75,11 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     authMode: 'api_key',
     baseUrlMode: 'none',
     apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
-    endpointHint: 'Uses the built-in Anthropic endpoint preset.',
+    connectionHint: 'Uses the built-in Anthropic endpoint preset.',
   },
   {
     providerId: 'github_models',
@@ -83,9 +93,11 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     authMode: 'api_key',
     baseUrlMode: 'none',
     apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
-    endpointHint: 'Uses the built-in GitHub Models inference endpoint.',
+    connectionHint: 'Uses the built-in GitHub Models inference endpoint.',
   },
   {
     providerId: 'openai_api',
@@ -99,9 +111,29 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     authMode: 'api_key',
     baseUrlMode: 'optional',
     apiVersionMode: 'optional',
+    regionMode: 'none',
+    projectIdMode: 'none',
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
-    endpointHint: 'Leave base URL blank to use the default OpenAI API endpoint, or supply a custom OpenAI-compatible endpoint.',
+    connectionHint: 'Leave base URL blank to use the default OpenAI API endpoint, or supply a custom OpenAI-compatible endpoint.',
+  },
+  {
+    providerId: 'ollama',
+    runtimeKind: 'openai_compatible',
+    label: 'Ollama',
+    description: 'Use a local Ollama endpoint without storing a fake app-local API key.',
+    defaultProfileId: 'ollama-default',
+    defaultProfileLabel: 'Ollama',
+    defaultModelId: 'llama3.2',
+    presetId: 'ollama',
+    authMode: 'local',
+    baseUrlMode: 'optional',
+    apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
+    manualModelAllowed: true,
+    supportsCatalogRefresh: true,
+    connectionHint: 'Leave base URL blank to use the default Ollama endpoint at http://127.0.0.1:11434/v1.',
   },
   {
     providerId: 'azure_openai',
@@ -115,9 +147,11 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     authMode: 'api_key',
     baseUrlMode: 'required',
     apiVersionMode: 'required',
+    regionMode: 'none',
+    projectIdMode: 'none',
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
-    endpointHint: 'Provide the Azure deployment base URL and required api-version value.',
+    connectionHint: 'Provide the Azure deployment base URL and required api-version value.',
   },
   {
     providerId: 'gemini_ai_studio',
@@ -131,9 +165,47 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     authMode: 'api_key',
     baseUrlMode: 'none',
     apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
-    endpointHint: 'Uses the built-in Gemini AI Studio compatibility endpoint.',
+    connectionHint: 'Uses the built-in Gemini AI Studio compatibility endpoint.',
+  },
+  {
+    providerId: 'bedrock',
+    runtimeKind: 'anthropic',
+    label: 'Amazon Bedrock',
+    description: 'Use Anthropic-family models via Amazon Bedrock with ambient AWS credentials and required region metadata.',
+    defaultProfileId: 'bedrock-default',
+    defaultProfileLabel: 'Amazon Bedrock',
+    defaultModelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+    presetId: 'bedrock',
+    authMode: 'ambient',
+    baseUrlMode: 'none',
+    apiVersionMode: 'none',
+    regionMode: 'required',
+    projectIdMode: 'none',
+    manualModelAllowed: true,
+    supportsCatalogRefresh: true,
+    connectionHint: 'Uses ambient AWS credentials from the desktop host; region is required and no app-local API key is stored.',
+  },
+  {
+    providerId: 'vertex',
+    runtimeKind: 'anthropic',
+    label: 'Google Vertex AI',
+    description: 'Use Anthropic-family models via Vertex AI with ambient ADC credentials plus required region and project metadata.',
+    defaultProfileId: 'vertex-default',
+    defaultProfileLabel: 'Google Vertex AI',
+    defaultModelId: 'claude-3-7-sonnet@20250219',
+    presetId: 'vertex',
+    authMode: 'ambient',
+    baseUrlMode: 'none',
+    apiVersionMode: 'none',
+    regionMode: 'required',
+    projectIdMode: 'required',
+    manualModelAllowed: true,
+    supportsCatalogRefresh: true,
+    connectionHint: 'Uses ambient Google ADC credentials from the desktop host; region and project ID are required and no app-local API key is stored.',
   },
 ]
 
@@ -177,22 +249,57 @@ export function getCloudProviderDefaultProfileId(
   return getCloudProviderPreset(providerId)?.defaultProfileId ?? null
 }
 
+export function getCloudProviderAuthMode(
+  providerId: RuntimeProviderIdDto | string | null | undefined,
+): ProviderAuthMode | null {
+  return getCloudProviderPreset(providerId)?.authMode ?? null
+}
+
 export function isApiKeyCloudProvider(
   providerId: RuntimeProviderIdDto | string | null | undefined,
 ): boolean {
-  return getCloudProviderPreset(providerId)?.authMode === 'api_key'
+  return getCloudProviderAuthMode(providerId) === 'api_key'
 }
 
 export function usesOauthCloudProvider(
   providerId: RuntimeProviderIdDto | string | null | undefined,
 ): boolean {
-  return getCloudProviderPreset(providerId)?.authMode === 'oauth'
+  return getCloudProviderAuthMode(providerId) === 'oauth'
 }
 
-export function formatProviderEndpointLabel(profile: Pick<ProviderProfileDto, 'providerId' | 'baseUrl'>): string {
+export function isLocalCloudProvider(
+  providerId: RuntimeProviderIdDto | string | null | undefined,
+): boolean {
+  return getCloudProviderAuthMode(providerId) === 'local'
+}
+
+export function usesAmbientCloudProvider(
+  providerId: RuntimeProviderIdDto | string | null | undefined,
+): boolean {
+  return getCloudProviderAuthMode(providerId) === 'ambient'
+}
+
+export function formatProviderConnectionLabel(
+  profile: Pick<ProviderProfileDto, 'providerId' | 'baseUrl' | 'region' | 'projectId'>,
+): string {
   if (profile.baseUrl?.trim()) {
     return `Custom endpoint · ${profile.baseUrl.trim()}`
   }
 
-  return getCloudProviderPreset(profile.providerId)?.endpointHint ?? getCloudProviderLabel(profile.providerId)
+  const metadataParts = [
+    profile.region?.trim() ? `Region ${profile.region.trim()}` : null,
+    profile.projectId?.trim() ? `Project ${profile.projectId.trim()}` : null,
+  ].filter((value): value is string => Boolean(value))
+
+  if (metadataParts.length > 0) {
+    return metadataParts.join(' · ')
+  }
+
+  return getCloudProviderPreset(profile.providerId)?.connectionHint ?? getCloudProviderLabel(profile.providerId)
+}
+
+export function formatProviderEndpointLabel(
+  profile: Pick<ProviderProfileDto, 'providerId' | 'baseUrl' | 'region' | 'projectId'>,
+): string {
+  return formatProviderConnectionLabel(profile)
 }

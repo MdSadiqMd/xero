@@ -26,8 +26,8 @@ import {
   type UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import {
-  formatProviderEndpointLabel,
-  isApiKeyCloudProvider,
+  formatProviderConnectionLabel,
+  getCloudProviderPreset,
 } from "@/src/lib/cadence-model/provider-presets"
 import { type OnboardingStepId } from "./types"
 
@@ -55,20 +55,42 @@ function getProviderReview(providerProfiles: ProviderProfilesDto | null, runtime
     }
   }
 
-  const customEndpointSuffix = activeProfile.baseUrl?.trim()
-    ? ` · ${formatProviderEndpointLabel(activeProfile)}`
-    : ""
+  const preset = getCloudProviderPreset(activeProfile.providerId)
+  const connectionSuffix = ` · ${formatProviderConnectionLabel(activeProfile)}`
 
-  if (isApiKeyCloudProvider(activeProfile.providerId)) {
-    return activeProfile.readiness.ready
-      ? {
-          ready: true,
-          value: `${activeProfile.label}${customEndpointSuffix} · API key saved`,
-        }
-      : {
-          ready: false,
-          value: `${activeProfile.label}${customEndpointSuffix} · API key required`,
-        }
+  switch (preset?.authMode) {
+    case 'api_key':
+      return activeProfile.readiness.ready
+        ? {
+            ready: true,
+            value: `${activeProfile.label}${connectionSuffix} · API key saved`,
+          }
+        : {
+            ready: false,
+            value: `${activeProfile.label}${connectionSuffix} · API key required`,
+          }
+    case 'local':
+      return activeProfile.readiness.ready
+        ? {
+            ready: true,
+            value: `${activeProfile.label}${connectionSuffix} · local endpoint ready`,
+          }
+        : {
+            ready: false,
+            value: `${activeProfile.label}${connectionSuffix} · local profile needs repair`,
+          }
+    case 'ambient':
+      return activeProfile.readiness.ready
+        ? {
+            ready: true,
+            value: `${activeProfile.label}${connectionSuffix} · ambient auth ready`,
+          }
+        : {
+            ready: false,
+            value: `${activeProfile.label}${connectionSuffix} · ambient profile needs repair`,
+          }
+    default:
+      break
   }
 
   const isOpenAiConnected = Boolean(runtimeSession?.providerId === "openai_codex" && runtimeSession.isAuthenticated)
@@ -80,7 +102,7 @@ function getProviderReview(providerProfiles: ProviderProfilesDto | null, runtime
       }
     : {
         ready: true,
-        value: `${activeProfile.label}${customEndpointSuffix} · active profile`,
+        value: `${activeProfile.label}${connectionSuffix} · active profile`,
       }
 }
 

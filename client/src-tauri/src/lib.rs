@@ -173,6 +173,15 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::solana::solana_snapshot_delete,
             commands::solana::solana_rpc_health,
             commands::solana::solana_rpc_endpoints_set,
+            commands::solana::solana_persona_list,
+            commands::solana::solana_persona_roles,
+            commands::solana::solana_persona_create,
+            commands::solana::solana_persona_fund,
+            commands::solana::solana_persona_delete,
+            commands::solana::solana_persona_import_keypair,
+            commands::solana::solana_persona_export_keypair,
+            commands::solana::solana_scenario_list,
+            commands::solana::solana_scenario_run,
             commands::solana::solana_subscribe_ready,
         ])
 }

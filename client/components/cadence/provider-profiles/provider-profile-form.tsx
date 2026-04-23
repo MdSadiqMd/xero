@@ -3,10 +3,12 @@ import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   AlertCircle,
   Check,
+  Cloud,
   KeyRound,
   LoaderCircle,
   LogIn,
   LogOut,
+  Server,
 } from "lucide-react"
 import {
   AnthropicIcon,
@@ -53,8 +55,11 @@ import {
   upsertProviderProfileRequestSchema,
 } from "@/src/lib/cadence-model"
 import {
+  formatProviderConnectionLabel,
   isApiKeyCloudProvider,
+  isLocalCloudProvider,
   listCloudProviderPresets,
+  usesAmbientCloudProvider,
 } from "@/src/lib/cadence-model/provider-presets"
 
 type SupportedProviderId = ProviderProfileDto["providerId"]
@@ -67,6 +72,8 @@ type ProviderDraft = {
   clearApiKey: boolean
   baseUrl: string
   apiVersion: string
+  region: string
+  projectId: string
 }
 
 interface ProviderProfileCard {
@@ -110,8 +117,11 @@ const PROVIDER_ICON_BY_ID: Record<SupportedProviderId, ElementType> = {
   anthropic: AnthropicIcon,
   github_models: GitHubIcon,
   openai_api: OpenAIIcon,
+  ollama: Server,
   azure_openai: OpenAIIcon,
   gemini_ai_studio: GoogleIcon,
+  bedrock: Cloud,
+  vertex: GoogleIcon,
 }
 
 const MODEL_GROUP_LABELS: Record<string, string> = {
@@ -153,6 +163,8 @@ function createDraft(card: ProviderProfileCard): ProviderDraft {
     clearApiKey: false,
     baseUrl: card.profile?.baseUrl ?? "",
     apiVersion: card.profile?.apiVersion ?? "",
+    region: card.profile?.region ?? "",
+    projectId: card.profile?.projectId ?? "",
   }
 }
 
@@ -192,10 +204,24 @@ function getProfileCards(providerProfiles: ProviderProfilesDto | null): Provider
   return cards
 }
 
-function getApiKeyProviderReadinessBadge(profile: ProviderProfileDto | null) {
-  if (!profile || !isApiKeyCloudProvider(profile.providerId)) return null
+function getProviderReadinessBadge(profile: ProviderProfileDto | null) {
+  if (!profile || profile.providerId === "openai_codex") return null
 
   if (profile.readiness.status === "ready") {
+    if (profile.readiness.proof === "local") {
+      return {
+        label: "Local",
+        className: "border border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300",
+      }
+    }
+
+    if (profile.readiness.proof === "ambient") {
+      return {
+        label: "Ambient auth",
+        className: "border border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:text-cyan-300",
+      }
+    }
+
     return {
       label: "Ready",
       className: "border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 dark:text-emerald-400",
@@ -206,6 +232,20 @@ function getApiKeyProviderReadinessBadge(profile: ProviderProfileDto | null) {
     return {
       label: "Needs repair",
       className: "border border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-300",
+    }
+  }
+
+  if (isLocalCloudProvider(profile.providerId)) {
+    return {
+      label: "Needs local setup",
+      className: "border border-border bg-secondary text-muted-foreground",
+    }
+  }
+
+  if (usesAmbientCloudProvider(profile.providerId)) {
+    return {
+      label: "Needs ambient setup",
+      className: "border border-border bg-secondary text-muted-foreground",
     }
   }
 
@@ -227,15 +267,35 @@ function getProfileId(card: ProviderProfileCard): string {
   return card.profile?.profileId ?? card.preset.defaultProfileId
 }
 
-function getProfileReference(profile: Pick<ProviderProfileDto, "profileId" | "label"> | null): string {
-  if (!profile) return "the selected profile"
+function getMissingConnectionFieldLabels(card: ProviderProfileCard, draft: ProviderDraft): string[] {
+  const missing: string[] = []
 
-  const profileId = profile.profileId.trim()
-  const label = profile.label.trim()
+  if (card.preset.baseUrlMode === "required" && !draft.baseUrl.trim()) {
+    missing.push("base URL")
+  }
 
-  if (label.length === 0) return profileId || "the selected profile"
-  if (profileId.length === 0 || profileId === label) return label
-  return `${label} (${profileId})`
+  if (card.preset.apiVersionMode === "required" && !draft.apiVersion.trim()) {
+    missing.push("API version")
+  }
+
+  if (card.preset.regionMode === "required" && !draft.region.trim()) {
+    missing.push("region")
+  }
+
+  if (card.preset.projectIdMode === "required" && !draft.projectId.trim()) {
+    missing.push("project ID")
+  }
+
+  return missing
+}
+
+function getConnectionLabel(card: ProviderProfileCard): string {
+  return formatProviderConnectionLabel({
+    providerId: card.preset.providerId,
+    baseUrl: card.profile?.baseUrl ?? null,
+    region: card.profile?.region ?? null,
+    projectId: card.profile?.projectId ?? null,
+  })
 }
 
 function isCardSelected(providerProfiles: ProviderProfilesDto | null, card: ProviderProfileCard): boolean {
@@ -256,6 +316,9 @@ function buildUpsertRequest(
       : baseUrl
         ? normalizeOptionalText(draft.apiVersion)
         : null
+  const region = card.preset.regionMode === "none" ? null : normalizeOptionalText(draft.region)
+  const projectId =
+    card.preset.projectIdMode === "none" ? null : normalizeOptionalText(draft.projectId)
 
   return {
     profileId: getProfileId(card),
@@ -269,6 +332,8 @@ function buildUpsertRequest(
     presetId: card.preset.presetId ?? null,
     baseUrl,
     apiVersion,
+    region,
+    projectId,
     apiKey:
       card.preset.authMode === "api_key"
         ? draft.clearApiKey
@@ -513,8 +578,6 @@ export interface ProviderProfileFormProps {
   onStartLogin?: () => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
   openAiMissingProjectLabel?: string
-  openAiMissingProjectDescription?: string
-  showUnavailableProviders?: boolean
 }
 
 export function ProviderProfileForm({
@@ -535,7 +598,6 @@ export function ProviderProfileForm({
   onStartLogin,
   onLogout,
   openAiMissingProjectLabel = "Open a project",
-  openAiMissingProjectDescription = "Select an imported project to sign in the selected OpenAI profile.",
 }: ProviderProfileFormProps) {
   const [editingCardKey, setEditingCardKey] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({})
@@ -547,7 +609,6 @@ export function ProviderProfileForm({
   const isRefreshing = providerProfilesLoadStatus === "loading"
   const isSaving = providerProfilesSaveStatus === "running"
   const selectedProfile = getActiveProviderProfile(providerProfiles)
-  const selectedProfileReference = getProfileReference(selectedProfile)
   const selectedProvider = resolveSelectedRuntimeProvider(providerProfiles, null, runtimeSession ?? null)
   const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession ?? null)
   const selectedProfileUnavailableMessage =
@@ -637,6 +698,16 @@ export function ProviderProfileForm({
       return
     }
 
+    if (card.preset.regionMode === "required" && !draft.region.trim()) {
+      setFormError(`${card.preset.label} requires a region.`)
+      return
+    }
+
+    if (card.preset.projectIdMode === "required" && !draft.projectId.trim()) {
+      setFormError(`${card.preset.label} requires a project ID.`)
+      return
+    }
+
     if (card.preset.authMode === "api_key") {
       const hasSavedKey = hasSavedApiKeyCredential(card)
       if (!hasSavedKey && !draft.clearApiKey && !draft.apiKey.trim()) {
@@ -676,10 +747,15 @@ export function ProviderProfileForm({
     setFormError(null)
     setAuthError(null)
 
-    if (!card.profile && (card.preset.baseUrlMode === "required" || card.preset.apiVersionMode === "required")) {
-      openEditor(card)
-      setFormError(`${card.preset.label} needs endpoint details before it can be activated.`)
-      return
+    if (!card.profile) {
+      const missingFields = getMissingConnectionFieldLabels(card, createDraft(card))
+      if (missingFields.length > 0) {
+        openEditor(card)
+        setFormError(
+          `${card.preset.label} needs ${missingFields.join(" and ")} before it can be activated.`,
+        )
+        return
+      }
     }
 
     try {
@@ -814,7 +890,7 @@ export function ProviderProfileForm({
           const isApiKeyProvider = card.preset.authMode === "api_key"
           const isOpenAi = card.preset.providerId === "openai_codex"
           const isSelected = isCardSelected(providerProfiles, card)
-          const readinessBadge = getApiKeyProviderReadinessBadge(card.profile)
+          const readinessBadge = getProviderReadinessBadge(card.profile)
           const hasSavedApiKey = hasSavedApiKeyCredential(card)
           const shouldRenderOpenAiAuth = isOpenAi && isSelected && Boolean(onStartLogin && onLogout)
           const isSelectedRuntimeProvider = runtimeSession?.providerId === selectedProvider.providerId
@@ -863,9 +939,7 @@ export function ProviderProfileForm({
           const modelChoiceGroups = groupProviderModelChoices(cardCatalogState.choices)
           const isCatalogRefreshing = cardCatalogState.loadStatus === "loading"
           const canRefreshCatalog = Boolean(onRefreshProviderModelCatalog && card.profile && card.preset.supportsCatalogRefresh)
-          const endpointLabel = card.profile?.baseUrl?.trim()
-            ? `Custom endpoint · ${card.profile.baseUrl.trim()}`
-            : card.preset.endpointHint
+          const connectionLabel = getConnectionLabel(card)
 
           return (
             <div
@@ -922,7 +996,7 @@ export function ProviderProfileForm({
                     </span>
                   </p>
 
-                  <p className="mt-1 text-[11.5px] text-muted-foreground">Endpoint: {endpointLabel}</p>
+                  <p className="mt-1 text-[11.5px] text-muted-foreground">Connection: {connectionLabel}</p>
 
                   {inlineStatus ? (
                     <Alert
@@ -1130,11 +1204,14 @@ export function ProviderProfileForm({
                     </p>
                   </div>
 
-                  {card.preset.baseUrlMode !== "none" || card.preset.apiVersionMode !== "none" ? (
+                  {card.preset.baseUrlMode !== "none" ||
+                  card.preset.apiVersionMode !== "none" ||
+                  card.preset.regionMode !== "none" ||
+                  card.preset.projectIdMode !== "none" ? (
                     <div className="space-y-3 rounded-md border border-border/80 bg-muted/25 px-3.5 py-3">
                       <div>
-                        <p className="text-[12px] font-medium text-foreground">Endpoint</p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">{card.preset.endpointHint}</p>
+                        <p className="text-[12px] font-medium text-foreground">Connection</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">{card.preset.connectionHint}</p>
                       </div>
 
                       {card.preset.baseUrlMode !== "none" ? (
@@ -1153,9 +1230,11 @@ export function ProviderProfileForm({
                               })
                             }
                             placeholder={
-                              card.preset.baseUrlMode === "required"
-                                ? "https://example-resource.openai.azure.com/openai/deployments/work"
-                                : "https://api.openai.com/v1"
+                              card.preset.providerId === "ollama"
+                                ? "http://127.0.0.1:11434/v1"
+                                : card.preset.baseUrlMode === "required"
+                                  ? "https://example-resource.openai.azure.com/openai/deployments/work"
+                                  : "https://api.openai.com/v1"
                             }
                             value={draft.baseUrl}
                           />
@@ -1179,6 +1258,48 @@ export function ProviderProfileForm({
                             }
                             placeholder="2024-10-21"
                             value={draft.apiVersion}
+                          />
+                        </div>
+                      ) : null}
+
+                      {card.preset.regionMode !== "none" ? (
+                        <div className="space-y-2">
+                          <Label htmlFor={`${card.key}-region`} className="text-[12px]">
+                            Region
+                          </Label>
+                          <Input
+                            id={`${card.key}-region`}
+                            className="h-9 font-mono text-[13px]"
+                            disabled={isSaving || isRefreshing}
+                            onChange={(event) =>
+                              setDraft(card, {
+                                ...draft,
+                                region: event.target.value,
+                              })
+                            }
+                            placeholder={card.preset.providerId === "vertex" ? "us-central1" : "us-east-1"}
+                            value={draft.region}
+                          />
+                        </div>
+                      ) : null}
+
+                      {card.preset.projectIdMode !== "none" ? (
+                        <div className="space-y-2">
+                          <Label htmlFor={`${card.key}-project-id`} className="text-[12px]">
+                            Project ID
+                          </Label>
+                          <Input
+                            id={`${card.key}-project-id`}
+                            className="h-9 font-mono text-[13px]"
+                            disabled={isSaving || isRefreshing}
+                            onChange={(event) =>
+                              setDraft(card, {
+                                ...draft,
+                                projectId: event.target.value,
+                              })
+                            }
+                            placeholder="vertex-project"
+                            value={draft.projectId}
                           />
                         </div>
                       ) : null}
@@ -1256,6 +1377,14 @@ export function ProviderProfileForm({
                             ? "Blank keeps the current key"
                             : `Required for ${card.preset.label}`}
                       </p>
+                    </div>
+                  ) : card.preset.authMode === "local" ? (
+                    <div className="rounded-md border border-sky-500/20 bg-sky-500/5 px-3.5 py-3 text-[12px] text-sky-700 dark:text-sky-200">
+                      Cadence treats {card.preset.label} as a local endpoint. No app-local API key is stored for this provider profile.
+                    </div>
+                  ) : card.preset.authMode === "ambient" ? (
+                    <div className="rounded-md border border-cyan-500/20 bg-cyan-500/5 px-3.5 py-3 text-[12px] text-cyan-700 dark:text-cyan-200">
+                      Cadence uses ambient desktop credentials for {card.preset.label}. No app-local API key is stored for this provider profile.
                     </div>
                   ) : null}
 

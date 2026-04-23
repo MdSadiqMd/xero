@@ -8,8 +8,10 @@ import type {
 } from '@/src/lib/cadence-model'
 import { getActiveProviderProfile } from '@/src/lib/cadence-model'
 import {
+  getCloudProviderAuthMode,
   getCloudProviderDefaultModelId,
   getCloudProviderLabel,
+  getCloudProviderPreset,
   isApiKeyCloudProvider,
   isKnownCloudProviderId,
 } from '@/src/lib/cadence-model/provider-presets'
@@ -38,6 +40,18 @@ export interface ProviderMismatchCopyView {
   reason: string
   sessionRecoveryCopy: string
   streamRecoveryCopy: string
+}
+
+type SelectedConfiguredProviderAuthMode = Exclude<
+  NonNullable<ReturnType<typeof getCloudProviderAuthMode>>,
+  'oauth'
+>
+
+interface SelectedConfiguredProviderState {
+  providerLabel: string
+  authMode: SelectedConfiguredProviderAuthMode
+  ready: boolean
+  readinessStatus: ProviderProfileReadinessDto['status'] | null
 }
 
 export function isKnownRuntimeProviderId(
@@ -85,35 +99,49 @@ function hasSelectedApiKeyProviderConfigured(selectedProvider: SelectedRuntimePr
   return false
 }
 
-interface SelectedApiKeyProviderState {
-  providerLabel: string
-  ready: boolean
-  readinessStatus: ProviderProfileReadinessDto['status'] | null
-}
-
-function getSelectedApiKeyProviderState(
+function getSelectedConfiguredProviderState(
   selectedProvider: SelectedRuntimeProviderView,
-): SelectedApiKeyProviderState | null {
-  if (!isApiKeyCloudProvider(selectedProvider.providerId)) {
+): SelectedConfiguredProviderState | null {
+  const authMode = getCloudProviderAuthMode(selectedProvider.providerId)
+  if (!authMode || authMode === 'oauth') {
     return null
   }
 
-  const readinessStatus =
-    selectedProvider.readiness?.status ??
-    (selectedProvider.source === 'runtime_session'
-      ? 'ready'
-      : hasSelectedApiKeyProviderConfigured(selectedProvider)
+  if (authMode === 'api_key') {
+    const readinessStatus =
+      selectedProvider.readiness?.status ??
+      (selectedProvider.source === 'runtime_session'
         ? 'ready'
-        : 'missing')
+        : hasSelectedApiKeyProviderConfigured(selectedProvider)
+          ? 'ready'
+          : 'missing')
+
+    return {
+      providerLabel: selectedProvider.providerLabel,
+      authMode,
+      ready: selectedProvider.readiness?.ready ?? readinessStatus === 'ready',
+      readinessStatus,
+    }
+  }
+
+  if (selectedProvider.readiness) {
+    return {
+      providerLabel: selectedProvider.providerLabel,
+      authMode,
+      ready: selectedProvider.readiness.ready,
+      readinessStatus: selectedProvider.readiness.status,
+    }
+  }
 
   return {
     providerLabel: selectedProvider.providerLabel,
-    ready: selectedProvider.readiness?.ready ?? readinessStatus === 'ready',
-    readinessStatus,
+    authMode,
+    ready: selectedProvider.source === 'runtime_session',
+    readinessStatus: selectedProvider.source === 'runtime_session' ? 'ready' : 'missing',
   }
 }
 
-function getRecoveredRuntimeRunApiKeyProviderLabel(
+function getRecoveredRuntimeRunConfiguredProviderLabel(
   runtimeRun: RuntimeRunView | null,
   selectedProvider: SelectedRuntimeProviderView,
 ): string | null {
@@ -122,7 +150,8 @@ function getRecoveredRuntimeRunApiKeyProviderLabel(
     return null
   }
 
-  if (!isApiKeyCloudProvider(runtimeRunProviderId)) {
+  const authMode = getCloudProviderAuthMode(runtimeRunProviderId)
+  if (!authMode || authMode === 'oauth') {
     return null
   }
 
@@ -154,6 +183,83 @@ function getApiKeyArticle(providerLabel: string): 'a' | 'an' {
 
 function getConfigureApiKeyCopy(providerLabel: string, suffix: string): string {
   return `Configure ${getApiKeyArticle(providerLabel)} ${providerLabel} API key in Settings${suffix}`
+}
+
+function getRequiredMetadataSuffix(providerId: RuntimeSettingsDto['providerId']): string {
+  const preset = getCloudProviderPreset(providerId)
+  if (!preset) {
+    return ''
+  }
+
+  const parts: string[] = []
+  if (preset.regionMode === 'required') {
+    parts.push('region')
+  }
+  if (preset.projectIdMode === 'required') {
+    parts.push('project ID')
+  }
+
+  if (parts.length === 0) {
+    return ''
+  }
+
+  return ` with ${parts.join(' and ')}`
+}
+
+function getRepairConfiguredProviderCopy(
+  state: SelectedConfiguredProviderState,
+  suffix: string,
+): string {
+  switch (state.authMode) {
+    case 'api_key':
+      return `Repair the selected ${state.providerLabel} profile credentials in Settings${suffix}`
+    case 'local':
+      return `Repair the selected ${state.providerLabel} local-endpoint metadata in Settings${suffix}`
+    case 'ambient':
+      return `Repair the selected ${state.providerLabel} ambient-auth metadata in Settings${suffix}`
+  }
+}
+
+function getSetupConfiguredProviderCopy(
+  state: SelectedConfiguredProviderState,
+  providerId: RuntimeSettingsDto['providerId'],
+  suffix: string,
+): string {
+  switch (state.authMode) {
+    case 'api_key':
+      return getConfigureApiKeyCopy(state.providerLabel, suffix)
+    case 'local':
+      return `Save the selected ${state.providerLabel} local endpoint profile in Settings${suffix}`
+    case 'ambient':
+      return `Save the selected ${state.providerLabel} ambient-auth profile${getRequiredMetadataSuffix(providerId)} in Settings${suffix}`
+  }
+}
+
+function getBindConfiguredProviderCopy(
+  state: SelectedConfiguredProviderState,
+  suffix: string,
+): string {
+  switch (state.authMode) {
+    case 'api_key':
+      return `Bind ${state.providerLabel} with the selected app-local provider profile${suffix}`
+    case 'local':
+      return `Bind ${state.providerLabel} with the selected local provider profile${suffix}`
+    case 'ambient':
+      return `Bind ${state.providerLabel} with the selected ambient-auth provider profile${suffix}`
+  }
+}
+
+function getValidatedConfiguredProviderBindingLabel(
+  state: SelectedConfiguredProviderState,
+): string {
+  switch (state.authMode) {
+    case 'api_key':
+      return 'profile'
+    case 'local':
+      return 'local provider profile'
+    case 'ambient':
+      return 'ambient-auth provider profile'
+  }
 }
 
 export function resolveSelectedRuntimeProvider(
@@ -252,18 +358,25 @@ export function getAgentSessionUnavailableReason(
   }
 
   const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
-  const selectedApiKeyProvider = getSelectedApiKeyProviderState(selectedProvider)
+  const selectedConfiguredProvider = getSelectedConfiguredProviderState(selectedProvider)
 
   if (!runtimeSession) {
-    if (selectedApiKeyProvider) {
-      if (selectedApiKeyProvider.readinessStatus === 'malformed') {
-        return `Repair the selected ${selectedApiKeyProvider.providerLabel} profile credentials in Settings before Cadence can bind a project runtime session.`
+    if (selectedConfiguredProvider) {
+      if (selectedConfiguredProvider.readinessStatus === 'malformed') {
+        return getRepairConfiguredProviderCopy(
+          selectedConfiguredProvider,
+          ' before Cadence can bind a project runtime session.',
+        )
       }
 
-      return selectedApiKeyProvider.ready
-        ? `Bind ${selectedApiKeyProvider.providerLabel} with the selected app-local provider profile to create a project runtime session.`
-        : getConfigureApiKeyCopy(
-            selectedApiKeyProvider.providerLabel,
+      return selectedConfiguredProvider.ready
+        ? getBindConfiguredProviderCopy(
+            selectedConfiguredProvider,
+            ' to create a project runtime session.',
+          )
+        : getSetupConfiguredProviderCopy(
+            selectedConfiguredProvider,
+            selectedProvider.providerId,
             ' before Cadence can bind a project runtime session.',
           )
     }
@@ -281,57 +394,64 @@ export function getAgentSessionUnavailableReason(
 
   switch (runtimeSession.phase) {
     case 'authenticated':
-      if (selectedApiKeyProvider) {
+      if (selectedConfiguredProvider) {
         return runtimeSession.sessionId
-          ? `Cadence validated the selected ${selectedApiKeyProvider.providerLabel} profile and bound session ${runtimeSession.sessionLabel} for model ${selectedProvider.modelId || 'the selected model'}.`
-          : `Cadence validated the selected ${selectedApiKeyProvider.providerLabel} profile for model ${selectedProvider.modelId || 'the selected model'}.`
+          ? `Cadence validated the selected ${selectedConfiguredProvider.providerLabel} ${getValidatedConfiguredProviderBindingLabel(selectedConfiguredProvider)} and bound session ${runtimeSession.sessionLabel} for model ${selectedProvider.modelId || 'the selected model'}.`
+          : `Cadence validated the selected ${selectedConfiguredProvider.providerLabel} ${getValidatedConfiguredProviderBindingLabel(selectedConfiguredProvider)} for model ${selectedProvider.modelId || 'the selected model'}.`
       }
 
       return runtimeSession.sessionId
         ? `Cadence is authenticated as ${runtimeSession.accountLabel} and bound to session ${runtimeSession.sessionLabel}.`
         : `Cadence is authenticated as ${runtimeSession.accountLabel}.`
     case 'awaiting_browser_callback':
-      return selectedApiKeyProvider
-        ? `Cadence surfaced a browser-auth phase while ${selectedApiKeyProvider.providerLabel} is selected. Rebind the runtime from the Agent tab or switch providers in Settings.`
+      return selectedConfiguredProvider
+        ? `Cadence surfaced a browser-auth phase while ${selectedConfiguredProvider.providerLabel} is selected. Rebind the runtime from the Agent tab or switch providers in Settings.`
         : 'Cadence started the OpenAI login flow and is waiting for the browser callback to return.'
     case 'awaiting_manual_input':
-      return selectedApiKeyProvider
-        ? `Cadence surfaced a manual-auth phase while ${selectedApiKeyProvider.providerLabel} is selected. Rebind the runtime from the Agent tab or switch providers in Settings.`
+      return selectedConfiguredProvider
+        ? `Cadence surfaced a manual-auth phase while ${selectedConfiguredProvider.providerLabel} is selected. Rebind the runtime from the Agent tab or switch providers in Settings.`
         : 'Cadence is waiting for the pasted OpenAI redirect URL to finish login for this project.'
     case 'starting':
-      return selectedApiKeyProvider
-        ? `Cadence is validating the selected ${selectedApiKeyProvider.providerLabel} profile and binding a runtime session for this project.`
+      return selectedConfiguredProvider
+        ? `Cadence is validating the selected ${selectedConfiguredProvider.providerLabel} ${getValidatedConfiguredProviderBindingLabel(selectedConfiguredProvider)} and binding a runtime session for this project.`
         : 'Cadence is opening the OpenAI login flow for this project.'
     case 'exchanging_code':
-      return selectedApiKeyProvider
-        ? `Cadence is completing the selected ${selectedApiKeyProvider.providerLabel} runtime bind for this project.`
+      return selectedConfiguredProvider
+        ? `Cadence is completing the selected ${selectedConfiguredProvider.providerLabel} runtime bind for this project.`
         : 'Cadence is exchanging the OpenAI authorization code for a project-bound session.'
     case 'refreshing':
-      return selectedApiKeyProvider
-        ? `Cadence is revalidating the selected ${selectedApiKeyProvider.providerLabel} binding for this project.`
+      return selectedConfiguredProvider
+        ? `Cadence is revalidating the selected ${selectedConfiguredProvider.providerLabel} binding for this project.`
         : 'Cadence is refreshing the stored OpenAI auth session for this project.'
     case 'idle':
-      if (selectedApiKeyProvider) {
-        if (selectedApiKeyProvider.readinessStatus === 'malformed') {
-          return `Repair the selected ${selectedApiKeyProvider.providerLabel} profile credentials in Settings before Cadence can bind the selected provider for this imported project.`
+      if (selectedConfiguredProvider) {
+        if (selectedConfiguredProvider.readinessStatus === 'malformed') {
+          return getRepairConfiguredProviderCopy(
+            selectedConfiguredProvider,
+            ' before Cadence can bind the selected provider for this imported project.',
+          )
         }
 
-        return selectedApiKeyProvider.ready
-          ? `Bind ${selectedApiKeyProvider.providerLabel} from the Agent tab to create or refresh the runtime session for this imported project.`
-          : getConfigureApiKeyCopy(
-              selectedApiKeyProvider.providerLabel,
+        return selectedConfiguredProvider.ready
+          ? getBindConfiguredProviderCopy(
+              selectedConfiguredProvider,
+              ' to create or refresh the runtime session for this imported project.',
+            )
+          : getSetupConfiguredProviderCopy(
+              selectedConfiguredProvider,
+              selectedProvider.providerId,
               ' before Cadence can bind the selected provider for this imported project.',
             )
       }
 
       return 'Sign in with OpenAI to create or reuse a runtime session for this imported project.'
     case 'cancelled':
-      return selectedApiKeyProvider
-        ? `The ${selectedApiKeyProvider.providerLabel} bind flow was cancelled before Cadence could refresh the project runtime session.`
+      return selectedConfiguredProvider
+        ? `The ${selectedConfiguredProvider.providerLabel} bind flow was cancelled before Cadence could refresh the project runtime session.`
         : 'The OpenAI login flow was cancelled before Cadence could create a runtime session.'
     case 'failed':
-      return selectedApiKeyProvider
-        ? `Cadence could not bind the ${selectedApiKeyProvider.providerLabel} runtime for this project.`
+      return selectedConfiguredProvider
+        ? `Cadence could not bind the ${selectedConfiguredProvider.providerLabel} runtime for this project.`
         : 'Cadence could not create a runtime session for this project.'
   }
 }
@@ -347,7 +467,7 @@ export function getAgentRuntimeRunUnavailableReason(
   }
 
   const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
-  const selectedApiKeyProvider = getSelectedApiKeyProviderState(selectedProvider)
+  const selectedConfiguredProvider = getSelectedConfiguredProviderState(selectedProvider)
 
   if (!runtimeRun) {
     if (runtimeSession?.isAuthenticated && !providerMismatchCopy) {
@@ -358,15 +478,22 @@ export function getAgentRuntimeRunUnavailableReason(
       return `${providerMismatchCopy.reason} Rebind the selected ${selectedProvider.profileId ? 'profile' : 'provider'} before launching a supervised harness run for this project.`
     }
 
-    if (selectedApiKeyProvider) {
-      if (selectedApiKeyProvider.readinessStatus === 'malformed') {
-        return `Repair the selected ${selectedApiKeyProvider.providerLabel} profile credentials in Settings and bind the provider before launching a supervised harness run for this project.`
+    if (selectedConfiguredProvider) {
+      if (selectedConfiguredProvider.readinessStatus === 'malformed') {
+        return getRepairConfiguredProviderCopy(
+          selectedConfiguredProvider,
+          ' and bind the provider before launching a supervised harness run for this project.',
+        )
       }
 
-      return selectedApiKeyProvider.ready
-        ? `Bind ${selectedApiKeyProvider.providerLabel} first, then launch a supervised harness run to populate durable repo-local run state for this project.`
-        : getConfigureApiKeyCopy(
-            selectedApiKeyProvider.providerLabel,
+      return selectedConfiguredProvider.ready
+        ? getBindConfiguredProviderCopy(
+            selectedConfiguredProvider,
+            ' first, then launch a supervised harness run to populate durable repo-local run state for this project.',
+          )
+        : getSetupConfiguredProviderCopy(
+            selectedConfiguredProvider,
+            selectedProvider.providerId,
             ' and bind the provider before launching a supervised harness run for this project.',
           )
     }
@@ -400,32 +527,39 @@ export function getAgentMessagesUnavailableReason(
   selectedProvider: SelectedRuntimeProviderView,
 ): string {
   const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
-  const selectedApiKeyProvider = getSelectedApiKeyProviderState(selectedProvider)
-  const recoveredRuntimeRunApiKeyProviderLabel = getRecoveredRuntimeRunApiKeyProviderLabel(
+  const selectedConfiguredProvider = getSelectedConfiguredProviderState(selectedProvider)
+  const recoveredRuntimeRunConfiguredProviderLabel = getRecoveredRuntimeRunConfiguredProviderLabel(
     runtimeRun,
     selectedProvider,
   )
 
   if (!runtimeSession) {
-    if (selectedApiKeyProvider) {
-      if (selectedApiKeyProvider.readinessStatus === 'malformed') {
+    if (selectedConfiguredProvider) {
+      if (selectedConfiguredProvider.readinessStatus === 'malformed') {
         return runtimeRun
-          ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired ${selectedApiKeyProvider.providerLabel} profile credentials for the selected provider.`
-          : `Repair the selected ${selectedApiKeyProvider.providerLabel} profile credentials in Settings before Cadence can establish a runtime session for this imported project.`
+          ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired ${selectedConfiguredProvider.providerLabel} profile credentials for the selected provider.`
+          : getRepairConfiguredProviderCopy(
+              selectedConfiguredProvider,
+              ' before Cadence can establish a runtime session for this imported project.',
+            )
       }
 
       return runtimeRun
-        ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires a ${selectedApiKeyProvider.providerLabel} runtime bind for the selected provider.`
-        : selectedApiKeyProvider.ready
-          ? `Bind ${selectedApiKeyProvider.providerLabel} from the Agent tab to establish the runtime session for this imported project.`
-          : getConfigureApiKeyCopy(
-              selectedApiKeyProvider.providerLabel,
+        ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires a ${selectedConfiguredProvider.providerLabel} runtime bind for the selected provider.`
+        : selectedConfiguredProvider.ready
+          ? getBindConfiguredProviderCopy(
+              selectedConfiguredProvider,
+              ' to establish the runtime session for this imported project.',
+            )
+          : getSetupConfiguredProviderCopy(
+              selectedConfiguredProvider,
+              selectedProvider.providerId,
               ' before Cadence can establish a runtime session for this imported project.',
             )
     }
 
-    if (runtimeRun && recoveredRuntimeRunApiKeyProviderLabel) {
-      return `Cadence recovered durable supervised-run state for this project, but live streaming still requires a ${recoveredRuntimeRunApiKeyProviderLabel} runtime bind for the recovered provider.`
+    if (runtimeRun && recoveredRuntimeRunConfiguredProviderLabel) {
+      return `Cadence recovered durable supervised-run state for this project, but live streaming still requires a ${recoveredRuntimeRunConfiguredProviderLabel} runtime bind for the recovered provider.`
     }
 
     return runtimeRun
@@ -438,23 +572,30 @@ export function getAgentMessagesUnavailableReason(
   }
 
   if (!runtimeSession.isAuthenticated) {
-    if (selectedApiKeyProvider) {
+    if (selectedConfiguredProvider) {
       if (runtimeSession.isLoginInProgress) {
-        return `Cadence is binding the selected ${selectedApiKeyProvider.providerLabel} provider. Wait for the saved-key validation to finish before expecting live stream activity.`
+        return `Cadence is binding the selected ${selectedConfiguredProvider.providerLabel} provider. Wait for the saved-key validation to finish before expecting live stream activity.`
       }
 
-      if (selectedApiKeyProvider.readinessStatus === 'malformed') {
+      if (selectedConfiguredProvider.readinessStatus === 'malformed') {
         return runtimeRun
-          ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired ${selectedApiKeyProvider.providerLabel} profile credentials.`
-          : `Repair the selected ${selectedApiKeyProvider.providerLabel} profile credentials in Settings before live streaming can start for this imported project.`
+          ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired ${selectedConfiguredProvider.providerLabel} profile credentials.`
+          : getRepairConfiguredProviderCopy(
+              selectedConfiguredProvider,
+              ' before live streaming can start for this imported project.',
+            )
       }
 
       return runtimeRun
-        ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires an authenticated ${selectedApiKeyProvider.providerLabel} runtime binding.`
-        : selectedApiKeyProvider.ready
-          ? `Bind ${selectedApiKeyProvider.providerLabel} from the Agent tab to establish the runtime session for this imported project.`
-          : getConfigureApiKeyCopy(
-              selectedApiKeyProvider.providerLabel,
+        ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires an authenticated ${selectedConfiguredProvider.providerLabel} runtime binding.`
+        : selectedConfiguredProvider.ready
+          ? getBindConfiguredProviderCopy(
+              selectedConfiguredProvider,
+              ' to establish the runtime session for this imported project.',
+            )
+          : getSetupConfiguredProviderCopy(
+              selectedConfiguredProvider,
+              selectedProvider.providerId,
               ' before live streaming can start for this imported project.',
             )
     }
@@ -471,8 +612,8 @@ export function getAgentMessagesUnavailableReason(
   if (!runtimeStream) {
     return runtimeRun?.hasCheckpoints
       ? 'Cadence recovered a supervised harness run, but the live runtime stream has not resumed yet. Durable checkpoints remain visible below.'
-      : selectedApiKeyProvider
-        ? `Cadence authenticated the selected ${selectedApiKeyProvider.providerLabel} provider, but the live runtime stream has not started yet.`
+      : selectedConfiguredProvider
+        ? `Cadence authenticated the selected ${selectedConfiguredProvider.providerLabel} provider, but the live runtime stream has not started yet.`
         : 'Cadence authenticated this project, but the live runtime stream has not started yet.'
   }
 
