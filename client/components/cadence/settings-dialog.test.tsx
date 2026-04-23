@@ -91,6 +91,32 @@ function makeAnthropicProfile(overrides: Partial<ProviderProfileDto> = {}): Prov
   }
 }
 
+function makeGithubProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
+  const ready = overrides.readiness?.ready ?? false
+
+  return {
+    profileId: 'github_models-default',
+    providerId: 'github_models',
+    label: 'GitHub Models',
+    modelId: 'openai/gpt-4.1',
+    active: false,
+    readiness: ready
+      ? {
+          ready: true,
+          status: 'ready',
+          credentialUpdatedAt: '2026-04-20T00:00:00Z',
+        }
+      : {
+          ready: false,
+          status: 'missing',
+          credentialUpdatedAt: null,
+        },
+    migratedFromLegacy: false,
+    migratedAt: null,
+    ...overrides,
+  }
+}
+
 function makeProviderProfiles(overrides: Partial<ProviderProfilesDto> = {}): ProviderProfilesDto {
   return {
     activeProfileId: overrides.activeProfileId ?? 'openai_codex-default',
@@ -563,9 +589,13 @@ describe('SettingsDialog', () => {
       expect(onUpsertProviderProfile).toHaveBeenCalledWith({
         profileId: 'openrouter-default',
         providerId: 'openrouter',
+        runtimeKind: 'openrouter',
         label: 'OpenRouter',
         modelId: 'openrouter/anthropic/claude-3.5-sonnet',
-        openrouterApiKey: secret,
+        presetId: 'openrouter',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: secret,
         activate: false,
       }),
     )
@@ -627,7 +657,7 @@ describe('SettingsDialog', () => {
             active: false,
             label: request.label,
             modelId: request.modelId,
-            readiness: request.anthropicApiKey === ''
+            readiness: request.apiKey === ''
               ? {
                   ready: false,
                   status: 'missing',
@@ -701,9 +731,13 @@ describe('SettingsDialog', () => {
       expect(onUpsertProviderProfile).toHaveBeenCalledWith({
         profileId: 'anthropic-default',
         providerId: 'anthropic',
+        runtimeKind: 'anthropic',
         label: 'Anthropic Work',
         modelId: 'claude-3-7-sonnet-latest',
-        anthropicApiKey: secret,
+        presetId: 'anthropic',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: secret,
         activate: false,
       }),
     )
@@ -731,6 +765,102 @@ describe('SettingsDialog', () => {
     fireEvent.click(within(getProviderCard('Anthropic Work')).getByRole('button', { name: 'Use this' }))
 
     await waitFor(() => expect(onSetActiveProviderProfile).toHaveBeenCalledWith('anthropic-default'))
+  })
+
+
+  it('lets GitHub Models use the shared generic save flow and keeps tokens redacted on edit', async () => {
+    const secret = 'ghp_test_secret'
+
+    let nextProviderProfiles = makeProviderProfiles({
+      activeProfileId: 'openai_codex-default',
+      profiles: [makeOpenAiProfile({ active: true }), makeOpenRouterProfile({ active: false })],
+    })
+
+    const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
+      nextProviderProfiles = makeProviderProfiles({
+        activeProfileId: 'openai_codex-default',
+        profiles: [
+          makeOpenAiProfile({ active: true }),
+          makeOpenRouterProfile({ active: false }),
+          makeGithubProfile({
+            active: false,
+            label: request.label,
+            modelId: request.modelId,
+            readiness: request.apiKey === ''
+              ? {
+                  ready: false,
+                  status: 'missing',
+                  credentialUpdatedAt: null,
+                }
+              : {
+                  ready: true,
+                  status: 'ready',
+                  credentialUpdatedAt: '2026-04-20T12:00:00Z',
+                },
+          }),
+        ],
+      })
+
+      return nextProviderProfiles
+    })
+
+    const { rerender } = render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: nextProviderProfiles,
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    fireEvent.click(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'Set up' }))
+
+    const labelInput = screen.getByLabelText('Profile label') as HTMLInputElement
+    const modelInput = screen.getByLabelText('Model') as HTMLInputElement
+    const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
+
+    expect(labelInput).toHaveValue('GitHub Models')
+    expect(keyInput).toHaveValue('')
+
+    fireEvent.change(labelInput, { target: { value: 'GitHub Work' } })
+    fireEvent.change(modelInput, { target: { value: 'meta/Llama-4-Scout-17B-16E-Instruct' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('GitHub Models requires an API key.')).toBeVisible()
+
+    fireEvent.change(keyInput, { target: { value: secret } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'github_models-default',
+        providerId: 'github_models',
+        runtimeKind: 'openai_compatible',
+        label: 'GitHub Work',
+        modelId: 'openai/gpt-4.1',
+        presetId: 'github_models',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: secret,
+        activate: false,
+      }),
+    )
+
+    rerender(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: nextProviderProfiles,
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Ready')).toBeVisible()
+    fireEvent.click(within(getProviderCard('GitHub Work')).getByRole('button', { name: 'Edit' }))
+
+    const keyInputAfter = screen.getByLabelText('API Key') as HTMLInputElement
+    expect(keyInputAfter).toHaveValue('')
+    expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument()
+    expect(screen.queryByText(secret)).not.toBeInTheDocument()
   })
 
   it('limits OpenAI auth controls to the selected profile and keeps typed auth failures inline', async () => {

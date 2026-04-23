@@ -84,6 +84,32 @@ function makeAnthropicProfile(overrides: Partial<ProviderProfileDto> = {}): Prov
   }
 }
 
+function makeGithubProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
+  const ready = overrides.readiness?.ready ?? false
+
+  return {
+    profileId: 'github_models-default',
+    providerId: 'github_models',
+    label: 'GitHub Models',
+    modelId: 'openai/gpt-4.1',
+    active: false,
+    readiness: ready
+      ? {
+          ready: true,
+          status: 'ready',
+          credentialUpdatedAt: '2026-04-20T00:00:00Z',
+        }
+      : {
+          ready: false,
+          status: 'missing',
+          credentialUpdatedAt: null,
+        },
+    migratedFromLegacy: false,
+    migratedAt: null,
+    ...overrides,
+  }
+}
+
 function makeProviderProfiles(overrides: Partial<ProviderProfilesDto> = {}): ProviderProfilesDto {
   return {
     activeProfileId: overrides.activeProfileId ?? 'openrouter-default',
@@ -260,7 +286,7 @@ describe('ProvidersStep', () => {
 
     expect(screen.getByText('Active')).toBeVisible()
     expect(screen.getByText('Ready')).toBeVisible()
-    expect(screen.getAllByText('Unavailable')).toHaveLength(1)
+    expect(screen.getByText('GitHub Models')).toBeVisible()
 
     fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Edit' }))
 
@@ -285,8 +311,13 @@ describe('ProvidersStep', () => {
       expect(onUpsertProviderProfile).toHaveBeenCalledWith({
         profileId: 'openrouter-default',
         providerId: 'openrouter',
+        runtimeKind: 'openrouter',
         label: 'Team OpenRouter',
         modelId: 'openrouter/anthropic/claude-3.5-sonnet',
+        presetId: 'openrouter',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: null,
         activate: true,
       }),
     )
@@ -301,7 +332,7 @@ describe('ProvidersStep', () => {
     })
 
     const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
-      const anthropicReady = typeof request.anthropicApiKey === 'string' && request.anthropicApiKey.trim().length > 0
+      const anthropicReady = typeof request.apiKey === 'string' && request.apiKey.trim().length > 0
       providerProfiles = makeProviderProfiles({
         activeProfileId: request.activate ? 'anthropic-default' : providerProfiles.activeProfileId,
         profiles: [
@@ -345,8 +376,13 @@ describe('ProvidersStep', () => {
       expect(onUpsertProviderProfile).toHaveBeenCalledWith({
         profileId: 'anthropic-default',
         providerId: 'anthropic',
+        runtimeKind: 'anthropic',
         label: 'Anthropic',
         modelId: 'claude-3-7-sonnet-latest',
+        presetId: 'anthropic',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: null,
         activate: true,
       }),
     )
@@ -375,9 +411,13 @@ describe('ProvidersStep', () => {
       expect(onUpsertProviderProfile).toHaveBeenCalledWith({
         profileId: 'anthropic-default',
         providerId: 'anthropic',
+        runtimeKind: 'anthropic',
         label: 'Anthropic',
         modelId: 'claude-3-7-sonnet-latest',
-        anthropicApiKey: secret,
+        presetId: 'anthropic',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: secret,
         activate: true,
       }),
     )
@@ -400,9 +440,116 @@ describe('ProvidersStep', () => {
       expect(onUpsertProviderProfile).toHaveBeenCalledWith({
         profileId: 'anthropic-default',
         providerId: 'anthropic',
+        runtimeKind: 'anthropic',
         label: 'Anthropic',
         modelId: 'claude-3-7-sonnet-latest',
-        anthropicApiKey: '',
+        presetId: 'anthropic',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: '',
+        activate: true,
+      }),
+    )
+  })
+
+
+  it('creates GitHub profiles from onboarding with the generic request shape and keeps tokens redacted', async () => {
+    const secret = 'ghp_test_secret'
+
+    let providerProfiles = makeProviderProfiles({
+      activeProfileId: 'openrouter-default',
+      profiles: [makeOpenAiProfile({ active: false }), makeOpenRouterProfile({ active: true })],
+    })
+
+    const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
+      const githubReady = typeof request.apiKey === 'string' && request.apiKey.trim().length > 0
+      providerProfiles = makeProviderProfiles({
+        activeProfileId: request.activate ? 'github_models-default' : providerProfiles.activeProfileId,
+        profiles: [
+          makeOpenAiProfile({ active: false }),
+          makeOpenRouterProfile({ active: !request.activate }),
+          makeGithubProfile({
+            active: Boolean(request.activate),
+            label: request.label,
+            modelId: request.modelId,
+            readiness: githubReady
+              ? {
+                  ready: true,
+                  status: 'ready',
+                  credentialUpdatedAt: '2026-04-20T12:00:00Z',
+                }
+              : {
+                  ready: false,
+                  status: 'missing',
+                  credentialUpdatedAt: null,
+                },
+          }),
+        ],
+      })
+
+      return providerProfiles
+    })
+
+    const { rerender } = render(
+      <ProvidersStep
+        {...makeProvidersStepProps({
+          providerProfiles,
+          onRefreshProviderProfiles: vi.fn(async () => providerProfiles),
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    fireEvent.click(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'Use this' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'github_models-default',
+        providerId: 'github_models',
+        runtimeKind: 'openai_compatible',
+        label: 'GitHub Models',
+        modelId: 'openai/gpt-4.1',
+        presetId: 'github_models',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: null,
+        activate: true,
+      }),
+    )
+
+    rerender(
+      <ProvidersStep
+        {...makeProvidersStepProps({
+          providerProfiles,
+          onRefreshProviderProfiles: vi.fn(async () => providerProfiles),
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    expect(within(getProviderCard('GitHub Models')).getByText('Active')).toBeVisible()
+    expect(within(getProviderCard('GitHub Models')).getByText('Needs key')).toBeVisible()
+
+    fireEvent.click(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'Set up' }))
+    const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
+    expect(keyInput).toHaveValue('')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('GitHub Models requires an API key.')).toBeVisible()
+
+    fireEvent.change(keyInput, { target: { value: secret } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'github_models-default',
+        providerId: 'github_models',
+        runtimeKind: 'openai_compatible',
+        label: 'GitHub Models',
+        modelId: 'openai/gpt-4.1',
+        presetId: 'github_models',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: secret,
         activate: true,
       }),
     )

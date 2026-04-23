@@ -7,10 +7,10 @@ import {
   LoaderCircle,
   LogIn,
   LogOut,
-  Lock,
 } from "lucide-react"
 import {
   AnthropicIcon,
+  GitHubIcon,
   GoogleIcon,
   OpenAIIcon,
 } from "@/components/cadence/brand-icons"
@@ -40,6 +40,7 @@ import {
   getProviderMismatchCopy,
   resolveSelectedRuntimeProvider,
 } from "@/src/features/cadence/use-cadence-desktop-state/runtime-provider"
+import type { CloudProviderPreset } from "@/src/lib/cadence-model/provider-presets"
 import {
   getActiveProviderProfile,
   getProviderModelCatalogFetchedAt,
@@ -49,34 +50,28 @@ import {
   type ProviderProfileDto,
   type RuntimeSessionView,
   type UpsertProviderProfileRequestDto,
+  upsertProviderProfileRequestSchema,
 } from "@/src/lib/cadence-model"
+import {
+  isApiKeyCloudProvider,
+  listCloudProviderPresets,
+} from "@/src/lib/cadence-model/provider-presets"
 
 type SupportedProviderId = ProviderProfileDto["providerId"]
-type ProviderCatalogId = SupportedProviderId | "anthropic" | "google"
 type AuthPending = "login" | "logout" | null
 
 type ProviderDraft = {
   label: string
   modelId: string
-  openrouterApiKey: string
-  clearOpenrouterApiKey: boolean
-  anthropicApiKey: string
-  clearAnthropicApiKey: boolean
-}
-
-interface ProviderCatalogEntry {
-  id: ProviderCatalogId
-  label: string
-  description: string
-  Icon: ElementType
-  supported: boolean
-  defaultProfileId?: string
-  defaultModelId?: string
+  apiKey: string
+  clearApiKey: boolean
+  baseUrl: string
+  apiVersion: string
 }
 
 interface ProviderProfileCard {
   key: string
-  catalog: ProviderCatalogEntry
+  preset: CloudProviderPreset
   profile: ProviderProfileDto | null
 }
 
@@ -109,42 +104,15 @@ interface ProviderModelCatalogState {
   selectedChoice: ProviderModelChoice | null
 }
 
-const PROVIDER_CATALOG: ProviderCatalogEntry[] = [
-  {
-    id: "openai_codex",
-    label: "OpenAI Codex",
-    description: "App-global provider profile. Browser sign-in happens when you bind a runtime session.",
-    Icon: OpenAIIcon,
-    supported: true,
-    defaultProfileId: "openai_codex-default",
-    defaultModelId: "openai_codex",
-  },
-  {
-    id: "openrouter",
-    label: "OpenRouter",
-    description: "App-global provider profile backed by a saved API key.",
-    Icon: KeyRound,
-    supported: true,
-    defaultProfileId: "openrouter-default",
-    defaultModelId: "openai/gpt-4.1-mini",
-  },
-  {
-    id: "anthropic",
-    label: "Anthropic",
-    description: "App-global provider profile backed by a saved API key and live Claude model discovery.",
-    Icon: AnthropicIcon,
-    supported: true,
-    defaultProfileId: "anthropic-default",
-    defaultModelId: "claude-3-7-sonnet-latest",
-  },
-  {
-    id: "google",
-    label: "Google",
-    description: "Coming soon.",
-    Icon: GoogleIcon,
-    supported: false,
-  },
-]
+const PROVIDER_ICON_BY_ID: Record<SupportedProviderId, ElementType> = {
+  openai_codex: OpenAIIcon,
+  openrouter: KeyRound,
+  anthropic: AnthropicIcon,
+  github_models: GitHubIcon,
+  openai_api: OpenAIIcon,
+  azure_openai: OpenAIIcon,
+  gemini_ai_studio: GoogleIcon,
+}
 
 const MODEL_GROUP_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
@@ -172,14 +140,19 @@ function errorViewMessage(error: OperatorActionErrorView | null, fallback: strin
   return fallback
 }
 
+function normalizeOptionalText(value: string): string | null {
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
 function createDraft(card: ProviderProfileCard): ProviderDraft {
   return {
-    label: card.profile?.label ?? card.catalog.label,
-    modelId: card.profile?.modelId ?? card.catalog.defaultModelId ?? "",
-    openrouterApiKey: "",
-    clearOpenrouterApiKey: false,
-    anthropicApiKey: "",
-    clearAnthropicApiKey: false,
+    label: card.profile?.label ?? card.preset.defaultProfileLabel,
+    modelId: card.profile?.modelId ?? card.preset.defaultModelId,
+    apiKey: "",
+    clearApiKey: false,
+    baseUrl: card.profile?.baseUrl ?? "",
+    apiVersion: card.profile?.apiVersion ?? "",
   }
 }
 
@@ -187,11 +160,9 @@ function getProfileCards(providerProfiles: ProviderProfilesDto | null): Provider
   const cards: ProviderProfileCard[] = []
   const activeProfileId = providerProfiles?.activeProfileId ?? null
 
-  for (const catalogEntry of PROVIDER_CATALOG) {
-    if (!catalogEntry.supported) continue
-
+  for (const preset of listCloudProviderPresets()) {
     const matches = (providerProfiles?.profiles ?? [])
-      .filter((profile) => profile.providerId === catalogEntry.id)
+      .filter((profile) => profile.providerId === preset.providerId)
       .sort((left, right) => {
         const leftActive = left.profileId === activeProfileId
         const rightActive = right.profileId === activeProfileId
@@ -202,8 +173,8 @@ function getProfileCards(providerProfiles: ProviderProfilesDto | null): Provider
 
     if (matches.length === 0) {
       cards.push({
-        key: `${catalogEntry.id}-placeholder`,
-        catalog: catalogEntry,
+        key: `${preset.providerId}-placeholder`,
+        preset,
         profile: null,
       })
       continue
@@ -212,7 +183,7 @@ function getProfileCards(providerProfiles: ProviderProfilesDto | null): Provider
     cards.push(
       ...matches.map((profile) => ({
         key: profile.profileId,
-        catalog: catalogEntry,
+        preset,
         profile,
       })),
     )
@@ -222,7 +193,7 @@ function getProfileCards(providerProfiles: ProviderProfilesDto | null): Provider
 }
 
 function getApiKeyProviderReadinessBadge(profile: ProviderProfileDto | null) {
-  if (!profile || (profile.providerId !== "openrouter" && profile.providerId !== "anthropic")) return null
+  if (!profile || !isApiKeyCloudProvider(profile.providerId)) return null
 
   if (profile.readiness.status === "ready") {
     return {
@@ -244,8 +215,16 @@ function getApiKeyProviderReadinessBadge(profile: ProviderProfileDto | null) {
   }
 }
 
+function hasSavedApiKeyCredential(card: ProviderProfileCard): boolean {
+  return Boolean(
+    card.profile &&
+      isApiKeyCloudProvider(card.profile.providerId) &&
+      card.profile.readiness.status !== "missing",
+  )
+}
+
 function getProfileId(card: ProviderProfileCard): string {
-  return card.profile?.profileId ?? card.catalog.defaultProfileId ?? `${card.catalog.id}-default`
+  return card.profile?.profileId ?? card.preset.defaultProfileId
 }
 
 function getProfileReference(profile: Pick<ProviderProfileDto, "profileId" | "label"> | null): string {
@@ -270,27 +249,32 @@ function buildUpsertRequest(
   draft: ProviderDraft,
   activate: boolean,
 ): UpsertProviderProfileRequestDto {
+  const baseUrl = card.preset.baseUrlMode === "none" ? null : normalizeOptionalText(draft.baseUrl)
+  const apiVersion =
+    card.preset.apiVersionMode === "none"
+      ? null
+      : baseUrl
+        ? normalizeOptionalText(draft.apiVersion)
+        : null
+
   return {
     profileId: getProfileId(card),
-    providerId: card.catalog.id as SupportedProviderId,
+    providerId: card.preset.providerId,
+    runtimeKind: card.preset.runtimeKind,
     label: draft.label.trim(),
     modelId:
-      card.catalog.id === "openai_codex"
-        ? card.catalog.defaultModelId ?? "openai_codex"
+      card.preset.providerId === "openai_codex"
+        ? card.preset.defaultModelId
         : draft.modelId.trim(),
-    ...(card.catalog.id === "openrouter"
-      ? draft.clearOpenrouterApiKey
-        ? { openrouterApiKey: "" }
-        : draft.openrouterApiKey.trim().length > 0
-          ? { openrouterApiKey: draft.openrouterApiKey.trim() }
-          : {}
-      : card.catalog.id === "anthropic"
-        ? draft.clearAnthropicApiKey
-          ? { anthropicApiKey: "" }
-          : draft.anthropicApiKey.trim().length > 0
-            ? { anthropicApiKey: draft.anthropicApiKey.trim() }
-            : {}
-        : {}),
+    presetId: card.preset.presetId ?? null,
+    baseUrl,
+    apiVersion,
+    apiKey:
+      card.preset.authMode === "api_key"
+        ? draft.clearApiKey
+          ? ""
+          : normalizeOptionalText(draft.apiKey)
+        : null,
     activate,
   }
 }
@@ -397,7 +381,7 @@ function getCardCatalogState(options: {
   providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
   selectedModelId: string | null
 }): ProviderModelCatalogState {
-  const profileId = options.card.profile?.profileId ?? options.card.catalog.defaultProfileId ?? null
+  const profileId = options.card.profile?.profileId ?? options.card.preset.defaultProfileId ?? null
   const catalog = profileId ? options.providerModelCatalogs[profileId] ?? null : null
   const loadStatus: ProviderModelCatalogLoadStatus = profileId
     ? options.providerModelCatalogLoadStatuses[profileId] ?? "idle"
@@ -410,7 +394,7 @@ function getCardCatalogState(options: {
   const seenModelIds = new Set<string>()
 
   for (const model of catalog?.models ?? []) {
-    const nextChoice = buildProviderModelChoice(model, options.card.catalog.label)
+    const nextChoice = buildProviderModelChoice(model, options.card.preset.label)
     if (!nextChoice || seenModelIds.has(nextChoice.modelId)) {
       continue
     }
@@ -439,12 +423,12 @@ function getCardCatalogState(options: {
       stateLabel: "Live catalog",
       detail:
         loadStatus === "loading"
-          ? `Refreshing ${options.card.catalog.label} model discovery while keeping ${discoveredChoices.length} discovered model${
+          ? `Refreshing ${options.card.preset.label} model discovery while keeping ${discoveredChoices.length} discovered model${
               discoveredChoices.length === 1 ? "" : "s"
             } visible.`
           : `Showing ${discoveredChoices.length} discovered model${
               discoveredChoices.length === 1 ? "" : "s"
-            } for ${options.card.profile?.label ?? options.card.catalog.label}.`,
+            } for ${options.card.profile?.label ?? options.card.preset.label}.`,
       tone: "default",
       fetchedAt: getProviderModelCatalogFetchedAt(catalog),
       lastSuccessAt: catalog.lastSuccessAt ?? null,
@@ -461,8 +445,8 @@ function getCardCatalogState(options: {
       refreshError,
       stateLabel: catalog?.source === "cache" ? "Cached catalog" : "Stale catalog",
       detail: refreshError?.message?.trim()
-        ? `${refreshError.message} Cadence is keeping the last successful model catalog for ${options.card.profile?.label ?? options.card.catalog.label} visible.`
-        : `Cadence is keeping the last successful model catalog for ${options.card.profile?.label ?? options.card.catalog.label} visible.`,
+        ? `${refreshError.message} Cadence is keeping the last successful model catalog for ${options.card.profile?.label ?? options.card.preset.label} visible.`
+        : `Cadence is keeping the last successful model catalog for ${options.card.profile?.label ?? options.card.preset.label} visible.`,
       tone: "warning",
       fetchedAt: getProviderModelCatalogFetchedAt(catalog),
       lastSuccessAt: catalog?.lastSuccessAt ?? null,
@@ -478,7 +462,7 @@ function getCardCatalogState(options: {
       loadStatus,
       refreshError,
       stateLabel: "Catalog unavailable",
-      detail: `Loading the ${options.card.catalog.label} model catalog. Cadence is keeping configured model truth visible without reopening free-text editing.`,
+      detail: `Loading the ${options.card.preset.label} model catalog. Cadence is keeping configured model truth visible without reopening free-text editing.`,
       tone: "default",
       fetchedAt: getProviderModelCatalogFetchedAt(catalog),
       lastSuccessAt: catalog?.lastSuccessAt ?? null,
@@ -489,7 +473,7 @@ function getCardCatalogState(options: {
 
   const unavailableDetail = selectedChoice
     ? `${selectedChoice.modelId} remains visible as the saved model, but discovery cannot confirm it right now.`
-    : `Cadence does not have a discovered model catalog for ${options.card.profile?.label ?? options.card.catalog.label} yet.`
+    : `Cadence does not have a discovered model catalog for ${options.card.profile?.label ?? options.card.preset.label} yet.`
 
   return {
     profileId,
@@ -552,7 +536,6 @@ export function ProviderProfileForm({
   onLogout,
   openAiMissingProjectLabel = "Open a project",
   openAiMissingProjectDescription = "Select an imported project to sign in the selected OpenAI profile.",
-  showUnavailableProviders = false,
 }: ProviderProfileFormProps) {
   const [editingCardKey, setEditingCardKey] = useState<string | null>(null)
   const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({})
@@ -561,10 +544,6 @@ export function ProviderProfileForm({
   const [authError, setAuthError] = useState<string | null>(null)
 
   const cards = getProfileCards(providerProfiles)
-  const unavailableProviders = showUnavailableProviders
-    ? PROVIDER_CATALOG.filter((entry) => !entry.supported)
-    : []
-
   const isRefreshing = providerProfilesLoadStatus === "loading"
   const isSaving = providerProfilesSaveStatus === "running"
   const selectedProfile = getActiveProviderProfile(providerProfiles)
@@ -643,37 +622,50 @@ export function ProviderProfileForm({
       return
     }
 
-    if (card.catalog.id === "openrouter" || card.catalog.id === "anthropic") {
-      const hasSavedKey = card.profile?.providerId === card.catalog.id && card.profile.readiness.ready
-      const isClearingKey =
-        card.catalog.id === "openrouter" ? draft.clearOpenrouterApiKey : draft.clearAnthropicApiKey
-      const apiKeyValue =
-        card.catalog.id === "openrouter" ? draft.openrouterApiKey : draft.anthropicApiKey
+    if (card.preset.providerId !== "openai_codex" && !draft.modelId.trim()) {
+      setFormError("Model ID is required.")
+      return
+    }
 
-      if (!draft.modelId.trim()) {
-        setFormError("Choose a discovered model before saving.")
+    if (card.preset.baseUrlMode === "required" && !draft.baseUrl.trim()) {
+      setFormError(`${card.preset.label} requires a base URL.`)
+      return
+    }
+
+    if (card.preset.apiVersionMode === "required" && !draft.apiVersion.trim()) {
+      setFormError(`${card.preset.label} requires an API version.`)
+      return
+    }
+
+    if (card.preset.authMode === "api_key") {
+      const hasSavedKey = hasSavedApiKeyCredential(card)
+      if (!hasSavedKey && !draft.clearApiKey && !draft.apiKey.trim()) {
+        setFormError(`${card.preset.label} requires an API key.`)
         return
       }
+    }
 
-      if (!hasSavedKey && !isClearingKey && !apiKeyValue.trim()) {
-        setFormError(`${card.catalog.label} requires an API key.`)
-        return
-      }
+    const activate = providerProfiles?.activeProfileId?.trim()
+      ? providerProfiles.activeProfileId === getProfileId(card)
+      : card.profile?.active ?? false
+    const parsedRequest = upsertProviderProfileRequestSchema.safeParse(
+      buildUpsertRequest(card, draft, activate),
+    )
+
+    if (!parsedRequest.success) {
+      setFormError(parsedRequest.error.issues[0]?.message ?? "Cadence rejected the provider profile request.")
+      return
     }
 
     setFormError(null)
 
     try {
-      const activate = providerProfiles?.activeProfileId?.trim()
-        ? providerProfiles.activeProfileId === getProfileId(card)
-        : card.profile?.active ?? false
-      await onUpsertProviderProfile(buildUpsertRequest(card, draft, activate))
+      await onUpsertProviderProfile(parsedRequest.data)
       closeEditor(card.key)
     } catch {
       setDraft(card, {
         ...draft,
-        openrouterApiKey: "",
-        anthropicApiKey: "",
+        apiKey: "",
       })
     }
   }
@@ -684,20 +676,28 @@ export function ProviderProfileForm({
     setFormError(null)
     setAuthError(null)
 
+    if (!card.profile && (card.preset.baseUrlMode === "required" || card.preset.apiVersionMode === "required")) {
+      openEditor(card)
+      setFormError(`${card.preset.label} needs endpoint details before it can be activated.`)
+      return
+    }
+
     try {
       if (card.profile) {
         await onSetActiveProviderProfile?.(card.profile.profileId)
         return
       }
 
-      const draft = createDraft(card)
-      await onUpsertProviderProfile?.({
-        profileId: getProfileId(card),
-        providerId: card.catalog.id as SupportedProviderId,
-        label: draft.label,
-        modelId: draft.modelId,
-        activate: true,
-      })
+      const parsedRequest = upsertProviderProfileRequestSchema.safeParse(
+        buildUpsertRequest(card, createDraft(card), true),
+      )
+      if (!parsedRequest.success) {
+        openEditor(card)
+        setFormError(parsedRequest.error.issues[0]?.message ?? "Cadence rejected the provider profile request.")
+        return
+      }
+
+      await onUpsertProviderProfile?.(parsedRequest.data)
     } catch {
       // Hook state surfaces the typed save error while the last truthful snapshot remains visible.
     }
@@ -809,16 +809,13 @@ export function ProviderProfileForm({
       <div className="grid gap-3">
         {cards.map((card) => {
           const draft = getDraft(card)
+          const Icon = PROVIDER_ICON_BY_ID[card.preset.providerId]
           const isEditing = editingCardKey === card.key
-          const isOpenRouter = card.catalog.id === "openrouter"
-          const isAnthropic = card.catalog.id === "anthropic"
-          const isApiKeyProvider = isOpenRouter || isAnthropic
-          const isOpenAi = card.catalog.id === "openai_codex"
+          const isApiKeyProvider = card.preset.authMode === "api_key"
+          const isOpenAi = card.preset.providerId === "openai_codex"
           const isSelected = isCardSelected(providerProfiles, card)
           const readinessBadge = getApiKeyProviderReadinessBadge(card.profile)
-          const hasSavedApiKey = Boolean(
-            isApiKeyProvider && card.profile?.providerId === card.catalog.id && card.profile.readiness.ready,
-          )
+          const hasSavedApiKey = hasSavedApiKeyCredential(card)
           const shouldRenderOpenAiAuth = isOpenAi && isSelected && Boolean(onStartLogin && onLogout)
           const isSelectedRuntimeProvider = runtimeSession?.providerId === selectedProvider.providerId
           const selectedRuntimeErrorMessage = runtimeSession?.lastError?.message?.trim() || null
@@ -855,7 +852,7 @@ export function ProviderProfileForm({
                     }
                   : null
             : null
-          const selectedModelId = (draft.modelId.trim() || card.profile?.modelId || card.catalog.defaultModelId || "").trim() || null
+          const selectedModelId = (draft.modelId.trim() || card.profile?.modelId || card.preset.defaultModelId || "").trim() || null
           const cardCatalogState = getCardCatalogState({
             card,
             providerModelCatalogs,
@@ -865,7 +862,10 @@ export function ProviderProfileForm({
           })
           const modelChoiceGroups = groupProviderModelChoices(cardCatalogState.choices)
           const isCatalogRefreshing = cardCatalogState.loadStatus === "loading"
-          const canRefreshCatalog = Boolean(onRefreshProviderModelCatalog && card.profile)
+          const canRefreshCatalog = Boolean(onRefreshProviderModelCatalog && card.profile && card.preset.supportsCatalogRefresh)
+          const endpointLabel = card.profile?.baseUrl?.trim()
+            ? `Custom endpoint · ${card.profile.baseUrl.trim()}`
+            : card.preset.endpointHint
 
           return (
             <div
@@ -882,13 +882,13 @@ export function ProviderProfileForm({
                     isSelected ? "border-primary/40 text-primary" : "border-border",
                   )}
                 >
-                  <card.catalog.Icon className="h-4 w-4 text-foreground/70" />
+                  <Icon className="h-4 w-4 text-foreground/70" />
                 </div>
 
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-[14px] font-medium text-foreground">
-                      {card.profile?.label ?? card.catalog.label}
+                      {card.profile?.label ?? card.preset.label}
                     </p>
                     {isSelected ? (
                       <Badge variant="secondary" className="px-2 py-0 text-[11px]">
@@ -912,15 +912,17 @@ export function ProviderProfileForm({
                   </div>
 
                   <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-                    {card.catalog.description}
+                    {card.preset.description}
                   </p>
 
                   <p className="mt-1.5 text-[11.5px] text-muted-foreground">
                     Model:{" "}
                     <span className="font-medium text-foreground/80">
-                      {card.profile?.modelId ?? card.catalog.defaultModelId ?? "Not configured"}
+                      {card.profile?.modelId ?? card.preset.defaultModelId ?? "Not configured"}
                     </span>
                   </p>
+
+                  <p className="mt-1 text-[11.5px] text-muted-foreground">Endpoint: {endpointLabel}</p>
 
                   {inlineStatus ? (
                     <Alert
@@ -1036,7 +1038,7 @@ export function ProviderProfileForm({
                           label: event.target.value,
                         })
                       }
-                      placeholder={card.catalog.label}
+                      placeholder={card.preset.defaultProfileLabel}
                       value={draft.label}
                     />
                   </div>
@@ -1065,12 +1067,12 @@ export function ProviderProfileForm({
                       <div className="rounded-md border border-border/80 bg-muted/25 px-3.5 py-3">
                         <p className="text-[13px] font-medium text-foreground">OpenAI Codex</p>
                         <p className="mt-1 font-mono text-[12px] text-muted-foreground">
-                          {card.catalog.defaultModelId ?? "openai_codex"}
+                          {card.preset.defaultModelId}
                         </p>
                       </div>
-                    ) : (
+                    ) : cardCatalogState.choices.length > 0 ? (
                       <Select
-                        disabled={isSaving || isRefreshing || cardCatalogState.choices.length === 0}
+                        disabled={isSaving || isRefreshing}
                         value={draft.modelId}
                         onValueChange={(value) =>
                           setDraft(card, {
@@ -1098,8 +1100,90 @@ export function ProviderProfileForm({
                           ))}
                         </SelectContent>
                       </Select>
+                    ) : card.preset.manualModelAllowed ? (
+                      <Input
+                        id={`${card.key}-model`}
+                        className="h-9 font-mono text-[13px]"
+                        disabled={isSaving || isRefreshing}
+                        onChange={(event) =>
+                          setDraft(card, {
+                            ...draft,
+                            modelId: event.target.value,
+                          })
+                        }
+                        placeholder={card.preset.defaultModelId || "provider/model-id"}
+                        value={draft.modelId}
+                      />
+                    ) : (
+                      <div className="rounded-md border border-border/80 bg-muted/25 px-3.5 py-3 text-[12px] text-muted-foreground">
+                        No model configuration is required for this provider.
+                      </div>
                     )}
+
+                    <p
+                      className={cn(
+                        "text-[11px]",
+                        cardCatalogState.tone === "warning" ? "text-amber-700 dark:text-amber-200" : "text-muted-foreground",
+                      )}
+                    >
+                      <span className="font-medium">{cardCatalogState.stateLabel}.</span> {cardCatalogState.detail}
+                    </p>
                   </div>
+
+                  {card.preset.baseUrlMode !== "none" || card.preset.apiVersionMode !== "none" ? (
+                    <div className="space-y-3 rounded-md border border-border/80 bg-muted/25 px-3.5 py-3">
+                      <div>
+                        <p className="text-[12px] font-medium text-foreground">Endpoint</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">{card.preset.endpointHint}</p>
+                      </div>
+
+                      {card.preset.baseUrlMode !== "none" ? (
+                        <div className="space-y-2">
+                          <Label htmlFor={`${card.key}-base-url`} className="text-[12px]">
+                            Base URL
+                          </Label>
+                          <Input
+                            id={`${card.key}-base-url`}
+                            className="h-9 font-mono text-[13px]"
+                            disabled={isSaving || isRefreshing}
+                            onChange={(event) =>
+                              setDraft(card, {
+                                ...draft,
+                                baseUrl: event.target.value,
+                              })
+                            }
+                            placeholder={
+                              card.preset.baseUrlMode === "required"
+                                ? "https://example-resource.openai.azure.com/openai/deployments/work"
+                                : "https://api.openai.com/v1"
+                            }
+                            value={draft.baseUrl}
+                          />
+                        </div>
+                      ) : null}
+
+                      {card.preset.apiVersionMode !== "none" ? (
+                        <div className="space-y-2">
+                          <Label htmlFor={`${card.key}-api-version`} className="text-[12px]">
+                            API version
+                          </Label>
+                          <Input
+                            id={`${card.key}-api-version`}
+                            className="h-9 font-mono text-[13px]"
+                            disabled={isSaving || isRefreshing}
+                            onChange={(event) =>
+                              setDraft(card, {
+                                ...draft,
+                                apiVersion: event.target.value,
+                              })
+                            }
+                            placeholder="2024-10-21"
+                            value={draft.apiVersion}
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   {isApiKeyProvider ? (
                     <div className="space-y-2">
@@ -1125,21 +1209,19 @@ export function ProviderProfileForm({
                           onChange={(event) =>
                             setDraft(card, {
                               ...draft,
-                              ...(isOpenRouter
-                                ? {
-                                    openrouterApiKey: event.target.value,
-                                    clearOpenrouterApiKey:
-                                      event.target.value.trim().length > 0 ? false : draft.clearOpenrouterApiKey,
-                                  }
-                                : {
-                                    anthropicApiKey: event.target.value,
-                                    clearAnthropicApiKey:
-                                      event.target.value.trim().length > 0 ? false : draft.clearAnthropicApiKey,
-                                  }),
+                              apiKey: event.target.value,
+                              clearApiKey:
+                                event.target.value.trim().length > 0 ? false : draft.clearApiKey,
                             })
                           }
-                          placeholder={hasSavedApiKey ? "Leave blank to keep current key" : "Paste API key"}
-                          value={isOpenRouter ? draft.openrouterApiKey : draft.anthropicApiKey}
+                          placeholder={
+                            hasSavedApiKey
+                              ? "Leave blank to keep current key"
+                              : card.preset.providerId === "github_models"
+                                ? "Paste GitHub token"
+                                : "Paste API key"
+                          }
+                          value={draft.apiKey}
                         />
                         {hasSavedApiKey ? (
                           <Button
@@ -1151,37 +1233,28 @@ export function ProviderProfileForm({
                             onClick={() =>
                               setDraft(card, {
                                 ...draft,
-                                ...(isOpenRouter
-                                  ? {
-                                      openrouterApiKey: "",
-                                      clearOpenrouterApiKey: !draft.clearOpenrouterApiKey,
-                                    }
-                                  : {
-                                      anthropicApiKey: "",
-                                      clearAnthropicApiKey: !draft.clearAnthropicApiKey,
-                                    }),
+                                apiKey: "",
+                                clearApiKey: !draft.clearApiKey,
                               })
                             }
                           >
-                            {(isOpenRouter ? draft.clearOpenrouterApiKey : draft.clearAnthropicApiKey)
-                              ? "Keep"
-                              : "Clear"}
+                            {draft.clearApiKey ? "Keep" : "Clear"}
                           </Button>
                         ) : null}
                       </div>
                       <p
                         className={cn(
                           "text-[11px]",
-                          (isOpenRouter ? draft.clearOpenrouterApiKey : draft.clearAnthropicApiKey)
+                          draft.clearApiKey
                             ? "text-destructive/80"
                             : "text-muted-foreground",
                         )}
                       >
-                        {(isOpenRouter ? draft.clearOpenrouterApiKey : draft.clearAnthropicApiKey)
+                        {draft.clearApiKey
                           ? "Saved key will be removed"
                           : hasSavedApiKey
                             ? "Blank keeps the current key"
-                            : `Required for ${card.catalog.label}`}
+                            : `Required for ${card.preset.label}`}
                       </p>
                     </div>
                   ) : null}
@@ -1211,26 +1284,6 @@ export function ProviderProfileForm({
             </div>
           )
         })}
-
-        {unavailableProviders.map((provider) => (
-          <div key={provider.id} className="rounded-lg border border-border/70 bg-card/30 px-5 py-4">
-            <div className="flex items-center gap-3.5">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/40">
-                <provider.Icon className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-[14px] font-medium text-muted-foreground">{provider.label}</p>
-                  <Badge variant="outline" className="gap-1.5 text-[11px]">
-                    <Lock className="h-3 w-3" />
-                    Unavailable
-                  </Badge>
-                </div>
-                <p className="mt-1 text-[12px] text-muted-foreground">{provider.description}</p>
-              </div>
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   )

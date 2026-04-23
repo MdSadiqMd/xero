@@ -661,20 +661,24 @@ function createMockAdapter(options?: {
   const upsertProviderProfile = vi.fn(async (request: {
     profileId: string
     providerId: RuntimeSettingsDto['providerId']
+    runtimeKind: string
     label: string
     modelId: string
-    openrouterApiKey?: string | null
+    presetId?: string | null
+    baseUrl?: string | null
+    apiVersion?: string | null
+    apiKey?: string | null
     activate?: boolean
   }) => {
     const existingProfiles = currentProviderProfiles.value.profiles.filter(
       (profile) => profile.profileId !== request.profileId,
     )
-    const openrouterApiKeyConfigured =
-      request.providerId === 'openrouter'
-        ? request.openrouterApiKey == null
-          ? currentRuntimeSettings.value.openrouterApiKeyConfigured
-          : request.openrouterApiKey.trim().length > 0
-        : currentRuntimeSettings.value.openrouterApiKeyConfigured
+    const apiKeyConfigured =
+      request.providerId === 'openai_codex'
+        ? false
+        : request.apiKey == null
+          ? currentProviderProfiles.value.profiles.find((profile) => profile.profileId === request.profileId)?.readiness.ready ?? false
+          : request.apiKey.trim().length > 0
 
     const nextActiveProfileId = request.activate
       ? request.profileId
@@ -682,20 +686,24 @@ function createMockAdapter(options?: {
     const nextProfile: ProviderProfilesDto['profiles'][number] = {
       profileId: request.profileId,
       providerId: request.providerId,
+      runtimeKind: request.runtimeKind as ProviderProfilesDto['profiles'][number]['runtimeKind'],
       label: request.label,
       modelId: request.modelId,
+      presetId: request.presetId ?? null,
+      baseUrl: request.baseUrl ?? null,
+      apiVersion: request.apiVersion ?? null,
       active: nextActiveProfileId === request.profileId,
       readiness:
-        request.providerId === 'openrouter'
+        request.providerId === 'openai_codex'
           ? {
-              ready: openrouterApiKeyConfigured,
-              status: openrouterApiKeyConfigured ? 'ready' : 'missing',
-              credentialUpdatedAt: openrouterApiKeyConfigured ? '2026-04-16T14:05:00Z' : null,
-            }
-          : {
               ready: false,
               status: 'missing',
               credentialUpdatedAt: null,
+            }
+          : {
+              ready: apiKeyConfigured,
+              status: apiKeyConfigured ? 'ready' : 'missing',
+              credentialUpdatedAt: apiKeyConfigured ? '2026-04-16T14:05:00Z' : null,
             },
       migratedFromLegacy: false,
       migratedAt: null,
@@ -719,6 +727,9 @@ function createMockAdapter(options?: {
       openrouterApiKeyConfigured: currentProviderProfiles.value.profiles.some(
         (profile) => profile.providerId === 'openrouter' && profile.readiness.ready,
       ),
+      anthropicApiKeyConfigured: currentProviderProfiles.value.profiles.some(
+        (profile) => profile.providerId === 'anthropic' && profile.readiness.ready,
+      ),
     }
 
     return currentProviderProfiles.value
@@ -739,6 +750,9 @@ function createMockAdapter(options?: {
         modelId: activeProfile.modelId,
         openrouterApiKeyConfigured: currentProviderProfiles.value.profiles.some(
           (profile) => profile.providerId === 'openrouter' && profile.readiness.ready,
+        ),
+        anthropicApiKeyConfigured: currentProviderProfiles.value.profiles.some(
+          (profile) => profile.providerId === 'anthropic' && profile.readiness.ready,
         ),
       }
     }
@@ -1543,9 +1557,13 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
             .upsertProviderProfile({
               profileId: 'openrouter-default',
               providerId: 'openrouter',
+              runtimeKind: 'openrouter',
               label: 'OpenRouter',
               modelId: 'openai/gpt-4.1-mini',
-              openrouterApiKey: 'sk-or-v1-test-secret',
+              presetId: 'openrouter',
+              baseUrl: null,
+              apiVersion: null,
+              apiKey: 'sk-or-v1-test-secret',
               activate: true,
             })
             .catch(() => undefined)
@@ -1561,6 +1579,27 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
         type="button"
       >
         Activate OpenAI provider profile
+      </button>
+      <button
+        onClick={() => {
+          void state
+            .upsertProviderProfile({
+              profileId: 'github_models-default',
+              providerId: 'github_models',
+              runtimeKind: 'openai_compatible',
+              label: 'GitHub Models',
+              modelId: 'openai/gpt-4.1',
+              presetId: 'github_models',
+              baseUrl: null,
+              apiVersion: null,
+              apiKey: 'ghp_test_secret',
+              activate: true,
+            })
+            .catch(() => undefined)
+        }}
+        type="button"
+      >
+        Save GitHub provider profile
       </button>
       <button
         onClick={() => {
@@ -3109,9 +3148,13 @@ describe('useCadenceDesktopState', () => {
       expect(setup.upsertProviderProfile).toHaveBeenCalledWith({
         profileId: 'openrouter-default',
         providerId: 'openrouter',
+        runtimeKind: 'openrouter',
         label: 'OpenRouter',
         modelId: 'openai/gpt-4.1-mini',
-        openrouterApiKey: 'sk-or-v1-test-secret',
+        presetId: 'openrouter',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: 'sk-or-v1-test-secret',
         activate: true,
       }),
     )
@@ -3135,6 +3178,62 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('OpenAI Codex')
     expect(screen.getByTestId('selected-provider-source')).toHaveTextContent('provider_profiles')
     expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('openai_codex')
+    expect(screen.getByTestId('runtime-provider-id')).toHaveTextContent('openai_codex')
+  })
+
+
+  it('forwards generic GitHub provider-profile payloads and projects GitHub as selected provider truth', async () => {
+    const setup = createMockAdapter({
+      listProjects: { projects: [makeProjectSummary('project-1', 'Cadence')] },
+      runtimeSettings: makeRuntimeSettings({
+        providerId: 'openai_codex',
+        modelId: 'openai_codex',
+        openrouterApiKeyConfigured: false,
+        anthropicApiKeyConfigured: false,
+      }),
+      providerProfiles: makeProviderProfilesFromRuntimeSettings(
+        makeRuntimeSettings({
+          providerId: 'openai_codex',
+          modelId: 'openai_codex',
+          openrouterApiKeyConfigured: false,
+          anthropicApiKeyConfigured: false,
+        }),
+      ),
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          providerId: 'openai_codex',
+          runtimeKind: 'openai_codex',
+          phase: 'authenticated',
+        }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('provider-profiles-active-profile-id')).toHaveTextContent('openai_codex-default'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save GitHub provider profile' }))
+
+    await waitFor(() =>
+      expect(setup.upsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'github_models-default',
+        providerId: 'github_models',
+        runtimeKind: 'openai_compatible',
+        label: 'GitHub Models',
+        modelId: 'openai/gpt-4.1',
+        presetId: 'github_models',
+        baseUrl: null,
+        apiVersion: null,
+        apiKey: 'ghp_test_secret',
+        activate: true,
+      }),
+    )
+    await waitFor(() => expect(screen.getByTestId('provider-profiles-active-profile-id')).toHaveTextContent('github_models-default'))
+    expect(screen.getByTestId('provider-profiles-selected-profile-id')).toHaveTextContent('github_models-default')
+    expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('GitHub Models')
+    expect(screen.getByTestId('provider-profiles-selected-readiness-status')).toHaveTextContent('ready')
+    expect(screen.getByTestId('selected-provider-id')).toHaveTextContent('github_models')
+    expect(screen.getByTestId('runtime-settings-provider-id')).toHaveTextContent('github_models')
     expect(screen.getByTestId('runtime-provider-id')).toHaveTextContent('openai_codex')
   })
 
