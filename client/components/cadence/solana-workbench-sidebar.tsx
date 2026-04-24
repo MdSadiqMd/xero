@@ -7,6 +7,7 @@ import {
   FileJson,
   Loader2,
   Play,
+  RadioTower,
   RefreshCw,
   Rocket,
   Search,
@@ -21,6 +22,8 @@ import { cn } from "@/lib/utils"
 import { SolanaAuditPanel } from "./solana-audit-panel"
 import { SolanaDeployPanel } from "./solana-deploy-panel"
 import { SolanaIdlPanel } from "./solana-idl-panel"
+import { SolanaIndexerPanel } from "./solana-indexer-panel"
+import { SolanaLogFeed } from "./solana-log-feed"
 import { SolanaMissingToolchain } from "./solana-missing-toolchain"
 import { SolanaPersonaPanel } from "./solana-persona-panel"
 import { SolanaScenarioPanel } from "./solana-scenario-panel"
@@ -44,6 +47,8 @@ type TabId =
   | "personas"
   | "scenarios"
   | "tx"
+  | "logs"
+  | "indexer"
   | "idl"
   | "deploy"
   | "audit"
@@ -281,6 +286,48 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
     [workbench],
   )
 
+  const handleSubscribeLogs = useCallback(
+    (filter: {
+      cluster: ClusterKind
+      programIds: string[]
+      includeDecoded: boolean
+    }) => workbench.subscribeLogs(filter),
+    [workbench],
+  )
+
+  const handleFetchRecentLogs = useCallback(
+    (args: {
+      cluster: ClusterKind
+      programIds?: string[]
+      lastN?: number
+      rpcUrl?: string | null
+      cachedOnly?: boolean
+    }) => workbench.fetchRecentLogs(args),
+    [workbench],
+  )
+
+  const handleScaffoldIndexer = useCallback(
+    (args: {
+      kind: "carbon" | "log_parser" | "helius_webhook"
+      idlPath: string
+      outputDir: string
+      projectSlug?: string | null
+      overwrite?: boolean
+      rpcUrl?: string | null
+    }) => workbench.scaffoldIndexer(args),
+    [workbench],
+  )
+
+  const handleRunIndexer = useCallback(
+    (args: {
+      cluster: ClusterKind
+      programIds: string[]
+      lastN?: number
+      rpcUrl?: string | null
+    }) => workbench.runIndexer(args),
+    [workbench],
+  )
+
   const scenariosForCluster = useMemo(
     () =>
       workbench.scenarios.filter((s) =>
@@ -306,6 +353,18 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
       id: "tx",
       icon: Search,
       label: "Tx",
+    },
+    {
+      id: "logs",
+      icon: RadioTower,
+      label: "Logs",
+      count: workbench.logEntries.length || undefined,
+    },
+    {
+      id: "indexer",
+      icon: FileJson,
+      label: "Indexer",
+      count: workbench.lastIndexerRun ? workbench.lastIndexerRun.entries.length : undefined,
     },
     {
       id: "idl",
@@ -564,6 +623,33 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
               onSimulate={handleSimulate}
               onExplain={handleExplain}
               onEstimateFee={handleEstimateFee}
+            />
+          ) : null}
+
+          {activeTab === "logs" ? (
+            <SolanaLogFeed
+              cluster={selectedKind}
+              busy={workbench.logBusy}
+              entries={workbench.logEntries}
+              decodedEvents={workbench.decodedLogEvents}
+              activeSubscriptions={workbench.activeLogSubscriptions}
+              lastFetch={workbench.lastLogFetch}
+              onSubscribe={handleSubscribeLogs}
+              onUnsubscribe={workbench.unsubscribeLogs}
+              onFetchRecent={handleFetchRecentLogs}
+              onRefreshSubscriptions={workbench.refreshActiveLogSubscriptions}
+              onClear={workbench.clearLogFeed}
+            />
+          ) : null}
+
+          {activeTab === "indexer" ? (
+            <SolanaIndexerPanel
+              cluster={selectedKind}
+              busy={workbench.indexerBusy}
+              lastScaffold={workbench.lastIndexerScaffold}
+              lastRun={workbench.lastIndexerRun}
+              onScaffold={handleScaffoldIndexer}
+              onRun={handleRunIndexer}
             />
           ) : null}
 

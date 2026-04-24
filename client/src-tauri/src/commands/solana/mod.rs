@@ -10,6 +10,8 @@ pub mod audit;
 pub mod cluster;
 pub mod events;
 pub mod idl;
+pub mod indexer;
+pub mod logs;
 pub mod pda;
 pub mod persona;
 pub mod program;
@@ -20,8 +22,12 @@ pub mod toolchain;
 pub mod tx;
 pub mod validator;
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Runtime, State};
@@ -42,9 +48,17 @@ pub use events::{
     PersonaEventKind, PersonaEventPayload, ScenarioEventKind, ScenarioEventPayload, TxEventKind,
     TxEventPayload, ValidatorLogLevel, ValidatorLogPayload, ValidatorPhase, ValidatorStatusPayload,
     SOLANA_AUDIT_EVENT, SOLANA_DEPLOY_PROGRESS_EVENT, SOLANA_IDL_CHANGED_EVENT,
-    SOLANA_PERSONA_EVENT, SOLANA_RPC_HEALTH_EVENT, SOLANA_SCENARIO_EVENT,
-    SOLANA_TOOLCHAIN_STATUS_CHANGED_EVENT, SOLANA_TX_EVENT, SOLANA_VALIDATOR_LOG_EVENT,
-    SOLANA_VALIDATOR_STATUS_EVENT,
+    SOLANA_LOG_DECODED_EVENT, SOLANA_LOG_EVENT, SOLANA_PERSONA_EVENT, SOLANA_RPC_HEALTH_EVENT,
+    SOLANA_SCENARIO_EVENT, SOLANA_TOOLCHAIN_STATUS_CHANGED_EVENT, SOLANA_TX_EVENT,
+    SOLANA_VALIDATOR_LOG_EVENT, SOLANA_VALIDATOR_STATUS_EVENT,
+};
+pub use indexer::{
+    scaffold as indexer_scaffold, IndexerKind, IndexerRunReport, IndexerRunRequest, ProgramEventCount,
+    ScaffoldFile, ScaffoldRequest, ScaffoldResult,
+};
+pub use logs::{
+    AnchorEvent, LogBus, LogDecoder, LogEntry, LogEventSink, LogFilter, LogSubscriptionToken,
+    NullLogEventSink, RawLogBatch, RpcLogSource, SystemRpcLogSource,
 };
 pub use idl::{
     codama::{CodamaGenerationReport, CodamaGenerationRequest, CodamaTarget, CodamaTargetResult},
@@ -125,6 +139,45 @@ pub struct SolanaState {
     /// Phase 6 — audit engine. Tests inject scripted runners via
     /// `with_audit_engine`.
     audit_engine: Arc<AuditEngine>,
+    /// Phase 7 — log bus. Streams raw + decoded log entries to
+    /// subscribers; tests wire in a `CollectingLogSink` via the
+    /// returned `Arc<LogBus>` handle.
+    log_bus: Arc<LogBus>,
+    /// Phase 7 — RPC-backed log source. Swapped out in tests via
+    /// `with_log_source` so scripted batches can be returned without
+    /// hitting the network.
+    log_source: Arc<dyn RpcLogSource>,
+    /// Background pollers keyed by subscription token. Each active
+    /// subscription that includes at least one program id gets a light
+    /// polling worker so decoded log events stream without manual refresh.
+    log_pollers: Arc<Mutex<HashMap<String, LogPollWorker>>>,
+}
+
+const LOG_POLL_INTERVAL: Duration = Duration::from_secs(4);
+const LOG_POLL_BATCH_LIMIT: u32 = 64;
+const LOG_POLL_DEDUP_WINDOW: usize = 2_048;
+
+#[derive(Debug)]
+struct LogPollWorker {
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+fn remember_signature(
+    queue: &mut VecDeque<String>,
+    set: &mut HashSet<String>,
+    signature: String,
+) -> bool {
+    if !set.insert(signature.clone()) {
+        return false;
+    }
+    queue.push_back(signature);
+    if queue.len() > LOG_POLL_DEDUP_WINDOW {
+        if let Some(removed) = queue.pop_front() {
+            set.remove(&removed);
+        }
+    }
+    true
 }
 
 fn build_tx_pipeline(
@@ -191,6 +244,9 @@ impl Default for SolanaState {
         let rpc_router = Arc::new(RpcRouter::new_with_default_pool());
         let (tx_pipeline, transport) = build_tx_pipeline(&supervisor, &rpc_router, &personas);
         let idl_registry = build_idl_registry(Arc::clone(&transport));
+        let log_bus = Arc::new(LogBus::new(Arc::clone(&idl_registry)));
+        let log_source: Arc<dyn RpcLogSource> =
+            Arc::new(SystemRpcLogSource::new(Arc::clone(&transport)));
         Self {
             supervisor,
             rpc_router,
@@ -202,6 +258,9 @@ impl Default for SolanaState {
             transport,
             deploy_services: Arc::new(DeployServices::system()),
             audit_engine: Arc::new(AuditEngine::system()),
+            log_bus,
+            log_source,
+            log_pollers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -225,6 +284,9 @@ impl SolanaState {
         ));
         let (tx_pipeline, transport) = build_tx_pipeline(&supervisor, &rpc_router, &personas);
         let idl_registry = build_idl_registry(Arc::clone(&transport));
+        let log_bus = Arc::new(LogBus::new(Arc::clone(&idl_registry)));
+        let log_source: Arc<dyn RpcLogSource> =
+            Arc::new(SystemRpcLogSource::new(Arc::clone(&transport)));
         Self {
             supervisor,
             rpc_router,
@@ -236,6 +298,9 @@ impl SolanaState {
             transport,
             deploy_services: Arc::new(DeployServices::system()),
             audit_engine: Arc::new(AuditEngine::system()),
+            log_bus,
+            log_source,
+            log_pollers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -253,6 +318,9 @@ impl SolanaState {
         ));
         let (tx_pipeline, transport) = build_tx_pipeline(&supervisor, &rpc_router, &personas);
         let idl_registry = build_idl_registry(Arc::clone(&transport));
+        let log_bus = Arc::new(LogBus::new(Arc::clone(&idl_registry)));
+        let log_source: Arc<dyn RpcLogSource> =
+            Arc::new(SystemRpcLogSource::new(Arc::clone(&transport)));
         Self {
             supervisor,
             rpc_router,
@@ -264,6 +332,9 @@ impl SolanaState {
             transport,
             deploy_services: Arc::new(DeployServices::system()),
             audit_engine: Arc::new(AuditEngine::system()),
+            log_bus,
+            log_source,
+            log_pollers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -285,6 +356,9 @@ impl SolanaState {
             Arc::new(NoopIdlFetcher) as Arc<dyn IdlFetcher>
         ));
         let transport: Arc<dyn RpcTransport> = Arc::new(HttpRpcTransport::new());
+        let log_bus = Arc::new(LogBus::new(Arc::clone(&idl_registry)));
+        let log_source: Arc<dyn RpcLogSource> =
+            Arc::new(SystemRpcLogSource::new(Arc::clone(&transport)));
         Self {
             supervisor,
             rpc_router,
@@ -296,6 +370,9 @@ impl SolanaState {
             transport,
             deploy_services: Arc::new(DeployServices::system()),
             audit_engine: Arc::new(AuditEngine::system()),
+            log_bus,
+            log_source,
+            log_pollers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -316,6 +393,9 @@ impl SolanaState {
             Arc::clone(&supervisor),
         ));
         let idl_registry = build_idl_registry(Arc::clone(&transport));
+        let log_bus = Arc::new(LogBus::new(Arc::clone(&idl_registry)));
+        let log_source: Arc<dyn RpcLogSource> =
+            Arc::new(SystemRpcLogSource::new(Arc::clone(&transport)));
         Self {
             supervisor,
             rpc_router,
@@ -327,6 +407,9 @@ impl SolanaState {
             transport,
             deploy_services,
             audit_engine: Arc::new(AuditEngine::system()),
+            log_bus,
+            log_source,
+            log_pollers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -335,6 +418,21 @@ impl SolanaState {
     /// surface without hitting external binaries).
     pub fn with_audit_engine(mut self, engine: Arc<AuditEngine>) -> Self {
         self.audit_engine = engine;
+        self
+    }
+
+    /// Test/integration hook: replace the log source so scripted
+    /// batches can flow through `solana_logs_recent` and the indexer
+    /// run path without a real cluster.
+    pub fn with_log_source(mut self, source: Arc<dyn RpcLogSource>) -> Self {
+        self.log_source = source;
+        self
+    }
+
+    /// Test/integration hook: replace the log bus (usually to bump the
+    /// ring capacity).
+    pub fn with_log_bus(mut self, bus: Arc<LogBus>) -> Self {
+        self.log_bus = bus;
         self
     }
 
@@ -378,6 +476,14 @@ impl SolanaState {
         Arc::clone(&self.audit_engine)
     }
 
+    pub fn log_bus(&self) -> Arc<LogBus> {
+        Arc::clone(&self.log_bus)
+    }
+
+    pub fn log_source(&self) -> Arc<dyn RpcLogSource> {
+        Arc::clone(&self.log_source)
+    }
+
     /// Resolve the RPC URL the persona / scenario commands should use when
     /// the caller hasn't supplied one. Prefers the active supervisor's URL;
     /// falls back to whichever endpoint the router considers healthy.
@@ -389,6 +495,129 @@ impl SolanaState {
             }
         }
         self.rpc_router.pick_healthy(cluster).map(|e| e.url)
+    }
+
+    fn start_log_poller(&self, token: &LogSubscriptionToken, filter: &LogFilter) {
+        if filter.program_ids.is_empty() {
+            return;
+        }
+
+        self.stop_log_poller(token);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_worker = Arc::clone(&stop);
+        let token_key = token.0.clone();
+        let cluster = filter.cluster;
+        let program_ids = filter.program_ids.clone();
+        let source = self.log_source();
+        let bus = self.log_bus();
+        let supervisor = self.supervisor();
+        let router = self.rpc_router();
+
+        let join = std::thread::spawn(move || {
+            let mut seen_queue: VecDeque<String> = VecDeque::new();
+            let mut seen_set: HashSet<String> = HashSet::new();
+
+            while !stop_worker.load(Ordering::Relaxed) {
+                let rpc_url = {
+                    let status = supervisor.status();
+                    if status.kind == Some(cluster) {
+                        status.rpc_url
+                    } else {
+                        None
+                    }
+                }
+                .or_else(|| router.pick_healthy(cluster).map(|endpoint| endpoint.url));
+
+                if let Some(rpc_url) = rpc_url {
+                    if let Ok(mut batches) =
+                        source.fetch_recent_many(cluster, &rpc_url, &program_ids, LOG_POLL_BATCH_LIMIT)
+                    {
+                        batches.sort_by(|a, b| {
+                            a.slot
+                                .unwrap_or(0)
+                                .cmp(&b.slot.unwrap_or(0))
+                                .then_with(|| a.signature.cmp(&b.signature))
+                        });
+
+                        for batch in batches {
+                            if remember_signature(
+                                &mut seen_queue,
+                                &mut seen_set,
+                                batch.signature.clone(),
+                            ) {
+                                bus.publish_raw(batch);
+                            }
+                        }
+                    }
+                }
+
+                let mut slept = Duration::from_millis(0);
+                while slept < LOG_POLL_INTERVAL {
+                    if stop_worker.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let tick = Duration::from_millis(250);
+                    std::thread::sleep(tick);
+                    slept += tick;
+                }
+            }
+        });
+
+        if let Ok(mut pollers) = self.log_pollers.lock() {
+            pollers.insert(
+                token_key,
+                LogPollWorker {
+                    stop,
+                    join: Some(join),
+                },
+            );
+        } else {
+            // Poisoned lock means we can't track the worker; shut it
+            // down immediately to avoid orphan polling threads.
+            stop.store(true, Ordering::Relaxed);
+            let _ = join.join();
+        }
+    }
+
+    fn stop_log_poller(&self, token: &LogSubscriptionToken) -> bool {
+        let worker = self
+            .log_pollers
+            .lock()
+            .ok()
+            .and_then(|mut pollers| pollers.remove(&token.0));
+
+        let Some(mut worker) = worker else {
+            return false;
+        };
+
+        worker.stop.store(true, Ordering::Relaxed);
+        if let Some(join) = worker.join.take() {
+            let _ = join.join();
+        }
+        true
+    }
+
+    fn stop_all_log_pollers(&self) {
+        let workers = self
+            .log_pollers
+            .lock()
+            .ok()
+            .map(|mut pollers| pollers.drain().map(|(_, worker)| worker).collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        for mut worker in workers {
+            worker.stop.store(true, Ordering::Relaxed);
+            if let Some(join) = worker.join.take() {
+                let _ = join.join();
+            }
+        }
+    }
+}
+
+impl Drop for SolanaState {
+    fn drop(&mut self) {
+        self.stop_all_log_pollers();
     }
 }
 
@@ -1685,6 +1914,217 @@ pub fn solana_replay_list(state: State<'_, SolanaState>) -> CommandResult<Vec<Ex
         .into_iter()
         .cloned()
         .collect())
+}
+
+// ---------- Logs & indexer commands (Phase 7) ------------------------------
+
+#[derive(Clone)]
+struct TauriLogSink<R: Runtime> {
+    app: AppHandle<R>,
+}
+
+impl<R: Runtime> std::fmt::Debug for TauriLogSink<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TauriLogSink").finish_non_exhaustive()
+    }
+}
+
+impl<R: Runtime> LogEventSink for TauriLogSink<R> {
+    fn emit_raw(&self, token: &LogSubscriptionToken, entry: &LogEntry) {
+        let _ = self.app.emit(
+            SOLANA_LOG_EVENT,
+            serde_json::json!({
+                "token": token.0.clone(),
+                "entry": entry,
+            }),
+        );
+    }
+
+    fn emit_decoded(&self, token: &LogSubscriptionToken, entry: &LogEntry) {
+        let _ = self.app.emit(
+            SOLANA_LOG_DECODED_EVENT,
+            serde_json::json!({
+                "token": token.0.clone(),
+                "signature": entry.signature,
+                "cluster": entry.cluster,
+                "slot": entry.slot,
+                "programsInvoked": entry.programs_invoked,
+                "anchorEvents": entry.anchor_events,
+                "explanation": entry.explanation,
+                "err": entry.err,
+                "receivedMs": entry.received_ms,
+            }),
+        );
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogsSubscribeRequest {
+    pub filter: LogFilter,
+}
+
+#[tauri::command]
+pub fn solana_logs_subscribe<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: LogsSubscribeRequest,
+) -> CommandResult<LogSubscriptionToken> {
+    let bus = state.log_bus();
+    bus.set_sink(Arc::new(TauriLogSink { app }) as Arc<dyn LogEventSink>);
+    let token = bus.subscribe(request.filter.clone());
+    state.start_log_poller(&token, &request.filter);
+    Ok(token)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogsUnsubscribeRequest {
+    pub token: LogSubscriptionToken,
+}
+
+#[tauri::command]
+pub fn solana_logs_unsubscribe(
+    state: State<'_, SolanaState>,
+    request: LogsUnsubscribeRequest,
+) -> CommandResult<bool> {
+    let unsubscribed = state.log_bus().unsubscribe(&request.token);
+    let stopped = state.stop_log_poller(&request.token);
+    Ok(unsubscribed || stopped)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogsRecentRequest {
+    pub cluster: ClusterKind,
+    #[serde(default)]
+    pub program_ids: Vec<String>,
+    #[serde(default = "default_recent_last_n")]
+    pub last_n: u32,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+    /// When true, only entries already in the bus cache are returned —
+    /// no RPC call. Used by the UI when reconnecting after a panel
+    /// close/open.
+    #[serde(default)]
+    pub cached_only: bool,
+}
+
+fn default_recent_last_n() -> u32 {
+    25
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsRecentResponse {
+    pub cluster: ClusterKind,
+    pub program_ids: Vec<String>,
+    pub fetched: u32,
+    pub entries: Vec<LogEntry>,
+}
+
+#[tauri::command]
+pub fn solana_logs_recent(
+    state: State<'_, SolanaState>,
+    request: LogsRecentRequest,
+) -> CommandResult<LogsRecentResponse> {
+    if !(1..=1024).contains(&request.last_n) {
+        return Err(logs::invalid_last_n(request.last_n as u64));
+    }
+    if request.cached_only || request.program_ids.is_empty() {
+        let filter = LogFilter {
+            cluster: request.cluster,
+            program_ids: request.program_ids.clone(),
+            include_decoded: true,
+        };
+        let entries = state.log_bus().recent(&filter, request.last_n as usize);
+        return Ok(LogsRecentResponse {
+            cluster: request.cluster,
+            program_ids: request.program_ids,
+            fetched: entries.len() as u32,
+            entries,
+        });
+    }
+
+    let rpc_url = request
+        .rpc_url
+        .or_else(|| state.resolve_rpc_url(request.cluster))
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "solana_logs_no_rpc",
+                "No RPC URL available — start a cluster or provide rpcUrl explicitly.",
+            )
+        })?;
+
+    let source = state.log_source();
+    let bus = state.log_bus();
+    let entries = logs::rpc_source::fetch_recent_and_publish(
+        source.as_ref(),
+        bus.as_ref(),
+        request.cluster,
+        &rpc_url,
+        &request.program_ids,
+        request.last_n,
+    )?;
+    Ok(LogsRecentResponse {
+        cluster: request.cluster,
+        program_ids: request.program_ids,
+        fetched: entries.len() as u32,
+        entries,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsActiveSubscription {
+    pub token: String,
+    pub filter: LogFilter,
+}
+
+#[tauri::command]
+pub fn solana_logs_active(
+    state: State<'_, SolanaState>,
+) -> CommandResult<Vec<LogsActiveSubscription>> {
+    Ok(state
+        .log_bus()
+        .active_subscriptions()
+        .into_iter()
+        .map(|(token, filter)| LogsActiveSubscription {
+            token: token.0,
+            filter,
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IndexerScaffoldArgs {
+    pub request: ScaffoldRequest,
+}
+
+#[tauri::command]
+pub fn solana_indexer_scaffold(
+    state: State<'_, SolanaState>,
+    request: IndexerScaffoldArgs,
+) -> CommandResult<ScaffoldResult> {
+    indexer::scaffold(state.idl_registry().as_ref(), &request.request)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IndexerRunArgs {
+    pub request: IndexerRunRequest,
+}
+
+#[tauri::command]
+pub fn solana_indexer_run(
+    state: State<'_, SolanaState>,
+    request: IndexerRunArgs,
+) -> CommandResult<IndexerRunReport> {
+    let source = state.log_source();
+    let bus = state.log_bus();
+    let resolver = |cluster: ClusterKind| state.resolve_rpc_url(cluster);
+    indexer::run_local(source.as_ref(), bus, &request.request, resolver)
 }
 
 /// Lightweight acknowledgement that the frontend can call when it opens

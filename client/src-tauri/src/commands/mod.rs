@@ -106,7 +106,9 @@ pub use solana::{
     solana_snapshot_delete, solana_snapshot_list, solana_snapshot_restore,
     solana_squads_proposal_create, solana_subscribe_ready, solana_toolchain_status,
     solana_tx_build, solana_tx_explain, solana_tx_send, solana_tx_simulate,
-    solana_verified_build_submit, SolanaState,
+    solana_verified_build_submit, solana_logs_subscribe, solana_logs_unsubscribe,
+    solana_logs_recent, solana_logs_active, solana_indexer_scaffold, solana_indexer_run,
+    SolanaState,
 };
 pub use start_autonomous_run::start_autonomous_run;
 pub use start_openai_login::start_openai_login;

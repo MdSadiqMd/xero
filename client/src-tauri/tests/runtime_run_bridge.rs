@@ -237,3 +237,18 @@ fn start_runtime_run_launches_github_models_with_truthful_provider_identity_and_
 ) {
     runtime_recovery::start_runtime_run_launches_github_models_with_truthful_provider_identity_and_secret_free_persistence();
 }
+
+#[test]
+fn start_runtime_run_projects_connected_mcp_servers_into_run_scoped_projection_contract() {
+    runtime_recovery::start_runtime_run_projects_connected_mcp_servers_into_run_scoped_projection_contract();
+}
+
+#[test]
+fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_unreadable() {
+    runtime_recovery::start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_unreadable();
+}
+
+#[test]
+fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_malformed() {
+    runtime_recovery::start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_malformed();
+}

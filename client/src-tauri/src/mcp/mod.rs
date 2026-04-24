@@ -1,5 +1,6 @@
 pub mod connection;
 pub mod registry;
+pub mod runtime_projection;
 
 pub use connection::{
     refresh_mcp_connection_truth, refresh_mcp_connection_truth_with_config,
@@ -11,4 +12,8 @@ pub use registry::{
     McpConnectionState, McpConnectionStatus, McpEnvironmentReference, McpRegistry,
     McpRegistryImportDiagnostic, McpRegistryImportResult, McpServerRecord, McpTransport,
     MCP_REGISTRY_FILE_NAME,
+};
+pub use runtime_projection::{
+    load_runtime_mcp_projection_contract, materialize_runtime_mcp_projection_for_run,
+    RuntimeMcpProjectionOutcome, RUNTIME_MCP_PROJECTION_DIRECTORY_NAME,
 };

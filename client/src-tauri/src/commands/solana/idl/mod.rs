@@ -245,6 +245,21 @@ impl IdlRegistry {
         *self.sink.write().unwrap() = sink;
     }
 
+    /// Register an IDL value directly into the cache, skipping disk I/O.
+    /// Primarily used by the log bus tests to seed an IDL that the log
+    /// decoder can look up — real code paths should prefer `load_file`
+    /// or `fetch_on_chain`.
+    pub fn load_value_for_tests(&self, value: Value) -> CommandResult<Idl> {
+        let idl = Idl::from_value(value, IdlSource::Synthetic);
+        let key = format!(
+            "synthetic::{}::{}",
+            idl.program_id().unwrap_or_else(|| "<no-id>".into()),
+            idl.hash
+        );
+        self.insert(&key, idl.clone());
+        Ok(idl)
+    }
+
     pub fn load_file(&self, path: &Path) -> CommandResult<Idl> {
         let bytes = fs::read(path).map_err(|err| read_error(path, err))?;
         let value: Value = serde_json::from_slice(&bytes).map_err(|err| {

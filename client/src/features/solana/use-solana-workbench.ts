@@ -991,6 +991,97 @@ export interface ReplayReport {
   referenceUrl: string
 }
 
+// Phase 7 — logs + indexer.
+export interface AnchorEvent {
+  programId: string
+  eventName?: string | null
+  discriminatorHex: string
+  payloadBase64: string
+  payloadBytesLen: number
+}
+
+export interface LogEntry {
+  cluster: ClusterKind
+  signature: string
+  slot?: number | null
+  blockTimeS?: number | null
+  rawLogs: string[]
+  programsInvoked: string[]
+  explanation: Explanation
+  anchorEvents: AnchorEvent[]
+  err?: unknown
+  receivedMs: number
+}
+
+export interface LogFilter {
+  cluster: ClusterKind
+  programIds: string[]
+  includeDecoded: boolean
+}
+
+export interface LogsRecentResponse {
+  cluster: ClusterKind
+  programIds: string[]
+  fetched: number
+  entries: LogEntry[]
+}
+
+export interface LogsActiveSubscription {
+  token: string
+  filter: LogFilter
+}
+
+export interface LogRawEventPayload {
+  token: string
+  entry: LogEntry
+}
+
+export interface LogDecodedEventPayload {
+  token: string
+  signature?: string | null
+  cluster: ClusterKind
+  slot?: number | null
+  programsInvoked: string[]
+  anchorEvents: AnchorEvent[]
+  explanation: Explanation
+  err?: unknown
+  receivedMs: number
+}
+
+export type IndexerKind = "carbon" | "log_parser" | "helius_webhook"
+
+export interface ScaffoldFile {
+  path: string
+  bytesWritten: number
+  sha256: string
+}
+
+export interface ScaffoldResult {
+  kind: IndexerKind
+  root: string
+  projectSlug: string
+  programId: string
+  programName: string
+  files: ScaffoldFile[]
+  entrypoint?: string | null
+  runHint: string
+  startCommand?: string | null
+}
+
+export interface ProgramEventCount {
+  programId: string
+  transactions: number
+  anchorEvents: number
+}
+
+export interface IndexerRunReport {
+  cluster: ClusterKind
+  programIds: string[]
+  fetchedSignatures: number
+  eventsByProgram: ProgramEventCount[]
+  entries: LogEntry[]
+}
+
 // PDA types.
 export type SeedPart =
   | { kind: "utf8"; value: string }
@@ -1279,6 +1370,40 @@ export interface UseSolanaWorkbench {
     snapshotSlot?: number | null
     rpcUrl?: string | null
   }) => Promise<ReplayReport | null>
+  // Phase 7 — logs + indexer.
+  logBusy: boolean
+  logEntries: LogEntry[]
+  decodedLogEvents: LogDecodedEventPayload[]
+  activeLogSubscriptions: LogsActiveSubscription[]
+  lastLogFetch: LogsRecentResponse | null
+  clearLogFeed: () => void
+  refreshActiveLogSubscriptions: () => Promise<void>
+  subscribeLogs: (filter: LogFilter) => Promise<string | null>
+  unsubscribeLogs: (token: string) => Promise<boolean>
+  fetchRecentLogs: (args: {
+    cluster: ClusterKind
+    programIds?: string[]
+    lastN?: number
+    rpcUrl?: string | null
+    cachedOnly?: boolean
+  }) => Promise<LogsRecentResponse | null>
+  indexerBusy: boolean
+  lastIndexerScaffold: ScaffoldResult | null
+  lastIndexerRun: IndexerRunReport | null
+  scaffoldIndexer: (args: {
+    kind: IndexerKind
+    idlPath: string
+    outputDir: string
+    projectSlug?: string | null
+    overwrite?: boolean
+    rpcUrl?: string | null
+  }) => Promise<ScaffoldResult | null>
+  runIndexer: (args: {
+    cluster: ClusterKind
+    programIds: string[]
+    lastN?: number
+    rpcUrl?: string | null
+  }) => Promise<IndexerRunReport | null>
 }
 
 const SOLANA_VALIDATOR_STATUS_EVENT = "solana:validator:status"
@@ -1288,9 +1413,13 @@ const SOLANA_TX_EVENT = "solana:tx"
 const SOLANA_IDL_CHANGED_EVENT = "solana:idl:changed"
 const SOLANA_DEPLOY_PROGRESS_EVENT = "solana:deploy:progress"
 const SOLANA_AUDIT_EVENT = "solana:audit"
+const SOLANA_LOG_EVENT = "solana:log"
+const SOLANA_LOG_DECODED_EVENT = "solana:log:decoded"
 
 const MAX_AUDIT_FEED_EVENTS = 200
 const MAX_AUDIT_FEED_FINDINGS = 500
+const MAX_LOG_FEED_ENTRIES = 500
+const MAX_DECODED_LOG_EVENTS = 500
 
 interface Options {
   /** When false, the hook releases listeners and doesn't probe. */
@@ -1382,6 +1511,21 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
   const [lastReplayReport, setLastReplayReport] =
     useState<ReplayReport | null>(null)
   const [replayCatalog, setReplayCatalog] = useState<ExploitDescriptor[]>([])
+
+  // Phase 7 — logs + indexer.
+  const [logBusy, setLogBusy] = useState(false)
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([])
+  const [decodedLogEvents, setDecodedLogEvents] =
+    useState<LogDecodedEventPayload[]>([])
+  const [activeLogSubscriptions, setActiveLogSubscriptions] =
+    useState<LogsActiveSubscription[]>([])
+  const [lastLogFetch, setLastLogFetch] =
+    useState<LogsRecentResponse | null>(null)
+  const [indexerBusy, setIndexerBusy] = useState(false)
+  const [lastIndexerScaffold, setLastIndexerScaffold] =
+    useState<ScaffoldResult | null>(null)
+  const [lastIndexerRun, setLastIndexerRun] =
+    useState<IndexerRunReport | null>(null)
 
   const activeRef = useRef(active)
   activeRef.current = active
@@ -2388,6 +2532,187 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     [],
   )
 
+  const mergeLogEntries = useCallback((incoming: LogEntry[]) => {
+    if (incoming.length === 0) return
+    const keyOf = (entry: LogEntry) =>
+      `${entry.cluster}:${entry.signature}:${entry.slot ?? "na"}`
+
+    setLogEntries((current) => {
+      const map = new Map<string, LogEntry>()
+      for (const entry of current) map.set(keyOf(entry), entry)
+      for (const entry of incoming) map.set(keyOf(entry), entry)
+
+      const next = Array.from(map.values()).sort(
+        (a, b) => (a.receivedMs ?? 0) - (b.receivedMs ?? 0),
+      )
+      if (next.length > MAX_LOG_FEED_ENTRIES) {
+        return next.slice(next.length - MAX_LOG_FEED_ENTRIES)
+      }
+      return next
+    })
+  }, [])
+
+  const clearLogFeed = useCallback(() => {
+    setLogEntries([])
+    setDecodedLogEvents([])
+    setLastLogFetch(null)
+  }, [])
+
+  const refreshActiveLogSubscriptions = useCallback(async () => {
+    if (!isTauri()) return
+    const next = await tauriInvoke<LogsActiveSubscription[]>("solana_logs_active")
+    if (next) setActiveLogSubscriptions(next)
+  }, [])
+
+  const subscribeLogs = useCallback(
+    async (filter: LogFilter): Promise<string | null> => {
+      if (!isTauri()) return null
+      setLogBusy(true)
+      setError(null)
+      try {
+        const token = await invoke<string>("solana_logs_subscribe", {
+          request: { filter },
+        })
+        setActiveLogSubscriptions((current) => {
+          if (current.some((entry) => entry.token === token)) return current
+          return [...current, { token, filter }]
+        })
+        return token
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setLogBusy(false)
+      }
+    },
+    [],
+  )
+
+  const unsubscribeLogs = useCallback(async (token: string): Promise<boolean> => {
+    if (!isTauri()) return false
+    setLogBusy(true)
+    setError(null)
+    try {
+      const ok = await invoke<boolean>("solana_logs_unsubscribe", {
+        request: { token },
+      })
+      setActiveLogSubscriptions((current) =>
+        current.filter((entry) => entry.token !== token),
+      )
+      return ok
+    } catch (err) {
+      setError(errorMessage(err))
+      return false
+    } finally {
+      setLogBusy(false)
+    }
+  }, [])
+
+  const fetchRecentLogs = useCallback(
+    async (args: {
+      cluster: ClusterKind
+      programIds?: string[]
+      lastN?: number
+      rpcUrl?: string | null
+      cachedOnly?: boolean
+    }): Promise<LogsRecentResponse | null> => {
+      if (!isTauri()) return null
+      setLogBusy(true)
+      setError(null)
+      try {
+        const response = await invoke<LogsRecentResponse>("solana_logs_recent", {
+          request: {
+            cluster: args.cluster,
+            programIds: args.programIds ?? [],
+            lastN: args.lastN ?? 25,
+            rpcUrl: args.rpcUrl ?? null,
+            cachedOnly: args.cachedOnly ?? false,
+          },
+        })
+        setLastLogFetch(response)
+        mergeLogEntries(response.entries)
+        return response
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setLogBusy(false)
+      }
+    },
+    [mergeLogEntries],
+  )
+
+  const scaffoldIndexer = useCallback(
+    async (args: {
+      kind: IndexerKind
+      idlPath: string
+      outputDir: string
+      projectSlug?: string | null
+      overwrite?: boolean
+      rpcUrl?: string | null
+    }): Promise<ScaffoldResult | null> => {
+      if (!isTauri()) return null
+      setIndexerBusy(true)
+      setError(null)
+      try {
+        const result = await invoke<ScaffoldResult>("solana_indexer_scaffold", {
+          request: {
+            request: {
+              kind: args.kind,
+              idlPath: args.idlPath,
+              outputDir: args.outputDir,
+              projectSlug: args.projectSlug ?? null,
+              overwrite: args.overwrite ?? false,
+              rpcUrl: args.rpcUrl ?? null,
+            },
+          },
+        })
+        setLastIndexerScaffold(result)
+        return result
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setIndexerBusy(false)
+      }
+    },
+    [],
+  )
+
+  const runIndexer = useCallback(
+    async (args: {
+      cluster: ClusterKind
+      programIds: string[]
+      lastN?: number
+      rpcUrl?: string | null
+    }): Promise<IndexerRunReport | null> => {
+      if (!isTauri()) return null
+      setIndexerBusy(true)
+      setError(null)
+      try {
+        const result = await invoke<IndexerRunReport>("solana_indexer_run", {
+          request: {
+            request: {
+              cluster: args.cluster,
+              programIds: args.programIds,
+              lastN: args.lastN ?? 25,
+              rpcUrl: args.rpcUrl ?? null,
+            },
+          },
+        })
+        setLastIndexerRun(result)
+        mergeLogEntries(result.entries)
+        return result
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setIndexerBusy(false)
+      }
+    },
+    [mergeLogEntries],
+  )
+
   // Mount: probe toolchain + cluster catalogue + status + persona catalog.
   useEffect(() => {
     if (!active || !isTauri()) return
@@ -2398,6 +2723,7 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     void refreshPersonaRoles()
     void refreshScenarios()
     void refreshReplayCatalog()
+    void refreshActiveLogSubscriptions()
   }, [
     active,
     refreshClusters,
@@ -2407,6 +2733,7 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     refreshPersonaRoles,
     refreshScenarios,
     refreshReplayCatalog,
+    refreshActiveLogSubscriptions,
   ])
 
   // Listen for status events while the sidebar is visible.
@@ -2526,6 +2853,34 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
             : next
         })
       }
+    }).then((unsub) => {
+      if (cancelled) {
+        unsub()
+      } else {
+        unsubs.push(unsub)
+      }
+    })
+
+    void listen<LogRawEventPayload>(SOLANA_LOG_EVENT, (event) => {
+      if (cancelled) return
+      mergeLogEntries([event.payload.entry])
+    }).then((unsub) => {
+      if (cancelled) {
+        unsub()
+      } else {
+        unsubs.push(unsub)
+      }
+    })
+
+    void listen<LogDecodedEventPayload>(SOLANA_LOG_DECODED_EVENT, (event) => {
+      if (cancelled) return
+      const payload = event.payload
+      setDecodedLogEvents((current) => {
+        const next = [...current, payload]
+        return next.length > MAX_DECODED_LOG_EVENTS
+          ? next.slice(next.length - MAX_DECODED_LOG_EVENTS)
+          : next
+      })
     }).then((unsub) => {
       if (cancelled) {
         unsub()
@@ -2673,5 +3028,20 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     scaffoldFuzzHarness,
     runCoverageAudit,
     runReplay,
+    logBusy,
+    logEntries,
+    decodedLogEvents,
+    activeLogSubscriptions,
+    lastLogFetch,
+    clearLogFeed,
+    refreshActiveLogSubscriptions,
+    subscribeLogs,
+    unsubscribeLogs,
+    fetchRecentLogs,
+    indexerBusy,
+    lastIndexerScaffold,
+    lastIndexerRun,
+    scaffoldIndexer,
+    runIndexer,
   }
 }

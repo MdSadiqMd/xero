@@ -13,6 +13,8 @@ pub const SOLANA_TX_EVENT: &str = "solana:tx";
 pub const SOLANA_IDL_CHANGED_EVENT: &str = "solana:idl:changed";
 pub const SOLANA_DEPLOY_PROGRESS_EVENT: &str = "solana:deploy:progress";
 pub const SOLANA_AUDIT_EVENT: &str = "solana:audit";
+pub const SOLANA_LOG_EVENT: &str = "solana:log";
+pub const SOLANA_LOG_DECODED_EVENT: &str = "solana:log:decoded";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

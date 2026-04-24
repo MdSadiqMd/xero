@@ -173,6 +173,43 @@ pub(crate) fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::Moc
         .expect("failed to build mock Tauri app")
 }
 
+pub(crate) fn mcp_registry_path(
+    app: &tauri::App<tauri::test::MockRuntime>,
+) -> PathBuf {
+    app.state::<DesktopState>()
+        .mcp_registry_file(&app.handle().clone())
+        .expect("resolve mcp registry path")
+}
+
+pub(crate) fn runtime_mcp_projection_path(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    run_id: &str,
+) -> PathBuf {
+    app.state::<DesktopState>()
+        .app_data_dir(&app.handle().clone())
+        .expect("resolve app data dir")
+        .join(cadence_desktop_lib::mcp::RUNTIME_MCP_PROJECTION_DIRECTORY_NAME)
+        .join(format!("{run_id}.json"))
+}
+
+pub(crate) fn persist_mcp_registry_snapshot(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    registry: &cadence_desktop_lib::mcp::McpRegistry,
+) {
+    let path = mcp_registry_path(app);
+    cadence_desktop_lib::mcp::persist_mcp_registry(&path, registry)
+        .expect("persist mcp registry snapshot");
+}
+
+pub(crate) fn load_runtime_mcp_projection_snapshot(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    run_id: &str,
+) -> cadence_desktop_lib::mcp::McpRegistry {
+    let path = runtime_mcp_projection_path(app, run_id);
+    cadence_desktop_lib::mcp::load_runtime_mcp_projection_contract(&path)
+        .expect("load runtime mcp projection snapshot")
+}
+
 pub(crate) fn create_state(root: &TempDir) -> (DesktopState, PathBuf, PathBuf) {
     let registry_path = root.path().join("app-data").join("project-registry.json");
     let auth_store_path = root.path().join("app-data").join("openai-auth.json");

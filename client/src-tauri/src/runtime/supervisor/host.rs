@@ -35,7 +35,8 @@ use super::persistence::protocol_diagnostic_into_record;
 use super::{
     read_json_line_from_reader, runtime_supervisor_thinking_effort_env_value,
     validate_runtime_supervisor_launch_context, write_json_line, RuntimeSupervisorLaunchEnv,
-    ANTHROPIC_API_KEY_ENV, CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
+    ANTHROPIC_API_KEY_ENV, CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV,
+    CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
     CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
     CADENCE_RUNTIME_THINKING_EFFORT_ENV, DEFAULT_CONTROL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT,
     DEFAULT_STOP_TIMEOUT, OPENAI_API_KEY_ENV, OPENAI_API_VERSION_ENV, OPENAI_BASE_URL_ENV,
@@ -1044,6 +1045,8 @@ fn apply_sidecar_launch_environment(
         .env_remove(CADENCE_RUNTIME_FLOW_ID_ENV)
         .env_remove(CADENCE_RUNTIME_MODEL_ID_ENV)
         .env_remove(CADENCE_RUNTIME_THINKING_EFFORT_ENV)
+        .env_remove(CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV)
+        .env_remove(CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV)
         .env_remove(ANTHROPIC_API_KEY_ENV)
         .env_remove(OPENAI_API_KEY_ENV)
         .env_remove(OPENAI_BASE_URL_ENV)

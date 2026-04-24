@@ -1,8 +1,9 @@
 //! Autonomous-runtime wrapper for the Solana workbench.
 //!
-//! Phase 1 only exposes two tools: `solana_cluster` (start/stop/status
-//! plus snapshot lifecycle) and `solana_logs` (fetch the tail of the
-//! supervisor's log ring). Later phases slot in alongside.
+//! Ships cluster lifecycle plus the transaction/program/audit surfaces,
+//! and now includes the Phase 7 log + indexer tools (`solana_logs`,
+//! `solana_indexer`) so agents can fetch decoded recent events and
+//! scaffold/run local indexers from the same command surface.
 //!
 //! Mirrors `browser.rs`: the request enum is JSON-in/JSON-out, the
 //! executor trait is trivially mockable, and the production wiring
@@ -16,20 +17,21 @@ use serde_json::Value as JsonValue;
 
 use crate::commands::solana::{
     idl::{self, codama::CodamaGenerationRequest},
-    pda, program, AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport, AnalyzerKind,
-    AuditEngine, BuildKind, BuildProfile, BuildReport, BuildRequest, BumpAnalysis, ClusterHandle,
-    ClusterKind, ClusterPda, ClusterStatus, CodamaGenerationReport, CodamaTarget, CoverageReport,
-    CoverageRequest, DeployAuthority, DeployResult, DeployServices, DeploySpec, DerivedAddress,
-    DriftReport, EndpointHealth, ExplainRequest, ExploitDescriptor, ExploitKey,
+    indexer, pda, program, AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport,
+    AnalyzerKind, AuditEngine, BuildKind, BuildProfile, BuildReport, BuildRequest, BumpAnalysis,
+    ClusterHandle, ClusterKind, ClusterPda, ClusterStatus, CodamaGenerationReport, CodamaTarget,
+    CoverageReport, CoverageRequest, DeployAuthority, DeployResult, DeployServices, DeploySpec,
+    DerivedAddress, DriftReport, EndpointHealth, ExplainRequest, ExploitDescriptor, ExploitKey,
     ExternalAnalyzerReport, ExternalAnalyzerRequest, FeeEstimate, FuzzReport, FuzzRequest, Idl,
     IdlPublishMode, IdlPublishReport, IdlPublishRequest, IdlRegistry, IdlSubscriptionToken,
-    KnownProgramLookup, NullAuditEventSink, PdaSite, PostDeployOptions, ReplayReport,
+    IndexerKind, IndexerRunReport, IndexerRunRequest, KnownProgramLookup, LogFilter,
+    LogSubscriptionToken, NullAuditEventSink, PdaSite, PostDeployOptions, ReplayReport,
     ReplayRequest, ResolveArgs, RollbackRequest, RollbackResult, RpcRouter, RpcTransport,
-    SamplePercentile, SeedPart, SendRequest, SimulateRequest, SimulationResult, SnapshotMeta,
-    SnapshotStore, SolanaState, SquadsProposalDescriptor, SquadsProposalRequest, StartOpts,
-    StaticLintReport, StaticLintRequest, TridentHarnessRequest, TridentHarnessResult, TxPipeline,
-    TxPlan, TxResult, TxSpec, UpgradeSafetyReport, UpgradeSafetyRequest, ValidatorSupervisor,
-    VerifiedBuildRequest, VerifiedBuildResult,
+    SamplePercentile, ScaffoldRequest, ScaffoldResult, SeedPart, SendRequest, SimulateRequest,
+    SimulationResult, SnapshotMeta, SnapshotStore, SolanaState, SquadsProposalDescriptor,
+    SquadsProposalRequest, StartOpts, StaticLintReport, StaticLintRequest, TridentHarnessRequest,
+    TridentHarnessResult, TxPipeline, TxPlan, TxResult, TxSpec, UpgradeSafetyReport,
+    UpgradeSafetyRequest, ValidatorSupervisor, VerifiedBuildRequest, VerifiedBuildResult,
 };
 use crate::commands::{CommandError, CommandResult};
 
@@ -52,6 +54,7 @@ pub const AUTONOMOUS_TOOL_SOLANA_AUDIT_EXTERNAL: &str = "solana_audit_external";
 pub const AUTONOMOUS_TOOL_SOLANA_AUDIT_FUZZ: &str = "solana_audit_fuzz";
 pub const AUTONOMOUS_TOOL_SOLANA_AUDIT_COVERAGE: &str = "solana_audit_coverage";
 pub const AUTONOMOUS_TOOL_SOLANA_REPLAY: &str = "solana_replay";
+pub const AUTONOMOUS_TOOL_SOLANA_INDEXER: &str = "solana_indexer";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -87,12 +90,70 @@ pub struct AutonomousSolanaClusterRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaLogsAction {
+    /// Backwards-compatible status surface.
+    Status,
+    /// Fetch and decode recent logs for one or more program ids.
+    Recent {
+        cluster: ClusterKind,
+        #[serde(default)]
+        program_ids: Vec<String>,
+        #[serde(default)]
+        last_n: Option<u32>,
+        #[serde(default)]
+        rpc_url: Option<String>,
+        #[serde(default)]
+        cached_only: bool,
+    },
+    /// Return currently-active subscriptions from the `LogBus`.
+    Active,
+    /// Start a live subscription.
+    Subscribe {
+        filter: LogFilter,
+    },
+    /// Stop a live subscription.
+    Unsubscribe {
+        token: LogSubscriptionToken,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AutonomousSolanaLogsRequest {
-    /// Reserved for future decoded-log filter support; Phase 1 returns the
-    /// process stderr tail from the validator supervisor.
-    #[serde(default)]
-    pub limit: Option<usize>,
+    #[serde(flatten)]
+    pub action: AutonomousSolanaLogsAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaIndexerAction {
+    Scaffold {
+        kind: IndexerKind,
+        idl_path: String,
+        output_dir: String,
+        #[serde(default)]
+        project_slug: Option<String>,
+        #[serde(default)]
+        overwrite: bool,
+        #[serde(default)]
+        rpc_url: Option<String>,
+    },
+    Run {
+        cluster: ClusterKind,
+        program_ids: Vec<String>,
+        #[serde(default)]
+        last_n: Option<u32>,
+        #[serde(default)]
+        rpc_url: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaIndexerRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaIndexerAction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -519,6 +580,11 @@ pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
         request: AutonomousSolanaAuditRequest,
     ) -> CommandResult<AutonomousSolanaOutput>;
 
+    fn indexer(
+        &self,
+        request: AutonomousSolanaIndexerRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
     fn replay(
         &self,
         request: AutonomousSolanaReplayRequest,
@@ -543,6 +609,8 @@ struct StateInner {
     transport: Arc<dyn RpcTransport>,
     deploy_services: Arc<DeployServices>,
     audit_engine: Arc<AuditEngine>,
+    log_bus: Arc<crate::commands::solana::LogBus>,
+    log_source: Arc<dyn crate::commands::solana::RpcLogSource>,
 }
 
 impl StateSolanaExecutor {
@@ -557,6 +625,8 @@ impl StateSolanaExecutor {
                 transport: state.transport(),
                 deploy_services: state.deploy_services(),
                 audit_engine: state.audit_engine(),
+                log_bus: state.log_bus(),
+                log_source: state.log_source(),
             }),
         }
     }
@@ -661,16 +731,103 @@ impl SolanaExecutor for StateSolanaExecutor {
         })
     }
 
-    fn logs(&self, _request: AutonomousSolanaLogsRequest) -> CommandResult<AutonomousSolanaOutput> {
-        // Phase 1 surface: caller gets whatever status the supervisor
-        // currently reports, so the agent can at least tell whether a
-        // cluster is running. Phase 7 will wire the full validator log
-        // bus.
-        let status = self.inner.supervisor.status();
-        let value = serde_json::to_value(status).unwrap_or(JsonValue::Null);
+    fn logs(&self, request: AutonomousSolanaLogsRequest) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaLogsAction::Status => {
+                let status = self.inner.supervisor.status();
+                (
+                    "status".to_string(),
+                    serde_json::to_value::<ClusterStatus>(status).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaLogsAction::Active => {
+                let active = self
+                    .inner
+                    .log_bus
+                    .active_subscriptions()
+                    .into_iter()
+                    .map(|(token, filter)| {
+                        serde_json::json!({
+                            "token": token,
+                            "filter": filter,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    "active".to_string(),
+                    serde_json::to_value(active).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaLogsAction::Subscribe { filter } => {
+                let token = self.inner.log_bus.subscribe(filter);
+                (
+                    "subscribe".to_string(),
+                    serde_json::to_value::<LogSubscriptionToken>(token)
+                        .unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaLogsAction::Unsubscribe { token } => {
+                let removed = self.inner.log_bus.unsubscribe(&token);
+                ("unsubscribe".to_string(), JsonValue::Bool(removed))
+            }
+            AutonomousSolanaLogsAction::Recent {
+                cluster,
+                program_ids,
+                last_n,
+                rpc_url,
+                cached_only,
+            } => {
+                let limit = last_n.unwrap_or(25);
+                if !(1..=1024).contains(&limit) {
+                    return Err(CommandError::user_fixable(
+                        "solana_logs_invalid_last_n",
+                        format!("last_n must be between 1 and 1024 (got {limit})."),
+                    ));
+                }
+
+                let filter = LogFilter {
+                    cluster,
+                    program_ids: program_ids.clone(),
+                    include_decoded: true,
+                };
+
+                let entries = if cached_only || program_ids.is_empty() {
+                    self.inner.log_bus.recent(&filter, limit as usize)
+                } else {
+                    let rpc_url = rpc_url
+                        .or_else(|| self.resolve_rpc_url(cluster))
+                        .ok_or_else(|| {
+                            CommandError::user_fixable(
+                                "solana_logs_no_rpc",
+                                "No RPC URL available — start a cluster or provide rpcUrl.",
+                            )
+                        })?;
+
+                    crate::commands::solana::logs::rpc_source::fetch_recent_and_publish(
+                        self.inner.log_source.as_ref(),
+                        self.inner.log_bus.as_ref(),
+                        cluster,
+                        &rpc_url,
+                        &program_ids,
+                        limit,
+                    )?
+                };
+
+                (
+                    "recent".to_string(),
+                    serde_json::json!({
+                        "cluster": cluster,
+                        "programIds": program_ids,
+                        "fetched": entries.len() as u32,
+                        "entries": entries,
+                    }),
+                )
+            }
+        };
+
         let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
         Ok(AutonomousSolanaOutput {
-            action: "status".to_string(),
+            action: action_name,
             value_json,
         })
     }
@@ -1304,6 +1461,66 @@ impl SolanaExecutor for StateSolanaExecutor {
         })
     }
 
+    fn indexer(
+        &self,
+        request: AutonomousSolanaIndexerRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaIndexerAction::Scaffold {
+                kind,
+                idl_path,
+                output_dir,
+                project_slug,
+                overwrite,
+                rpc_url,
+            } => {
+                let result = indexer::scaffold(
+                    self.inner.idl_registry.as_ref(),
+                    &ScaffoldRequest {
+                        kind,
+                        idl_path,
+                        output_dir,
+                        project_slug,
+                        overwrite,
+                        rpc_url,
+                    },
+                )?;
+                (
+                    "scaffold".to_string(),
+                    serde_json::to_value::<ScaffoldResult>(result).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaIndexerAction::Run {
+                cluster,
+                program_ids,
+                last_n,
+                rpc_url,
+            } => {
+                let report = indexer::run_local(
+                    self.inner.log_source.as_ref(),
+                    Arc::clone(&self.inner.log_bus),
+                    &IndexerRunRequest {
+                        cluster,
+                        program_ids,
+                        last_n: last_n.unwrap_or(25),
+                        rpc_url,
+                    },
+                    |kind| self.resolve_rpc_url(kind),
+                )?;
+                (
+                    "run".to_string(),
+                    serde_json::to_value::<IndexerRunReport>(report).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
+
     fn replay(
         &self,
         request: AutonomousSolanaReplayRequest,
@@ -1614,6 +1831,15 @@ impl SolanaExecutor for UnavailableSolanaExecutor {
         })
     }
 
+    fn indexer(
+        &self,
+        _request: AutonomousSolanaIndexerRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Solana indexer scaffolds require the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
     fn replay(
         &self,
         request: AutonomousSolanaReplayRequest,
@@ -1680,7 +1906,9 @@ mod tests {
         assert_eq!(err.class, crate::commands::CommandErrorClass::PolicyDenied);
 
         let err = exec
-            .logs(AutonomousSolanaLogsRequest { limit: Some(10) })
+            .logs(AutonomousSolanaLogsRequest {
+                action: AutonomousSolanaLogsAction::Status,
+            })
             .unwrap_err();
         assert_eq!(err.class, crate::commands::CommandErrorClass::PolicyDenied);
     }

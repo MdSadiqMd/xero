@@ -28,6 +28,9 @@ use crate::{
         RuntimeRunControlStateRecord, RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord,
         RuntimeRunStatus, RuntimeRunTransportLiveness,
     },
+    mcp::{
+        materialize_runtime_mcp_projection_for_run, RUNTIME_MCP_PROJECTION_DIRECTORY_NAME,
+    },
     provider_models::{
         load_provider_model_catalog, ProviderModelCatalog, ProviderModelCatalogSource,
         ProviderModelRecord, ProviderModelThinkingEffort,
@@ -253,8 +256,15 @@ pub(crate) fn launch_or_reconnect_runtime_run<R: Runtime>(
         requested_controls.as_ref(),
         initial_prompt.as_deref(),
     )?;
-    let prepared_launch =
-        prepare_runtime_supervisor_launch(app, state, &runtime, &session_id, &run_controls)?;
+    let run_id = generate_runtime_run_id();
+    let prepared_launch = prepare_runtime_supervisor_launch(
+        app,
+        state,
+        &runtime,
+        &session_id,
+        &run_controls,
+        &run_id,
+    )?;
 
     let launched = launch_detached_runtime_supervisor(
         state,
@@ -262,7 +272,7 @@ pub(crate) fn launch_or_reconnect_runtime_run<R: Runtime>(
             project_id: project_id.into(),
             repo_root: repo_root.clone(),
             runtime_kind: runtime.runtime_kind.clone(),
-            run_id: generate_runtime_run_id(),
+            run_id,
             session_id,
             flow_id: runtime.flow_id.clone(),
             launch_context: prepared_launch.launch_context,
@@ -465,6 +475,7 @@ fn prepare_runtime_supervisor_launch<R: Runtime>(
     runtime: &crate::commands::RuntimeSessionDto,
     session_id: &str,
     run_controls: &RuntimeRunControlStateRecord,
+    run_id: &str,
 ) -> CommandResult<PreparedRuntimeSupervisorLaunch> {
     let provider_profiles = load_provider_profiles_snapshot(app, state)?;
     let active_profile = provider_profiles.active_profile().ok_or_else(|| {
@@ -564,6 +575,36 @@ fn prepare_runtime_supervisor_launch<R: Runtime>(
             launch_env.insert("OPENAI_API_VERSION", api_version);
         }
     }
+
+    let mcp_registry_path = state.mcp_registry_file(app)?;
+    let mcp_projection_root = state
+        .app_data_dir(app)?
+        .join(RUNTIME_MCP_PROJECTION_DIRECTORY_NAME);
+    let mcp_projection = materialize_runtime_mcp_projection_for_run(
+        &mcp_registry_path,
+        &mcp_projection_root,
+        run_id,
+    )
+    .map_err(|error| {
+        let message = format!(
+            "Cadence rejected detached runtime launch because MCP projection could not be built safely: {} ({})",
+            error.message, error.code
+        );
+        if error.retryable {
+            CommandError::retryable("runtime_mcp_projection_failed", message)
+        } else {
+            CommandError::user_fixable("runtime_mcp_projection_failed", message)
+        }
+    })?;
+
+    launch_env.insert(
+        crate::runtime::supervisor::CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV,
+        mcp_projection.projection_path.to_string_lossy().to_string(),
+    );
+    launch_env.insert(
+        crate::runtime::supervisor::CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV,
+        "1",
+    );
 
     Ok(PreparedRuntimeSupervisorLaunch {
         launch_context: RuntimeSupervisorLaunchContext {

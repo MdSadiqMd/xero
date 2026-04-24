@@ -18,6 +18,7 @@ use crate::{
         self, RuntimeRunRecord, RuntimeRunStatus, RuntimeRunTransportLiveness,
         RuntimeRunTransportRecord, RuntimeRunUpsertRecord,
     },
+    mcp::load_runtime_mcp_projection_contract,
 };
 
 use super::boundary::emit_interactive_boundary_if_detected;
@@ -30,7 +31,8 @@ use super::{
     validate_runtime_supervisor_launch_context, write_json_line, PtyEventNormalizer,
     RuntimeSupervisorSidecarArgs, SharedPtyWriter, SidecarSharedState, SupervisorEventHub,
     ANTHROPIC_API_KEY_ENV, BEDROCK_BASE_URL_ENV, BEDROCK_DEFAULT_REGION_ENV, BEDROCK_ENABLE_ENV,
-    BEDROCK_REGION_ENV, CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
+    BEDROCK_REGION_ENV, CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV,
+    CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
     CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
     CADENCE_RUNTIME_THINKING_EFFORT_ENV, HEARTBEAT_INTERVAL, OPENAI_API_KEY_ENV,
     OPENAI_API_VERSION_ENV, OPENAI_BASE_URL_ENV, TERMINAL_ATTACH_GRACE_PERIOD, VERTEX_BASE_URL_ENV,
@@ -157,6 +159,8 @@ fn emit_startup_error(error: CommandError) -> Result<(), CommandError> {
 fn validate_inherited_launch_environment(
     launch_context: &RuntimeSupervisorLaunchContext,
 ) -> Result<(), CommandError> {
+    validate_runtime_mcp_launch_contract()?;
+
     match launch_context.provider_id.as_str() {
         crate::runtime::ANTHROPIC_PROVIDER_ID => {
             let anthropic_api_key = std::env::var(ANTHROPIC_API_KEY_ENV)
@@ -316,6 +320,53 @@ fn validate_inherited_launch_environment(
     Ok(())
 }
 
+fn validate_runtime_mcp_launch_contract() -> Result<(), CommandError> {
+    let contract_required = std::env::var(CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV)
+        .ok()
+        .map(|value| value.trim() == "1")
+        .unwrap_or(false);
+
+    if !contract_required {
+        return Ok(());
+    }
+
+    let projection_path = std::env::var(CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "runtime_supervisor_launch_env_invalid",
+                "Cadence rejected detached runtime launch because the MCP projection path was missing from the launch environment contract.",
+            )
+        })?;
+
+    let projection_path = PathBuf::from(projection_path);
+    if !projection_path.is_file() {
+        return Err(CommandError::user_fixable(
+            "runtime_supervisor_launch_env_invalid",
+            format!(
+                "Cadence rejected detached runtime launch because MCP projection file {} was unavailable.",
+                projection_path.display()
+            ),
+        ));
+    }
+
+    load_runtime_mcp_projection_contract(&projection_path).map_err(|error| {
+        CommandError::user_fixable(
+            "runtime_supervisor_launch_env_invalid",
+            format!(
+                "Cadence rejected detached runtime launch because MCP projection contract at {} was invalid: {} ({})",
+                projection_path.display(),
+                error.message,
+                error.code,
+            ),
+        )
+    })?;
+
+    Ok(())
+}
+
 fn is_local_openai_compatible_base_url(base_url: &str) -> bool {
     Url::parse(base_url)
         .ok()
@@ -386,6 +437,8 @@ fn apply_launch_context_to_child_environment(
     builder.env_remove(CADENCE_RUNTIME_FLOW_ID_ENV);
     builder.env_remove(CADENCE_RUNTIME_MODEL_ID_ENV);
     builder.env_remove(CADENCE_RUNTIME_THINKING_EFFORT_ENV);
+    builder.env_remove(CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV);
+    builder.env_remove(CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV);
     builder.env_remove(ANTHROPIC_API_KEY_ENV);
     builder.env_remove(OPENAI_API_KEY_ENV);
     builder.env_remove(OPENAI_BASE_URL_ENV);
@@ -412,6 +465,13 @@ fn apply_launch_context_to_child_environment(
             CADENCE_RUNTIME_THINKING_EFFORT_ENV,
             runtime_supervisor_thinking_effort_env_value(thinking_effort),
         );
+    }
+
+    if let Ok(projection_path) = std::env::var(CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV) {
+        builder.env(CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV, projection_path);
+    }
+    if let Ok(required) = std::env::var(CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV) {
+        builder.env(CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV, required);
     }
 
     if launch_context.provider_id == crate::runtime::ANTHROPIC_PROVIDER_ID {
