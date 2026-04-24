@@ -232,7 +232,9 @@ pub(crate) fn sample_tool_result_artifact(
                         },
                     ),
                 ),
-                action_id: Some("action-1".into()),
+                action_id: Some(format!(
+                    "scope:run:{run_id}:boundary:boundary-1:terminal_input_required"
+                )),
                 boundary_id: Some("boundary-1".into()),
             },
         )),
@@ -270,7 +272,9 @@ pub(crate) fn sample_verification_evidence_artifact(
                 label: "Terminal input required".into(),
                 outcome: project_store::AutonomousVerificationOutcomeRecord::Blocked,
                 command_result: None,
-                action_id: Some("action-1".into()),
+                action_id: Some(format!(
+                    "scope:run:{run_id}:boundary:boundary-1:terminal_input_required"
+                )),
                 boundary_id: Some("boundary-1".into()),
             },
         )),

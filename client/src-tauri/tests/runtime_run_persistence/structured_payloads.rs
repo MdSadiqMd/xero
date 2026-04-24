@@ -50,7 +50,7 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_structured_artifact_paylo
         .expect("read stored structured payload json");
     let expected_payload_json = concat!(
         "{",
-        "\"actionId\":\"action-1\"",
+        "\"actionId\":\"scope:run:run-1:boundary:boundary-1:terminal_input_required\"",
         ",\"artifactId\":\"artifact-tool-result\"",
         ",\"attemptId\":\"run-1:unit:1:attempt:1\"",
         ",\"boundaryId\":\"boundary-1\"",
@@ -154,7 +154,7 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_mcp_tool_result_payloads_
         .expect("read stored MCP structured payload json");
     let expected_payload_json = concat!(
         "{",
-        "\"actionId\":\"action-1\"",
+        "\"actionId\":\"scope:run:run-1:boundary:boundary-1:terminal_input_required\"",
         ",\"artifactId\":\"artifact-tool-result\"",
         ",\"attemptId\":\"run-1:unit:1:attempt:1\"",
         ",\"boundaryId\":\"boundary-1\"",
@@ -272,7 +272,7 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_browser_computer_use_tool
         .expect("read stored browser/computer-use structured payload json");
     let expected_payload_json = concat!(
         "{",
-        "\"actionId\":\"action-1\"",
+        "\"actionId\":\"scope:run:run-1:boundary:boundary-1:terminal_input_required\"",
         ",\"artifactId\":\"artifact-tool-result\"",
         ",\"attemptId\":\"run-1:unit:1:attempt:1\"",
         ",\"boundaryId\":\"boundary-1\"",
@@ -374,7 +374,7 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_verification_evidence_pay
         .expect("read stored verification evidence payload json");
     let expected_payload_json = concat!(
         "{",
-        "\"actionId\":\"action-1\"",
+        "\"actionId\":\"scope:run:run-1:boundary:boundary-1:terminal_input_required\"",
         ",\"artifactId\":\"artifact-verification-evidence\"",
         ",\"attemptId\":\"run-1:unit:1:attempt:1\"",
         ",\"boundaryId\":\"boundary-1\"",
@@ -571,6 +571,98 @@ pub(crate) fn autonomous_run_persistence_rejects_structured_artifact_payload_lin
     let error = project_store::upsert_autonomous_run(&repo_root, &payload)
         .expect_err("payload linkage mismatch should be rejected");
     assert_eq!(error.code, "autonomous_run_request_invalid");
+}
+
+pub(crate) fn autonomous_run_persistence_rejects_noncanonical_action_boundary_linkage() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
+        },
+    )
+    .expect("persist runtime run for non-canonical linkage rejection");
+
+    let mut artifact = sample_tool_result_artifact(project_id, run_id);
+    if let Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(tool)) =
+        artifact.payload.as_mut()
+    {
+        tool.action_id = Some("noncanonical-action".into());
+        tool.boundary_id = Some("boundary-1".into());
+    }
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![artifact];
+
+    let error = project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect_err("non-canonical action/boundary linkage should be rejected");
+    assert_eq!(error.code, "autonomous_run_request_invalid");
+}
+
+pub(crate) fn autonomous_run_decode_fails_closed_when_action_boundary_linkage_is_tampered() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-1";
+    let repo_root = seed_project(&root, project_id, "repo-1", "repo");
+    let run_id = "run-1";
+
+    project_store::upsert_runtime_run(
+        &repo_root,
+        &project_store::RuntimeRunUpsertRecord {
+            run: sample_run(project_id, run_id),
+            checkpoint: Some(sample_checkpoint(
+                project_id,
+                run_id,
+                1,
+                project_store::RuntimeRunCheckpointKind::Bootstrap,
+                "Bootstrap checkpoint.",
+                "2099-04-15T19:00:20Z",
+            )),
+            control_state: Some(sample_control_state("2099-04-15T19:00:00Z")),
+        },
+    )
+    .expect("persist runtime run before action/boundary linkage tamper");
+
+    let mut payload = sample_autonomous_run(project_id, run_id);
+    payload.artifacts = vec![sample_tool_result_artifact(project_id, run_id)];
+    project_store::upsert_autonomous_run(&repo_root, &payload)
+        .expect("persist autonomous run with canonical action/boundary linkage");
+
+    let connection = open_state_connection(&repo_root);
+    let stored_payload_json: String = connection
+        .query_row(
+            "SELECT payload_json FROM autonomous_unit_artifacts WHERE artifact_id = ?1",
+            params!["artifact-tool-result"],
+            |row| row.get(0),
+        )
+        .expect("read stored payload json before linkage tamper");
+    let tampered_payload_json = stored_payload_json.replace(
+        "scope:run:run-1:boundary:boundary-1:terminal_input_required",
+        "noncanonical-action",
+    );
+
+    connection
+        .execute(
+            "UPDATE autonomous_unit_artifacts SET payload_json = ?1 WHERE artifact_id = ?2",
+            params![tampered_payload_json, "artifact-tool-result"],
+        )
+        .expect("tamper stored action/boundary linkage payload");
+
+    let error = project_store::load_autonomous_run(&repo_root, project_id)
+        .expect_err("tampered action/boundary linkage should fail closed");
+    assert_eq!(error.code, "runtime_run_decode_failed");
 }
 
 pub(crate) fn autonomous_run_persistence_rejects_mcp_tool_summary_with_command_result() {
@@ -844,7 +936,7 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_mcp_capability_kind_is_tam
                     ",\"toolState\":\"succeeded\"",
                     ",\"commandResult\":null",
                     ",\"toolSummary\":{\"kind\":\"mcp_capability\",\"serverId\":\"workspace-mcp\",\"capabilityKind\":\"workflow\",\"capabilityId\":\"prompt://summarize\",\"capabilityName\":\"Summarize\"}",
-                    ",\"actionId\":\"action-1\"",
+                    ",\"actionId\":\"scope:run:run-1:boundary:boundary-1:terminal_input_required\"",
                     ",\"boundaryId\":\"boundary-1\"",
                     "}"
                 ),
@@ -925,7 +1017,7 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_browser_computer_use_summa
                     ",\"toolState\":\"running\"",
                     ",\"commandResult\":null",
                     ",\"toolSummary\":{\"kind\":\"browser_computer_use\",\"surface\":\"browser\",\"action\":\"click\",\"status\":\"queued\",\"target\":\"button#primary\",\"outcome\":null}",
-                    ",\"actionId\":\"action-1\"",
+                    ",\"actionId\":\"scope:run:run-1:boundary:boundary-1:terminal_input_required\"",
                     ",\"boundaryId\":\"boundary-1\"",
                     "}"
                 ),
@@ -1140,7 +1232,7 @@ pub(crate) fn autonomous_run_persistence_rejects_policy_denied_artifacts_without
                     diagnostic_code: "   ".into(),
                     message: "Policy denied write access to the repository worktree.".into(),
                     tool_name: Some("shell.exec".into()),
-                    action_id: Some("action-1".into()),
+                    action_id: Some("scope:run:run-1:boundary:boundary-1:terminal_input_required".into()),
                     boundary_id: Some("boundary-1".into()),
                 },
             ),

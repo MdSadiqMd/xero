@@ -343,6 +343,8 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
             Some(project_store::AutonomousArtifactPayloadRecord::PolicyDenied(payload))
                 if payload.diagnostic_code == "policy_denied_write_access"
                     && payload.message == "Cadence blocked repository writes until operator approval resumes the active boundary"
+                    && payload.action_id.as_deref() == Some(action_id.as_str())
+                    && payload.boundary_id.as_deref() == Some(boundary_id.as_str())
         )
     }));
     assert!(paused_artifacts.iter().any(|artifact| {
@@ -351,8 +353,8 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
             Some(project_store::AutonomousArtifactPayloadRecord::VerificationEvidence(payload))
                 if payload.evidence_kind == "policy_denied_write_access"
                     && payload.outcome == project_store::AutonomousVerificationOutcomeRecord::Failed
-                    && payload.action_id.is_none()
-                    && payload.boundary_id.is_none()
+                    && payload.action_id.as_deref() == Some(action_id.as_str())
+                    && payload.boundary_id.as_deref() == Some(boundary_id.as_str())
         )
     }));
     assert!(paused_artifacts.iter().any(|artifact| {
@@ -599,8 +601,8 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
                     Some(project_store::AutonomousArtifactPayloadRecord::VerificationEvidence(payload))
                         if payload.evidence_kind == "policy_denied_write_access"
                             && payload.outcome == project_store::AutonomousVerificationOutcomeRecord::Failed
-                            && payload.action_id.is_none()
-                            && payload.boundary_id.is_none()
+                            && payload.action_id.as_deref() == Some(action_id.as_str())
+                            && payload.boundary_id.as_deref() == Some(boundary_id.as_str())
                 )
             })
             .count(),

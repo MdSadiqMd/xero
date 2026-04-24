@@ -3328,7 +3328,7 @@ fn validate_autonomous_artifact_action_boundary_linkage(
                 "artifact_boundary_id",
                 "autonomous_run_request_invalid",
             )?;
-            Ok(())
+            validate_runtime_action_boundary_identity(action_id.trim(), boundary_id.trim())
         }
         (None, None) => Ok(()),
         _ => Err(CommandError::user_fixable(
@@ -3336,6 +3336,66 @@ fn validate_autonomous_artifact_action_boundary_linkage(
             "Cadence requires autonomous artifact action_id and boundary_id to be provided together.",
         )),
     }
+}
+
+fn validate_runtime_action_boundary_identity(
+    action_id: &str,
+    boundary_id: &str,
+) -> Result<(), CommandError> {
+    if action_id.chars().any(char::is_whitespace) {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires boundary-linked autonomous artifacts to persist canonical action_id values without whitespace.",
+        ));
+    }
+
+    if boundary_id.contains(':') || boundary_id.chars().any(char::is_whitespace) {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires boundary-linked autonomous artifacts to persist canonical boundary_id values.",
+        ));
+    }
+
+    let run_marker = ":run:";
+    let Some(run_start) = action_id.find(run_marker) else {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires boundary-linked autonomous artifacts to use runtime-scoped canonical action_id values.",
+        ));
+    };
+    if run_start == 0 {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires boundary-linked autonomous artifacts to include a stable action scope prefix.",
+        ));
+    }
+
+    let boundary_marker = format!(":boundary:{boundary_id}:");
+    let Some(boundary_start) = action_id.find(boundary_marker.as_str()) else {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires boundary-linked autonomous artifacts to keep action_id and boundary_id in canonical agreement.",
+        ));
+    };
+
+    let run_id = &action_id[(run_start + run_marker.len())..boundary_start];
+    if run_id.is_empty() || run_id.contains(':') || run_id.chars().any(char::is_whitespace) {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires boundary-linked autonomous artifacts to persist a canonical run-scoped action_id.",
+        ));
+    }
+
+    let action_type = &action_id[(boundary_start + boundary_marker.len())..];
+    if action_type.is_empty() || action_type.contains(':') || action_type.chars().any(char::is_whitespace)
+    {
+        return Err(CommandError::user_fixable(
+            "autonomous_run_request_invalid",
+            "Cadence requires boundary-linked autonomous artifacts to persist an action_id with a canonical action type suffix.",
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_autonomous_artifact_command_result(

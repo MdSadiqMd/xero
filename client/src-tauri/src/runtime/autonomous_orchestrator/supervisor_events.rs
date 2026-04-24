@@ -13,9 +13,10 @@ use crate::{
     },
     runtime::{
         protocol::{
-            CommandToolResultSummary, SupervisorLiveEventPayload, SupervisorSkillCacheStatus,
-            SupervisorSkillDiagnostic, SupervisorSkillLifecycleResult,
-            SupervisorSkillLifecycleStage, SupervisorToolCallState, ToolResultSummary,
+            BrowserComputerUseActionStatus, CommandToolResultSummary, SupervisorLiveEventPayload,
+            SupervisorSkillCacheStatus, SupervisorSkillDiagnostic,
+            SupervisorSkillLifecycleResult, SupervisorSkillLifecycleStage,
+            SupervisorToolCallState, ToolResultSummary,
         },
         AutonomousSkillCacheStatus, AutonomousSkillSourceMetadata,
     },
@@ -77,6 +78,14 @@ pub fn persist_supervisor_event(
             let command_result = tool_summary.as_ref().and_then(|summary| {
                 command_result_record_for_tool_summary(summary, detail.as_deref())
             });
+            let (action_id, boundary_id) = if is_recoverable_advanced_browser_tool_failure(
+                tool_state,
+                tool_summary.as_ref(),
+            ) {
+                current_boundary_linkage(repo_root, project_id, existing.as_ref())?
+            } else {
+                (None, None)
+            };
             upsert_artifact(
                 &mut payload.artifacts,
                 AutonomousUnitArtifactRecord {
@@ -105,8 +114,8 @@ pub fn persist_supervisor_event(
                             tool_state: supervisor_tool_state_record(tool_state),
                             command_result,
                             tool_summary: tool_summary.clone(),
-                            action_id: None,
-                            boundary_id: None,
+                            action_id,
+                            boundary_id,
                         },
                     )),
                     created_at: timestamp.clone(),
@@ -146,14 +155,7 @@ pub fn persist_supervisor_event(
             title,
             detail,
         } => {
-            if action_id.trim().is_empty() || boundary_id.trim().is_empty() {
-                return Err(CommandError::retryable(
-                    "autonomous_live_event_boundary_identity_invalid",
-                    format!(
-                        "Cadence refused to persist live supervisor boundary state because action id `{action_id}` and boundary id `{boundary_id}` must both be non-empty."
-                    ),
-                ));
-            }
+            validate_canonical_boundary_linkage(action_id, boundary_id)?;
 
             let timestamp = now_timestamp();
             payload.run.status = AutonomousRunStatus::Paused;
@@ -211,8 +213,15 @@ pub fn persist_supervisor_event(
                             },
                         )),
                         created_at,
-                        updated_at: timestamp,
+                        updated_at: timestamp.clone(),
                     },
+                );
+                propagate_boundary_linkage_to_recoverable_artifacts(
+                    &mut payload.artifacts,
+                    attempt.attempt_id.as_str(),
+                    action_id,
+                    boundary_id,
+                    &timestamp,
                 );
             }
         }
@@ -222,7 +231,8 @@ pub fn persist_supervisor_event(
             detail,
         } if code.contains("policy_denied") => {
             if let Some(attempt) = payload.attempt.as_ref() {
-                let (action_id, boundary_id) = current_boundary_linkage(existing.as_ref());
+                let (action_id, boundary_id) =
+                    current_boundary_linkage(repo_root, project_id, existing.as_ref())?;
                 let artifact_suffix = linkage_suffix(boundary_id.as_deref());
                 let artifact_id = format!(
                     "{}:policy:{}{}",
@@ -421,37 +431,257 @@ fn command_error_from_supervisor_skill_diagnostic(
     }
 }
 
+fn is_recoverable_advanced_browser_tool_failure(
+    tool_state: &SupervisorToolCallState,
+    tool_summary: Option<&ToolResultSummary>,
+) -> bool {
+    matches!(
+        (tool_state, tool_summary),
+        (
+            SupervisorToolCallState::Failed,
+            Some(ToolResultSummary::BrowserComputerUse(summary))
+        ) if matches!(
+            summary.status,
+            BrowserComputerUseActionStatus::Failed | BrowserComputerUseActionStatus::Blocked
+        ) && summary
+            .outcome
+            .as_deref()
+            .and_then(advanced_browser_failure_diagnostic_code)
+            .is_some()
+    )
+}
+
+fn is_recoverable_advanced_browser_tool_payload(
+    tool: &AutonomousToolResultPayloadRecord,
+) -> bool {
+    matches!(
+        (&tool.tool_state, tool.tool_summary.as_ref()),
+        (
+            AutonomousToolCallStateRecord::Failed,
+            Some(ToolResultSummary::BrowserComputerUse(summary))
+        ) if matches!(
+            summary.status,
+            BrowserComputerUseActionStatus::Failed | BrowserComputerUseActionStatus::Blocked
+        ) && summary
+            .outcome
+            .as_deref()
+            .and_then(advanced_browser_failure_diagnostic_code)
+            .is_some()
+    )
+}
+
+fn advanced_browser_failure_diagnostic_code(outcome: &str) -> Option<&str> {
+    let diagnostic_code = outcome
+        .split_once(':')
+        .map(|(code, _)| code.trim())
+        .unwrap_or_else(|| outcome.trim());
+    match diagnostic_code {
+        "advanced_browser_failure_timeout"
+        | "advanced_browser_failure_policy_permission"
+        | "advanced_browser_failure_validation_runtime" => Some(diagnostic_code),
+        _ => None,
+    }
+}
+
+fn validate_canonical_boundary_linkage(action_id: &str, boundary_id: &str) -> Result<(), CommandError> {
+    let code = "autonomous_live_event_boundary_identity_invalid";
+    let action_id = action_id.trim();
+    let boundary_id = boundary_id.trim();
+
+    if action_id.is_empty() || boundary_id.is_empty() {
+        return Err(CommandError::retryable(
+            code,
+            "Cadence refused to persist boundary-linked artifacts because action_id and boundary_id must both be non-empty.",
+        ));
+    }
+
+    if action_id.chars().any(char::is_whitespace) {
+        return Err(CommandError::retryable(
+            code,
+            format!(
+                "Cadence refused to persist boundary-linked artifacts because action id `{action_id}` contains whitespace and is not canonical."
+            ),
+        ));
+    }
+
+    if boundary_id.contains(':') || boundary_id.chars().any(char::is_whitespace) {
+        return Err(CommandError::retryable(
+            code,
+            format!(
+                "Cadence refused to persist boundary-linked artifacts because boundary id `{boundary_id}` is malformed."
+            ),
+        ));
+    }
+
+    let run_marker = ":run:";
+    let Some(run_start) = action_id.find(run_marker) else {
+        return Err(CommandError::retryable(
+            code,
+            format!(
+                "Cadence refused to persist boundary-linked artifacts because action id `{action_id}` is missing runtime scope."
+            ),
+        ));
+    };
+    if run_start == 0 {
+        return Err(CommandError::retryable(
+            code,
+            format!(
+                "Cadence refused to persist boundary-linked artifacts because action id `{action_id}` is missing a stable scope prefix."
+            ),
+        ));
+    }
+
+    let boundary_marker = format!(":boundary:{boundary_id}:");
+    let Some(boundary_start) = action_id.find(boundary_marker.as_str()) else {
+        return Err(CommandError::retryable(
+            code,
+            format!(
+                "Cadence refused to persist boundary-linked artifacts because action id `{action_id}` does not match boundary `{boundary_id}`."
+            ),
+        ));
+    };
+
+    let run_id = &action_id[(run_start + run_marker.len())..boundary_start];
+    if run_id.is_empty() || run_id.contains(':') || run_id.chars().any(char::is_whitespace) {
+        return Err(CommandError::retryable(
+            code,
+            format!(
+                "Cadence refused to persist boundary-linked artifacts because action id `{action_id}` carries a malformed run identity."
+            ),
+        ));
+    }
+
+    let action_type = &action_id[(boundary_start + boundary_marker.len())..];
+    if action_type.is_empty() || action_type.contains(':') || action_type.chars().any(char::is_whitespace)
+    {
+        return Err(CommandError::retryable(
+            code,
+            format!(
+                "Cadence refused to persist boundary-linked artifacts because action id `{action_id}` carries a malformed action type."
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 fn current_boundary_linkage(
+    _repo_root: &Path,
+    _project_id: &str,
     existing: Option<&AutonomousRunSnapshotRecord>,
-) -> (Option<String>, Option<String>) {
+) -> Result<(Option<String>, Option<String>), CommandError> {
     let Some(existing) = existing else {
-        return (None, None);
+        return Ok((None, None));
     };
     let Some(boundary_id) = existing
         .attempt
         .as_ref()
         .and_then(|attempt| attempt.boundary_id.clone())
     else {
-        return (None, None);
+        return Ok((None, None));
     };
 
-    let action_id = existing
+    let mut action_id: Option<String> = None;
+    for artifact in existing
         .history
         .iter()
         .flat_map(|entry| entry.artifacts.iter())
-        .find_map(|artifact| match artifact.payload.as_ref() {
-            Some(AutonomousArtifactPayloadRecord::VerificationEvidence(payload))
-                if payload.boundary_id.as_deref() == Some(boundary_id.as_str())
-                    && payload.outcome == AutonomousVerificationOutcomeRecord::Blocked =>
-            {
-                payload.action_id.clone()
+    {
+        let Some(AutonomousArtifactPayloadRecord::VerificationEvidence(payload)) =
+            artifact.payload.as_ref()
+        else {
+            continue;
+        };
+        if payload.outcome != AutonomousVerificationOutcomeRecord::Blocked {
+            continue;
+        }
+        if payload.boundary_id.as_deref() != Some(boundary_id.as_str()) {
+            continue;
+        }
+        let Some(candidate_action_id) = payload.action_id.as_deref() else {
+            return Err(CommandError::retryable(
+                "autonomous_live_event_boundary_identity_invalid",
+                format!(
+                    "Cadence refused to persist boundary-linked artifacts because blocked boundary `{boundary_id}` is missing its canonical action identity."
+                ),
+            ));
+        };
+        validate_canonical_boundary_linkage(candidate_action_id, boundary_id.as_str())?;
+        match action_id.as_ref() {
+            Some(existing_action_id) if existing_action_id != candidate_action_id => {
+                return Err(CommandError::retryable(
+                    "autonomous_live_event_boundary_identity_invalid",
+                    format!(
+                        "Cadence refused to persist boundary-linked artifacts because boundary `{boundary_id}` maps to conflicting action identities `{existing_action_id}` and `{candidate_action_id}`."
+                    ),
+                ));
             }
-            _ => None,
-        });
+            _ => action_id = Some(candidate_action_id.to_string()),
+        }
+    }
 
-    match action_id {
-        Some(action_id) => (Some(action_id), Some(boundary_id)),
-        None => (None, None),
+    if let Some(action_id) = action_id {
+        return Ok((Some(action_id), Some(boundary_id)));
+    }
+
+    Err(CommandError::retryable(
+        "autonomous_live_event_boundary_identity_invalid",
+        format!(
+            "Cadence refused to persist boundary-linked artifacts because blocked boundary `{boundary_id}` has no canonical action identity in durable history for run `{}`.",
+            existing.run.run_id
+        ),
+    ))
+}
+
+fn propagate_boundary_linkage_to_recoverable_artifacts(
+    artifacts: &mut [AutonomousUnitArtifactRecord],
+    attempt_id: &str,
+    action_id: &str,
+    boundary_id: &str,
+    updated_at: &str,
+) {
+    for artifact in artifacts
+        .iter_mut()
+        .filter(|artifact| artifact.attempt_id == attempt_id)
+    {
+        let Some(payload) = artifact.payload.as_mut() else {
+            continue;
+        };
+
+        let should_link = match payload {
+            AutonomousArtifactPayloadRecord::ToolResult(tool)
+                if is_recoverable_advanced_browser_tool_payload(tool)
+                    && tool.action_id.is_none()
+                    && tool.boundary_id.is_none() =>
+            {
+                tool.action_id = Some(action_id.to_string());
+                tool.boundary_id = Some(boundary_id.to_string());
+                true
+            }
+            AutonomousArtifactPayloadRecord::PolicyDenied(policy)
+                if policy.action_id.is_none() && policy.boundary_id.is_none() =>
+            {
+                policy.action_id = Some(action_id.to_string());
+                policy.boundary_id = Some(boundary_id.to_string());
+                true
+            }
+            AutonomousArtifactPayloadRecord::VerificationEvidence(evidence)
+                if evidence.action_id.is_none()
+                    && evidence.boundary_id.is_none()
+                    && evidence.outcome == AutonomousVerificationOutcomeRecord::Failed
+                    && evidence.evidence_kind.contains("policy_denied") =>
+            {
+                evidence.action_id = Some(action_id.to_string());
+                evidence.boundary_id = Some(boundary_id.to_string());
+                true
+            }
+            _ => false,
+        };
+
+        if should_link {
+            artifact.content_hash = None;
+            artifact.updated_at = updated_at.to_string();
+        }
     }
 }
 

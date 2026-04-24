@@ -94,6 +94,16 @@ fn autonomous_run_persistence_rejects_structured_artifact_payload_linkage_mismat
 }
 
 #[test]
+fn autonomous_run_persistence_rejects_noncanonical_action_boundary_linkage() {
+    structured_payloads::autonomous_run_persistence_rejects_noncanonical_action_boundary_linkage();
+}
+
+#[test]
+fn autonomous_run_decode_fails_closed_when_action_boundary_linkage_is_tampered() {
+    structured_payloads::autonomous_run_decode_fails_closed_when_action_boundary_linkage_is_tampered();
+}
+
+#[test]
 fn autonomous_run_persistence_rejects_mcp_tool_summary_with_command_result() {
     structured_payloads::autonomous_run_persistence_rejects_mcp_tool_summary_with_command_result();
 }

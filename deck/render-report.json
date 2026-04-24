@@ -1,0 +1,90 @@
+{
+  "generatedAt": "2026-04-24T19:29:26.956Z",
+  "html": "xero-helius-pitch-deck.html",
+  "pdf": "xero-helius-pitch-deck.pdf",
+  "pdfBytes": 1580343,
+  "slideCount": 10,
+  "previews": [
+    {
+      "file": "previews/slide-01.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 32.73,
+      "entropy": 5.216,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-02.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 30.24,
+      "entropy": 5.353,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-03.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 29.13,
+      "entropy": 4.856,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-04.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 31.58,
+      "entropy": 5.243,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-05.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 33.38,
+      "entropy": 5.425,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-06.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 31.79,
+      "entropy": 5.255,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-07.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 33.49,
+      "entropy": 5.264,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-08.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 32.27,
+      "entropy": 5.083,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-09.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 31.58,
+      "entropy": 5.35,
+      "passed": true
+    },
+    {
+      "file": "previews/slide-10.png",
+      "width": 1600,
+      "height": 900,
+      "mean": 30.7,
+      "entropy": 5.305,
+      "passed": true
+    }
+  ],
+  "passed": true
+}
