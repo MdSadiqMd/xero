@@ -14,27 +14,34 @@
 //!     drive mainnet.
 
 use std::fs;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use cadence_desktop_lib::commands::solana::audit::coverage::{
+    CoverageInvocation, CoverageOutcome, CoverageRunner,
+};
+use cadence_desktop_lib::commands::solana::audit::replay::{
+    ReplayContext, ReplayRunner, ReplayStep, ReplayStepTrace,
+};
+use cadence_desktop_lib::commands::solana::audit::sec3::{
+    AnalyzerInvocation, AnalyzerOutcome, AnalyzerProbe, ExternalAnalyzerReport,
+    ExternalAnalyzerRequest, ExternalAnalyzerRunner,
+};
+use cadence_desktop_lib::commands::solana::audit::static_lints::{
+    StaticLintReport, StaticLintRequest,
+};
+use cadence_desktop_lib::commands::solana::audit::trident::{
+    FuzzReport, FuzzRequest, TridentInvocation, TridentOutcome, TridentProbe, TridentRunner,
+};
+use cadence_desktop_lib::commands::solana::audit::{
+    AuditEngine, AuditEventPayload, AuditEventPhase, AuditEventSink, AuditRunKind, ReplayOutcome,
+    ReplayReport, ReplayRequest,
+};
 use cadence_desktop_lib::commands::solana::{
-    audit::{
-        coverage::{test_support::ScriptedCoverageRunner, CoverageOutcome},
-        replay::test_support::ScriptedReplayRunner,
-        sec3::{
-            test_support::ScriptedAnalyzerRunner, AnalyzerOutcome, AnalyzerProbe,
-            ExternalAnalyzerReport, ExternalAnalyzerRequest,
-        },
-        static_lints::{StaticLintRequest, StaticLintReport},
-        trident::{
-            test_support::ScriptedTridentRunner, FuzzReport, FuzzRequest, TridentOutcome,
-            TridentProbe,
-        },
-        AuditEngine, AuditEventPayload, AuditEventPhase, AuditEventSink, AuditRunKind,
-        ReplayOutcome, ReplayReport, ReplayRequest,
-    },
     AnalyzerKind, ClusterKind, CoverageReport, CoverageRequest, ExploitKey, Finding,
     FindingSeverity, NullAuditEventSink,
 };
+use cadence_desktop_lib::commands::{CommandErrorClass, CommandResult};
 use tempfile::TempDir;
 
 const FIXTURE_LCOV: &str = "SF:programs/p/src/lib.rs\nFN:10,prog::deposit\nFN:30,prog::withdraw\nFNDA:4,prog::deposit\nFNDA:0,prog::withdraw\nFNF:2\nFNH:1\nLF:20\nLH:12\nBRF:4\nBRH:2\nend_of_record\n";
@@ -55,6 +62,164 @@ impl AuditEventSink for RecordingSink {
         self.events.lock().unwrap().push(payload);
     }
 }
+
+// ---------- Scripted runners (local duplicates of the crate-private
+// `test_support` mocks) ------------------------------------------------------
+
+#[derive(Debug, Default)]
+struct ScriptedCoverageRunner {
+    outcome: Mutex<Option<CoverageOutcome>>,
+    write_lcov: Mutex<Option<String>>,
+    invocations: Mutex<Vec<CoverageInvocation>>,
+}
+
+impl ScriptedCoverageRunner {
+    fn new() -> Self {
+        Self::default()
+    }
+    #[allow(dead_code)]
+    fn set_outcome(&self, outcome: CoverageOutcome) {
+        *self.outcome.lock().unwrap() = Some(outcome);
+    }
+    fn set_lcov_body(&self, body: impl Into<String>) {
+        *self.write_lcov.lock().unwrap() = Some(body.into());
+    }
+}
+
+impl CoverageRunner for ScriptedCoverageRunner {
+    fn run(&self, invocation: &CoverageInvocation) -> CommandResult<CoverageOutcome> {
+        self.invocations.lock().unwrap().push(invocation.clone());
+        if let Some(body) = self.write_lcov.lock().unwrap().clone() {
+            if let Some(parent) = Path::new(&invocation.lcov_out).parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&invocation.lcov_out, body).unwrap();
+        }
+        Ok(self
+            .outcome
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or(CoverageOutcome {
+                exit_code: Some(0),
+                success: true,
+                stdout: String::new(),
+                stderr: String::new(),
+                lcov_path: invocation.lcov_out.clone(),
+            }))
+    }
+}
+
+#[derive(Debug, Default)]
+struct ScriptedReplayRunner {
+    outcome: Mutex<Option<(ReplayOutcome, String)>>,
+}
+
+impl ScriptedReplayRunner {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn set_outcome(&self, outcome: ReplayOutcome, summary: &str) {
+        *self.outcome.lock().unwrap() = Some((outcome, summary.to_string()));
+    }
+}
+
+impl ReplayRunner for ScriptedReplayRunner {
+    fn execute_step(
+        &self,
+        _ctx: &ReplayContext,
+        step_index: u32,
+        _step: &ReplayStep,
+    ) -> CommandResult<ReplayStepTrace> {
+        Ok(ReplayStepTrace {
+            step_index,
+            label: format!("step-{step_index}"),
+            success: true,
+            message: "scripted".into(),
+            signature: None,
+        })
+    }
+    fn verify_outcome(&self, _ctx: &ReplayContext) -> CommandResult<(ReplayOutcome, String)> {
+        Ok(self
+            .outcome
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or((ReplayOutcome::Inconclusive, "test-scripted".into())))
+    }
+}
+
+#[derive(Debug, Default)]
+struct ScriptedAnalyzerRunner {
+    probe: Mutex<Option<AnalyzerProbe>>,
+    outcome: Mutex<Option<AnalyzerOutcome>>,
+}
+
+impl ScriptedAnalyzerRunner {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn set_probe(&self, probe: AnalyzerProbe) {
+        *self.probe.lock().unwrap() = Some(probe);
+    }
+    fn set_outcome(&self, outcome: AnalyzerOutcome) {
+        *self.outcome.lock().unwrap() = Some(outcome);
+    }
+}
+
+impl ExternalAnalyzerRunner for ScriptedAnalyzerRunner {
+    fn probe(&self, _kind: AnalyzerKind) -> AnalyzerProbe {
+        self.probe.lock().unwrap().clone().unwrap_or(AnalyzerProbe {
+            installed: false,
+            binary_path: None,
+        })
+    }
+    fn run(&self, _invocation: &AnalyzerInvocation) -> CommandResult<AnalyzerOutcome> {
+        Ok(self.outcome.lock().unwrap().clone().unwrap_or(AnalyzerOutcome {
+            exit_code: Some(0),
+            success: true,
+            stdout: String::new(),
+            stderr: String::new(),
+        }))
+    }
+}
+
+#[derive(Debug, Default)]
+struct ScriptedTridentRunner {
+    probe: Mutex<Option<TridentProbe>>,
+    outcome: Mutex<Option<TridentOutcome>>,
+}
+
+impl ScriptedTridentRunner {
+    fn new() -> Self {
+        Self::default()
+    }
+    fn set_probe(&self, probe: TridentProbe) {
+        *self.probe.lock().unwrap() = Some(probe);
+    }
+    fn set_outcome(&self, outcome: TridentOutcome) {
+        *self.outcome.lock().unwrap() = Some(outcome);
+    }
+}
+
+impl TridentRunner for ScriptedTridentRunner {
+    fn probe(&self) -> TridentProbe {
+        self.probe.lock().unwrap().clone().unwrap_or(TridentProbe {
+            installed: true,
+            binary_path: Some("/tmp/trident".into()),
+        })
+    }
+    fn run(&self, _invocation: &TridentInvocation) -> CommandResult<TridentOutcome> {
+        Ok(self.outcome.lock().unwrap().clone().unwrap_or(TridentOutcome {
+            exit_code: Some(0),
+            success: true,
+            stdout: String::new(),
+            stderr: String::new(),
+        }))
+    }
+}
+
+// ---------- Tests ----------------------------------------------------------
 
 pub fn static_lints_stream_findings_in_phase_order() {
     let tmp = TempDir::new().unwrap();
@@ -109,7 +274,6 @@ pub fn tally(a: u64, b: u64) -> u64 {
     assert!(events.len() >= 2, "expected at least started + completed");
     assert_eq!(events.first().unwrap().phase, AuditEventPhase::Started);
     assert_eq!(events.last().unwrap().phase, AuditEventPhase::Completed);
-    // Every Progress event must carry a finding.
     for event in &events {
         if event.phase == AuditEventPhase::Progress {
             assert!(event.finding.is_some(), "progress events carry findings");
@@ -224,13 +388,8 @@ pub fn coverage_parses_instruction_rollups() {
     let tmp = TempDir::new().unwrap();
     let coverage = Arc::new(ScriptedCoverageRunner::new());
     coverage.set_lcov_body(FIXTURE_LCOV);
-    coverage.set_outcome(CoverageOutcome {
-        exit_code: Some(0),
-        success: true,
-        stdout: String::new(),
-        stderr: String::new(),
-        lcov_path: String::new(),
-    });
+    // Leave outcome to the default so `lcov_path` echoes the invocation's
+    // `lcov_out` (where we just wrote the fixture body).
     let engine = AuditEngine::with_runners(
         Arc::new(ScriptedTridentRunner::new()),
         coverage,
@@ -290,7 +449,7 @@ pub fn replay_catalog_returns_four_exploits_and_refuses_mainnet() {
         .unwrap_err();
     assert_eq!(
         err.class,
-        cadence_desktop_lib::commands::CommandErrorClass::PolicyDenied,
+        CommandErrorClass::PolicyDenied,
         "mainnet replay must be policy-denied"
     );
 }

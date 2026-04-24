@@ -3391,14 +3391,6 @@ describe('useCadenceDesktopState', () => {
         retryable: true,
       }),
     )
-    setup.listMcpServers.mockRejectedValueOnce(
-      new CadenceDesktopError({
-        code: 'adapter_contract_mismatch',
-        errorClass: 'adapter_contract_mismatch',
-        message: 'Command list_mcp_servers returned an unexpected payload shape.',
-        retryable: false,
-      }),
-    )
 
     render(<Harness adapter={setup.adapter} />)
 
@@ -3410,6 +3402,15 @@ describe('useCadenceDesktopState', () => {
       expect(screen.getByTestId('mcp-registry-mutation-error-code')).toHaveTextContent('mcp_status_refresh_failed'),
     )
     expect(screen.getByTestId('mcp-registry-first-status')).toHaveTextContent('stale')
+
+    setup.listMcpServers.mockRejectedValueOnce(
+      new CadenceDesktopError({
+        code: 'adapter_contract_mismatch',
+        errorClass: 'adapter_contract_mismatch',
+        message: 'Command list_mcp_servers returned an unexpected payload shape.',
+        retryable: false,
+      }),
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Load MCP registry' }))
 
