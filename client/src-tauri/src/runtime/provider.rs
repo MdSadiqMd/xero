@@ -760,11 +760,8 @@ fn current_unix_timestamp() -> i64 {
 
 impl From<OpenAiCompatibleRuntimeSessionBinding> for RuntimeProviderSessionBinding {
     fn from(binding: OpenAiCompatibleRuntimeSessionBinding) -> Self {
-        let provider = resolve_runtime_provider_identity(
-            Some(binding.provider_id.as_str()),
-            Some(OPENAI_COMPATIBLE_RUNTIME_KIND),
-        )
-        .expect("openai-compatible binding provider id should resolve");
+        let provider = resolve_runtime_provider_identity(Some(binding.provider_id.as_str()), None)
+            .expect("openai-compatible binding provider id should resolve");
 
         Self {
             provider,

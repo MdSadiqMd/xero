@@ -1764,6 +1764,404 @@ fn start_runtime_session_surfaces_typed_vertex_adc_missing_diagnostic() {
 }
 
 #[test]
+fn get_runtime_session_rejects_stale_bedrock_binding_after_region_change() {
+    with_scoped_env(
+        &[
+            ("AWS_ACCESS_KEY_ID", Some("test-bedrock-access-key")),
+            ("AWS_SECRET_ACCESS_KEY", Some("test-bedrock-secret-key")),
+            ("AWS_SESSION_TOKEN", None),
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+        ],
+        || {
+            let root = tempfile::tempdir().expect("temp dir");
+            let (state, _registry_path, _auth_store_path) = create_state(&root);
+            let app = build_mock_app(state);
+            let (project_id, _repo_root) = seed_project(&root, &app);
+
+            upsert_provider_profile(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                UpsertProviderProfileRequestDto {
+                    profile_id: "bedrock-default".into(),
+                    provider_id: "bedrock".into(),
+                    runtime_kind: "anthropic".into(),
+                    label: "Bedrock".into(),
+                    model_id: "anthropic.claude-3-7-sonnet-20250219-v1:0".into(),
+                    preset_id: Some("bedrock".into()),
+                    base_url: None,
+                    api_version: None,
+                    region: Some("us-east-1".into()),
+                    project_id: None,
+                    api_key: None,
+                    activate: true,
+                },
+            )
+            .expect("save first bedrock provider profile");
+
+            start_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("bind first bedrock runtime session");
+
+            upsert_provider_profile(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                UpsertProviderProfileRequestDto {
+                    profile_id: "bedrock-default".into(),
+                    provider_id: "bedrock".into(),
+                    runtime_kind: "anthropic".into(),
+                    label: "Bedrock".into(),
+                    model_id: "anthropic.claude-3-7-sonnet-20250219-v1:0".into(),
+                    preset_id: Some("bedrock".into()),
+                    base_url: None,
+                    api_version: None,
+                    region: Some("us-west-2".into()),
+                    project_id: None,
+                    api_key: None,
+                    activate: true,
+                },
+            )
+            .expect("update bedrock region");
+
+            let reconciled = get_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("reconcile stale bedrock binding");
+
+            assert_eq!(reconciled.phase, RuntimeAuthPhase::Idle);
+            assert_eq!(reconciled.provider_id, "bedrock");
+            assert_eq!(reconciled.runtime_kind, "anthropic");
+            assert_eq!(
+                reconciled.last_error_code.as_deref(),
+                Some("bedrock_binding_stale")
+            );
+            assert!(reconciled.session_id.is_none());
+        },
+    );
+}
+
+#[test]
+fn get_runtime_session_rejects_stale_vertex_binding_after_project_change() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let adc_path = root.path().join("vertex-adc.json");
+    std::fs::write(&adc_path, "{}\n").expect("write fake adc file");
+    let adc_env = adc_path.to_string_lossy().into_owned();
+
+    with_scoped_env(
+        &[
+            ("GOOGLE_APPLICATION_CREDENTIALS", Some(adc_env.as_str())),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+        ],
+        || {
+            let (state, _registry_path, _auth_store_path) = create_state(&root);
+            let app = build_mock_app(state);
+            let (project_id, _repo_root) = seed_project(&root, &app);
+
+            upsert_provider_profile(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                UpsertProviderProfileRequestDto {
+                    profile_id: "vertex-default".into(),
+                    provider_id: "vertex".into(),
+                    runtime_kind: "anthropic".into(),
+                    label: "Vertex".into(),
+                    model_id: "claude-3-7-sonnet@20250219".into(),
+                    preset_id: Some("vertex".into()),
+                    base_url: None,
+                    api_version: None,
+                    region: Some("us-central1".into()),
+                    project_id: Some("vertex-project-a".into()),
+                    api_key: None,
+                    activate: true,
+                },
+            )
+            .expect("save first vertex provider profile");
+
+            start_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("bind first vertex runtime session");
+
+            upsert_provider_profile(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                UpsertProviderProfileRequestDto {
+                    profile_id: "vertex-default".into(),
+                    provider_id: "vertex".into(),
+                    runtime_kind: "anthropic".into(),
+                    label: "Vertex".into(),
+                    model_id: "claude-3-7-sonnet@20250219".into(),
+                    preset_id: Some("vertex".into()),
+                    base_url: None,
+                    api_version: None,
+                    region: Some("us-central1".into()),
+                    project_id: Some("vertex-project-b".into()),
+                    api_key: None,
+                    activate: true,
+                },
+            )
+            .expect("update vertex project id");
+
+            let reconciled = get_runtime_session(
+                app.handle().clone(),
+                app.state::<DesktopState>(),
+                ProjectIdRequestDto {
+                    project_id: project_id.clone(),
+                },
+            )
+            .expect("reconcile stale vertex binding");
+
+            assert_eq!(reconciled.phase, RuntimeAuthPhase::Idle);
+            assert_eq!(reconciled.provider_id, "vertex");
+            assert_eq!(reconciled.runtime_kind, "anthropic");
+            assert_eq!(
+                reconciled.last_error_code.as_deref(),
+                Some("vertex_binding_stale")
+            );
+            assert!(reconciled.session_id.is_none());
+        },
+    );
+}
+
+#[test]
+fn get_runtime_session_rejects_stale_openai_api_binding_after_key_rotation() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "openai-api-default".into(),
+            provider_id: "openai_api".into(),
+            runtime_kind: "openai_compatible".into(),
+            label: "OpenAI API".into(),
+            model_id: "gpt-4.1".into(),
+            preset_id: Some("openai_api".into()),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: Some("sk-openai-first".into()),
+            activate: true,
+        },
+    )
+    .expect("save first openai api provider profile");
+
+    start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind first openai api runtime session");
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "openai-api-default".into(),
+            provider_id: "openai_api".into(),
+            runtime_kind: "openai_compatible".into(),
+            label: "OpenAI API".into(),
+            model_id: "gpt-4.1".into(),
+            preset_id: Some("openai_api".into()),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: Some("sk-openai-second".into()),
+            activate: true,
+        },
+    )
+    .expect("rotate openai api key");
+
+    let reconciled = get_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("reconcile stale openai api binding");
+
+    assert_eq!(reconciled.phase, RuntimeAuthPhase::Idle);
+    assert_eq!(reconciled.provider_id, "openai_api");
+    assert_eq!(reconciled.runtime_kind, "openai_compatible");
+    assert_eq!(
+        reconciled.last_error_code.as_deref(),
+        Some("openai_binding_stale")
+    );
+    assert!(reconciled.session_id.is_none());
+}
+
+#[test]
+fn get_runtime_session_rejects_stale_azure_openai_binding_after_api_version_change() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "azure-openai-default".into(),
+            provider_id: "azure_openai".into(),
+            runtime_kind: "openai_compatible".into(),
+            label: "Azure OpenAI".into(),
+            model_id: "gpt-4o".into(),
+            preset_id: Some("azure_openai".into()),
+            base_url: Some("https://example.openai.azure.com/openai/deployments/gpt-4o".into()),
+            api_version: Some("2024-10-21".into()),
+            region: None,
+            project_id: None,
+            api_key: Some("azure-key-first".into()),
+            activate: true,
+        },
+    )
+    .expect("save first azure openai provider profile");
+
+    start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind first azure openai runtime session");
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "azure-openai-default".into(),
+            provider_id: "azure_openai".into(),
+            runtime_kind: "openai_compatible".into(),
+            label: "Azure OpenAI".into(),
+            model_id: "gpt-4o".into(),
+            preset_id: Some("azure_openai".into()),
+            base_url: Some("https://example.openai.azure.com/openai/deployments/gpt-4o".into()),
+            api_version: Some("2025-03-01-preview".into()),
+            region: None,
+            project_id: None,
+            api_key: Some("azure-key-first".into()),
+            activate: true,
+        },
+    )
+    .expect("update azure openai api version");
+
+    let reconciled = get_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("reconcile stale azure openai binding");
+
+    assert_eq!(reconciled.phase, RuntimeAuthPhase::Idle);
+    assert_eq!(reconciled.provider_id, "azure_openai");
+    assert_eq!(reconciled.runtime_kind, "openai_compatible");
+    assert_eq!(
+        reconciled.last_error_code.as_deref(),
+        Some("azure_openai_binding_stale")
+    );
+    assert!(reconciled.session_id.is_none());
+}
+
+#[test]
+fn get_runtime_session_rejects_stale_gemini_ai_studio_binding_after_model_change() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "gemini-default".into(),
+            provider_id: "gemini_ai_studio".into(),
+            runtime_kind: "gemini".into(),
+            label: "Gemini AI Studio".into(),
+            model_id: "gemini-2.5-flash".into(),
+            preset_id: Some("gemini_ai_studio".into()),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: Some("gemini-key-first".into()),
+            activate: true,
+        },
+    )
+    .expect("save first gemini ai studio provider profile");
+
+    start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind first gemini ai studio runtime session");
+
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "gemini-default".into(),
+            provider_id: "gemini_ai_studio".into(),
+            runtime_kind: "gemini".into(),
+            label: "Gemini AI Studio".into(),
+            model_id: "gemini-2.5-pro".into(),
+            preset_id: Some("gemini_ai_studio".into()),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: Some("gemini-key-first".into()),
+            activate: true,
+        },
+    )
+    .expect("update gemini ai studio model");
+
+    let reconciled = get_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("reconcile stale gemini ai studio binding");
+
+    assert_eq!(reconciled.phase, RuntimeAuthPhase::Idle);
+    assert_eq!(reconciled.provider_id, "gemini_ai_studio");
+    assert_eq!(reconciled.runtime_kind, "gemini");
+    assert_eq!(
+        reconciled.last_error_code.as_deref(),
+        Some("gemini_ai_studio_binding_stale")
+    );
+    assert!(reconciled.session_id.is_none());
+}
+
+#[test]
 fn start_runtime_session_binds_ollama_without_api_key_using_local_default_endpoint() {
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_state(&root);
