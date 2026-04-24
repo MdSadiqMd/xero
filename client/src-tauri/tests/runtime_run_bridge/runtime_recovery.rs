@@ -1366,6 +1366,148 @@ pub(crate) fn start_runtime_run_projects_connected_mcp_servers_into_run_scoped_p
     );
 }
 
+pub(crate) fn start_runtime_run_projects_empty_projection_contract_when_registry_has_no_connected_servers(
+) {
+    let root = tempfile::tempdir().expect("temp dir");
+    let models_base_url = spawn_static_http_server_for_requests(
+        200,
+        r#"{"data":[{"id":"gpt-4.1-mini","display_name":"GPT-4.1 Mini","capabilities":{"reasoning":{"supported":true,"effortOptions":["low","medium","high"],"defaultEffort":"medium"}}}]}"#,
+        3,
+    );
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    let mut mcp_registry = cadence_desktop_lib::mcp::default_mcp_registry();
+    mcp_registry.servers = vec![
+        cadence_desktop_lib::mcp::McpServerRecord {
+            id: "mcp-stale".into(),
+            name: "Stale MCP".into(),
+            transport: cadence_desktop_lib::mcp::McpTransport::Http {
+                url: "https://stale.example.com/mcp".into(),
+            },
+            env: Vec::new(),
+            cwd: None,
+            connection: cadence_desktop_lib::mcp::McpConnectionState {
+                status: cadence_desktop_lib::mcp::McpConnectionStatus::Stale,
+                diagnostic: Some(cadence_desktop_lib::mcp::McpConnectionDiagnostic {
+                    code: "mcp_status_unchecked".into(),
+                    message: "Server has not been checked yet.".into(),
+                    retryable: true,
+                }),
+                last_checked_at: None,
+                last_healthy_at: None,
+            },
+            updated_at: "2026-04-20T10:00:01Z".into(),
+        },
+        cadence_desktop_lib::mcp::McpServerRecord {
+            id: "mcp-failed".into(),
+            name: "Failed MCP".into(),
+            transport: cadence_desktop_lib::mcp::McpTransport::Sse {
+                url: "https://failed.example.com/sse".into(),
+            },
+            env: Vec::new(),
+            cwd: None,
+            connection: cadence_desktop_lib::mcp::McpConnectionState {
+                status: cadence_desktop_lib::mcp::McpConnectionStatus::Failed,
+                diagnostic: Some(cadence_desktop_lib::mcp::McpConnectionDiagnostic {
+                    code: "mcp_connect_failed".into(),
+                    message: "Probe failed".into(),
+                    retryable: true,
+                }),
+                last_checked_at: Some("2026-04-20T10:00:02Z".into()),
+                last_healthy_at: None,
+            },
+            updated_at: "2026-04-20T10:00:02Z".into(),
+        },
+        cadence_desktop_lib::mcp::McpServerRecord {
+            id: "mcp-blocked".into(),
+            name: "Blocked MCP".into(),
+            transport: cadence_desktop_lib::mcp::McpTransport::Http {
+                url: "https://blocked.example.com/mcp".into(),
+            },
+            env: Vec::new(),
+            cwd: None,
+            connection: cadence_desktop_lib::mcp::McpConnectionState {
+                status: cadence_desktop_lib::mcp::McpConnectionStatus::Blocked,
+                diagnostic: Some(cadence_desktop_lib::mcp::McpConnectionDiagnostic {
+                    code: "mcp_auth_blocked".into(),
+                    message: "Operator action required".into(),
+                    retryable: false,
+                }),
+                last_checked_at: Some("2026-04-20T10:00:03Z".into()),
+                last_healthy_at: None,
+            },
+            updated_at: "2026-04-20T10:00:03Z".into(),
+        },
+    ];
+    persist_mcp_registry_snapshot(&app, &mcp_registry);
+
+    seed_openai_compatible_profile(
+        &app,
+        "openai-compatible-work",
+        "openai_api",
+        "openai_compatible",
+        "gpt-4.1-mini",
+        Some("openai_api"),
+        Some(&models_base_url),
+        Some("2025-03-01-preview"),
+        "sk-openai-runtime-secret",
+    );
+
+    let runtime = start_runtime_session(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ProjectIdRequestDto {
+            project_id: project_id.clone(),
+        },
+    )
+    .expect("bind openai-compatible runtime session before empty projection launch");
+    assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+
+    let launched = start_runtime_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StartRuntimeRunRequestDto {
+            project_id: project_id.clone(),
+            initial_controls: None,
+            initial_prompt: None,
+        },
+    )
+    .expect("start runtime run with empty mcp projection");
+
+    let running = wait_for_runtime_run(&app, &project_id, |runtime_run| {
+        runtime_run.status == RuntimeRunStatusDto::Running
+            && runtime_run.transport.liveness == RuntimeRunTransportLivenessDto::Reachable
+    });
+    assert_eq!(running.run_id, launched.run_id);
+
+    let projection_path = runtime_mcp_projection_path(&app, &launched.run_id);
+    assert!(projection_path.is_file());
+
+    let projection = load_runtime_mcp_projection_snapshot(&app, &launched.run_id);
+    assert!(projection.servers.is_empty());
+
+    let projection_text =
+        std::fs::read_to_string(&projection_path).expect("read empty runtime mcp projection file");
+    assert!(
+        projection_text.contains("\"servers\":[]") || projection_text.contains("\"servers\": []"),
+        "projection contract should persist an explicit empty server array: {projection_text}"
+    );
+
+    let stopped = stop_runtime_run(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        StopRuntimeRunRequestDto {
+            project_id,
+            run_id: launched.run_id,
+        },
+    )
+    .expect("stop runtime run with empty mcp projection")
+    .expect("runtime run with empty mcp projection should still exist");
+    assert_eq!(stopped.status, RuntimeRunStatusDto::Stopped);
+}
+
 pub(crate) fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_unreadable() {
     let root = tempfile::tempdir().expect("temp dir");
     let models_base_url = spawn_static_http_server_for_requests(
@@ -1413,7 +1555,9 @@ pub(crate) fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_unrea
     )
     .expect_err("unreadable mcp registry should fail closed");
     assert_eq!(error.code, "runtime_mcp_projection_failed");
-    assert!(error.message.contains("mcp_registry_read_failed"));
+    assert!(error
+        .message
+        .contains("runtime_mcp_projection_registry_unreadable"));
     assert_eq!(count_runtime_run_rows(&repo_root), 0);
 }
 
@@ -1490,6 +1634,8 @@ pub(crate) fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_malfo
     )
     .expect_err("malformed mcp registry should fail closed");
     assert_eq!(error.code, "runtime_mcp_projection_failed");
-    assert!(error.message.contains("mcp_registry_invalid"));
+    assert!(error
+        .message
+        .contains("runtime_mcp_projection_registry_malformed"));
     assert_eq!(count_runtime_run_rows(&repo_root), 0);
 }

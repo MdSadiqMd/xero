@@ -1261,16 +1261,17 @@ pub(crate) fn plan_mode_required_missing_runtime_snapshot_pauses_and_replays_wit
         "expected paused diagnostics to include deterministic action id, got {paused_message}"
     );
     assert_eq!(
-        count_operator_approval_rows_for_action(&repo_root, &project_id, &pending_plan_mode.action_id),
+        count_operator_approval_rows_for_action(
+            &repo_root,
+            &project_id,
+            &pending_plan_mode.action_id
+        ),
         1
     );
 
-    let replayed = apply_workflow_transition(
-        app.handle().clone(),
-        app.state::<DesktopState>(),
-        request,
-    )
-    .expect("replayed missing-runtime transition should keep deterministic gate pause");
+    let replayed =
+        apply_workflow_transition(app.handle().clone(), app.state::<DesktopState>(), request)
+            .expect("replayed missing-runtime transition should keep deterministic gate pause");
     assert_eq!(
         replayed.automatic_dispatch.status,
         WorkflowAutomaticDispatchStatusDto::Skipped
@@ -1291,7 +1292,11 @@ pub(crate) fn plan_mode_required_missing_runtime_snapshot_pauses_and_replays_wit
 
     assert_eq!(count_workflow_transition_rows(&repo_root, &project_id), 1);
     assert_eq!(
-        count_operator_approval_rows_for_action(&repo_root, &project_id, &pending_plan_mode.action_id),
+        count_operator_approval_rows_for_action(
+            &repo_root,
+            &project_id,
+            &pending_plan_mode.action_id
+        ),
         1
     );
 }

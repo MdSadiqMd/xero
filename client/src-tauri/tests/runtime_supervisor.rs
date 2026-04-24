@@ -109,6 +109,27 @@ fn detached_supervisor_rejects_openai_compatible_launch_without_base_url_env() {
 }
 
 #[test]
+fn detached_supervisor_rejects_mcp_contract_when_projection_path_is_unreadable() {
+    launch_probe_stop::detached_supervisor_rejects_mcp_contract_when_projection_path_is_unreadable(
+    );
+}
+
+#[test]
+fn detached_supervisor_rejects_mcp_contract_with_malformed_projection_file() {
+    launch_probe_stop::detached_supervisor_rejects_mcp_contract_with_malformed_projection_file();
+}
+
+#[test]
+fn detached_supervisor_rejects_mcp_contract_with_non_connected_server_status() {
+    launch_probe_stop::detached_supervisor_rejects_mcp_contract_with_non_connected_server_status();
+}
+
+#[test]
+fn detached_supervisor_rejects_mcp_projection_path_when_contract_required_flag_missing() {
+    launch_probe_stop::detached_supervisor_rejects_mcp_projection_path_when_contract_required_flag_missing();
+}
+
+#[test]
 fn detached_supervisor_attach_replays_buffered_events_after_fresh_host_probe() {
     attach_replay::detached_supervisor_attach_replays_buffered_events_after_fresh_host_probe();
 }

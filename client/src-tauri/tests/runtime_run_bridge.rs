@@ -286,6 +286,11 @@ fn start_runtime_run_projects_connected_mcp_servers_into_run_scoped_projection_c
 }
 
 #[test]
+fn start_runtime_run_projects_empty_projection_contract_when_registry_has_no_connected_servers() {
+    runtime_recovery::start_runtime_run_projects_empty_projection_contract_when_registry_has_no_connected_servers();
+}
+
+#[test]
 fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_unreadable() {
     runtime_recovery::start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_unreadable();
 }

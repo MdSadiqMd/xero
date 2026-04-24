@@ -321,25 +321,46 @@ fn validate_inherited_launch_environment(
 }
 
 fn validate_runtime_mcp_launch_contract() -> Result<(), CommandError> {
-    let contract_required = std::env::var(CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV)
+    let projection_path_env = std::env::var(CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV)
         .ok()
-        .map(|value| value.trim() == "1")
-        .unwrap_or(false);
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
 
-    if !contract_required {
-        return Ok(());
-    }
-
-    let projection_path = std::env::var(CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV)
+    let contract_required = match std::env::var(CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV)
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            CommandError::user_fixable(
+        .as_deref()
+    {
+        None => false,
+        Some("1") => true,
+        Some("0") => false,
+        Some(other) => {
+            return Err(CommandError::user_fixable(
                 "runtime_supervisor_launch_env_invalid",
-                "Cadence rejected detached runtime launch because the MCP projection path was missing from the launch environment contract.",
-            )
-        })?;
+                format!(
+                    "Cadence rejected detached runtime launch because MCP contract-required flag was malformed (`{other}`)."
+                ),
+            ));
+        }
+    };
+
+    if !contract_required {
+        if projection_path_env.is_some() {
+            return Err(CommandError::user_fixable(
+                "runtime_supervisor_launch_env_invalid",
+                "Cadence rejected detached runtime launch because MCP projection path was present while contract-required validation was disabled.",
+            ));
+        }
+        return Ok(());
+    }
+
+    let projection_path = projection_path_env.ok_or_else(|| {
+        CommandError::user_fixable(
+            "runtime_supervisor_launch_env_invalid",
+            "Cadence rejected detached runtime launch because the MCP projection path was missing from the launch environment contract.",
+        )
+    })?;
 
     let projection_path = PathBuf::from(projection_path);
     if !projection_path.is_file() {

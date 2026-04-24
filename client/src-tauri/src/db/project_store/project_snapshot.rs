@@ -284,8 +284,12 @@ pub(crate) fn read_planning_lifecycle_projection(
             })
             .collect();
         let action_required = !stage_blocking_gates.is_empty();
-        let (unblock_reason, unblock_gate_key, unblock_action_id) =
-            derive_lifecycle_unblock_reason(stage, &node.node_id, &stage_blocking_gates, &approvals);
+        let (unblock_reason, unblock_gate_key, unblock_action_id) = derive_lifecycle_unblock_reason(
+            stage,
+            &node.node_id,
+            &stage_blocking_gates,
+            &approvals,
+        );
 
         stages.push(PlanningLifecycleStageDto {
             stage,
@@ -332,10 +336,10 @@ fn derive_lifecycle_unblock_reason(
 
     let stage_label = planning_lifecycle_stage_label(&stage);
     let reason = if gate.gate_key == super::workflow::PLAN_MODE_REQUIRED_GATE_KEY {
-        if linked_approval.is_some_and(|approval| approval.status == OperatorApprovalStatus::Approved) {
-            format!(
-                "{stage_label} is waiting for an explicit resume after plan-mode approval."
-            )
+        if linked_approval
+            .is_some_and(|approval| approval.status == OperatorApprovalStatus::Approved)
+        {
+            format!("{stage_label} is waiting for an explicit resume after plan-mode approval.")
         } else if linked_approval.is_some() {
             format!(
                 "{stage_label} requires explicit plan-mode approval before implementation can continue."
@@ -345,14 +349,12 @@ fn derive_lifecycle_unblock_reason(
                 "{stage_label} remains blocked until the plan-mode continuation gate is resolved."
             )
         }
-    } else if linked_approval.is_some_and(|approval| approval.status == OperatorApprovalStatus::Approved) {
-        format!(
-            "{stage_label} is waiting for resume after a gate approval was recorded."
-        )
+    } else if linked_approval
+        .is_some_and(|approval| approval.status == OperatorApprovalStatus::Approved)
+    {
+        format!("{stage_label} is waiting for resume after a gate approval was recorded.")
     } else if linked_approval.is_some() {
-        format!(
-            "{stage_label} is waiting on a linked operator gate approval."
-        )
+        format!("{stage_label} is waiting on a linked operator gate approval.")
     } else if gate.gate_state == WorkflowGateState::Blocked {
         format!("{stage_label} is blocked by an unresolved workflow gate.")
     } else {

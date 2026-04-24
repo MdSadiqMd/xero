@@ -4732,7 +4732,9 @@ fn resolve_automatic_dispatch_candidate(
         ) && is_plan_mode_implementation_continuation;
 
         if let Some(required_gate) = edge.gate_requirement.as_deref() {
-            let required_gate_present = target_gates.iter().any(|gate| gate.gate_key == required_gate);
+            let required_gate_present = target_gates
+                .iter()
+                .any(|gate| gate.gate_key == required_gate);
 
             if !required_gate_present {
                 if requires_plan_mode_gate {

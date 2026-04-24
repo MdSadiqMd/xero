@@ -1230,8 +1230,8 @@ pub(crate) fn plan_mode_required_resume_unblocks_implementation_continuation_wit
     );
 }
 
-pub(crate) fn plan_mode_required_missing_runtime_snapshot_replay_keeps_pending_approval_idempotent(
-) {
+pub(crate) fn plan_mode_required_missing_runtime_snapshot_replay_keeps_pending_approval_idempotent()
+{
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path) = create_state(&root);
     let app = build_mock_app(state);
@@ -1363,12 +1363,9 @@ pub(crate) fn plan_mode_required_missing_runtime_snapshot_replay_keeps_pending_a
         1
     );
 
-    let replayed = apply_workflow_transition(
-        app.handle().clone(),
-        app.state::<DesktopState>(),
-        request,
-    )
-    .expect("replayed missing-runtime transition should preserve deterministic gate pause");
+    let replayed =
+        apply_workflow_transition(app.handle().clone(), app.state::<DesktopState>(), request)
+            .expect("replayed missing-runtime transition should preserve deterministic gate pause");
     assert_eq!(
         replayed.automatic_dispatch.code.as_deref(),
         Some("workflow_transition_gate_unmet")

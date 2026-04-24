@@ -1152,3 +1152,217 @@ pub(crate) fn detached_supervisor_rejects_openai_compatible_launch_without_base_
         Some("openai_compatible_base_url_missing")
     );
 }
+
+pub(crate) fn detached_supervisor_rejects_mcp_contract_when_projection_path_is_unreadable() {
+    let _guard = supervisor_test_guard();
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-mcp-contract-unreadable";
+    let repo_root = seed_project(&root, project_id, "repo-mcp-contract-unreadable", "repo");
+    let state = DesktopState::default();
+
+    let unreadable_projection_path = root.path().join("app-data").join("mcp-projection-dir");
+    std::fs::create_dir_all(&unreadable_projection_path)
+        .expect("create unreadable mcp projection directory path");
+
+    let mut request = openai_compatible_launch_request(
+        project_id,
+        &repo_root,
+        "run-mcp-contract-unreadable",
+        "openai_api",
+        "openai_compatible",
+        "gpt-4.1-mini",
+        Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+        Some("sk-openai-present"),
+        Some("https://api.openai.com/v1"),
+        None,
+        &runtime_shell::script_sleep(5),
+    );
+    request.launch_env.insert(
+        "CADENCE_RUNTIME_MCP_CONFIG_PATH",
+        unreadable_projection_path.to_string_lossy().as_ref(),
+    );
+    request
+        .launch_env
+        .insert("CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED", "1");
+
+    let error = launch_detached_runtime_supervisor(&state, request)
+        .expect_err("unreadable mcp projection path should fail closed");
+    assert_eq!(error.code, "runtime_supervisor_launch_env_invalid");
+    assert!(error.message.contains("was unavailable"));
+
+    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
+        .expect("load failed mcp projection runtime run")
+        .expect("failed mcp projection runtime run should persist");
+    assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Failed);
+    assert_eq!(
+        snapshot
+            .run
+            .last_error
+            .as_ref()
+            .map(|diagnostic| diagnostic.code.as_str()),
+        Some("runtime_supervisor_launch_env_invalid")
+    );
+}
+
+pub(crate) fn detached_supervisor_rejects_mcp_contract_with_malformed_projection_file() {
+    let _guard = supervisor_test_guard();
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-mcp-contract-malformed";
+    let repo_root = seed_project(&root, project_id, "repo-mcp-contract-malformed", "repo");
+    let state = DesktopState::default();
+
+    let malformed_projection_path = root.path().join("app-data").join("mcp-malformed.json");
+    std::fs::create_dir_all(
+        malformed_projection_path
+            .parent()
+            .expect("malformed projection parent"),
+    )
+    .expect("create malformed projection parent");
+    std::fs::write(
+        &malformed_projection_path,
+        r#"{
+  "version": 1,
+  "servers": [
+    {
+      "id": "bad id",
+      "name": "Bad Server",
+      "transport": { "kind": "stdio", "command": "npx", "args": ["-y", "bad"] },
+      "updatedAt": "2026-04-20T10:00:00Z"
+    }
+  ],
+  "updatedAt": "2026-04-20T10:00:00Z"
+}
+"#,
+    )
+    .expect("write malformed mcp projection contract");
+
+    let mut request = openai_compatible_launch_request(
+        project_id,
+        &repo_root,
+        "run-mcp-contract-malformed",
+        "openai_api",
+        "openai_compatible",
+        "gpt-4.1-mini",
+        Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+        Some("sk-openai-present"),
+        Some("https://api.openai.com/v1"),
+        None,
+        &runtime_shell::script_sleep(5),
+    );
+    request.launch_env.insert(
+        "CADENCE_RUNTIME_MCP_CONFIG_PATH",
+        malformed_projection_path.to_string_lossy().as_ref(),
+    );
+    request
+        .launch_env
+        .insert("CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED", "1");
+
+    let error = launch_detached_runtime_supervisor(&state, request)
+        .expect_err("malformed mcp projection contract should fail closed");
+    assert_eq!(error.code, "runtime_supervisor_launch_env_invalid");
+    assert!(error
+        .message
+        .contains("runtime_mcp_projection_contract_malformed"));
+}
+
+pub(crate) fn detached_supervisor_rejects_mcp_contract_with_non_connected_server_status() {
+    let _guard = supervisor_test_guard();
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-mcp-contract-disconnected";
+    let repo_root = seed_project(&root, project_id, "repo-mcp-contract-disconnected", "repo");
+    let state = DesktopState::default();
+
+    let projection_path = root.path().join("app-data").join("mcp-stale-contract.json");
+    let mut contract = cadence_desktop_lib::mcp::default_mcp_registry();
+    contract.servers = vec![cadence_desktop_lib::mcp::McpServerRecord {
+        id: "mcp-stale".into(),
+        name: "Stale MCP".into(),
+        transport: cadence_desktop_lib::mcp::McpTransport::Http {
+            url: "https://stale.example.com/mcp".into(),
+        },
+        env: Vec::new(),
+        cwd: None,
+        connection: cadence_desktop_lib::mcp::McpConnectionState {
+            status: cadence_desktop_lib::mcp::McpConnectionStatus::Stale,
+            diagnostic: Some(cadence_desktop_lib::mcp::McpConnectionDiagnostic {
+                code: "mcp_status_unchecked".into(),
+                message: "Server has not been checked yet.".into(),
+                retryable: true,
+            }),
+            last_checked_at: None,
+            last_healthy_at: None,
+        },
+        updated_at: "2026-04-20T10:00:00Z".into(),
+    }];
+    cadence_desktop_lib::mcp::persist_mcp_registry(&projection_path, &contract)
+        .expect("persist stale mcp projection contract");
+
+    let mut request = openai_compatible_launch_request(
+        project_id,
+        &repo_root,
+        "run-mcp-contract-disconnected",
+        "openai_api",
+        "openai_compatible",
+        "gpt-4.1-mini",
+        Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+        Some("sk-openai-present"),
+        Some("https://api.openai.com/v1"),
+        None,
+        &runtime_shell::script_sleep(5),
+    );
+    request.launch_env.insert(
+        "CADENCE_RUNTIME_MCP_CONFIG_PATH",
+        projection_path.to_string_lossy().as_ref(),
+    );
+    request
+        .launch_env
+        .insert("CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED", "1");
+
+    let error = launch_detached_runtime_supervisor(&state, request)
+        .expect_err("non-connected mcp contract should fail closed");
+    assert_eq!(error.code, "runtime_supervisor_launch_env_invalid");
+    assert!(error
+        .message
+        .contains("runtime_mcp_projection_contract_disconnected"));
+}
+
+pub(crate) fn detached_supervisor_rejects_mcp_projection_path_when_contract_required_flag_missing()
+{
+    let _guard = supervisor_test_guard();
+    let root = tempfile::tempdir().expect("temp dir");
+    let project_id = "project-mcp-contract-partial";
+    let repo_root = seed_project(&root, project_id, "repo-mcp-contract-partial", "repo");
+    let state = DesktopState::default();
+
+    let projection_path = root.path().join("app-data").join("mcp-empty-contract.json");
+    cadence_desktop_lib::mcp::persist_mcp_registry(
+        &projection_path,
+        &cadence_desktop_lib::mcp::default_mcp_registry(),
+    )
+    .expect("persist empty mcp projection contract");
+
+    let mut request = openai_compatible_launch_request(
+        project_id,
+        &repo_root,
+        "run-mcp-contract-partial",
+        "openai_api",
+        "openai_compatible",
+        "gpt-4.1-mini",
+        Some(cadence_desktop_lib::commands::ProviderModelThinkingEffortDto::Medium),
+        Some("sk-openai-present"),
+        Some("https://api.openai.com/v1"),
+        None,
+        &runtime_shell::script_sleep(5),
+    );
+    request.launch_env.insert(
+        "CADENCE_RUNTIME_MCP_CONFIG_PATH",
+        projection_path.to_string_lossy().as_ref(),
+    );
+
+    let error = launch_detached_runtime_supervisor(&state, request)
+        .expect_err("partial mcp launch contract should fail closed");
+    assert_eq!(error.code, "runtime_supervisor_launch_env_invalid");
+    assert!(error
+        .message
+        .contains("contract-required validation was disabled"));
+}
