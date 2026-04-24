@@ -54,12 +54,14 @@ import type { RuntimeRunView, RuntimeSessionView } from './cadence-model/runtime
 export type { Phase, PhaseStatus, PhaseStep, Project } from '@/components/cadence/data'
 export {
   gitToolResultScopeSchema,
+  mcpCapabilityKindSchema,
   safePercent,
   toolResultSummarySchema,
   webToolResultContentKindSchema,
 } from './cadence-model/shared'
 export type {
   GitToolResultScopeDto,
+  McpCapabilityKindDto,
   ToolResultSummaryDto,
   WebToolResultContentKindDto,
 } from './cadence-model/shared'

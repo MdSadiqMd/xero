@@ -23,6 +23,7 @@ export const optionalIsoTimestampSchema = isoTimestampSchema.nullable().optional
 
 export const gitToolResultScopeSchema = z.enum(['staged', 'unstaged', 'worktree'])
 export const webToolResultContentKindSchema = z.enum(['html', 'plain_text'])
+export const mcpCapabilityKindSchema = z.enum(['tool', 'resource', 'prompt', 'command'])
 
 export const toolResultSummarySchema = z.discriminatedUnion('kind', [
   z
@@ -66,10 +67,20 @@ export const toolResultSummarySchema = z.discriminatedUnion('kind', [
       truncated: z.boolean(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal('mcp_capability'),
+      serverId: z.string().trim().min(1),
+      capabilityKind: mcpCapabilityKindSchema,
+      capabilityId: z.string().trim().min(1),
+      capabilityName: nonEmptyOptionalTextSchema,
+    })
+    .strict(),
 ])
 
 export type GitToolResultScopeDto = z.infer<typeof gitToolResultScopeSchema>
 export type WebToolResultContentKindDto = z.infer<typeof webToolResultContentKindSchema>
+export type McpCapabilityKindDto = z.infer<typeof mcpCapabilityKindSchema>
 export type ToolResultSummaryDto = z.infer<typeof toolResultSummarySchema>
 
 export function sortByNewest<T>(

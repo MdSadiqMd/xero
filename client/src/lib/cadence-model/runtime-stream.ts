@@ -421,6 +421,28 @@ function ensureRuntimeStreamText(value: string | null | undefined, field: string
   return normalized
 }
 
+function normalizeRuntimeToolSummary(summary: ToolResultSummaryDto | null | undefined): ToolResultSummaryDto | null {
+  if (!summary) {
+    return null
+  }
+
+  const parsedSummary = toolResultSummarySchema.safeParse(summary)
+  if (!parsedSummary.success) {
+    const firstIssue = parsedSummary.error.issues[0]
+    const issuePath =
+      firstIssue && firstIssue.path.length > 0
+        ? firstIssue.path.map(String).join('.')
+        : 'toolSummary'
+    const issueMessage = firstIssue?.message ?? 'Invalid runtime tool summary payload.'
+
+    throw new Error(
+      `Cadence received a runtime tool item with malformed toolSummary payload (${issuePath}: ${issueMessage}).`,
+    )
+  }
+
+  return parsedSummary.data
+}
+
 function runtimeStreamItemId(kind: RuntimeStreamItemKindDto, runId: string, sequence: number): string {
   return `${kind}:${runId}:${sequence}`
 }
@@ -486,7 +508,7 @@ function normalizeRuntimeStreamItem(event: RuntimeStreamEventDto): RuntimeStream
         toolName,
         toolState,
         detail: normalizeOptionalText(event.item.detail),
-        toolSummary: event.item.toolSummary ?? null,
+        toolSummary: normalizeRuntimeToolSummary(event.item.toolSummary),
       }
     }
     case 'skill': {

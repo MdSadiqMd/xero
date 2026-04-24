@@ -20,6 +20,7 @@ import {
   getStreamStatusMeta,
   getToolStateBadgeVariant,
   getToolStateLabel,
+  getToolSummaryContext,
 } from './runtime-stream-helpers'
 import { displayValue, formatSequence } from './shared-helpers'
 
@@ -178,19 +179,26 @@ export function AgentFeedSection({
             </div>
             <div className="mt-4 space-y-3">
               {toolCalls.length > 0 ? (
-                toolCalls.map((item) => (
-                  <div key={item.id} className="rounded-lg border border-border/70 bg-background/70 px-3 py-2">
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                      <span>{formatSequence(item.sequence)}</span>
-                      <span>{item.runId}</span>
-                      <Badge variant={getToolStateBadgeVariant(item.toolState)}>{getToolStateLabel(item.toolState)}</Badge>
+                toolCalls.map((item) => {
+                  const toolSummaryContext = getToolSummaryContext(item)
+
+                  return (
+                    <div key={item.id} className="rounded-lg border border-border/70 bg-background/70 px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                        <span>{formatSequence(item.sequence)}</span>
+                        <span>{item.runId}</span>
+                        <Badge variant={getToolStateBadgeVariant(item.toolState)}>{getToolStateLabel(item.toolState)}</Badge>
+                      </div>
+                      <p className="mt-2 text-sm font-medium text-foreground">{item.toolName}</p>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                        {displayValue(item.detail, 'Cadence has not recorded tool detail for this call yet.')}
+                      </p>
+                      {toolSummaryContext ? (
+                        <p className="mt-2 text-xs leading-5 text-muted-foreground">{toolSummaryContext}</p>
+                      ) : null}
                     </div>
-                    <p className="mt-2 text-sm font-medium text-foreground">{item.toolName}</p>
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                      {displayValue(item.detail, 'Cadence has not recorded tool detail for this call yet.')}
-                    </p>
-                  </div>
-                ))
+                  )
+                })
               ) : (
                 <FeedEmptyState body="Cadence has not observed any tool calls for this run yet." title="No tool calls yet" />
               )}

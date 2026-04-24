@@ -1188,6 +1188,9 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
     : null
   const checkpointControlLoop = state.agentView?.checkpointControlLoop ?? null
   const firstCheckpointCard = checkpointControlLoop?.items[0] ?? null
+  const firstToolCall = state.agentView?.runtimeStream?.toolCalls?.[0] ?? null
+  const firstToolSummary = firstToolCall?.toolSummary ?? null
+  const firstToolMcpSummary = firstToolSummary?.kind === 'mcp_capability' ? firstToolSummary : null
   const firstApprovalResumeState =
     !firstApproval
       ? 'none'
@@ -1261,6 +1264,14 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="stream-run-id">{state.agentView?.runtimeStream?.runId ?? 'none'}</div>
       <div data-testid="stream-last-sequence">{String(state.agentView?.runtimeStream?.lastSequence ?? 0)}</div>
       <div data-testid="stream-item-count">{String(state.agentView?.runtimeStreamItems?.length ?? 0)}</div>
+      <div data-testid="stream-tool-count">{String(state.agentView?.runtimeStream?.toolCalls.length ?? 0)}</div>
+      <div data-testid="stream-tool-first-id">{firstToolCall?.toolCallId ?? 'none'}</div>
+      <div data-testid="stream-tool-first-state">{firstToolCall?.toolState ?? 'none'}</div>
+      <div data-testid="stream-tool-first-summary-kind">{firstToolSummary?.kind ?? 'none'}</div>
+      <div data-testid="stream-tool-first-mcp-server-id">{firstToolMcpSummary?.serverId ?? 'none'}</div>
+      <div data-testid="stream-tool-first-mcp-capability-kind">{firstToolMcpSummary?.capabilityKind ?? 'none'}</div>
+      <div data-testid="stream-tool-first-mcp-capability-id">{firstToolMcpSummary?.capabilityId ?? 'none'}</div>
+      <div data-testid="stream-tool-first-mcp-capability-name">{firstToolMcpSummary?.capabilityName ?? 'none'}</div>
       <div data-testid="stream-skill-count">{String(state.agentView?.skillItems?.length ?? 0)}</div>
       <div data-testid="stream-skill-first-id">{state.agentView?.skillItems?.[0]?.skillId ?? 'none'}</div>
       <div data-testid="stream-skill-first-stage">{state.agentView?.skillItems?.[0]?.stage ?? 'none'}</div>
@@ -2683,6 +2694,202 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('stream-skill-first-id')).toHaveTextContent('find-skills')
     expect(screen.getByTestId('stream-skill-first-stage')).toHaveTextContent('invoke')
     expect(screen.getByTestId('stream-skill-first-result')).toHaveTextContent('failed')
+  })
+
+  it('projects MCP capability tool summaries into the agent tool lane projection', async () => {
+    const setup = createMockAdapter({
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
+
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'tool',
+          runId: 'run-project-1',
+          sequence: 1,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'mcp-invoke-1',
+          toolName: 'mcp.invoke',
+          toolState: 'failed',
+          toolSummary: {
+            kind: 'mcp_capability',
+            serverId: 'linear',
+            capabilityKind: 'prompt',
+            capabilityId: 'summarize_context',
+            capabilityName: 'Summarize Context',
+          },
+          skillId: null,
+          skillStage: null,
+          skillResult: null,
+          skillSource: null,
+          skillCacheStatus: null,
+          skillDiagnostic: null,
+          actionId: null,
+          boundaryId: null,
+          actionType: null,
+          title: null,
+          detail: 'MCP prompt invocation failed with upstream timeout.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T13:30:00Z',
+        },
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('live'))
+    expect(screen.getByTestId('stream-tool-count')).toHaveTextContent('1')
+    expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('mcp-invoke-1')
+    expect(screen.getByTestId('stream-tool-first-state')).toHaveTextContent('failed')
+    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('mcp_capability')
+    expect(screen.getByTestId('stream-tool-first-mcp-server-id')).toHaveTextContent('linear')
+    expect(screen.getByTestId('stream-tool-first-mcp-capability-kind')).toHaveTextContent('prompt')
+    expect(screen.getByTestId('stream-tool-first-mcp-capability-id')).toHaveTextContent('summarize_context')
+    expect(screen.getByTestId('stream-tool-first-mcp-capability-name')).toHaveTextContent('Summarize Context')
+  })
+
+  it('fails closed on malformed MCP tool summaries and preserves the last truthful tool lane', async () => {
+    const setup = createMockAdapter({
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
+
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'tool',
+          runId: 'run-project-1',
+          sequence: 1,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'mcp-invoke-1',
+          toolName: 'mcp.invoke',
+          toolState: 'succeeded',
+          toolSummary: {
+            kind: 'mcp_capability',
+            serverId: 'linear',
+            capabilityKind: 'command',
+            capabilityId: 'project_sync',
+            capabilityName: 'Project Sync',
+          },
+          skillId: null,
+          skillStage: null,
+          skillResult: null,
+          skillSource: null,
+          skillCacheStatus: null,
+          skillDiagnostic: null,
+          actionId: null,
+          boundaryId: null,
+          actionType: null,
+          title: null,
+          detail: 'MCP command completed successfully.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T13:30:00Z',
+        },
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-tool-count')).toHaveTextContent('1'))
+    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('mcp_capability')
+    expect(screen.getByTestId('stream-tool-first-mcp-capability-kind')).toHaveTextContent('command')
+
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'tool',
+          runId: 'run-project-1',
+          sequence: 2,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'mcp-invoke-2',
+          toolName: 'mcp.invoke',
+          toolState: 'failed',
+          toolSummary: {
+            kind: 'mcp_capability',
+            serverId: 'linear',
+            capabilityKind: 'unsupported_kind',
+            capabilityId: 'project_sync',
+            capabilityName: 'Project Sync',
+          },
+          skillId: null,
+          skillStage: null,
+          skillResult: null,
+          skillSource: null,
+          skillCacheStatus: null,
+          skillDiagnostic: null,
+          actionId: null,
+          boundaryId: null,
+          actionType: null,
+          title: null,
+          detail: 'Malformed MCP summary.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T13:30:01Z',
+        },
+      } as unknown as RuntimeStreamEventDto)
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('error'))
+    expect(screen.getByTestId('stream-tool-count')).toHaveTextContent('1')
+    expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('mcp-invoke-1')
+    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('mcp_capability')
+    expect(screen.getByTestId('messages-reason')).toHaveTextContent('malformed toolSummary payload')
   })
 
   it('fails closed on malformed skill events and preserves the last truthful skill lane', async () => {

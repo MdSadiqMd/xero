@@ -2263,8 +2263,20 @@ describe('cadence-model', () => {
       contentType: 'text/html',
       truncated: false,
     })
+    const mcpSummary = toolResultSummarySchema.parse({
+      kind: 'mcp_capability',
+      serverId: 'linear',
+      capabilityKind: 'prompt',
+      capabilityId: 'summarize_context',
+      capabilityName: 'Summarize Context',
+    })
 
-    expect([fileSummary.kind, gitSummary.kind, webSummary.kind]).toEqual(['file', 'git', 'web'])
+    expect([fileSummary.kind, gitSummary.kind, webSummary.kind, mcpSummary.kind]).toEqual([
+      'file',
+      'git',
+      'web',
+      'mcp_capability',
+    ])
 
     const artifactPayloadBase = {
       kind: 'tool_result' as const,
@@ -2307,6 +2319,13 @@ describe('cadence-model', () => {
     }
     expect(mappedArtifact.toolSummary.baseRevision).toBe('main~1')
 
+    expect(mcpSummary.kind).toBe('mcp_capability')
+    if (mcpSummary.kind !== 'mcp_capability') {
+      throw new Error('Expected an MCP capability summary kind.')
+    }
+    expect(mcpSummary.capabilityKind).toBe('prompt')
+    expect(mcpSummary.capabilityName).toBe('Summarize Context')
+
     const legacyArtifact = mapAutonomousArtifact({
       ...artifactWithSummary,
       payload: autonomousToolResultPayloadSchema.parse(artifactPayloadBase),
@@ -2318,6 +2337,33 @@ describe('cadence-model', () => {
         kind: 'unknown',
         target: 'https://example.com',
         truncated: false,
+      }),
+    ).toThrow()
+
+    expect(() =>
+      toolResultSummarySchema.parse({
+        kind: 'mcp_capability',
+        capabilityKind: 'tool',
+        capabilityId: 'list_projects',
+        capabilityName: 'List Projects',
+      }),
+    ).toThrow()
+
+    expect(() =>
+      toolResultSummarySchema.parse({
+        kind: 'mcp_capability',
+        serverId: 'linear',
+        capabilityKind: 'unsupported_kind',
+        capabilityId: 'list_projects',
+      }),
+    ).toThrow()
+
+    expect(() =>
+      toolResultSummarySchema.parse({
+        kind: 'mcp_capability',
+        serverId: 'linear',
+        capabilityKind: 'tool',
+        capabilityId: null,
       }),
     ).toThrow()
 

@@ -103,6 +103,29 @@ export function getToolStateLabel(toolState: RuntimeStreamToolItemView['toolStat
   }
 }
 
+function getMcpCapabilityKindLabel(kind: 'tool' | 'resource' | 'prompt' | 'command'): string {
+  switch (kind) {
+    case 'tool':
+      return 'Tool'
+    case 'resource':
+      return 'Resource'
+    case 'prompt':
+      return 'Prompt'
+    case 'command':
+      return 'Command'
+  }
+}
+
+export function getToolSummaryContext(item: RuntimeStreamToolItemView): string | null {
+  const summary = item.toolSummary
+  if (!summary || summary.kind !== 'mcp_capability') {
+    return null
+  }
+
+  const capabilityLabel = displayValue(summary.capabilityName, summary.capabilityId)
+  return `MCP ${getMcpCapabilityKindLabel(summary.capabilityKind)} · ${capabilityLabel} · server ${summary.serverId} · outcome ${getToolStateLabel(item.toolState)}`
+}
+
 export function getSkillStageLabel(stage: RuntimeStreamSkillItemView['stage']): string {
   switch (stage) {
     case 'discovery':

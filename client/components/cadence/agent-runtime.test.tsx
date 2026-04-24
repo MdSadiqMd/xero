@@ -1510,6 +1510,73 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('code: autonomous_skill_invoke_failed · terminal')).toBeVisible()
   })
 
+  it('renders MCP capability context in the tool lane without regressing standard tool details', () => {
+    const toolCalls: RuntimeStreamView['toolCalls'] = [
+      {
+        id: 'tool-read',
+        kind: 'tool',
+        runId: 'run-1',
+        sequence: 5,
+        createdAt: '2026-04-18T14:10:00Z',
+        toolCallId: 'tool-read-1',
+        toolName: 'read',
+        toolState: 'succeeded',
+        detail: 'Read README.md from the repository root.',
+        toolSummary: {
+          kind: 'command',
+          exitCode: 0,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutRedacted: false,
+          stderrRedacted: false,
+        },
+      },
+      {
+        id: 'tool-mcp',
+        kind: 'tool',
+        runId: 'run-1',
+        sequence: 6,
+        createdAt: '2026-04-18T14:10:01Z',
+        toolCallId: 'mcp-invoke-1',
+        toolName: 'mcp.invoke',
+        toolState: 'failed',
+        detail: 'MCP prompt invocation failed with upstream timeout.',
+        toolSummary: {
+          kind: 'mcp_capability',
+          serverId: 'linear',
+          capabilityKind: 'prompt',
+          capabilityId: 'summarize_context',
+          capabilityName: 'Summarize Context',
+        },
+      },
+    ]
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', phase: 'authenticated', phaseLabel: 'Authenticated' }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStream: makeRuntimeStream({
+            status: 'live',
+            items: toolCalls,
+            toolCalls,
+            lastSequence: 6,
+          }),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Streaming live activity',
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('heading', { name: 'Tool lane' })).toBeVisible()
+    expect(screen.getByText('read')).toBeVisible()
+    expect(screen.getByText('mcp.invoke')).toBeVisible()
+    expect(screen.getByText('Read README.md from the repository root.')).toBeVisible()
+    expect(screen.getByText('MCP prompt invocation failed with upstream timeout.')).toBeVisible()
+    expect(screen.getByText('MCP Prompt · Summarize Context · server linear · outcome Failed')).toBeVisible()
+  })
+
   it('renders the empty skill lane state when a run has no skill lifecycle rows yet', () => {
     render(
       <AgentRuntime
