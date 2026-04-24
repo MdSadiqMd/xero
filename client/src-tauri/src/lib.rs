@@ -228,6 +228,11 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::solana::solana_logs_active,
             commands::solana::solana_indexer_scaffold,
             commands::solana::solana_indexer_run,
+            commands::solana::solana_token_extension_matrix,
+            commands::solana::solana_token_create,
+            commands::solana::solana_metaplex_mint,
+            commands::solana::solana_wallet_scaffold_list,
+            commands::solana::solana_wallet_scaffold_generate,
             commands::solana::solana_subscribe_ready,
         ])
 }

@@ -18,9 +18,11 @@ pub mod program;
 pub mod rpc_router;
 pub mod scenario;
 pub mod snapshot;
+pub mod token;
 pub mod toolchain;
 pub mod tx;
 pub mod validator;
+pub mod wallet;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -106,6 +108,14 @@ pub use scenario::{
 pub use snapshot::{
     AccountFetcher, AccountRecord, RpcAccountFetcher, SnapshotManifest, SnapshotMeta, SnapshotStore,
 };
+pub use token::{
+    create_token, extension_matrix as token_extension_matrix, mint_metaplex_nft,
+    parse_extension_matrix, ExtensionEntry, ExtensionMatrix, Incompatibility,
+    MetaplexMintInvocation, MetaplexMintOutcome, MetaplexMintRequest, MetaplexMintResult,
+    MetaplexMintRunner, MetaplexStandard, SdkCompat, SupportLevel, SystemMetaplexRunner,
+    SystemTokenCreateRunner, TokenCreateInvocation, TokenCreateOutcome, TokenCreateRunner,
+    TokenCreateSpec, TokenExtension, TokenExtensionConfig, TokenProgram, TokenServices,
+};
 pub use toolchain::{ToolProbe, ToolchainStatus};
 pub use tx::{
     AccountMetaSpec, AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport, AltRunner,
@@ -118,6 +128,10 @@ pub use tx::{
 pub use validator::{
     ClusterHandle, ClusterStatus, StartOpts, ValidatorLauncher, ValidatorSession,
     ValidatorSupervisor,
+};
+pub use wallet::{
+    descriptors as wallet_descriptors, generate as generate_wallet_scaffold, WalletDescriptor,
+    WalletKind, WalletScaffoldFile, WalletScaffoldRequest, WalletScaffoldResult,
 };
 
 /// Process-wide Solana state. Registered alongside `EmulatorState` in the
@@ -154,6 +168,13 @@ pub struct SolanaState {
     /// subscription that includes at least one program id gets a light
     /// polling worker so decoded log events stream without manual refresh.
     log_pollers: Arc<Mutex<HashMap<String, LogPollWorker>>>,
+    /// Phase 8 — token + metaplex runners. Tests swap in scripted
+    /// runners via `with_token_services`.
+    token_services: Arc<TokenServices>,
+    /// Filesystem root the Metaplex worker script materialises into.
+    /// Lives under the OS data dir by default; tests redirect it to a
+    /// `TempDir`.
+    metaplex_worker_root: Arc<Mutex<PathBuf>>,
 }
 
 const LOG_POLL_INTERVAL: Duration = Duration::from_secs(4);
@@ -205,6 +226,14 @@ fn build_tx_pipeline(
 fn build_idl_registry(transport: Arc<dyn RpcTransport>) -> Arc<IdlRegistry> {
     let fetcher: Arc<dyn IdlFetcher> = Arc::new(RpcIdlFetcher::new(transport));
     Arc::new(IdlRegistry::new(fetcher))
+}
+
+fn default_metaplex_worker_root() -> PathBuf {
+    if let Some(dir) = dirs::data_dir() {
+        dir.join("cadence-solana-metaplex-worker")
+    } else {
+        std::env::temp_dir().join("cadence-solana-metaplex-worker")
+    }
 }
 
 #[derive(Debug)]
@@ -264,6 +293,8 @@ impl Default for SolanaState {
             log_bus,
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
+            token_services: Arc::new(TokenServices::system()),
+            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
         }
     }
 }
@@ -304,6 +335,8 @@ impl SolanaState {
             log_bus,
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
+            token_services: Arc::new(TokenServices::system()),
+            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
         }
     }
 
@@ -338,6 +371,8 @@ impl SolanaState {
             log_bus,
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
+            token_services: Arc::new(TokenServices::system()),
+            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
         }
     }
 
@@ -376,6 +411,8 @@ impl SolanaState {
             log_bus,
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
+            token_services: Arc::new(TokenServices::system()),
+            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
         }
     }
 
@@ -413,6 +450,8 @@ impl SolanaState {
             log_bus,
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
+            token_services: Arc::new(TokenServices::system()),
+            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
         }
     }
 
@@ -436,6 +475,22 @@ impl SolanaState {
     /// ring capacity).
     pub fn with_log_bus(mut self, bus: Arc<LogBus>) -> Self {
         self.log_bus = bus;
+        self
+    }
+
+    /// Test/integration hook: replace the Phase 8 token/metaplex runners.
+    pub fn with_token_services(mut self, services: Arc<TokenServices>) -> Self {
+        self.token_services = services;
+        self
+    }
+
+    /// Test/integration hook: pin the Metaplex worker directory so tests
+    /// can materialise the script into a `TempDir`.
+    pub fn with_metaplex_worker_root(self, root: PathBuf) -> Self {
+        *self
+            .metaplex_worker_root
+            .lock()
+            .expect("metaplex worker root mutex not poisoned") = root;
         self
     }
 
@@ -477,6 +532,17 @@ impl SolanaState {
 
     pub fn audit_engine(&self) -> Arc<AuditEngine> {
         Arc::clone(&self.audit_engine)
+    }
+
+    pub fn token_services(&self) -> Arc<TokenServices> {
+        Arc::clone(&self.token_services)
+    }
+
+    pub fn metaplex_worker_root(&self) -> PathBuf {
+        self.metaplex_worker_root
+            .lock()
+            .expect("metaplex worker root mutex not poisoned")
+            .clone()
     }
 
     pub fn log_bus(&self) -> Arc<LogBus> {
@@ -2135,6 +2201,77 @@ pub fn solana_indexer_run(
     let bus = state.log_bus();
     let resolver = |cluster: ClusterKind| state.resolve_rpc_url(cluster);
     indexer::run_local(source.as_ref(), bus, &request.request, resolver)
+}
+
+// ---------- Token / Metaplex / Wallet commands (Phase 8) ------------------
+
+#[tauri::command]
+pub fn solana_token_extension_matrix() -> CommandResult<ExtensionMatrix> {
+    Ok(token_extension_matrix().clone())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TokenCreateArgs {
+    pub spec: TokenCreateSpec,
+}
+
+#[tauri::command]
+pub fn solana_token_create(
+    state: State<'_, SolanaState>,
+    request: TokenCreateArgs,
+) -> CommandResult<token::TokenCreateReport> {
+    let mut spec = request.spec;
+    if spec.rpc_url.is_none() {
+        spec.rpc_url = state.resolve_rpc_url(spec.cluster);
+    }
+    let authority_path = state
+        .personas
+        .keypair_path(spec.cluster, &spec.authority_persona)?;
+    let services = state.token_services();
+    token::create_token(services.token.as_ref(), &authority_path, spec)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetaplexMintArgs {
+    pub request: MetaplexMintRequest,
+}
+
+#[tauri::command]
+pub fn solana_metaplex_mint(
+    state: State<'_, SolanaState>,
+    request: MetaplexMintArgs,
+) -> CommandResult<MetaplexMintResult> {
+    let mut req = request.request;
+    if req.rpc_url.is_none() {
+        req.rpc_url = state.resolve_rpc_url(req.cluster);
+    }
+    let authority_path = state
+        .personas
+        .keypair_path(req.cluster, &req.authority_persona)?;
+    let services = state.token_services();
+    let worker_root = state.metaplex_worker_root();
+    token::mint_metaplex_nft(services.metaplex.as_ref(), &worker_root, &authority_path, req)
+}
+
+#[tauri::command]
+pub fn solana_wallet_scaffold_list() -> CommandResult<Vec<WalletDescriptor>> {
+    Ok(wallet_descriptors())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WalletScaffoldGenerateArgs {
+    pub request: WalletScaffoldRequest,
+}
+
+#[tauri::command]
+pub fn solana_wallet_scaffold_generate(
+    request: WalletScaffoldGenerateArgs,
+) -> CommandResult<WalletScaffoldResult> {
+    let toolchain = toolchain::probe();
+    wallet::generate(&toolchain, &request.request)
 }
 
 /// Lightweight acknowledgement that the frontend can call when it opens

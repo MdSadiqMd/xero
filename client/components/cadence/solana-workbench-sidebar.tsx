@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   CircleCheckBig,
   CircleSlash,
+  Coins,
   FileJson,
   Loader2,
   Play,
@@ -15,6 +16,7 @@ import {
   ShieldCheck,
   Square,
   Users,
+  Wallet,
   Waves,
   Zap,
 } from "lucide-react"
@@ -27,7 +29,9 @@ import { SolanaLogFeed } from "./solana-log-feed"
 import { SolanaMissingToolchain } from "./solana-missing-toolchain"
 import { SolanaPersonaPanel } from "./solana-persona-panel"
 import { SolanaScenarioPanel } from "./solana-scenario-panel"
+import { SolanaTokenPanel } from "./solana-token-panel"
 import { SolanaTxInspector } from "./solana-tx-inspector"
+import { SolanaWalletPanel } from "./solana-wallet-panel"
 import {
   useSolanaWorkbench,
   type ClusterKind,
@@ -52,6 +56,8 @@ type TabId =
   | "idl"
   | "deploy"
   | "audit"
+  | "token"
+  | "wallet"
   | "rpc"
 
 interface SolanaWorkbenchSidebarProps {
@@ -382,6 +388,18 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
       icon: ShieldCheck,
       label: "Audit",
       count: workbench.auditFindings.length || undefined,
+    },
+    {
+      id: "token",
+      icon: Coins,
+      label: "Token",
+      count: workbench.lastTokenCreate?.incompatibilities.length || undefined,
+    },
+    {
+      id: "wallet",
+      icon: Wallet,
+      label: "Wallet",
+      count: workbench.walletDescriptors.length || undefined,
     },
     {
       id: "rpc",
@@ -715,6 +733,30 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
               onScaffoldFuzz={workbench.scaffoldFuzzHarness}
               onRunCoverage={workbench.runCoverageAudit}
               onRunReplay={workbench.runReplay}
+            />
+          ) : null}
+
+          {activeTab === "token" ? (
+            <SolanaTokenPanel
+              cluster={selectedKind}
+              clusterRunning={clusterRunning}
+              busy={workbench.tokenBusy}
+              personaNames={workbench.personas.map((p) => p.name)}
+              matrix={workbench.extensionMatrix}
+              lastTokenCreate={workbench.lastTokenCreate}
+              lastMetaplexMint={workbench.lastMetaplexMint}
+              onCreateToken={workbench.createToken}
+              onMintMetaplex={workbench.mintMetaplex}
+            />
+          ) : null}
+
+          {activeTab === "wallet" ? (
+            <SolanaWalletPanel
+              cluster={selectedKind}
+              busy={workbench.walletBusy}
+              descriptors={workbench.walletDescriptors}
+              lastScaffold={workbench.lastWalletScaffold}
+              onGenerate={workbench.generateWalletScaffold}
             />
           ) : null}
 

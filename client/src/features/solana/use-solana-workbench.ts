@@ -1082,6 +1082,170 @@ export interface IndexerRunReport {
   entries: LogEntry[]
 }
 
+// Phase 8 — token + metaplex + wallet types.
+export type TokenExtension =
+  | "transfer_fee"
+  | "transfer_hook"
+  | "metadata_pointer"
+  | "token_metadata"
+  | "interest_bearing"
+  | "non_transferable"
+  | "permanent_delegate"
+  | "default_account_state"
+  | "mint_close_authority"
+  | "confidential_transfer"
+  | "memo_transfer"
+  | "cpi_guard"
+  | "immutable_owner"
+  | "group_pointer"
+  | "group_member_pointer"
+  | "scaled_ui_amount"
+
+export type TokenSupportLevel = "full" | "partial" | "unsupported" | "unknown"
+
+export interface SdkCompat {
+  sdk: string
+  versionRange: string
+  supportLevel: TokenSupportLevel
+  remediationHint: string
+}
+
+export interface ExtensionEntry {
+  extension: TokenExtension
+  label: string
+  summary: string
+  requiresProgram: string
+  sdkSupport: SdkCompat[]
+}
+
+export interface ExtensionMatrix {
+  manifestVersion: string
+  generatedAt: string
+  entries: ExtensionEntry[]
+}
+
+export interface Incompatibility {
+  extension: TokenExtension
+  sdk: string
+  versionRange: string
+  supportLevel: TokenSupportLevel
+  remediationHint: string
+}
+
+export type TokenProgram = "spl" | "spl_token_2022"
+
+export interface TokenExtensionConfig {
+  transferFeeBasisPoints?: number | null
+  transferFeeMaximum?: number | null
+  interestRateBps?: number | null
+  transferHookProgramId?: string | null
+  transferFeeWithdrawAuthority?: string | null
+}
+
+export interface TokenCreateSpec {
+  cluster: ClusterKind
+  program?: TokenProgram
+  authorityPersona: string
+  decimals: number
+  mintKeypairPath?: string | null
+  extensions?: TokenExtension[]
+  config?: TokenExtensionConfig
+  splTokenCli?: string | null
+  rpcUrl?: string | null
+}
+
+export interface TokenCreateReport {
+  cluster: ClusterKind
+  program: TokenProgram
+  argv: string[]
+  success: boolean
+  exitCode?: number | null
+  stdoutExcerpt: string
+  stderrExcerpt: string
+  elapsedMs: number
+  mintAddress?: string | null
+  extensions: TokenExtension[]
+  incompatibilities: Incompatibility[]
+}
+
+export type MetaplexStandard = "non_fungible" | "fungible" | "programmable_non_fungible"
+
+export interface MetaplexMintRequest {
+  cluster: ClusterKind
+  authorityPersona: string
+  metadataUri: string
+  name: string
+  symbol: string
+  recipient?: string | null
+  collectionMint?: string | null
+  sellerFeeBps?: number | null
+  standard?: MetaplexStandard
+  nodeBin?: string | null
+  refreshWorker?: boolean
+  rpcUrl?: string | null
+}
+
+export interface MetaplexMintResult {
+  cluster: ClusterKind
+  standard: MetaplexStandard
+  argv: string[]
+  workerPath: string
+  workerSha256: string
+  success: boolean
+  exitCode?: number | null
+  stdoutExcerpt: string
+  stderrExcerpt: string
+  elapsedMs: number
+  mintAddress?: string | null
+  signature?: string | null
+}
+
+export type WalletKind =
+  | "wallet_adapter"
+  | "wallet_standard"
+  | "privy"
+  | "dynamic"
+  | "mwa_stub"
+
+export interface WalletDescriptor {
+  kind: WalletKind
+  label: string
+  summary: string
+  requiresApiKey: boolean
+  supportedClusters: ClusterKind[]
+}
+
+export interface WalletScaffoldRequest {
+  kind: WalletKind
+  outputDir: string
+  projectSlug?: string | null
+  cluster?: ClusterKind
+  rpcUrl?: string | null
+  appName?: string | null
+  appId?: string | null
+  overwrite?: boolean
+}
+
+export interface WalletScaffoldFile {
+  path: string
+  bytesWritten: number
+  sha256: string
+}
+
+export interface WalletScaffoldResult {
+  kind: WalletKind
+  root: string
+  projectSlug: string
+  cluster: ClusterKind
+  rpcUrl: string
+  appName: string
+  files: WalletScaffoldFile[]
+  entrypoint?: string | null
+  runHint: string
+  apiKeyEnv?: string | null
+  nextSteps: string[]
+}
+
 // PDA types.
 export type SeedPart =
   | { kind: "utf8"; value: string }
@@ -1404,6 +1568,23 @@ export interface UseSolanaWorkbench {
     lastN?: number
     rpcUrl?: string | null
   }) => Promise<IndexerRunReport | null>
+  // Phase 8 — token + metaplex + wallet scaffolds.
+  tokenBusy: boolean
+  extensionMatrix: ExtensionMatrix | null
+  lastTokenCreate: TokenCreateReport | null
+  lastMetaplexMint: MetaplexMintResult | null
+  walletBusy: boolean
+  walletDescriptors: WalletDescriptor[]
+  lastWalletScaffold: WalletScaffoldResult | null
+  refreshExtensionMatrix: () => Promise<void>
+  refreshWalletDescriptors: () => Promise<void>
+  createToken: (spec: TokenCreateSpec) => Promise<TokenCreateReport | null>
+  mintMetaplex: (
+    request: MetaplexMintRequest,
+  ) => Promise<MetaplexMintResult | null>
+  generateWalletScaffold: (
+    request: WalletScaffoldRequest,
+  ) => Promise<WalletScaffoldResult | null>
 }
 
 const SOLANA_VALIDATOR_STATUS_EVENT = "solana:validator:status"
@@ -1526,6 +1707,20 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     useState<ScaffoldResult | null>(null)
   const [lastIndexerRun, setLastIndexerRun] =
     useState<IndexerRunReport | null>(null)
+
+  // Phase 8 — token + wallet state.
+  const [tokenBusy, setTokenBusy] = useState(false)
+  const [extensionMatrix, setExtensionMatrix] =
+    useState<ExtensionMatrix | null>(null)
+  const [lastTokenCreate, setLastTokenCreate] =
+    useState<TokenCreateReport | null>(null)
+  const [lastMetaplexMint, setLastMetaplexMint] =
+    useState<MetaplexMintResult | null>(null)
+  const [walletBusy, setWalletBusy] = useState(false)
+  const [walletDescriptors, setWalletDescriptors] =
+    useState<WalletDescriptor[]>([])
+  const [lastWalletScaffold, setLastWalletScaffold] =
+    useState<WalletScaffoldResult | null>(null)
 
   const activeRef = useRef(active)
   activeRef.current = active
@@ -2713,6 +2908,98 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     [mergeLogEntries],
   )
 
+  // ---------------------- Phase 8 — token + wallet actions ----------------
+  const refreshExtensionMatrix = useCallback(async () => {
+    if (!isTauri()) return
+    try {
+      const next = await invoke<ExtensionMatrix>("solana_token_extension_matrix")
+      setExtensionMatrix(next)
+    } catch (err) {
+      setError(errorMessage(err))
+    }
+  }, [])
+
+  const refreshWalletDescriptors = useCallback(async () => {
+    if (!isTauri()) return
+    try {
+      const next = await invoke<WalletDescriptor[]>(
+        "solana_wallet_scaffold_list",
+      )
+      setWalletDescriptors(next)
+    } catch (err) {
+      setError(errorMessage(err))
+    }
+  }, [])
+
+  const createToken = useCallback(
+    async (spec: TokenCreateSpec): Promise<TokenCreateReport | null> => {
+      if (!isTauri()) return null
+      setTokenBusy(true)
+      setError(null)
+      try {
+        const report = await invoke<TokenCreateReport>("solana_token_create", {
+          request: { spec },
+        })
+        setLastTokenCreate(report)
+        return report
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setTokenBusy(false)
+      }
+    },
+    [],
+  )
+
+  const mintMetaplex = useCallback(
+    async (
+      request: MetaplexMintRequest,
+    ): Promise<MetaplexMintResult | null> => {
+      if (!isTauri()) return null
+      setTokenBusy(true)
+      setError(null)
+      try {
+        const result = await invoke<MetaplexMintResult>(
+          "solana_metaplex_mint",
+          { request: { request } },
+        )
+        setLastMetaplexMint(result)
+        return result
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setTokenBusy(false)
+      }
+    },
+    [],
+  )
+
+  const generateWalletScaffold = useCallback(
+    async (
+      request: WalletScaffoldRequest,
+    ): Promise<WalletScaffoldResult | null> => {
+      if (!isTauri()) return null
+      setWalletBusy(true)
+      setError(null)
+      try {
+        const result = await invoke<WalletScaffoldResult>(
+          "solana_wallet_scaffold_generate",
+          { request: { request } },
+        )
+        setLastWalletScaffold(result)
+        return result
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setWalletBusy(false)
+      }
+    },
+    [],
+  )
+
   // Mount: probe toolchain + cluster catalogue + status + persona catalog.
   useEffect(() => {
     if (!active || !isTauri()) return
@@ -2724,6 +3011,8 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     void refreshScenarios()
     void refreshReplayCatalog()
     void refreshActiveLogSubscriptions()
+    void refreshExtensionMatrix()
+    void refreshWalletDescriptors()
   }, [
     active,
     refreshClusters,
@@ -2734,6 +3023,8 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     refreshScenarios,
     refreshReplayCatalog,
     refreshActiveLogSubscriptions,
+    refreshExtensionMatrix,
+    refreshWalletDescriptors,
   ])
 
   // Listen for status events while the sidebar is visible.
@@ -3043,5 +3334,17 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     lastIndexerRun,
     scaffoldIndexer,
     runIndexer,
+    tokenBusy,
+    extensionMatrix,
+    lastTokenCreate,
+    lastMetaplexMint,
+    walletBusy,
+    walletDescriptors,
+    lastWalletScaffold,
+    refreshExtensionMatrix,
+    refreshWalletDescriptors,
+    createToken,
+    mintMetaplex,
+    generateWalletScaffold,
   }
 }

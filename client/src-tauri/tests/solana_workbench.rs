@@ -34,6 +34,9 @@ mod persona_lifecycle;
 #[path = "solana/audit_engine.rs"]
 mod audit_engine;
 
+#[path = "solana/wallet_and_token.rs"]
+mod wallet_and_token;
+
 #[test]
 fn spin_restore_cycle_runs_three_consecutive_times() {
     spin_restore_cycle::spin_restore_cycle_runs_three_consecutive_times();
@@ -144,4 +147,61 @@ fn audit_replay_scripted_runner_emits_expected_bad_state_finding() {
 #[test]
 fn audit_twenty_instruction_anchor_program_audit_is_fast() {
     audit_engine::twenty_instruction_anchor_program_audit_is_fast();
+}
+
+// -- Phase 8 — token + metaplex + wallet -----------------------------------
+
+#[test]
+fn extension_matrix_flags_transfer_hook_on_wallet_adapter() {
+    wallet_and_token::extension_matrix_flags_transfer_hook_on_wallet_adapter();
+}
+
+#[test]
+fn token_create_argv_preserves_transfer_fee_config() {
+    wallet_and_token::token_create_argv_preserves_transfer_fee_config();
+}
+
+#[test]
+fn token_create_reports_transfer_hook_incompatibilities() {
+    wallet_and_token::token_create_reports_transfer_hook_incompatibilities();
+}
+
+#[test]
+fn token_create_rejects_extensions_on_classic_program() {
+    wallet_and_token::token_create_rejects_extensions_on_classic_program();
+}
+
+#[test]
+fn metaplex_mint_materialises_worker_and_passes_env() {
+    wallet_and_token::metaplex_mint_materialises_worker_and_passes_env();
+}
+
+#[test]
+fn metaplex_mint_rejects_overlong_symbol() {
+    wallet_and_token::metaplex_mint_rejects_overlong_symbol();
+}
+
+#[test]
+fn wallet_descriptors_cover_every_kind() {
+    wallet_and_token::wallet_descriptors_cover_every_kind();
+}
+
+#[test]
+fn privy_scaffold_writes_compileable_tree_with_api_key_env() {
+    wallet_and_token::privy_scaffold_writes_compileable_tree_with_api_key_env();
+}
+
+#[test]
+fn wallet_adapter_scaffold_bakes_rpc_url_and_reports_free_tier() {
+    wallet_and_token::wallet_adapter_scaffold_bakes_rpc_url_and_reports_free_tier();
+}
+
+#[test]
+fn mwa_scaffold_writes_phone_testing_checklist() {
+    wallet_and_token::mwa_scaffold_writes_phone_testing_checklist();
+}
+
+#[test]
+fn wallet_scaffold_refuses_missing_node() {
+    wallet_and_token::wallet_scaffold_refuses_missing_node();
 }
