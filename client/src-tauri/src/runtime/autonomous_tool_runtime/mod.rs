@@ -35,11 +35,14 @@ pub use browser::{
 pub use repo_scope::{resolve_imported_repo_root, resolve_imported_repo_root_from_registry};
 pub use solana::{
     AutonomousSolanaAltAction, AutonomousSolanaAltRequest, AutonomousSolanaClusterAction,
-    AutonomousSolanaClusterRequest, AutonomousSolanaExplainRequest, AutonomousSolanaLogsRequest,
-    AutonomousSolanaOutput, AutonomousSolanaSimulateRequest, AutonomousSolanaTxAction,
-    AutonomousSolanaTxRequest, SolanaExecutor, StateSolanaExecutor, UnavailableSolanaExecutor,
-    AUTONOMOUS_TOOL_SOLANA_ALT, AUTONOMOUS_TOOL_SOLANA_CLUSTER, AUTONOMOUS_TOOL_SOLANA_EXPLAIN,
-    AUTONOMOUS_TOOL_SOLANA_LOGS, AUTONOMOUS_TOOL_SOLANA_SIMULATE, AUTONOMOUS_TOOL_SOLANA_TX,
+    AutonomousSolanaClusterRequest, AutonomousSolanaCodamaRequest, AutonomousSolanaExplainRequest,
+    AutonomousSolanaIdlAction, AutonomousSolanaIdlRequest, AutonomousSolanaLogsRequest,
+    AutonomousSolanaOutput, AutonomousSolanaPdaAction, AutonomousSolanaPdaRequest,
+    AutonomousSolanaSimulateRequest, AutonomousSolanaTxAction, AutonomousSolanaTxRequest,
+    SolanaExecutor, StateSolanaExecutor, UnavailableSolanaExecutor, AUTONOMOUS_TOOL_SOLANA_ALT,
+    AUTONOMOUS_TOOL_SOLANA_CLUSTER, AUTONOMOUS_TOOL_SOLANA_CODAMA, AUTONOMOUS_TOOL_SOLANA_EXPLAIN,
+    AUTONOMOUS_TOOL_SOLANA_IDL, AUTONOMOUS_TOOL_SOLANA_LOGS, AUTONOMOUS_TOOL_SOLANA_PDA,
+    AUTONOMOUS_TOOL_SOLANA_SIMULATE, AUTONOMOUS_TOOL_SOLANA_TX,
 };
 
 pub const AUTONOMOUS_TOOL_READ: &str = "read";

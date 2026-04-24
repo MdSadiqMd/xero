@@ -12,7 +12,7 @@
 //! project has `codama` as a devDependency, to `pnpm codama`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 

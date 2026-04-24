@@ -8,16 +8,20 @@
 //! executor trait is trivially mockable, and the production wiring
 //! bridges to the Tauri `SolanaState` the UI uses.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::commands::solana::{
-    AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport, ClusterHandle, ClusterKind,
-    ClusterStatus, EndpointHealth, ExplainRequest, FeeEstimate, KnownProgramLookup, ResolveArgs,
-    SamplePercentile, SendRequest, SimulateRequest, SimulationResult, SnapshotMeta, SolanaState,
-    StartOpts, TxPipeline, TxPlan, TxResult, TxSpec,
+    idl::{self, codama::CodamaGenerationRequest},
+    pda, AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport, BumpAnalysis,
+    ClusterHandle, ClusterKind, ClusterPda, ClusterStatus, CodamaGenerationReport, CodamaTarget,
+    DerivedAddress, DriftReport, EndpointHealth, ExplainRequest, FeeEstimate, Idl, IdlPublishMode,
+    IdlPublishReport, IdlPublishRequest, IdlRegistry, IdlSubscriptionToken, KnownProgramLookup,
+    PdaSite, ResolveArgs, SamplePercentile, SeedPart, SendRequest, SimulateRequest,
+    SimulationResult, SnapshotMeta, SolanaState, StartOpts, TxPipeline, TxPlan, TxResult, TxSpec,
 };
 use crate::commands::{CommandError, CommandResult};
 
@@ -27,6 +31,9 @@ pub const AUTONOMOUS_TOOL_SOLANA_TX: &str = "solana_tx";
 pub const AUTONOMOUS_TOOL_SOLANA_SIMULATE: &str = "solana_simulate";
 pub const AUTONOMOUS_TOOL_SOLANA_EXPLAIN: &str = "solana_explain";
 pub const AUTONOMOUS_TOOL_SOLANA_ALT: &str = "solana_alt";
+pub const AUTONOMOUS_TOOL_SOLANA_IDL: &str = "solana_idl";
+pub const AUTONOMOUS_TOOL_SOLANA_CODAMA: &str = "solana_codama";
+pub const AUTONOMOUS_TOOL_SOLANA_PDA: &str = "solana_pda";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -159,6 +166,104 @@ pub struct AutonomousSolanaAltRequest {
     pub action: AutonomousSolanaAltAction,
 }
 
+// ---------- IDL / Codama / PDA requests (Phase 4) --------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaIdlAction {
+    /// Read a local IDL file into the registry.
+    Load {
+        path: String,
+    },
+    /// Fetch from chain via the injected RPC transport.
+    Fetch {
+        program_id: String,
+        cluster: ClusterKind,
+        #[serde(default)]
+        rpc_url: Option<String>,
+    },
+    /// Return the most-recently-cached IDL for a program.
+    Get {
+        program_id: String,
+        #[serde(default)]
+        cluster: Option<ClusterKind>,
+    },
+    /// Start watching a local IDL file. Returns a subscription token.
+    Watch {
+        path: String,
+    },
+    /// Stop a previously-started watch.
+    Unwatch {
+        token: IdlSubscriptionToken,
+    },
+    /// Classify local-vs-on-chain drift.
+    Drift {
+        program_id: String,
+        cluster: ClusterKind,
+        local_path: String,
+        #[serde(default)]
+        rpc_url: Option<String>,
+    },
+    /// Run `anchor idl init/upgrade`. Caller provides the authority
+    /// keypair path explicitly (the runtime doesn't expand personas to
+    /// keypairs to keep the agent surface local-first).
+    Publish {
+        program_id: String,
+        cluster: ClusterKind,
+        idl_path: String,
+        authority_keypair_path: String,
+        rpc_url: String,
+        mode: IdlPublishMode,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaIdlRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaIdlAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSolanaCodamaRequest {
+    pub idl_path: String,
+    pub targets: Vec<CodamaTarget>,
+    pub output_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaPdaAction {
+    Derive {
+        program_id: String,
+        seeds: Vec<SeedPart>,
+        #[serde(default)]
+        bump: Option<u8>,
+    },
+    Scan {
+        project_root: String,
+    },
+    Predict {
+        program_id: String,
+        seeds: Vec<SeedPart>,
+        clusters: Vec<ClusterKind>,
+    },
+    AnalyseBump {
+        program_id: String,
+        seeds: Vec<SeedPart>,
+        #[serde(default)]
+        bump: Option<u8>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaPdaRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaPdaAction,
+}
+
 pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
     fn cluster(
         &self,
@@ -180,6 +285,15 @@ pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
     ) -> CommandResult<AutonomousSolanaOutput>;
 
     fn alt(&self, request: AutonomousSolanaAltRequest) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn idl(&self, request: AutonomousSolanaIdlRequest) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn codama(
+        &self,
+        request: AutonomousSolanaCodamaRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn pda(&self, request: AutonomousSolanaPdaRequest) -> CommandResult<AutonomousSolanaOutput>;
 }
 
 /// Executor that dispatches against a live `SolanaState`. Safe to clone
@@ -196,6 +310,7 @@ struct StateInner {
     router: Arc<crate::commands::solana::RpcRouter>,
     snapshots: Arc<crate::commands::solana::SnapshotStore>,
     tx_pipeline: Arc<TxPipeline>,
+    idl_registry: Arc<IdlRegistry>,
 }
 
 impl StateSolanaExecutor {
@@ -206,8 +321,19 @@ impl StateSolanaExecutor {
                 router: state.rpc_router(),
                 snapshots: state.snapshots(),
                 tx_pipeline: state.tx_pipeline(),
+                idl_registry: state.idl_registry(),
             }),
         }
+    }
+
+    fn resolve_rpc_url(&self, cluster: ClusterKind) -> Option<String> {
+        let status = self.inner.supervisor.status();
+        if status.kind == Some(cluster) {
+            if let Some(url) = status.rpc_url.clone() {
+                return Some(url);
+            }
+        }
+        self.inner.router.pick_healthy(cluster).map(|e| e.url)
     }
 }
 
@@ -447,6 +573,195 @@ impl SolanaExecutor for StateSolanaExecutor {
             value_json,
         })
     }
+
+    fn idl(&self, request: AutonomousSolanaIdlRequest) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaIdlAction::Load { path } => {
+                let idl = self.inner.idl_registry.load_file(Path::new(&path))?;
+                (
+                    "load".to_string(),
+                    serde_json::to_value::<Idl>(idl).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaIdlAction::Fetch {
+                program_id,
+                cluster,
+                rpc_url,
+            } => {
+                let rpc_url = rpc_url.or_else(|| self.resolve_rpc_url(cluster)).ok_or_else(
+                    || {
+                        CommandError::user_fixable(
+                            "solana_idl_no_rpc",
+                            "No RPC URL available — start a cluster or provide rpcUrl.",
+                        )
+                    },
+                )?;
+                let idl =
+                    self.inner
+                        .idl_registry
+                        .fetch_on_chain(cluster, &rpc_url, &program_id)?;
+                (
+                    "fetch".to_string(),
+                    serde_json::to_value::<Option<Idl>>(idl).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaIdlAction::Get {
+                program_id,
+                cluster,
+            } => {
+                let idl = self.inner.idl_registry.get_cached(&program_id, cluster);
+                (
+                    "get".to_string(),
+                    serde_json::to_value::<Option<Idl>>(idl).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaIdlAction::Watch { path } => {
+                let token = self.inner.idl_registry.watch_path(Path::new(&path))?;
+                (
+                    "watch".to_string(),
+                    serde_json::to_value::<IdlSubscriptionToken>(token).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaIdlAction::Unwatch { token } => {
+                let ok = self.inner.idl_registry.unwatch(&token)?;
+                (
+                    "unwatch".to_string(),
+                    JsonValue::Bool(ok),
+                )
+            }
+            AutonomousSolanaIdlAction::Drift {
+                program_id,
+                cluster,
+                local_path,
+                rpc_url,
+            } => {
+                let local = self.inner.idl_registry.load_file(Path::new(&local_path))?;
+                let rpc_url = rpc_url.or_else(|| self.resolve_rpc_url(cluster)).ok_or_else(
+                    || {
+                        CommandError::user_fixable(
+                            "solana_idl_no_rpc",
+                            "No RPC URL available — start a cluster or provide rpcUrl.",
+                        )
+                    },
+                )?;
+                let chain =
+                    self.inner
+                        .idl_registry
+                        .fetch_on_chain(cluster, &rpc_url, &program_id)?;
+                let report = idl::drift::classify(&local, chain.as_ref());
+                (
+                    "drift".to_string(),
+                    serde_json::to_value::<DriftReport>(report).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaIdlAction::Publish {
+                program_id,
+                cluster,
+                idl_path,
+                authority_keypair_path,
+                rpc_url,
+                mode,
+            } => {
+                let runner = idl::publish::SystemAnchorIdlRunner::new();
+                let sink = idl::publish::NullProgressSink;
+                let report = idl::publish::publish(
+                    &runner,
+                    &sink,
+                    &IdlPublishRequest {
+                        program_id,
+                        cluster,
+                        idl_path,
+                        authority_keypair_path,
+                        rpc_url,
+                        mode,
+                    },
+                )?;
+                (
+                    "publish".to_string(),
+                    serde_json::to_value::<IdlPublishReport>(report).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
+
+    fn codama(
+        &self,
+        request: AutonomousSolanaCodamaRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        let runner = idl::codama::SystemCodamaRunner::new();
+        let report = idl::codama::generate(
+            &runner,
+            &CodamaGenerationRequest {
+                idl_path: request.idl_path,
+                targets: request.targets,
+                output_dir: request.output_dir,
+            },
+        )?;
+        let value = serde_json::to_value::<CodamaGenerationReport>(report).unwrap_or(JsonValue::Null);
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: "generate".to_string(),
+            value_json,
+        })
+    }
+
+    fn pda(&self, request: AutonomousSolanaPdaRequest) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaPdaAction::Derive {
+                program_id,
+                seeds,
+                bump,
+            } => {
+                let derived = match bump {
+                    Some(b) => pda::create_program_address(&program_id, &seeds, b)?,
+                    None => pda::find_program_address(&program_id, &seeds)?,
+                };
+                (
+                    "derive".to_string(),
+                    serde_json::to_value::<DerivedAddress>(derived).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaPdaAction::Scan { project_root } => {
+                let sites = pda::scan(Path::new(&project_root))?;
+                (
+                    "scan".to_string(),
+                    serde_json::to_value::<Vec<PdaSite>>(sites).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaPdaAction::Predict {
+                program_id,
+                seeds,
+                clusters,
+            } => {
+                let predictions = pda::predict(&program_id, &seeds, &clusters)?;
+                (
+                    "predict".to_string(),
+                    serde_json::to_value::<Vec<ClusterPda>>(predictions).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaPdaAction::AnalyseBump {
+                program_id,
+                seeds,
+                bump,
+            } => {
+                let analysis = pda::analyse_bump(&program_id, &seeds, bump)?;
+                (
+                    "analyse_bump".to_string(),
+                    serde_json::to_value::<BumpAnalysis>(analysis).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
 }
 
 /// No-op executor. Returns `policy_denied` for every action so environments
@@ -498,6 +813,27 @@ impl SolanaExecutor for UnavailableSolanaExecutor {
     fn alt(&self, _request: AutonomousSolanaAltRequest) -> CommandResult<AutonomousSolanaOutput> {
         Err(CommandError::policy_denied(
             "Solana ALT actions require the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
+    fn idl(&self, _request: AutonomousSolanaIdlRequest) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Solana IDL actions require the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
+    fn codama(
+        &self,
+        _request: AutonomousSolanaCodamaRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Solana Codama codegen requires the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
+    fn pda(&self, _request: AutonomousSolanaPdaRequest) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Solana PDA actions require the desktop runtime; no SolanaState is wired.",
         ))
     }
 }

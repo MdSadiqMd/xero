@@ -199,6 +199,10 @@ struct WatchHandle {
     path: PathBuf,
     stop: Arc<Mutex<bool>>,
     thread: Option<JoinHandle<()>>,
+    /// Shared with the poller thread; only accessed through
+    /// `poll_once_for_tests` in non-production builds, which is why the
+    /// compiler flags it as unread in the release profile.
+    #[allow(dead_code)]
     last_hash: Arc<Mutex<Option<String>>>,
 }
 
@@ -476,6 +480,7 @@ fn watcher_loop(
     }
 }
 
+#[cfg(test)]
 fn poll_once(
     token: &IdlSubscriptionToken,
     path: &Path,

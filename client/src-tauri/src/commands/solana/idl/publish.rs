@@ -69,7 +69,7 @@ pub struct IdlPublishReport {
     pub argv: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DeployProgressPhase {
     Planning,

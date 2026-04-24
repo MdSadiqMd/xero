@@ -175,9 +175,9 @@ mod tests {
     #[test]
     fn fetch_decodes_and_inflates_idl_payload() {
         let transport = Arc::new(ScriptedTransport::new());
-        let idl_json = r#"{"metadata":{"name":"my_program","address":"Prog11111111111111111111111111111111111111"}}"#;
+        let idl_json = r#"{"metadata":{"name":"my_program","address":"11111111111111111111111111111111"}}"#;
         let account_b64 = build_idl_account(
-            "Prog11111111111111111111111111111111111111",
+            "11111111111111111111111111111111",
             idl_json.as_bytes(),
         );
         transport.set(
@@ -201,7 +201,7 @@ mod tests {
             .fetch(
                 ClusterKind::Devnet,
                 "http://rpc.test",
-                "Prog11111111111111111111111111111111111111",
+                "11111111111111111111111111111111",
             )
             .unwrap()
             .expect("payload should decode");
@@ -225,7 +225,7 @@ mod tests {
             .fetch(
                 ClusterKind::Devnet,
                 "http://rpc.test",
-                "Prog11111111111111111111111111111111111111",
+                "11111111111111111111111111111111",
             )
             .unwrap();
         assert!(got.is_none());
@@ -250,7 +250,7 @@ mod tests {
             .fetch(
                 ClusterKind::Devnet,
                 "http://rpc.test",
-                "Prog11111111111111111111111111111111111111",
+                "11111111111111111111111111111111",
             )
             .unwrap_err();
         assert_eq!(err.code, "solana_idl_account_too_small");

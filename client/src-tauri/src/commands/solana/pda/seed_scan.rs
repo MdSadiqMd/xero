@@ -133,11 +133,15 @@ fn scan_text(path: &Path, text: &str, sites: &mut Vec<PdaSite>) {
     // skip multi-line invocations because parsing balanced parens in
     // Rust source from a regex is a losing game. The typical Anchor
     // program keeps PDA calls on one or two lines.
-    let find_re =
-        Regex::new(r"find_program_address\s*\(\s*&\[(?P<seeds>[^\]]*)\]\s*,\s*(?P<prog>[^\)]+)\)")
-            .unwrap();
+    // Seed lists may contain one level of nested brackets (the bump
+    // byte is commonly written as `&[bump]`). The inner group matches
+    // either non-bracket chars or a balanced single-level `[...]` group.
+    let find_re = Regex::new(
+        r"find_program_address\s*\(\s*&\[(?P<seeds>(?:[^\[\]]|\[[^\[\]]*\])*)\]\s*,\s*(?P<prog>[^\)]+)\)",
+    )
+    .unwrap();
     let create_re = Regex::new(
-        r"create_program_address\s*\(\s*&\[(?P<seeds>[^\]]*)\]\s*,\s*(?P<prog>[^\)]+)\)",
+        r"create_program_address\s*\(\s*&\[(?P<seeds>(?:[^\[\]]|\[[^\[\]]*\])*)\]\s*,\s*(?P<prog>[^\)]+)\)",
     )
     .unwrap();
 

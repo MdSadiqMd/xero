@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CircleCheckBig, CircleSlash, Loader2, Play, RefreshCw, Square, Waves } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { SolanaIdlPanel } from "./solana-idl-panel"
 import { SolanaMissingToolchain } from "./solana-missing-toolchain"
 import { SolanaPersonaPanel } from "./solana-persona-panel"
 import { SolanaScenarioPanel } from "./solana-scenario-panel"
@@ -10,6 +11,7 @@ import { SolanaTxInspector } from "./solana-tx-inspector"
 import {
   useSolanaWorkbench,
   type ClusterKind,
+  type CodamaTarget,
   type FundingDelta,
   type PersonaRole,
   type SimulateRequest,
@@ -157,6 +159,40 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
   const handleEstimateFee = useCallback(
     async (programIds: string[]) =>
       workbench.estimatePriorityFee(selectedKind, programIds),
+    [workbench, selectedKind],
+  )
+
+  const handleIdlFetch = useCallback(
+    async (programId: string) => workbench.fetchIdl(programId, selectedKind),
+    [workbench, selectedKind],
+  )
+
+  const handleIdlDrift = useCallback(
+    async (programId: string, localPath: string) =>
+      workbench.driftIdl(programId, selectedKind, localPath),
+    [workbench, selectedKind],
+  )
+
+  const handleCodama = useCallback(
+    async (idlPath: string, targets: CodamaTarget[], outputDir: string) =>
+      workbench.generateCodama(idlPath, targets, outputDir),
+    [workbench],
+  )
+
+  const handlePublishIdl = useCallback(
+    async (args: {
+      programId: string
+      idlPath: string
+      authorityPersona: string
+      mode: "init" | "upgrade"
+    }) =>
+      workbench.publishIdl({
+        programId: args.programId,
+        cluster: selectedKind,
+        idlPath: args.idlPath,
+        authorityPersona: args.authorityPersona,
+        mode: args.mode,
+      }),
     [workbench, selectedKind],
   )
 
@@ -349,6 +385,26 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
           onSimulate={handleSimulate}
           onExplain={handleExplain}
           onEstimateFee={handleEstimateFee}
+        />
+
+        <SolanaIdlPanel
+          cluster={selectedKind}
+          idls={workbench.idls}
+          idlBusy={workbench.idlBusy}
+          lastIdlEvent={workbench.lastIdlEvent}
+          lastDriftReport={workbench.lastDriftReport}
+          lastCodamaReport={workbench.lastCodamaReport}
+          lastPublishReport={workbench.lastPublishReport}
+          lastDeployProgress={workbench.lastDeployProgress}
+          activeWatches={workbench.activeIdlWatches}
+          personaNames={workbench.personas.map((p) => p.name)}
+          onLoad={workbench.loadIdl}
+          onFetch={handleIdlFetch}
+          onDrift={handleIdlDrift}
+          onCodama={handleCodama}
+          onPublish={handlePublishIdl}
+          onStartWatch={workbench.startIdlWatch}
+          onStopWatch={workbench.stopIdlWatch}
         />
 
         <section className="border-b border-border/70 px-3 py-3">
