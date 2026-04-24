@@ -171,7 +171,7 @@ function makeAutonomousUnit(overrides: Partial<NonNullable<ProjectSnapshotRespon
     runId: 'run-1',
     unitId: 'run-1:checkpoint:2',
     sequence: 2,
-    kind: 'state' as const,
+    kind: 'executor' as const,
     status: 'active' as const,
     summary: 'Supervisor heartbeat recorded.',
     boundaryId: null,
@@ -1935,7 +1935,7 @@ describe('cadence-model', () => {
     expect(project.autonomousRun?.duplicateStartDetected).toBe(true)
     expect(project.autonomousRun?.runtimeLabel).toBe('Openai Codex · Autonomous run stale')
     expect(project.autonomousUnit?.unitId).toBe('run-1:checkpoint:2')
-    expect(project.autonomousUnit?.kindLabel).toBe('State')
+    expect(project.autonomousUnit?.kindLabel).toBe('Executor worker')
     expect(project.autonomousUnit?.statusLabel).toBe('Active')
     expect(project.runtimeSession).toBeNull()
     expect(project.runtimeRun).toBeNull()
@@ -1949,6 +1949,50 @@ describe('cadence-model', () => {
         autonomousUnit: makeAutonomousUnit({ runId: 'run-2' }),
       }),
     ).toThrow(/Autonomous unit run id must match/)
+  })
+
+  it('accepts runtime worker kinds and maps deterministic worker-purpose labels', () => {
+    const workerKinds = [
+      { kind: 'researcher', label: 'Researcher worker' },
+      { kind: 'planner', label: 'Planner worker' },
+      { kind: 'executor', label: 'Executor worker' },
+      { kind: 'verifier', label: 'Verifier worker' },
+    ] as const
+
+    for (const workerKind of workerKinds) {
+      const mapped = mapAutonomousUnit(
+        autonomousUnitSchema.parse({
+          ...makeAutonomousUnit(),
+          kind: workerKind.kind,
+        }),
+      )
+
+      expect(mapped.kind).toBe(workerKind.kind)
+      expect(mapped.kindLabel).toBe(workerKind.label)
+    }
+  })
+
+  it('fails closed on malformed autonomous worker kinds at the schema boundary', () => {
+    expect(() =>
+      autonomousUnitSchema.parse({
+        ...makeAutonomousUnit(),
+        kind: 'worker',
+      }),
+    ).toThrow()
+
+    expect(() =>
+      autonomousUnitSchema.parse({
+        ...makeAutonomousUnit(),
+        kind: '   ',
+      }),
+    ).toThrow()
+
+    expect(() =>
+      autonomousUnitSchema.parse({
+        ...makeAutonomousUnit(),
+        kind: 'Researcher',
+      }),
+    ).toThrow()
   })
 
   it('maps runtime-run provider identity independently from runtime kind labels', () => {

@@ -427,7 +427,7 @@ function makeAutonomousRunState(
       runId,
       unitId: `${runId}:checkpoint:2`,
       sequence: 2,
-      kind: 'state',
+      kind: 'executor',
       status: 'active',
       summary: 'Recovered the current autonomous unit boundary.',
       boundaryId: 'checkpoint:2',
@@ -516,7 +516,7 @@ function makeAutonomousHistoryEntry(options: {
       runId,
       unitId: options.unitId,
       sequence: options.sequence,
-      kind: 'state',
+      kind: 'executor',
       status: 'completed',
       summary: `Recovered durable unit ${options.sequence}.`,
       boundaryId: `boundary:${options.sequence}`,
@@ -1789,6 +1789,28 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry state' }))
 
     await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('autonomous refresh failed'))
+    expect(screen.getByTestId('autonomous-run-id')).toHaveTextContent('auto-project-1')
+    expect(screen.getByTestId('autonomous-run-provider-id')).toHaveTextContent('azure_openai')
+    expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('auto-project-1:checkpoint:2')
+  })
+
+  it('fails closed on malformed autonomous worker kinds and keeps the last truthful autonomous state visible', async () => {
+    const setup = createMockAdapter({
+      autonomousStates: {
+        'project-1': makeAutonomousRunState('project-1', { runId: 'auto-project-1', providerId: 'azure_openai' }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('autonomous-run-id')).toHaveTextContent('auto-project-1'))
+
+    setup.getAutonomousRun.mockRejectedValueOnce(
+      new Error('Invalid enum value for autonomous unit kind. Expected one of researcher|planner|executor|verifier, received Researcher.'),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Retry state' }))
+
+    await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('researcher|planner|executor|verifier'))
     expect(screen.getByTestId('autonomous-run-id')).toHaveTextContent('auto-project-1')
     expect(screen.getByTestId('autonomous-run-provider-id')).toHaveTextContent('azure_openai')
     expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('auto-project-1:checkpoint:2')

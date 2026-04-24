@@ -35,7 +35,7 @@ export const autonomousRunStatusSchema = z.enum([
   'completed',
 ])
 export const autonomousRunRecoveryStateSchema = z.enum(['healthy', 'recovery_required', 'terminal', 'failed'])
-export const autonomousUnitKindSchema = z.enum(['bootstrap', 'state', 'tool', 'action_required', 'diagnostic'])
+export const autonomousUnitKindSchema = z.enum(['researcher', 'planner', 'executor', 'verifier'])
 export const autonomousUnitStatusSchema = z.enum([
   'pending',
   'active',
@@ -767,16 +767,14 @@ export function getAutonomousRunRecoveryLabel(recoveryState: AutonomousRunRecove
 
 export function getAutonomousUnitKindLabel(kind: AutonomousUnitKindDto): string {
   switch (kind) {
-    case 'bootstrap':
-      return 'Bootstrap'
-    case 'state':
-      return 'State'
-    case 'tool':
-      return 'Tool'
-    case 'action_required':
-      return 'Action required'
-    case 'diagnostic':
-      return 'Diagnostic'
+    case 'researcher':
+      return 'Researcher worker'
+    case 'planner':
+      return 'Planner worker'
+    case 'executor':
+      return 'Executor worker'
+    case 'verifier':
+      return 'Verifier worker'
   }
 }
 
