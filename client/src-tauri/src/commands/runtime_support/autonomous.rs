@@ -38,8 +38,9 @@ use super::{
 pub(crate) fn load_persisted_autonomous_run(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
 ) -> CommandResult<Option<AutonomousRunSnapshotRecord>> {
-    project_store::load_autonomous_run(repo_root, project_id)
+    project_store::load_autonomous_run(repo_root, project_id, agent_session_id)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,10 +53,11 @@ pub(crate) enum AutonomousSyncIntent {
 pub(crate) fn sync_autonomous_run_state(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
     runtime_snapshot: Option<&RuntimeRunSnapshotRecord>,
     intent: AutonomousSyncIntent,
 ) -> CommandResult<AutonomousRunStateDto> {
-    let existing = load_persisted_autonomous_run(repo_root, project_id)?;
+    let existing = load_persisted_autonomous_run(repo_root, project_id, agent_session_id)?;
 
     let persisted = match runtime_snapshot {
         Some(snapshot) => {
@@ -192,6 +194,7 @@ fn reconcile_autonomous_run_snapshot(
 fn autonomous_run_dto_from_snapshot(snapshot: &AutonomousRunSnapshotRecord) -> AutonomousRunDto {
     AutonomousRunDto {
         project_id: snapshot.run.project_id.clone(),
+        agent_session_id: snapshot.run.agent_session_id.clone(),
         run_id: snapshot.run.run_id.clone(),
         runtime_kind: snapshot.run.runtime_kind.clone(),
         provider_id: snapshot.run.provider_id.clone(),

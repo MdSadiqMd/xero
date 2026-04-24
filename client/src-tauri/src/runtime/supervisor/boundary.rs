@@ -185,6 +185,7 @@ fn emit_runtime_boundary_candidate(
 ) {
     let (
         project_id,
+        agent_session_id,
         run_id,
         runtime_kind,
         session_id,
@@ -228,6 +229,7 @@ fn emit_runtime_boundary_candidate(
         };
         (
             state.project_id.clone(),
+            state.agent_session_id.clone(),
             state.run_id.clone(),
             state.runtime_kind.clone(),
             state.session_id.clone(),
@@ -285,6 +287,7 @@ fn emit_runtime_boundary_candidate(
             repo_root,
             &RuntimeActionRequiredUpsertRecord {
                 project_id,
+                agent_session_id,
                 run_id,
                 runtime_kind,
                 session_id,

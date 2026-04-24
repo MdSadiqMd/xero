@@ -204,9 +204,13 @@ pub(crate) fn runtime_stream_dedupes_replayed_action_required_against_durable_pe
         Some("boundary-1")
     );
 
-    let autonomous_snapshot = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load autonomous run after replayed runtime stream")
-        .expect("autonomous run should still exist after replayed runtime stream");
+    let autonomous_snapshot = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous run after replayed runtime stream")
+    .expect("autonomous run should still exist after replayed runtime stream");
     let blocked_evidence = autonomous_snapshot
         .history
         .iter()
@@ -299,9 +303,13 @@ pub(crate) fn runtime_stream_redacts_secret_bearing_replay_without_leaking_token
     assert!(!serialized_items.contains("refresh-1"));
     assert!(!serialized_items.contains(&access_token));
 
-    let persisted = project_store::load_runtime_run(&repo_root, &project_id)
-        .expect("load stored runtime run")
-        .expect("stored runtime run should exist");
+    let persisted = project_store::load_runtime_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load stored runtime run")
+    .expect("stored runtime run should exist");
     let checkpoint_dump = persisted
         .checkpoints
         .iter()
@@ -666,9 +674,9 @@ pub(crate) fn runtime_stream_replays_browser_computer_use_tool_summary_variant_w
         } if code == "runtime_supervisor_live_event_unsupported"
     ));
 
-    assert!(items.iter().all(|item| {
-        item.tool_call_id.as_deref() != Some("tool-browser-malformed")
-    }));
+    assert!(items
+        .iter()
+        .all(|item| { item.tool_call_id.as_deref() != Some("tool-browser-malformed") }));
 
     stop_supervisor_run(app.state::<DesktopState>().inner(), &project_id, &repo_root);
 }

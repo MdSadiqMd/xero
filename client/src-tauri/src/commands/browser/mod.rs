@@ -253,7 +253,12 @@ fn ensure_browser_webview<R: Runtime>(
     let builder = WebviewBuilder::new(label.to_string(), WebviewUrl::External(target.clone()))
         .initialization_script(BROWSER_BRIDGE_INIT_SCRIPT)
         .on_navigation(move |url| {
-            tabs_for_nav.record_page_state(&tab_id_for_nav, Some(url.to_string()), None, Some(true));
+            tabs_for_nav.record_page_state(
+                &tab_id_for_nav,
+                Some(url.to_string()),
+                None,
+                Some(true),
+            );
             events::emit(
                 &app_for_nav,
                 BROWSER_URL_CHANGED_EVENT,
@@ -270,7 +275,12 @@ fn ensure_browser_webview<R: Runtime>(
         .on_page_load(move |_webview, payload| {
             let url = payload.url().to_string();
             let loading = matches!(payload.event(), PageLoadEvent::Started);
-            tabs_for_load.record_page_state(&tab_id_for_load, Some(url.clone()), None, Some(loading));
+            tabs_for_load.record_page_state(
+                &tab_id_for_load,
+                Some(url.clone()),
+                None,
+                Some(loading),
+            );
             events::emit(
                 &app_for_load,
                 BROWSER_LOAD_STATE_EVENT,
@@ -980,7 +990,9 @@ mod tests {
     #[test]
     fn tab_label_rejects_unknown_id() {
         let tabs = BrowserTabs::new();
-        let error = tabs.tab_label("tab-missing").expect_err("missing tab should fail");
+        let error = tabs
+            .tab_label("tab-missing")
+            .expect_err("missing tab should fail");
         assert_eq!(error.code, "browser_tab_not_found");
     }
 }

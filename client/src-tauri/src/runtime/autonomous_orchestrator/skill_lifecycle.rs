@@ -25,13 +25,15 @@ use crate::runtime::autonomous_orchestrator::reconcile::reconcile_runtime_snapsh
 pub fn persist_skill_lifecycle_event(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
     lifecycle: &AutonomousSkillLifecycleEvent,
 ) -> Result<Option<AutonomousRunSnapshotRecord>, CommandError> {
-    let runtime_snapshot = match project_store::load_runtime_run(repo_root, project_id)? {
-        Some(snapshot) => snapshot,
-        None => return Ok(None),
-    };
-    let existing = project_store::load_autonomous_run(repo_root, project_id)?;
+    let runtime_snapshot =
+        match project_store::load_runtime_run(repo_root, project_id, agent_session_id)? {
+            Some(snapshot) => snapshot,
+            None => return Ok(None),
+        };
+    let existing = project_store::load_autonomous_run(repo_root, project_id, agent_session_id)?;
     if let Some(snapshot) = existing.as_ref() {
         if snapshot.run.run_id != runtime_snapshot.run.run_id {
             return Err(CommandError::retryable(

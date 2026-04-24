@@ -89,6 +89,7 @@ pub fn load_project_snapshot(
             verification_records,
             resume_history,
             handoff_packages,
+            agent_sessions: Vec::new(),
             autonomous_run: None,
             autonomous_unit: None,
         },

@@ -1111,6 +1111,7 @@ pub(crate) fn plan_mode_required_resume_unblocks_implementation_continuation_wit
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-plan-mode-gate-linked-1".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -1400,6 +1401,7 @@ fn seed_runtime_scoped_resume_fixture(
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: runtime_run_id.into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -1435,6 +1437,7 @@ fn seed_runtime_scoped_resume_fixture(
         repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: runtime_run_id.into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-runtime-fixture-1".into(),
@@ -1477,6 +1480,7 @@ fn seed_runtime_scoped_resume_fixture(
         &project_store::AutonomousRunUpsertRecord {
             run: project_store::AutonomousRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: autonomous_run_id.into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -1592,9 +1596,13 @@ pub(crate) fn runtime_scoped_resume_rejects_run_identity_mismatch_without_resume
         .execute_batch("PRAGMA foreign_keys = ON;")
         .expect("re-enable foreign keys after runtime/autonomous run-id mismatch fixture");
 
-    let before = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("load autonomous snapshot before runtime run mismatch resume")
-        .expect("autonomous snapshot should exist before runtime run mismatch resume");
+    let before = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot before runtime run mismatch resume")
+    .expect("autonomous snapshot should exist before runtime run mismatch resume");
 
     let error = resume_operator_run(
         app.handle().clone(),
@@ -1608,9 +1616,13 @@ pub(crate) fn runtime_scoped_resume_rejects_run_identity_mismatch_without_resume
     .expect_err("runtime-scoped resume should fail closed on run identity mismatch");
     assert_eq!(error.code, "autonomous_resume_run_mismatch");
 
-    let after = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("load autonomous snapshot after runtime run mismatch resume")
-        .expect("autonomous snapshot should remain after runtime run mismatch resume");
+    let after = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot after runtime run mismatch resume")
+    .expect("autonomous snapshot should remain after runtime run mismatch resume");
     assert_eq!(after.run.run_id, before.run.run_id);
     assert_eq!(after.run.status, before.run.status);
     assert_eq!(after.attempt, before.attempt);
@@ -1658,9 +1670,13 @@ pub(crate) fn runtime_scoped_resume_rejects_missing_boundary_identity_without_re
         None,
     );
 
-    let before = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("load autonomous snapshot before missing-boundary resume")
-        .expect("autonomous snapshot should exist before missing-boundary resume");
+    let before = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot before missing-boundary resume")
+    .expect("autonomous snapshot should exist before missing-boundary resume");
 
     let error = resume_operator_run(
         app.handle().clone(),
@@ -1676,9 +1692,13 @@ pub(crate) fn runtime_scoped_resume_rejects_missing_boundary_identity_without_re
     );
     assert_eq!(error.code, "autonomous_resume_identity_invalid");
 
-    let after = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("load autonomous snapshot after missing-boundary resume")
-        .expect("autonomous snapshot should remain after missing-boundary resume");
+    let after = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot after missing-boundary resume")
+    .expect("autonomous snapshot should remain after missing-boundary resume");
     assert_eq!(after.run.run_id, before.run.run_id);
     assert_eq!(after.run.status, before.run.status);
     assert_eq!(

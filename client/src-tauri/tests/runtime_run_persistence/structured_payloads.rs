@@ -76,9 +76,13 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_structured_artifact_paylo
         .collect::<String>();
     assert_eq!(payload_hash, expected_hash);
 
-    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run with structured artifact")
-        .expect("structured autonomous run should exist");
+    let recovered = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run with structured artifact")
+    .expect("structured autonomous run should exist");
     assert_eq!(
         recovered.history[0].artifacts[0].content_hash.as_deref(),
         Some(expected_hash.as_str())
@@ -180,9 +184,13 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_mcp_tool_result_payloads_
         .collect::<String>();
     assert_eq!(payload_hash, expected_hash);
 
-    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run with MCP structured artifact")
-        .expect("MCP structured autonomous run should exist");
+    let recovered = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run with MCP structured artifact")
+    .expect("MCP structured autonomous run should exist");
     let recovered_summary = recovered
         .history
         .iter()
@@ -232,41 +240,40 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_browser_computer_use_tool
     let linked_action_id =
         format!("scope:run:{run_id}:boundary:boundary-browser-1:terminal_input_required");
 
-    let make_browser_tool_artifact = |
-        artifact_id: &str,
-        tool_call_id: &str,
-        tool_name: &str,
-        tool_state: project_store::AutonomousToolCallStateRecord,
-        summary: cadence_desktop_lib::runtime::protocol::BrowserComputerUseToolResultSummary,
-        action_id: Option<&str>,
-        boundary_id: Option<&str>,
-        created_at: &str,
-    | {
-        let mut artifact = sample_tool_result_artifact(project_id, run_id);
-        artifact.artifact_id = artifact_id.into();
-        artifact.summary = format!("Persisted browser/computer-use step `{tool_call_id}`.");
-        artifact.created_at = created_at.into();
-        artifact.updated_at = created_at.into();
+    let make_browser_tool_artifact =
+        |artifact_id: &str,
+         tool_call_id: &str,
+         tool_name: &str,
+         tool_state: project_store::AutonomousToolCallStateRecord,
+         summary: cadence_desktop_lib::runtime::protocol::BrowserComputerUseToolResultSummary,
+         action_id: Option<&str>,
+         boundary_id: Option<&str>,
+         created_at: &str| {
+            let mut artifact = sample_tool_result_artifact(project_id, run_id);
+            artifact.artifact_id = artifact_id.into();
+            artifact.summary = format!("Persisted browser/computer-use step `{tool_call_id}`.");
+            artifact.created_at = created_at.into();
+            artifact.updated_at = created_at.into();
 
-        if let Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(payload)) =
-            artifact.payload.as_mut()
-        {
-            payload.artifact_id = artifact_id.into();
-            payload.tool_call_id = tool_call_id.into();
-            payload.tool_name = tool_name.into();
-            payload.tool_state = tool_state;
-            payload.command_result = None;
-            payload.tool_summary = Some(
-                cadence_desktop_lib::runtime::protocol::ToolResultSummary::BrowserComputerUse(
-                    summary,
-                ),
-            );
-            payload.action_id = action_id.map(str::to_string);
-            payload.boundary_id = boundary_id.map(str::to_string);
-        }
+            if let Some(project_store::AutonomousArtifactPayloadRecord::ToolResult(payload)) =
+                artifact.payload.as_mut()
+            {
+                payload.artifact_id = artifact_id.into();
+                payload.tool_call_id = tool_call_id.into();
+                payload.tool_name = tool_name.into();
+                payload.tool_state = tool_state;
+                payload.command_result = None;
+                payload.tool_summary = Some(
+                    cadence_desktop_lib::runtime::protocol::ToolResultSummary::BrowserComputerUse(
+                        summary,
+                    ),
+                );
+                payload.action_id = action_id.map(str::to_string);
+                payload.boundary_id = boundary_id.map(str::to_string);
+            }
 
-        artifact
-    };
+            artifact
+        };
 
     let open_artifact = make_browser_tool_artifact(
         "artifact-tool-browser-open",
@@ -276,7 +283,8 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_browser_computer_use_tool
         cadence_desktop_lib::runtime::protocol::BrowserComputerUseToolResultSummary {
             surface: cadence_desktop_lib::runtime::protocol::BrowserComputerUseSurface::Browser,
             action: "open".into(),
-            status: cadence_desktop_lib::runtime::protocol::BrowserComputerUseActionStatus::Succeeded,
+            status:
+                cadence_desktop_lib::runtime::protocol::BrowserComputerUseActionStatus::Succeeded,
             target: Some("https://example.com".into()),
             outcome: Some("Opened browser context".into()),
         },
@@ -293,7 +301,8 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_browser_computer_use_tool
         cadence_desktop_lib::runtime::protocol::BrowserComputerUseToolResultSummary {
             surface: cadence_desktop_lib::runtime::protocol::BrowserComputerUseSurface::Browser,
             action: "tab_open".into(),
-            status: cadence_desktop_lib::runtime::protocol::BrowserComputerUseActionStatus::Succeeded,
+            status:
+                cadence_desktop_lib::runtime::protocol::BrowserComputerUseActionStatus::Succeeded,
             target: Some("https://example.com/docs".into()),
             outcome: Some("Opened tab tab-2".into()),
         },
@@ -329,7 +338,8 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_browser_computer_use_tool
         cadence_desktop_lib::runtime::protocol::BrowserComputerUseToolResultSummary {
             surface: cadence_desktop_lib::runtime::protocol::BrowserComputerUseSurface::Browser,
             action: "current_url".into(),
-            status: cadence_desktop_lib::runtime::protocol::BrowserComputerUseActionStatus::Succeeded,
+            status:
+                cadence_desktop_lib::runtime::protocol::BrowserComputerUseActionStatus::Succeeded,
             target: Some("tab-2".into()),
             outcome: Some("https://example.com/docs".into()),
         },
@@ -433,9 +443,13 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_browser_computer_use_tool
         Some("https://example.com/docs")
     );
 
-    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run with browser/computer-use structured artifacts")
-        .expect("browser/computer-use structured autonomous run should exist");
+    let recovered = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run with browser/computer-use structured artifacts")
+    .expect("browser/computer-use structured autonomous run should exist");
 
     let mut recovered_steps = recovered
         .history
@@ -447,9 +461,11 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_browser_computer_use_tool
             else {
                 return None;
             };
-            let Some(cadence_desktop_lib::runtime::protocol::ToolResultSummary::BrowserComputerUse(
-                summary,
-            )) = payload.tool_summary.as_ref()
+            let Some(
+                cadence_desktop_lib::runtime::protocol::ToolResultSummary::BrowserComputerUse(
+                    summary,
+                ),
+            ) = payload.tool_summary.as_ref()
             else {
                 return None;
             };
@@ -572,9 +588,13 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_verification_evidence_pay
         .collect::<String>();
     assert_eq!(payload_hash, expected_hash);
 
-    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run with verification evidence artifact")
-        .expect("verification evidence autonomous run should exist");
+    let recovered = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run with verification evidence artifact")
+    .expect("verification evidence autonomous run should exist");
     assert_eq!(
         recovered.history[0].artifacts[0].content_hash.as_deref(),
         Some(expected_hash.as_str())
@@ -657,9 +677,13 @@ pub(crate) fn autonomous_run_persistence_canonicalizes_skill_lifecycle_payloads_
         .collect::<String>();
     assert_eq!(payload_hash, expected_hash);
 
-    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run with skill lifecycle artifact")
-        .expect("skill lifecycle autonomous run should exist");
+    let recovered = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run with skill lifecycle artifact")
+    .expect("skill lifecycle autonomous run should exist");
     assert_eq!(
         recovered.history[0].artifacts[0].content_hash.as_deref(),
         Some(expected_hash.as_str())
@@ -833,8 +857,12 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_action_boundary_linkage_is
         )
         .expect("tamper stored action/boundary linkage payload");
 
-    let error = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect_err("tampered action/boundary linkage should fail closed");
+    let error = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect_err("tampered action/boundary linkage should fail closed");
     assert_eq!(error.code, "runtime_run_decode_failed");
 }
 
@@ -1118,8 +1146,12 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_mcp_capability_kind_is_tam
         )
         .expect("tamper MCP tool summary capability kind");
 
-    let error = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect_err("tampered MCP capability kind should fail closed");
+    let error = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect_err("tampered MCP capability kind should fail closed");
     assert_eq!(error.code, "runtime_run_decode_failed");
 }
 
@@ -1199,8 +1231,12 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_browser_computer_use_summa
         )
         .expect("tamper browser/computer-use tool summary status");
 
-    let error = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect_err("tampered browser/computer-use summary should fail closed");
+    let error = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect_err("tampered browser/computer-use summary should fail closed");
     assert_eq!(error.code, "runtime_run_decode_failed");
 }
 
@@ -1405,7 +1441,9 @@ pub(crate) fn autonomous_run_persistence_rejects_policy_denied_artifacts_without
                     diagnostic_code: "   ".into(),
                     message: "Policy denied write access to the repository worktree.".into(),
                     tool_name: Some("shell.exec".into()),
-                    action_id: Some("scope:run:run-1:boundary:boundary-1:terminal_input_required".into()),
+                    action_id: Some(
+                        "scope:run:run-1:boundary:boundary-1:terminal_input_required".into(),
+                    ),
                     boundary_id: Some("boundary-1".into()),
                 },
             ),
@@ -1460,8 +1498,12 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_structured_payload_json_is
         )
         .expect("tamper structured payload json");
 
-    let error = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect_err("malformed payload json should fail closed");
+    let error = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect_err("malformed payload json should fail closed");
     assert_eq!(error.code, "runtime_run_decode_failed");
 }
 
@@ -1517,8 +1559,12 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_skill_lifecycle_payload_st
         )
         .expect("tamper skill lifecycle payload stage");
 
-    let error = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect_err("tampered skill lifecycle payload should fail closed");
+    let error = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect_err("tampered skill lifecycle payload should fail closed");
     assert_eq!(error.code, "runtime_run_decode_failed");
 }
 
@@ -1547,13 +1593,22 @@ pub(crate) fn autonomous_skill_lifecycle_persistence_is_replay_safe_across_stage
 
     let discovery =
         AutonomousSkillLifecycleEvent::discovered("find-skills", sample_skill_source_metadata());
-    persist_skill_lifecycle_event(&repo_root, project_id, &discovery)
-        .expect("persist discovery skill lifecycle event")
-        .expect("skill lifecycle snapshot should exist");
+    persist_skill_lifecycle_event(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+        &discovery,
+    )
+    .expect("persist discovery skill lifecycle event")
+    .expect("skill lifecycle snapshot should exist");
 
-    let after_discovery = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("load autonomous run after discovery")
-        .expect("autonomous run should exist after discovery");
+    let after_discovery = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous run after discovery")
+    .expect("autonomous run should exist after discovery");
     let discovery_artifact = after_discovery
         .history
         .iter()
@@ -1562,9 +1617,14 @@ pub(crate) fn autonomous_skill_lifecycle_persistence_is_replay_safe_across_stage
         .expect("discovery artifact should exist")
         .clone();
 
-    persist_skill_lifecycle_event(&repo_root, project_id, &discovery)
-        .expect("persist repeated discovery skill lifecycle event")
-        .expect("skill lifecycle snapshot should still exist");
+    persist_skill_lifecycle_event(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+        &discovery,
+    )
+    .expect("persist repeated discovery skill lifecycle event")
+    .expect("skill lifecycle snapshot should still exist");
 
     let install = AutonomousSkillLifecycleEvent {
         stage: project_store::AutonomousSkillLifecycleStageRecord::Install,
@@ -1575,13 +1635,22 @@ pub(crate) fn autonomous_skill_lifecycle_persistence_is_replay_safe_across_stage
         cache_status: Some(AutonomousSkillCacheStatus::Hit),
         diagnostic: None,
     };
-    persist_skill_lifecycle_event(&repo_root, project_id, &install)
-        .expect("persist install skill lifecycle event")
-        .expect("skill lifecycle snapshot should still exist");
+    persist_skill_lifecycle_event(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+        &install,
+    )
+    .expect("persist install skill lifecycle event")
+    .expect("skill lifecycle snapshot should still exist");
 
-    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run after repeated stage writes")
-        .expect("autonomous run should exist after repeated stage writes");
+    let recovered = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run after repeated stage writes")
+    .expect("autonomous run should exist after repeated stage writes");
     let skill_artifacts = recovered
         .history
         .iter()

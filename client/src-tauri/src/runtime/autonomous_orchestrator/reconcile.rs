@@ -227,6 +227,7 @@ pub fn reconcile_runtime_snapshot(
     AutonomousRunUpsertRecord {
         run: AutonomousRunRecord {
             project_id: runtime_snapshot.run.project_id.clone(),
+            agent_session_id: runtime_snapshot.run.agent_session_id.clone(),
             run_id: runtime_snapshot.run.run_id.clone(),
             runtime_kind: runtime_snapshot.run.runtime_kind.clone(),
             provider_id: runtime_snapshot.run.provider_id.clone(),

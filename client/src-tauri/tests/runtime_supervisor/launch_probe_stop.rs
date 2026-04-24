@@ -142,7 +142,7 @@ pub(crate) fn detached_supervisor_launches_and_recovers_after_fresh_host_probe()
     assert_eq!(
         state
             .runtime_supervisor_controller()
-            .snapshot(project_id)
+            .snapshot(project_id, project_store::DEFAULT_AGENT_SESSION_ID)
             .as_ref()
             .map(|snapshot| snapshot.run_id.as_str()),
         Some("run-1")
@@ -190,6 +190,7 @@ pub(crate) fn detached_supervisor_probe_marks_unreachable_run_stale() {
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-stale".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -243,6 +244,7 @@ pub(crate) fn detached_supervisor_probe_preserves_provider_identity_after_stale_
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-gemini-stale".into(),
                 runtime_kind: "gemini".into(),
                 provider_id: "gemini_ai_studio".into(),
@@ -311,6 +313,7 @@ pub(crate) fn detached_supervisor_rejects_missing_shell_program() {
         &state,
         RuntimeSupervisorLaunchRequest {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             repo_root,
             runtime_kind: "openai_codex".into(),
             run_id: "run-invalid".into(),
@@ -368,9 +371,13 @@ pub(crate) fn detached_supervisor_rejects_provider_runtime_kind_mismatch_launch_
     assert!(error.message.contains("bedrock"));
     assert!(error.message.contains("openai_compatible"));
     assert!(
-        project_store::load_runtime_run(&repo_root, project_id)
-            .expect("load runtime run after launch validation failure")
-            .is_none(),
+        project_store::load_runtime_run(
+            &repo_root,
+            project_id,
+            project_store::DEFAULT_AGENT_SESSION_ID
+        )
+        .expect("load runtime run after launch validation failure")
+        .is_none(),
         "malformed launch context should be rejected before any durable run row is written"
     );
 }
@@ -573,9 +580,13 @@ pub(crate) fn detached_supervisor_rejects_anthropic_launch_without_api_key_env()
     .expect_err("anthropic detached launch should require api key env");
     assert_eq!(error.code, "anthropic_api_key_missing");
 
-    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load failed anthropic runtime run")
-        .expect("failed anthropic runtime run should persist");
+    let snapshot = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load failed anthropic runtime run")
+    .expect("failed anthropic runtime run should persist");
     assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Failed);
     assert_eq!(snapshot.run.transport.endpoint, "launch-pending");
     assert!(snapshot.run.last_heartbeat_at.is_none());
@@ -1053,9 +1064,13 @@ pub(crate) fn detached_supervisor_rejects_openai_compatible_launch_without_api_k
     .expect_err("openai-compatible detached launch should require api key env");
     assert_eq!(error.code, "openai_api_key_missing");
 
-    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load failed openai-compatible runtime run")
-        .expect("failed openai-compatible runtime run should persist");
+    let snapshot = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load failed openai-compatible runtime run")
+    .expect("failed openai-compatible runtime run should persist");
     assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Failed);
     assert_eq!(snapshot.run.transport.endpoint, "launch-pending");
     assert!(snapshot.run.last_heartbeat_at.is_none());
@@ -1095,9 +1110,13 @@ pub(crate) fn detached_supervisor_rejects_github_models_launch_without_token_env
     .expect_err("github models detached launch should require token env");
     assert_eq!(error.code, "github_models_token_missing");
 
-    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load failed github models runtime run")
-        .expect("failed github models runtime run should persist");
+    let snapshot = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load failed github models runtime run")
+    .expect("failed github models runtime run should persist");
     assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Failed);
     assert_eq!(snapshot.run.transport.endpoint, "launch-pending");
     assert!(snapshot.run.last_heartbeat_at.is_none());
@@ -1137,9 +1156,13 @@ pub(crate) fn detached_supervisor_rejects_openai_compatible_launch_without_base_
     .expect_err("openai-compatible detached launch should require base url env");
     assert_eq!(error.code, "openai_compatible_base_url_missing");
 
-    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load failed openai-compatible runtime run")
-        .expect("failed openai-compatible runtime run should persist");
+    let snapshot = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load failed openai-compatible runtime run")
+    .expect("failed openai-compatible runtime run should persist");
     assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Failed);
     assert_eq!(snapshot.run.transport.endpoint, "launch-pending");
     assert!(snapshot.run.last_heartbeat_at.is_none());
@@ -1190,9 +1213,13 @@ pub(crate) fn detached_supervisor_rejects_mcp_contract_when_projection_path_is_u
     assert_eq!(error.code, "runtime_supervisor_launch_env_invalid");
     assert!(error.message.contains("was unavailable"));
 
-    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load failed mcp projection runtime run")
-        .expect("failed mcp projection runtime run should persist");
+    let snapshot = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load failed mcp projection runtime run")
+    .expect("failed mcp projection runtime run should persist");
     assert_eq!(snapshot.run.status, project_store::RuntimeRunStatus::Failed);
     assert_eq!(
         snapshot

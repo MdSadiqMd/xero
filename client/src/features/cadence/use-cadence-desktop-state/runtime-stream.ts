@@ -110,6 +110,7 @@ interface AttachDesktopRuntimeListenersArgs {
 
 interface AttachRuntimeStreamSubscriptionArgs {
   projectId: string | null
+  agentSessionId: string | null
   runtimeSession: RuntimeSessionView | null
   runId: string | null
   adapter: CadenceDesktopAdapter
@@ -391,6 +392,7 @@ export async function attachDesktopRuntimeListeners({
 
 export function attachRuntimeStreamSubscription({
   projectId,
+  agentSessionId,
   runtimeSession,
   runId,
   adapter,
@@ -398,7 +400,7 @@ export function attachRuntimeStreamSubscription({
   updateRuntimeStream,
   scheduleRuntimeMetadataRefresh,
 }: AttachRuntimeStreamSubscriptionArgs): () => void {
-  if (!projectId) {
+  if (!projectId || !agentSessionId) {
     return () => undefined
   }
 
@@ -415,7 +417,7 @@ export function attachRuntimeStreamSubscription({
   const seenActionKeys = runtimeActionRefreshKeysRef.current[projectId] ?? new Set<string>()
   runtimeActionRefreshKeysRef.current[projectId] = seenActionKeys
   for (const key of Array.from(seenActionKeys)) {
-    if (!key.startsWith(`${runId}:`)) {
+    if (!key.startsWith(`${agentSessionId}:${runId}:`)) {
       seenActionKeys.delete(key)
     }
   }
@@ -427,6 +429,7 @@ export function attachRuntimeStreamSubscription({
     updateRuntimeStream(projectId, (currentStream) =>
       applyRuntimeStreamIssue(currentStream, {
         projectId,
+        agentSessionId,
         runtimeKind: runtimeSession.runtimeKind,
         runId,
         sessionId: runtimeSession.sessionId,
@@ -442,9 +445,10 @@ export function attachRuntimeStreamSubscription({
   }
 
   updateRuntimeStream(projectId, (currentStream) => {
-    if (currentStream?.runId === runId) {
+    if (currentStream?.runId === runId && currentStream.agentSessionId === agentSessionId) {
       return {
         ...currentStream,
+        agentSessionId,
         runtimeKind: runtimeSession.runtimeKind,
         sessionId: runtimeSession.sessionId,
         flowId: runtimeSession.flowId,
@@ -455,6 +459,7 @@ export function attachRuntimeStreamSubscription({
 
     return createRuntimeStreamView({
       projectId,
+      agentSessionId,
       runtimeKind: runtimeSession.runtimeKind,
       runId,
       sessionId: runtimeSession.sessionId,
@@ -467,6 +472,7 @@ export function attachRuntimeStreamSubscription({
   void adapter
     .subscribeRuntimeStream(
       projectId,
+      agentSessionId,
       ACTIVE_RUNTIME_STREAM_ITEM_KINDS,
       (payload) => {
         if (disposed) {
@@ -477,6 +483,7 @@ export function attachRuntimeStreamSubscription({
           updateRuntimeStream(projectId, (currentStream) =>
             applyRuntimeStreamIssue(currentStream, {
               projectId,
+              agentSessionId,
               runtimeKind: runtimeSession.runtimeKind,
               runId,
               sessionId: runtimeSession.sessionId,
@@ -502,6 +509,7 @@ export function attachRuntimeStreamSubscription({
 
             return applyRuntimeStreamIssue(currentStream, {
               projectId,
+              agentSessionId: payload.agentSessionId,
               runtimeKind: payload.runtimeKind,
               runId: payload.runId,
               sessionId: payload.sessionId,
@@ -517,7 +525,7 @@ export function attachRuntimeStreamSubscription({
         if (payload.item.kind === 'action_required') {
           const actionId = payload.item.actionId?.trim()
           if (actionId) {
-            const refreshKey = `${payload.runId}:${actionId}`
+            const refreshKey = `${payload.agentSessionId}:${payload.runId}:${actionId}`
             const knownKeys = runtimeActionRefreshKeysRef.current[projectId] ?? new Set<string>()
             runtimeActionRefreshKeysRef.current[projectId] = knownKeys
 
@@ -536,6 +544,7 @@ export function attachRuntimeStreamSubscription({
         updateRuntimeStream(projectId, (currentStream) =>
           applyRuntimeStreamIssue(currentStream, {
             projectId,
+            agentSessionId,
             runtimeKind: runtimeSession.runtimeKind,
             runId,
             sessionId: runtimeSession.sessionId,
@@ -556,10 +565,14 @@ export function attachRuntimeStreamSubscription({
 
       unsubscribe = subscription.unsubscribe
       updateRuntimeStream(projectId, (currentStream) => {
-        if (currentStream?.runId === subscription.response.runId) {
+        if (
+          currentStream?.runId === subscription.response.runId
+          && currentStream.agentSessionId === subscription.response.agentSessionId
+        ) {
           return {
             ...currentStream,
             runtimeKind: subscription.response.runtimeKind,
+            agentSessionId: subscription.response.agentSessionId,
             runId: subscription.response.runId,
             sessionId: subscription.response.sessionId,
             flowId: subscription.response.flowId ?? null,
@@ -584,6 +597,7 @@ export function attachRuntimeStreamSubscription({
       updateRuntimeStream(projectId, (currentStream) =>
         applyRuntimeStreamIssue(currentStream, {
           projectId,
+          agentSessionId,
           runtimeKind: runtimeSession.runtimeKind,
           runId,
           sessionId: runtimeSession.sessionId,

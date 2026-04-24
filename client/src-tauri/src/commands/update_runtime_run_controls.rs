@@ -25,10 +25,12 @@ pub fn update_runtime_run_controls<R: Runtime>(
     request: UpdateRuntimeRunControlsRequestDto,
 ) -> CommandResult<RuntimeRunDto> {
     validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
     validate_non_empty(&request.run_id, "runId")?;
 
     let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
-    let before = load_persisted_runtime_run(&repo_root, &request.project_id)?;
+    let before =
+        load_persisted_runtime_run(&repo_root, &request.project_id, &request.agent_session_id)?;
     let Some(existing) = before.as_ref() else {
         return Err(CommandError::retryable(
             "runtime_run_missing",
@@ -59,6 +61,7 @@ pub fn update_runtime_run_controls<R: Runtime>(
         state.inner(),
         RuntimeSupervisorUpdateControlsRequest {
             project_id: request.project_id.clone(),
+            agent_session_id: request.agent_session_id.clone(),
             repo_root,
             run_id: request.run_id.clone(),
             controls: normalized_controls,
@@ -66,7 +69,13 @@ pub fn update_runtime_run_controls<R: Runtime>(
             control_timeout: DEFAULT_RUNTIME_RUN_CONTROL_TIMEOUT,
         },
     )?;
-    emit_runtime_run_updated_if_changed(&app, &request.project_id, &before, &Some(after.clone()))?;
+    emit_runtime_run_updated_if_changed(
+        &app,
+        &request.project_id,
+        &request.agent_session_id,
+        &before,
+        &Some(after.clone()),
+    )?;
 
     Ok(runtime_run_dto_from_snapshot(&after))
 }

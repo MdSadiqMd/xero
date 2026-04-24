@@ -226,6 +226,7 @@ fn wait_for_runtime_run(
             app.state::<DesktopState>(),
             GetRuntimeRunRequestDto {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
             },
         )
         .expect("get runtime run should succeed")
@@ -256,6 +257,7 @@ fn wait_for_autonomous_run(
             app.state::<DesktopState>(),
             GetAutonomousRunRequestDto {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
             },
         )
         .expect("get autonomous run should succeed");
@@ -676,6 +678,7 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -731,6 +734,7 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -790,6 +794,7 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
         fresh_app.state::<DesktopState>(),
         CancelAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: started_run.run_id.clone(),
         },
     )

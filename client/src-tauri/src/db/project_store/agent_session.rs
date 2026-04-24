@@ -3,15 +3,11 @@ use std::path::Path;
 use rand::RngCore;
 use rusqlite::{params, Connection, Error as SqlError, Transaction};
 
-use crate::{
-    auth::now_timestamp,
-    commands::CommandError,
-    db::database_path_for_repo,
-};
+use crate::{auth::now_timestamp, commands::CommandError, db::database_path_for_repo};
 
 use super::{
-    decode_optional_non_empty_text, open_runtime_database, read_project_row, require_non_empty_owned,
-    validate_non_empty_text,
+    decode_optional_non_empty_text, open_runtime_database, read_project_row,
+    require_non_empty_owned, validate_non_empty_text,
 };
 
 pub const DEFAULT_AGENT_SESSION_ID: &str = "agent-session-main";
@@ -88,7 +84,11 @@ pub fn create_agent_session(
     repo_root: &Path,
     payload: &AgentSessionCreateRecord,
 ) -> Result<AgentSessionRecord, CommandError> {
-    validate_non_empty_text(&payload.project_id, "projectId", "agent_session_request_invalid")?;
+    validate_non_empty_text(
+        &payload.project_id,
+        "projectId",
+        "agent_session_request_invalid",
+    )?;
     validate_non_empty_text(&payload.title, "title", "agent_session_request_invalid")?;
 
     let database_path = database_path_for_repo(repo_root);
@@ -226,22 +226,25 @@ pub fn list_agent_sessions(
         })?;
 
     let rows = statement
-        .query_map(params![project_id, if include_archived { 1 } else { 0 }], |row| {
-            Ok(RawAgentSessionRow {
-                project_id: row.get(0)?,
-                agent_session_id: row.get(1)?,
-                title: row.get(2)?,
-                summary: row.get(3)?,
-                status: row.get(4)?,
-                selected: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-                archived_at: row.get(8)?,
-                last_run_id: row.get(9)?,
-                last_runtime_kind: row.get(10)?,
-                last_provider_id: row.get(11)?,
-            })
-        })
+        .query_map(
+            params![project_id, if include_archived { 1 } else { 0 }],
+            |row| {
+                Ok(RawAgentSessionRow {
+                    project_id: row.get(0)?,
+                    agent_session_id: row.get(1)?,
+                    title: row.get(2)?,
+                    summary: row.get(3)?,
+                    status: row.get(4)?,
+                    selected: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                    archived_at: row.get(8)?,
+                    last_run_id: row.get(9)?,
+                    last_runtime_kind: row.get(10)?,
+                    last_provider_id: row.get(11)?,
+                })
+            },
+        )
         .map_err(|error| {
             CommandError::system_fault(
                 "agent_session_query_failed",
@@ -284,7 +287,11 @@ pub fn update_agent_session(
     repo_root: &Path,
     payload: &AgentSessionUpdateRecord,
 ) -> Result<AgentSessionRecord, CommandError> {
-    validate_non_empty_text(&payload.project_id, "projectId", "agent_session_request_invalid")?;
+    validate_non_empty_text(
+        &payload.project_id,
+        "projectId",
+        "agent_session_request_invalid",
+    )?;
     validate_non_empty_text(
         &payload.agent_session_id,
         "agentSessionId",
@@ -348,7 +355,9 @@ pub fn update_agent_session(
                 payload.agent_session_id.as_str(),
                 payload.title.as_deref().map(str::trim),
                 payload.summary.as_deref(),
-                payload.selected.map(|selected| if selected { 1 } else { 0 }),
+                payload
+                    .selected
+                    .map(|selected| if selected { 1 } else { 0 }),
                 now.as_str(),
             ],
         )
@@ -398,8 +407,9 @@ pub fn archive_agent_session(
     let connection = open_runtime_database(repo_root, &database_path)?;
     read_project_row(&connection, &database_path, repo_root, project_id)?;
 
-    let existing = read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
-        .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))?;
+    let existing =
+        read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
+            .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))?;
     if existing.status == AgentSessionStatus::Archived {
         return Ok(existing);
     }
@@ -473,8 +483,9 @@ pub(crate) fn ensure_agent_session_active(
     let database_path = database_path_for_repo(repo_root);
     let connection = open_runtime_database(repo_root, &database_path)?;
     read_project_row(&connection, &database_path, repo_root, project_id)?;
-    let session = read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
-        .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))?;
+    let session =
+        read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
+            .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))?;
     if session.status != AgentSessionStatus::Active {
         return Err(CommandError::user_fixable(
             "agent_session_archived",
@@ -697,8 +708,12 @@ fn decode_agent_session_row(
         }
     };
 
-    let archived_at =
-        decode_optional_non_empty_text(row.archived_at, "archived_at", database_path, "agent_session_decode_failed")?;
+    let archived_at = decode_optional_non_empty_text(
+        row.archived_at,
+        "archived_at",
+        database_path,
+        "agent_session_decode_failed",
+    )?;
     if matches!(status, AgentSessionStatus::Archived) && archived_at.is_none() {
         return Err(CommandError::system_fault(
             "agent_session_decode_failed",

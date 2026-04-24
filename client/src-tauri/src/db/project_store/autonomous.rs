@@ -3423,7 +3423,9 @@ fn validate_runtime_action_boundary_identity(
     }
 
     let action_type = &action_id[(boundary_start + boundary_marker.len())..];
-    if action_type.is_empty() || action_type.contains(':') || action_type.chars().any(char::is_whitespace)
+    if action_type.is_empty()
+        || action_type.contains(':')
+        || action_type.chars().any(char::is_whitespace)
     {
         return Err(CommandError::user_fixable(
             "autonomous_run_request_invalid",

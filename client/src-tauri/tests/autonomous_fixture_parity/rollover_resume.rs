@@ -237,9 +237,13 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
         vec!["roadmap", "requirements", "research"]
     );
 
-    let durable_progressed = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load durable progressed autonomous run")
-        .expect("durable progressed autonomous run should exist");
+    let durable_progressed = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable progressed autonomous run")
+    .expect("durable progressed autonomous run should exist");
     let roadmap_transition =
         project_store::load_recent_workflow_transition_events(&repo_root, &project_id, None)
             .expect("load lifecycle transition events")
@@ -278,6 +282,7 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id.clone(),
             runtime_kind: launched.run.runtime_kind.clone(),
             session_id: "session-1".into(),
@@ -301,6 +306,7 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
     persist_supervisor_event(
         &repo_root,
         &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
         &SupervisorLiveEventPayload::ActionRequired {
             action_id: action_id.clone(),
             boundary_id: boundary_id.clone(),
@@ -399,9 +405,13 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
         .iter()
         .all(|dispatch| { dispatch.status == project_store::NotificationDispatchStatus::Pending }));
 
-    let paused_durable = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load durable autonomous run after boundary pause")
-        .expect("durable autonomous run should exist after boundary pause");
+    let paused_durable = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable autonomous run after boundary pause")
+    .expect("durable autonomous run should exist after boundary pause");
     let paused_artifacts = paused_durable
         .history
         .iter()
@@ -749,9 +759,13 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
             && dispatch.status == project_store::NotificationDispatchStatus::Claimed
     }));
 
-    let resumed_durable = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load durable autonomous run after resume")
-        .expect("durable autonomous run should still exist after resume");
+    let resumed_durable = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable autonomous run after resume")
+    .expect("durable autonomous run should still exist after resume");
     let resumed_artifacts = resumed_durable
         .history
         .iter()
@@ -961,6 +975,7 @@ pub(crate) fn autonomous_fixture_repo_parity_proves_stage_rollover_boundary_resu
         fresh_resumed_app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )

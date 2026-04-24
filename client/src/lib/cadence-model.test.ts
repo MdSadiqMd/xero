@@ -131,6 +131,7 @@ function makeSnapshot(overrides: Partial<ProjectSnapshotResponseDto> = {}): Proj
 function makeAutonomousRun(overrides: Partial<NonNullable<ProjectSnapshotResponseDto['autonomousRun']>> = {}) {
   return {
     projectId: 'project-1',
+    agentSessionId: 'agent-session-main',
     runId: 'run-1',
     runtimeKind: 'openai_codex',
     providerId: 'openai_codex',
@@ -409,6 +410,7 @@ function makeProviderProfiles(overrides: Record<string, unknown> = {}) {
 
 const streamSubscription = subscribeRuntimeStreamResponseSchema.parse({
   projectId: 'project-1',
+  agentSessionId: 'agent-session-main',
   runtimeKind: 'openai_codex',
   runId: 'run-1',
   sessionId: 'session-1',
@@ -420,6 +422,7 @@ function makeStreamEvent(
   item: Omit<RuntimeStreamItemDto, 'runId' | 'sequence'>,
   overrides: Partial<Omit<RuntimeStreamEventDto, 'projectId' | 'item'>> & {
     projectId?: string
+    agentSessionId?: string
     runtimeKind?: string
     runId?: string
     sessionId?: string
@@ -433,6 +436,7 @@ function makeStreamEvent(
 
   return {
     projectId: overrides.projectId ?? streamSubscription.projectId,
+    agentSessionId: overrides.agentSessionId ?? streamSubscription.agentSessionId,
     runtimeKind: overrides.runtimeKind ?? streamSubscription.runtimeKind,
     runId: overrides.runId ?? streamSubscription.runId,
     sessionId: overrides.sessionId ?? streamSubscription.sessionId,
@@ -2943,6 +2947,7 @@ describe('cadence-model', () => {
 
     const staleStream = applyRuntimeStreamIssue(liveStream, {
       projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
       runtimeKind: 'openai_codex',
       sessionId: 'session-1',
       flowId: 'flow-1',

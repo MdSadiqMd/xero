@@ -73,6 +73,7 @@ fn resume_runtime_operator_run<R: Runtime>(
     if let Err(error) = validate_operator_resume_target(
         repo_root,
         &runtime_resume.project_id,
+        &runtime_resume.agent_session_id,
         &runtime_resume.approval_request.action_id,
         &runtime_resume.boundary_id,
     ) {
@@ -82,7 +83,12 @@ fn resume_runtime_operator_run<R: Runtime>(
             ResumeHistoryStatus::Failed,
             &runtime_resume_failure_summary(&runtime_resume, &error),
         )?;
-        emit_runtime_resume_updates(app, repo_root, &runtime_resume.project_id)?;
+        emit_runtime_resume_updates(
+            app,
+            repo_root,
+            &runtime_resume.project_id,
+            &runtime_resume.agent_session_id,
+        )?;
         return Err(error);
     }
 
@@ -90,6 +96,7 @@ fn resume_runtime_operator_run<R: Runtime>(
         state,
         RuntimeSupervisorSubmitInputRequest {
             project_id: runtime_resume.project_id.clone(),
+            agent_session_id: runtime_resume.agent_session_id.clone(),
             repo_root: repo_root.to_path_buf(),
             run_id: runtime_resume.run_id.clone(),
             session_id: runtime_resume.session_id.clone(),
@@ -104,6 +111,7 @@ fn resume_runtime_operator_run<R: Runtime>(
             if let Err(error) = persist_operator_resume(
                 repo_root,
                 &runtime_resume.project_id,
+                &runtime_resume.agent_session_id,
                 &runtime_resume.approval_request.action_id,
                 &runtime_resume.boundary_id,
             ) {
@@ -113,7 +121,12 @@ fn resume_runtime_operator_run<R: Runtime>(
                     ResumeHistoryStatus::Failed,
                     &runtime_resume_failure_summary(&runtime_resume, &error),
                 )?;
-                emit_runtime_resume_updates(app, repo_root, &runtime_resume.project_id)?;
+                emit_runtime_resume_updates(
+                    app,
+                    repo_root,
+                    &runtime_resume.project_id,
+                    &runtime_resume.agent_session_id,
+                )?;
                 return Err(error);
             }
 
@@ -123,7 +136,12 @@ fn resume_runtime_operator_run<R: Runtime>(
                 ResumeHistoryStatus::Started,
                 &runtime_resume_success_summary(&runtime_resume),
             )?;
-            emit_runtime_resume_updates(app, repo_root, &runtime_resume.project_id)?;
+            emit_runtime_resume_updates(
+                app,
+                repo_root,
+                &runtime_resume.project_id,
+                &runtime_resume.agent_session_id,
+            )?;
             Ok(ResumeOperatorRunResponseDto {
                 approval_request: resumed.approval_request,
                 resume_entry: resumed.resume_entry,
@@ -139,7 +157,12 @@ fn resume_runtime_operator_run<R: Runtime>(
                 ResumeHistoryStatus::Failed,
                 &runtime_resume_failure_summary(&runtime_resume, &error),
             )?;
-            emit_runtime_resume_updates(app, repo_root, &runtime_resume.project_id)?;
+            emit_runtime_resume_updates(
+                app,
+                repo_root,
+                &runtime_resume.project_id,
+                &runtime_resume.agent_session_id,
+            )?;
             Err(error)
         }
     }
@@ -149,6 +172,7 @@ fn emit_runtime_resume_updates<R: Runtime>(
     app: &AppHandle<R>,
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
 ) -> CommandResult<()> {
     emit_project_updated(
         app,
@@ -157,7 +181,7 @@ fn emit_runtime_resume_updates<R: Runtime>(
         ProjectUpdateReason::MetadataChanged,
     )?;
 
-    let runtime_run = project_store::load_runtime_run(repo_root, project_id)?;
+    let runtime_run = project_store::load_runtime_run(repo_root, project_id, agent_session_id)?;
     let runtime_run = runtime_run.as_ref().map(runtime_run_dto_from_snapshot);
     emit_runtime_run_updated(app, runtime_run.as_ref())
 }

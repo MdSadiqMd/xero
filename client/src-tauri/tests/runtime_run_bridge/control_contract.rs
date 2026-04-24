@@ -85,6 +85,7 @@ pub(crate) fn queued_runtime_controls_apply_on_next_model_boundary_and_recover_r
         app.state::<DesktopState>(),
         UpdateRuntimeRunControlsRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id.clone(),
             controls: Some(RuntimeRunControlInputDto {
                 model_id: running.controls.active.model_id.clone(),
@@ -187,6 +188,7 @@ pub(crate) fn queued_runtime_controls_apply_on_next_model_boundary_and_recover_r
         fresh_app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )
@@ -248,6 +250,7 @@ pub(crate) fn queued_runtime_controls_duplicate_boundary_is_idempotent() {
         app.state::<DesktopState>(),
         UpdateRuntimeRunControlsRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id.clone(),
             controls: Some(RuntimeRunControlInputDto {
                 model_id: running.controls.active.model_id.clone(),
@@ -311,6 +314,7 @@ pub(crate) fn queued_runtime_controls_duplicate_boundary_is_idempotent() {
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )
@@ -340,6 +344,7 @@ pub(crate) fn get_runtime_run_fails_closed_for_malformed_control_state_without_f
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.clone(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-malformed-control-state".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -378,7 +383,10 @@ pub(crate) fn get_runtime_run_fails_closed_for_malformed_control_state_without_f
     let error = get_runtime_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
-        GetRuntimeRunRequestDto { project_id },
+        GetRuntimeRunRequestDto {
+            project_id,
+            agent_session_id: "agent-session-main".into(),
+        },
     )
     .expect_err("malformed control state should fail closed");
 

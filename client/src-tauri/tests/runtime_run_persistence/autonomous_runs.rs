@@ -100,9 +100,13 @@ pub(crate) fn autonomous_run_persistence_tracks_current_unit_duplicate_start_and
         Some("autonomous_run_cancelled")
     );
 
-    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run")
-        .expect("autonomous run should still exist");
+    let recovered = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run")
+    .expect("autonomous run should still exist");
     assert_eq!(
         recovered.run.status,
         project_store::AutonomousRunStatus::Cancelled
@@ -210,9 +214,13 @@ pub(crate) fn autonomous_run_persistence_persists_explicit_workflow_linkage_and_
         )
     );
 
-    let recovered = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run with workflow linkage")
-        .expect("autonomous run with workflow linkage should exist");
+    let recovered = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run with workflow linkage")
+    .expect("autonomous run with workflow linkage should exist");
     assert_eq!(
         recovered
             .unit
@@ -330,8 +338,12 @@ pub(crate) fn autonomous_run_decode_fails_closed_for_cross_project_workflow_link
         )
         .expect("tamper autonomous unit workflow linkage");
 
-    let error = project_store::load_autonomous_run(&repo_root_one, "project-1")
-        .expect_err("cross-project workflow linkage should fail closed");
+    let error = project_store::load_autonomous_run(
+        &repo_root_one,
+        "project-1",
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect_err("cross-project workflow linkage should fail closed");
     assert_eq!(error.code, "runtime_run_decode_failed");
 }
 
@@ -368,7 +380,11 @@ pub(crate) fn autonomous_run_decode_fails_closed_when_unit_row_is_missing() {
         )
         .expect("delete active autonomous unit row");
 
-    let error = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect_err("missing active autonomous unit row should fail closed");
+    let error = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect_err("missing active autonomous unit row should fail closed");
     assert_eq!(error.code, "runtime_run_decode_failed");
 }

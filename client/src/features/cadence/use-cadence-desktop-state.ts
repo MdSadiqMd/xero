@@ -14,6 +14,7 @@ import {
   mapRepositoryStatus,
   mapRuntimeRun,
   mapRuntimeSession,
+  selectAgentSessionId,
   upsertProjectListItem,
   notificationRouteCredentialReadinessSchema,
   type AutonomousUnitAttemptView,
@@ -747,7 +748,10 @@ export function useCadenceDesktopState(
 
   const syncRuntimeRun = useCallback(
     async (projectId: string) => {
-      const response = await adapter.getRuntimeRun(projectId)
+      const agentSessionId = selectAgentSessionId(
+        activeProjectRef.current?.id === projectId ? activeProjectRef.current.agentSessions : null,
+      )
+      const response = await adapter.getRuntimeRun(projectId, agentSessionId)
       return applyRuntimeRunUpdate(projectId, response ? mapRuntimeRun(response) : null, {
         clearGlobalError: false,
         loadError: null,
@@ -758,7 +762,10 @@ export function useCadenceDesktopState(
 
   const syncAutonomousRun = useCallback(
     async (projectId: string) => {
-      const response = await adapter.getAutonomousRun(projectId)
+      const agentSessionId = selectAgentSessionId(
+        activeProjectRef.current?.id === projectId ? activeProjectRef.current.agentSessions : null,
+      )
+      const response = await adapter.getAutonomousRun(projectId, agentSessionId)
       const inspection = mapAutonomousRunInspection(response)
       applyAutonomousRunStateUpdate(projectId, inspection, {
         clearGlobalError: false,
@@ -1430,6 +1437,7 @@ export function useCadenceDesktopState(
   const activeRuntimeSession = activeProjectId
     ? runtimeSessions[activeProjectId] ?? activeProject?.runtimeSession ?? null
     : null
+  const activeAgentSessionId = activeProject ? selectAgentSessionId(activeProject.agentSessions) : null
   const activeRuntimeRun = activeProjectId ? runtimeRuns[activeProjectId] ?? activeProject?.runtimeRun ?? null : null
   const activeAutonomousRun = activeProjectId
     ? autonomousRuns[activeProjectId] ?? activeProject?.autonomousRun ?? null
@@ -1449,13 +1457,18 @@ export function useCadenceDesktopState(
   const activeAutonomousRunErrorMessage = activeProjectId ? autonomousRunLoadErrors[activeProjectId] ?? null : null
   const activeRuntimeRunId = activeRuntimeRun?.runId ?? null
   const activeRuntimeSubscriptionKey =
-    activeProjectId && activeRuntimeSession?.isAuthenticated && activeRuntimeSession.sessionId && activeRuntimeRunId
-      ? `${activeProjectId}:${activeRuntimeSession.sessionId}:${activeRuntimeRunId}:${runtimeStreamRetryToken}`
+    activeProjectId
+    && activeAgentSessionId
+    && activeRuntimeSession?.isAuthenticated
+    && activeRuntimeSession.sessionId
+    && activeRuntimeRunId
+      ? `${activeProjectId}:${activeAgentSessionId}:${activeRuntimeSession.sessionId}:${activeRuntimeRunId}:${runtimeStreamRetryToken}`
       : null
 
   useEffect(() => {
     return attachRuntimeStreamSubscription({
       projectId: activeProjectId,
+      agentSessionId: activeAgentSessionId,
       runtimeSession: activeRuntimeSession,
       runId: activeRuntimeRunId,
       adapter,
@@ -1465,6 +1478,7 @@ export function useCadenceDesktopState(
     })
   }, [
     activeProjectId,
+    activeAgentSessionId,
     activeRuntimeRunId,
     activeRuntimeSession,
     activeRuntimeSubscriptionKey,

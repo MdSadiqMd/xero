@@ -14,9 +14,8 @@ use crate::{
     runtime::{
         protocol::{
             BrowserComputerUseActionStatus, CommandToolResultSummary, SupervisorLiveEventPayload,
-            SupervisorSkillCacheStatus, SupervisorSkillDiagnostic,
-            SupervisorSkillLifecycleResult, SupervisorSkillLifecycleStage,
-            SupervisorToolCallState, ToolResultSummary,
+            SupervisorSkillCacheStatus, SupervisorSkillDiagnostic, SupervisorSkillLifecycleResult,
+            SupervisorSkillLifecycleStage, SupervisorToolCallState, ToolResultSummary,
         },
         AutonomousSkillCacheStatus, AutonomousSkillSourceMetadata,
     },
@@ -33,13 +32,15 @@ use crate::runtime::autonomous_orchestrator::reconcile::{
 pub fn persist_supervisor_event(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
     event: &SupervisorLiveEventPayload,
 ) -> Result<Option<AutonomousRunSnapshotRecord>, CommandError> {
-    let runtime_snapshot = match project_store::load_runtime_run(repo_root, project_id)? {
-        Some(snapshot) => snapshot,
-        None => return Ok(None),
-    };
-    let existing = project_store::load_autonomous_run(repo_root, project_id)?;
+    let runtime_snapshot =
+        match project_store::load_runtime_run(repo_root, project_id, agent_session_id)? {
+            Some(snapshot) => snapshot,
+            None => return Ok(None),
+        };
+    let existing = project_store::load_autonomous_run(repo_root, project_id, agent_session_id)?;
     if let Some(snapshot) = existing.as_ref() {
         if snapshot.run.run_id != runtime_snapshot.run.run_id {
             return Err(CommandError::retryable(
@@ -146,7 +147,12 @@ pub fn persist_supervisor_event(
                     .as_ref()
                     .map(command_error_from_supervisor_skill_diagnostic),
             };
-            return persist_skill_lifecycle_event(repo_root, project_id, &lifecycle);
+            return persist_skill_lifecycle_event(
+                repo_root,
+                project_id,
+                agent_session_id,
+                &lifecycle,
+            );
         }
         SupervisorLiveEventPayload::ActionRequired {
             action_id,
@@ -451,9 +457,7 @@ fn is_recoverable_advanced_browser_tool_failure(
     )
 }
 
-fn is_recoverable_advanced_browser_tool_payload(
-    tool: &AutonomousToolResultPayloadRecord,
-) -> bool {
+fn is_recoverable_advanced_browser_tool_payload(tool: &AutonomousToolResultPayloadRecord) -> bool {
     matches!(
         (&tool.tool_state, tool.tool_summary.as_ref()),
         (
@@ -483,7 +487,10 @@ fn advanced_browser_failure_diagnostic_code(outcome: &str) -> Option<&str> {
     }
 }
 
-fn validate_canonical_boundary_linkage(action_id: &str, boundary_id: &str) -> Result<(), CommandError> {
+fn validate_canonical_boundary_linkage(
+    action_id: &str,
+    boundary_id: &str,
+) -> Result<(), CommandError> {
     let code = "autonomous_live_event_boundary_identity_invalid";
     let action_id = action_id.trim();
     let boundary_id = boundary_id.trim();
@@ -552,7 +559,9 @@ fn validate_canonical_boundary_linkage(action_id: &str, boundary_id: &str) -> Re
     }
 
     let action_type = &action_id[(boundary_start + boundary_marker.len())..];
-    if action_type.is_empty() || action_type.contains(':') || action_type.chars().any(char::is_whitespace)
+    if action_type.is_empty()
+        || action_type.contains(':')
+        || action_type.chars().any(char::is_whitespace)
     {
         return Err(CommandError::retryable(
             code,

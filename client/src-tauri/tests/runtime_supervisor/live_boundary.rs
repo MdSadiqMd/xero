@@ -54,9 +54,13 @@ pub(crate) fn detached_supervisor_live_event_redacts_secret_bearing_output_in_re
     assert!(!replay_dump.contains("Bearer"));
     assert!(!replay_dump.contains("sk-"));
 
-    let stored = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load stored runtime run")
-        .expect("stored runtime run should exist");
+    let stored = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load stored runtime run")
+    .expect("stored runtime run should exist");
     let checkpoint_dump = stored
         .checkpoints
         .iter()
@@ -1170,6 +1174,7 @@ pub(crate) fn detached_supervisor_persists_matching_autonomous_boundary_once_bef
     persist_supervisor_event(
         &repo_root,
         project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
         &SupervisorLiveEventPayload::ActionRequired {
             action_id: approval_action_id.clone(),
             boundary_id: boundary_id.clone(),
@@ -1181,9 +1186,13 @@ pub(crate) fn detached_supervisor_persists_matching_autonomous_boundary_once_bef
     .expect("persist autonomous boundary from supervisor event")
     .expect("autonomous boundary persistence should return a snapshot");
 
-    let boundary_snapshot = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("load autonomous run after boundary persistence")
-        .expect("autonomous run should exist after boundary persistence");
+    let boundary_snapshot = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous run after boundary persistence")
+    .expect("autonomous run should exist after boundary persistence");
     assert_eq!(
         boundary_snapshot.run.status,
         project_store::AutonomousRunStatus::Paused
@@ -1233,9 +1242,13 @@ pub(crate) fn detached_supervisor_persists_matching_autonomous_boundary_once_bef
         .expect("runtime run should still exist after fresh probe");
     assert_eq!(recovered.run.run_id, launched.run.run_id);
 
-    let replayed_snapshot = project_store::load_autonomous_run(&repo_root, project_id)
-        .expect("reload autonomous run after fresh probe")
-        .expect("autonomous run should still exist after fresh probe");
+    let replayed_snapshot = project_store::load_autonomous_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload autonomous run after fresh probe")
+    .expect("autonomous run should still exist after fresh probe");
     let replayed_boundary_evidence = replayed_snapshot
         .history
         .iter()
@@ -1418,6 +1431,7 @@ pub(crate) fn submit_runtime_run_input_rejects_mismatched_ack_and_preserves_runn
         &state,
         RuntimeSupervisorSubmitInputRequest {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             repo_root: repo_root.clone(),
             run_id: "run-submit-ack-mismatch".into(),
             session_id: "session-1".into(),
@@ -1435,9 +1449,13 @@ pub(crate) fn submit_runtime_run_input_rejects_mismatched_ack_and_preserves_runn
         .join()
         .expect("mock mismatched-ack control server thread should complete");
 
-    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load runtime run after mismatched ack")
-        .expect("runtime run should still exist after mismatched ack");
+    let snapshot = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load runtime run after mismatched ack")
+    .expect("runtime run should still exist after mismatched ack");
     assert_eq!(
         snapshot.run.status,
         project_store::RuntimeRunStatus::Running
@@ -1476,6 +1494,7 @@ pub(crate) fn submit_runtime_run_input_preserves_running_projection_on_malformed
         &state,
         RuntimeSupervisorSubmitInputRequest {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             repo_root: repo_root.clone(),
             run_id: "run-submit-malformed-response".into(),
             session_id: "session-1".into(),
@@ -1493,9 +1512,13 @@ pub(crate) fn submit_runtime_run_input_preserves_running_projection_on_malformed
         .join()
         .expect("mock malformed-response control server thread should complete");
 
-    let snapshot = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load runtime run after malformed control response")
-        .expect("runtime run should still exist after malformed control response");
+    let snapshot = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load runtime run after malformed control response")
+    .expect("runtime run should still exist after malformed control response");
     assert_eq!(
         snapshot.run.status,
         project_store::RuntimeRunStatus::Running
@@ -1682,9 +1705,13 @@ pub(crate) fn detached_supervisor_rejects_structured_shell_review_boundary_with_
     assert!(snapshot.approval_requests.is_empty());
     assert!(snapshot.resume_history.is_empty());
 
-    let runtime_run = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load malformed shell-review runtime run")
-        .expect("runtime run should exist after malformed shell-review event");
+    let runtime_run = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load malformed shell-review runtime run")
+    .expect("runtime run should exist after malformed shell-review event");
     assert_eq!(
         runtime_run
             .checkpoints

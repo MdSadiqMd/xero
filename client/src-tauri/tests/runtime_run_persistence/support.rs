@@ -54,6 +54,7 @@ pub(crate) fn open_state_connection(repo_root: &Path) -> Connection {
 pub(crate) fn sample_run(project_id: &str, run_id: &str) -> project_store::RuntimeRunRecord {
     project_store::RuntimeRunRecord {
         project_id: project_id.into(),
+        agent_session_id: "agent-session-main".into(),
         run_id: run_id.into(),
         runtime_kind: "openai_codex".into(),
         provider_id: "openai_codex".into(),
@@ -107,6 +108,7 @@ pub(crate) fn sample_autonomous_run_record(
 ) -> project_store::AutonomousRunRecord {
     project_store::AutonomousRunRecord {
         project_id: project_id.into(),
+        agent_session_id: "agent-session-main".into(),
         run_id: run_id.into(),
         runtime_kind: "openai_codex".into(),
         provider_id: "openai_codex".into(),

@@ -1388,6 +1388,7 @@ pub(crate) fn workflow_transition_auto_dispatch_blocks_when_runtime_controls_are
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-plan-mode-control-malformed-1".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),

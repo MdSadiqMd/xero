@@ -1,3 +1,4 @@
+pub mod agent_session;
 pub mod apply_workflow_transition;
 pub mod browser;
 pub mod cancel_autonomous_run;
@@ -45,6 +46,10 @@ pub mod upsert_workflow_graph;
 mod contracts;
 pub(crate) mod runtime_support;
 
+pub use agent_session::{
+    archive_agent_session, create_agent_session, get_agent_session, list_agent_sessions,
+    update_agent_session,
+};
 pub use apply_workflow_transition::apply_workflow_transition;
 pub use browser::{
     browser_back, browser_click, browser_cookies_get, browser_cookies_set, browser_current_url,

@@ -260,6 +260,7 @@ pub(crate) fn launch_request(
     let shell = runtime_shell::launch_script(command);
     RuntimeSupervisorLaunchRequest {
         project_id: project_id.into(),
+        agent_session_id: "agent-session-main".into(),
         repo_root: repo_root.to_path_buf(),
         runtime_kind: "openai_codex".into(),
         run_id: run_id.into(),
@@ -285,6 +286,7 @@ pub(crate) fn launch_request(
 pub(crate) fn probe_request(project_id: &str, repo_root: &Path) -> RuntimeSupervisorProbeRequest {
     RuntimeSupervisorProbeRequest {
         project_id: project_id.into(),
+        agent_session_id: "agent-session-main".into(),
         repo_root: repo_root.to_path_buf(),
         control_timeout: Duration::from_millis(750),
     }
@@ -293,6 +295,7 @@ pub(crate) fn probe_request(project_id: &str, repo_root: &Path) -> RuntimeSuperv
 pub(crate) fn stop_request(project_id: &str, repo_root: &Path) -> RuntimeSupervisorStopRequest {
     RuntimeSupervisorStopRequest {
         project_id: project_id.into(),
+        agent_session_id: "agent-session-main".into(),
         repo_root: repo_root.to_path_buf(),
         control_timeout: Duration::from_millis(750),
         shutdown_timeout: Duration::from_secs(4),
@@ -375,6 +378,7 @@ pub(crate) fn start_direct_runtime_stream(
         app.state::<DesktopState>().inner().clone(),
         RuntimeStreamRequest {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             repo_root: repo_root.to_path_buf(),
             session_id: runtime
                 .session_id
@@ -448,6 +452,7 @@ pub(crate) fn seed_terminal_runtime_run(repo_root: &Path, project_id: &str, run_
         &RuntimeRunUpsertRecord {
             run: RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: run_id.into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -486,6 +491,7 @@ pub(crate) fn seed_fake_runtime_run(
         &RuntimeRunUpsertRecord {
             run: RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: run_id.into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -524,14 +530,19 @@ pub(crate) fn seed_runtime_action_required(
     boundary_id: &str,
     created_at: &str,
 ) -> String {
-    let runtime_run = project_store::load_runtime_run(repo_root, project_id)
-        .expect("load runtime run for action-required seed")
-        .expect("runtime run should exist before seeding action-required state");
+    let runtime_run = project_store::load_runtime_run(
+        repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load runtime run for action-required seed")
+    .expect("runtime run should exist before seeding action-required state");
 
     let persisted = project_store::upsert_runtime_action_required(
         repo_root,
         &RuntimeActionRequiredUpsertRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: run_id.into(),
             runtime_kind: runtime_run.run.runtime_kind,
             session_id: session_id.into(),
@@ -573,6 +584,7 @@ pub(crate) fn seed_blocked_autonomous_run(
         &project_store::AutonomousRunUpsertRecord {
             run: project_store::AutonomousRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: run_id.into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),

@@ -49,7 +49,14 @@ import {
   type AutonomousUnitHistoryEntryView,
   type AutonomousUnitView,
 } from './cadence-model/autonomous'
-import type { RuntimeRunView, RuntimeSessionView } from './cadence-model/runtime'
+import {
+  agentSessionSchema,
+  mapAgentSession,
+  selectAgentSessionId,
+  type AgentSessionView,
+  type RuntimeRunView,
+  type RuntimeSessionView,
+} from './cadence-model/runtime'
 
 export type { Phase, PhaseStatus, PhaseStep, Project } from '@/components/cadence/data'
 export {
@@ -90,6 +97,7 @@ export const projectSnapshotResponseSchema = z
     verificationRecords: z.array(verificationRecordSchema),
     resumeHistory: z.array(resumeHistoryEntrySchema),
     handoffPackages: z.array(workflowHandoffPackageSchema).optional(),
+    agentSessions: z.array(agentSessionSchema),
     autonomousRun: z.lazy(() => autonomousRunSchema).nullable().optional(),
     autonomousUnit: z.lazy(() => autonomousUnitSchema).nullable().optional(),
     notificationDispatches: z.array(notificationDispatchSchema).optional(),
@@ -138,6 +146,9 @@ export interface ProjectDetailView extends Project {
   verificationRecords: VerificationRecordView[]
   resumeHistory: ResumeHistoryEntryView[]
   handoffPackages: WorkflowHandoffPackageView[]
+  agentSessions: AgentSessionView[]
+  selectedAgentSession: AgentSessionView | null
+  selectedAgentSessionId: string
   notificationBroker: NotificationBrokerView
   runtimeSession?: RuntimeSessionView | null
   runtimeRun?: RuntimeRunView | null
@@ -159,6 +170,12 @@ export function mapProjectSnapshot(
   const handoffPackages = (snapshot.handoffPackages ?? [])
     .filter((pkg) => pkg.projectId === snapshot.project.id)
     .map(mapWorkflowHandoffPackage)
+  const agentSessions = snapshot.agentSessions
+    .filter((session) => session.projectId === snapshot.project.id)
+    .map(mapAgentSession)
+  const selectedAgentSessionId = selectAgentSessionId(agentSessions)
+  const selectedAgentSession =
+    agentSessions.find((session) => session.agentSessionId === selectedAgentSessionId) ?? null
   const notificationDispatches = options.notificationDispatches ?? snapshot.notificationDispatches ?? []
   const notificationBroker = mapNotificationBroker(snapshot.project.id, notificationDispatches)
 
@@ -181,6 +198,9 @@ export function mapProjectSnapshot(
     verificationRecords,
     resumeHistory,
     handoffPackages,
+    agentSessions,
+    selectedAgentSession,
+    selectedAgentSessionId,
     notificationBroker,
     runtimeSession: null,
     runtimeRun: null,

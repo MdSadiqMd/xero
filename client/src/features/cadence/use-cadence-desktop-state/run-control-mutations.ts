@@ -3,6 +3,7 @@ import { useCallback } from 'react'
 import { mapAutonomousRunInspection } from '@/src/lib/cadence-model/autonomous'
 import {
   mapRuntimeRun,
+  selectAgentSessionId,
   type RuntimeRunControlInputDto,
 } from '@/src/lib/cadence-model/runtime'
 
@@ -50,13 +51,16 @@ export function useRunControlMutations({
       activeProjectIdRef,
       'Select an imported project before starting an autonomous run.',
     )
+    const agentSessionId = selectAgentSessionId(
+      activeProjectRef.current?.id === projectId ? activeProjectRef.current.agentSessions : null,
+    )
 
     setAutonomousRunActionStatus('running')
     setPendingAutonomousRunAction('start')
     setAutonomousRunActionError(null)
 
     try {
-      const response = await adapter.startAutonomousRun(projectId)
+      const response = await adapter.startAutonomousRun(projectId, agentSessionId)
       return applyAutonomousRunStateUpdate(projectId, mapAutonomousRunInspection(response), {
         clearGlobalError: false,
         loadError: null,
@@ -82,6 +86,7 @@ export function useRunControlMutations({
     }
   }, [
     activeProjectIdRef,
+    activeProjectRef,
     adapter,
     applyAutonomousRunStateUpdate,
     setAutonomousRunActionError,
@@ -128,13 +133,16 @@ export function useRunControlMutations({
         activeProjectIdRef,
         'Select an imported project before cancelling the autonomous run.',
       )
+      const agentSessionId = selectAgentSessionId(
+        activeProjectRef.current?.id === projectId ? activeProjectRef.current.agentSessions : null,
+      )
 
       setAutonomousRunActionStatus('running')
       setPendingAutonomousRunAction('cancel')
       setAutonomousRunActionError(null)
 
       try {
-        const response = await adapter.cancelAutonomousRun(projectId, runId)
+        const response = await adapter.cancelAutonomousRun(projectId, agentSessionId, runId)
         return applyAutonomousRunStateUpdate(projectId, mapAutonomousRunInspection(response), {
           clearGlobalError: false,
           loadError: null,
@@ -158,6 +166,7 @@ export function useRunControlMutations({
     },
     [
       activeProjectIdRef,
+      activeProjectRef,
       adapter,
       applyAutonomousRunStateUpdate,
       setAutonomousRunActionError,
@@ -172,13 +181,16 @@ export function useRunControlMutations({
       activeProjectIdRef,
       'Select an imported project before starting a supervised runtime run.',
     )
+    const agentSessionId = selectAgentSessionId(
+      activeProjectRef.current?.id === projectId ? activeProjectRef.current.agentSessions : null,
+    )
 
     setRuntimeRunActionStatus('running')
     setPendingRuntimeRunAction('start')
     setRuntimeRunActionError(null)
 
     try {
-      const response = await adapter.startRuntimeRun(projectId, {
+      const response = await adapter.startRuntimeRun(projectId, agentSessionId, {
         initialControls: options?.controls ?? null,
         initialPrompt: options?.prompt ?? null,
       })
@@ -207,6 +219,7 @@ export function useRunControlMutations({
     }
   }, [
     activeProjectIdRef,
+    activeProjectRef,
     adapter,
     applyRuntimeRunUpdate,
     setPendingRuntimeRunAction,
@@ -221,7 +234,10 @@ export function useRunControlMutations({
         activeProjectIdRef,
         'Select an imported project before queueing supervised runtime-run controls.',
       )
-      let runId =
+      const agentSessionId = selectAgentSessionId(
+        activeProjectRef.current?.id === projectId ? activeProjectRef.current.agentSessions : null,
+      )
+      let runId: string | null =
         runtimeRunsRef.current[projectId]?.runId?.trim() ??
         activeProjectRef.current?.runtimeRun?.runId?.trim() ??
         null
@@ -238,6 +254,7 @@ export function useRunControlMutations({
       if (!runId) {
         throw new Error('Cadence cannot queue runtime-run controls until a supervised runtime run exists for this project.')
       }
+      const resolvedRunId = runId
 
       setRuntimeRunActionStatus('running')
       setPendingRuntimeRunAction('update_controls')
@@ -246,7 +263,8 @@ export function useRunControlMutations({
       try {
         const response = await adapter.updateRuntimeRunControls({
           projectId,
-          runId,
+          agentSessionId,
+          runId: resolvedRunId,
           controls: request.controls ?? null,
           prompt: request.prompt ?? null,
         })
@@ -293,13 +311,16 @@ export function useRunControlMutations({
         activeProjectIdRef,
         'Select an imported project before stopping the supervised runtime run.',
       )
+      const agentSessionId = selectAgentSessionId(
+        activeProjectRef.current?.id === projectId ? activeProjectRef.current.agentSessions : null,
+      )
 
       setRuntimeRunActionStatus('running')
       setPendingRuntimeRunAction('stop')
       setRuntimeRunActionError(null)
 
       try {
-        const response = await adapter.stopRuntimeRun(projectId, runId)
+        const response = await adapter.stopRuntimeRun(projectId, agentSessionId, runId)
         return applyRuntimeRunUpdate(projectId, response ? mapRuntimeRun(response) : null, {
           clearGlobalError: false,
           loadError: null,
@@ -323,6 +344,7 @@ export function useRunControlMutations({
     },
     [
       activeProjectIdRef,
+      activeProjectRef,
       adapter,
       applyRuntimeRunUpdate,
       setPendingRuntimeRunAction,

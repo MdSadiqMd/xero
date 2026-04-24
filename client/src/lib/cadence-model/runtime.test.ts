@@ -9,6 +9,7 @@ import {
 function makeRuntimeRunDto(overrides: Record<string, unknown> = {}) {
   return {
     projectId: 'project-1',
+    agentSessionId: 'agent-session-main',
     runId: 'run-project-1',
     runtimeKind: 'openai_codex',
     providerId: 'openrouter',
@@ -133,10 +134,12 @@ describe('runtime run control schemas', () => {
   it('requires at least one control delta or prompt when queueing runtime-run changes', () => {
     const emptyUpdate = updateRuntimeRunControlsRequestSchema.safeParse({
       projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
       runId: 'run-project-1',
     })
     const validStart = startRuntimeRunRequestSchema.parse({
       projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
       initialControls: {
         modelId: 'openai/gpt-4.1-mini',
         thinkingEffort: 'high',
@@ -149,6 +152,7 @@ describe('runtime run control schemas', () => {
     expect(emptyUpdate.success).toBe(false)
     expect(validStart).toMatchObject({
       projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
       initialControls: {
         modelId: 'openai/gpt-4.1-mini',
         thinkingEffort: 'high',
@@ -162,6 +166,7 @@ describe('runtime run control schemas', () => {
   it('defaults planModeRequired to false and rejects malformed plan mode values', () => {
     const defaulted = startRuntimeRunRequestSchema.parse({
       projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
       initialControls: {
         modelId: 'openai/gpt-4.1-mini',
         approvalMode: 'suggest',
@@ -184,6 +189,7 @@ describe('runtime run control schemas', () => {
     )
     const malformedRequest = updateRuntimeRunControlsRequestSchema.safeParse({
       projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
       runId: 'run-project-1',
       controls: {
         modelId: 'openai/gpt-4.1-mini',

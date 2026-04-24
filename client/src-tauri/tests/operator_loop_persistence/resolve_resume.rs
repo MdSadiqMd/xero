@@ -241,6 +241,7 @@ pub(crate) fn runtime_scoped_resume_rejects_conflicting_user_answer_without_pers
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-conflict-1".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -267,6 +268,7 @@ pub(crate) fn runtime_scoped_resume_rejects_conflicting_user_answer_without_pers
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-conflict-1".into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-1".into(),
@@ -344,6 +346,7 @@ pub(crate) fn runtime_scoped_resume_rejects_corrupted_approved_answer_metadata_w
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-metadata-conflict-1".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -370,6 +373,7 @@ pub(crate) fn runtime_scoped_resume_rejects_corrupted_approved_answer_metadata_w
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-metadata-conflict-1".into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-1".into(),
@@ -458,6 +462,7 @@ pub(crate) fn runtime_scoped_approval_requires_non_secret_user_answer_at_resolve
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-require-answer-1".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -484,6 +489,7 @@ pub(crate) fn runtime_scoped_approval_requires_non_secret_user_answer_at_resolve
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-require-answer-1".into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-1".into(),
@@ -611,6 +617,7 @@ pub(crate) fn runtime_scoped_approval_rejects_malformed_runtime_identity_without
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-malformed-1".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -637,6 +644,7 @@ pub(crate) fn runtime_scoped_approval_rejects_malformed_runtime_identity_without
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-malformed-1".into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-1".into(),
@@ -715,6 +723,7 @@ pub(crate) fn runtime_scoped_resume_rejects_already_resumed_autonomous_boundary_
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-autonomous-replay-1".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -741,6 +750,7 @@ pub(crate) fn runtime_scoped_resume_rejects_already_resumed_autonomous_boundary_
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-autonomous-replay-1".into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-1".into(),
@@ -783,6 +793,7 @@ pub(crate) fn runtime_scoped_resume_rejects_already_resumed_autonomous_boundary_
         &project_store::AutonomousRunUpsertRecord {
             run: project_store::AutonomousRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: "run-autonomous-replay-1".into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -928,8 +939,12 @@ pub(crate) fn runtime_scoped_resume_rejects_already_resumed_autonomous_boundary_
         Some(action_id.as_str())
     );
 
-    let runtime_run = project_store::load_runtime_run(&repo_root, project_id)
-        .expect("load runtime run after autonomous replay guard failure")
-        .expect("runtime run should still exist after autonomous replay guard failure");
+    let runtime_run = project_store::load_runtime_run(
+        &repo_root,
+        project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load runtime run after autonomous replay guard failure")
+    .expect("runtime run should still exist after autonomous replay guard failure");
     assert_eq!(runtime_run.run.run_id, "run-autonomous-replay-1");
 }

@@ -903,6 +903,7 @@ pub(crate) fn wait_for_runtime_run(
             app.state::<DesktopState>(),
             GetRuntimeRunRequestDto {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
             },
         )
         .expect("get runtime run should succeed")
@@ -933,6 +934,7 @@ pub(crate) fn wait_for_autonomous_run(
             app.state::<DesktopState>(),
             GetAutonomousRunRequestDto {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
             },
         )
         .expect("get autonomous run should succeed");
@@ -1150,6 +1152,7 @@ pub(crate) fn seed_unreachable_runtime_run_with_identity_and_plan_mode(
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: run_id.into(),
                 runtime_kind: runtime_kind.into(),
                 provider_id: provider_id.into(),
@@ -1196,6 +1199,7 @@ pub(crate) fn seed_failed_runtime_run(repo_root: &Path, project_id: &str, run_id
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: run_id.into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -1236,6 +1240,7 @@ pub(crate) fn seed_active_autonomous_run(repo_root: &Path, project_id: &str, run
     let payload = project_store::AutonomousRunUpsertRecord {
         run: project_store::AutonomousRunRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: run_id.into(),
             runtime_kind: "openai_codex".into(),
             provider_id: "openai_codex".into(),
@@ -1318,6 +1323,7 @@ pub(crate) fn launch_scripted_runtime_run(
         state,
         RuntimeSupervisorLaunchRequest {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             repo_root: repo_root.to_path_buf(),
             runtime_kind: "openai_codex".into(),
             run_id: run_id.into(),

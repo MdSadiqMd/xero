@@ -910,7 +910,8 @@ fn sanitize_tool_result_summary(
             let status = sanitize_browser_computer_use_action_status(summary.status)?;
             sanitize_browser_computer_use_status_for_tool_state(tool_state, &status)?;
             let outcome = sanitize_optional_tool_summary_text(summary.outcome)?;
-            let outcome = normalize_advanced_browser_failure_outcome(tool_state, &status, detail, outcome)?;
+            let outcome =
+                normalize_advanced_browser_failure_outcome(tool_state, &status, detail, outcome)?;
             Ok(ToolResultSummary::BrowserComputerUse(
                 BrowserComputerUseToolResultSummary {
                     surface: sanitize_browser_computer_use_surface(summary.surface)?,
@@ -975,7 +976,11 @@ fn classify_advanced_browser_failure(
         .map(str::to_ascii_lowercase)
         .collect::<Vec<_>>();
 
-    let has_signal = |signal: &str| normalized_fragments.iter().any(|fragment| fragment.contains(signal));
+    let has_signal = |signal: &str| {
+        normalized_fragments
+            .iter()
+            .any(|fragment| fragment.contains(signal))
+    };
 
     if has_signal(BROWSER_BRIDGE_TIMEOUT_CODE)
         || has_signal("timeout")
@@ -1054,9 +1059,7 @@ fn sanitize_browser_computer_use_surface(
     }
 }
 
-fn sanitize_browser_computer_use_action(
-    action: String,
-) -> Result<String, ToolSummaryDecodeError> {
+fn sanitize_browser_computer_use_action(action: String) -> Result<String, ToolSummaryDecodeError> {
     let action = sanitize_required_tool_summary_text(action)?;
     if is_supported_browser_computer_use_action(action.as_str()) {
         Ok(action)
@@ -1417,17 +1420,20 @@ pub(super) fn persist_autonomous_live_event(
     persistence_lock: &Arc<Mutex<()>>,
     event: &SupervisorLiveEventPayload,
 ) {
-    let project_id = {
-        shared
-            .lock()
-            .expect("sidecar state lock poisoned")
-            .project_id
-            .clone()
+    let (project_id, agent_session_id) = {
+        let snapshot = shared.lock().expect("sidecar state lock poisoned");
+        (
+            snapshot.project_id.clone(),
+            snapshot.agent_session_id.clone(),
+        )
     };
 
-    let Err(error) =
-        autonomous_orchestrator::persist_supervisor_event(repo_root, &project_id, event)
-    else {
+    let Err(error) = autonomous_orchestrator::persist_supervisor_event(
+        repo_root,
+        &project_id,
+        &agent_session_id,
+        event,
+    ) else {
         return;
     };
 

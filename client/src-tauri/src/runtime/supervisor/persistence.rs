@@ -187,6 +187,7 @@ pub(super) fn persist_sidecar_checkpoint(
 ) -> Result<RuntimeRunSnapshotRecord, CommandError> {
     let (
         project_id,
+        agent_session_id,
         run_id,
         runtime_kind,
         provider_id,
@@ -203,6 +204,7 @@ pub(super) fn persist_sidecar_checkpoint(
         snapshot.last_checkpoint_at = Some(now_timestamp());
         (
             snapshot.project_id.clone(),
+            snapshot.agent_session_id.clone(),
             snapshot.run_id.clone(),
             snapshot.runtime_kind.clone(),
             snapshot.provider_id.clone(),
@@ -228,6 +230,7 @@ pub(super) fn persist_sidecar_checkpoint(
             &RuntimeRunUpsertRecord {
                 run: RuntimeRunRecord {
                     project_id: project_id.clone(),
+                    agent_session_id: agent_session_id.clone(),
                     run_id: run_id.clone(),
                     runtime_kind: runtime_kind.clone(),
                     provider_id: provider_id.clone(),
@@ -279,6 +282,7 @@ pub(super) fn persist_sidecar_checkpoint(
                 &RuntimeRunUpsertRecord {
                     run: RuntimeRunRecord {
                         project_id: project_id.clone(),
+                        agent_session_id: agent_session_id.clone(),
                         run_id: run_id.clone(),
                         runtime_kind,
                         provider_id: shared
@@ -356,6 +360,7 @@ pub(super) fn persist_runtime_row_from_shared(
         &RuntimeRunUpsertRecord {
             run: RuntimeRunRecord {
                 project_id: snapshot.project_id,
+                agent_session_id: snapshot.agent_session_id,
                 run_id: snapshot.run_id,
                 runtime_kind: snapshot.runtime_kind,
                 provider_id: snapshot.provider_id,

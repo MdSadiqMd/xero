@@ -327,6 +327,7 @@ pub struct AutonomousLifecycleReasonDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousRunDto {
     pub project_id: String,
+    pub agent_session_id: String,
     pub run_id: String,
     pub runtime_kind: String,
     pub provider_id: String,
@@ -445,6 +446,7 @@ pub struct AutonomousRunStateDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GetAutonomousRunRequestDto {
     pub project_id: String,
+    pub agent_session_id: String,
 }
 
 use super::runtime::RuntimeRunControlInputDto;
@@ -453,6 +455,7 @@ use super::runtime::RuntimeRunControlInputDto;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartAutonomousRunRequestDto {
     pub project_id: String,
+    pub agent_session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_controls: Option<RuntimeRunControlInputDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -463,5 +466,6 @@ pub struct StartAutonomousRunRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CancelAutonomousRunRequestDto {
     pub project_id: String,
+    pub agent_session_id: String,
     pub run_id: String,
 }

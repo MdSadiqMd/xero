@@ -431,32 +431,6 @@ export async function loadProjectState({
       error: getDesktopErrorMessage(error),
     }))
 
-  const runtimeRunPromise: Promise<RuntimeRunLoadResult> = adapter
-    .getRuntimeRun(projectId)
-    .then((response) => ({
-      ok: true as const,
-      runtimeRun: response ? mapRuntimeRun(response) : null,
-      error: null,
-    }))
-    .catch((error) => ({
-      ok: false as const,
-      runtimeRun: refs.runtimeRunsRef.current[projectId] ?? null,
-      error: getDesktopErrorMessage(error),
-    }))
-
-  const autonomousRunPromise: Promise<AutonomousRunLoadResult> = adapter
-    .getAutonomousRun(projectId)
-    .then((response) => ({
-      ok: true as const,
-      inspection: mapAutonomousRunInspection(response),
-      error: null,
-    }))
-    .catch((error) => ({
-      ok: false as const,
-      inspection: createAutonomousFallbackInspection(projectId, refs),
-      error: getDesktopErrorMessage(error),
-    }))
-
   const shouldSyncNotificationAdapters = source !== 'runtime_run:updated'
   const syncPromise: Promise<{
     attempted: boolean
@@ -561,6 +535,32 @@ export async function loadProjectState({
     const snapshotProject = mapProjectSnapshot(snapshotResponse, {
       notificationDispatches: brokerResult.dispatches,
     })
+    const agentSessionId = snapshotProject.selectedAgentSessionId
+    const runtimeRunPromise: Promise<RuntimeRunLoadResult> = adapter
+      .getRuntimeRun(projectId, agentSessionId)
+      .then((response) => ({
+        ok: true as const,
+        runtimeRun: response ? mapRuntimeRun(response) : null,
+        error: null,
+      }))
+      .catch((error) => ({
+        ok: false as const,
+        runtimeRun: refs.runtimeRunsRef.current[projectId] ?? null,
+        error: getDesktopErrorMessage(error),
+      }))
+
+    const autonomousRunPromise: Promise<AutonomousRunLoadResult> = adapter
+      .getAutonomousRun(projectId, agentSessionId)
+      .then((response) => ({
+        ok: true as const,
+        inspection: mapAutonomousRunInspection(response),
+        error: null,
+      }))
+      .catch((error) => ({
+        ok: false as const,
+        inspection: createAutonomousFallbackInspection(projectId, refs),
+        error: getDesktopErrorMessage(error),
+      }))
     const status = mapRepositoryStatus(statusResponse)
     const cachedRuntime = refs.runtimeSessionsRef.current[projectId] ?? null
     const cachedRuntimeRun = refs.runtimeRunsRef.current[projectId] ?? null

@@ -272,11 +272,13 @@ export const runtimeStreamItemSchema = z
 
 export const subscribeRuntimeStreamRequestSchema = z.object({
   projectId: z.string().trim().min(1),
+  agentSessionId: z.string().trim().min(1),
   itemKinds: z.array(runtimeStreamItemKindSchema).min(1),
 }).strict()
 
 export const subscribeRuntimeStreamResponseSchema = z.object({
   projectId: z.string().trim().min(1),
+  agentSessionId: z.string().trim().min(1),
   runtimeKind: z.string().trim().min(1),
   runId: z.string().trim().min(1),
   sessionId: z.string().trim().min(1),
@@ -375,6 +377,7 @@ export type RuntimeStreamViewItem =
 
 export interface RuntimeStreamEventDto {
   projectId: string
+  agentSessionId: string
   runtimeKind: string
   runId: string
   sessionId: string
@@ -385,6 +388,7 @@ export interface RuntimeStreamEventDto {
 
 export interface RuntimeStreamView {
   projectId: string
+  agentSessionId: string
   runtimeKind: string
   runId: string | null
   sessionId: string | null
@@ -609,6 +613,7 @@ function normalizeRuntimeStreamItem(event: RuntimeStreamEventDto): RuntimeStream
 
 export function createRuntimeStreamView(options: {
   projectId: string
+  agentSessionId: string
   runtimeKind: string
   runId?: string | null
   sessionId?: string | null
@@ -618,6 +623,7 @@ export function createRuntimeStreamView(options: {
 }): RuntimeStreamView {
   return {
     projectId: options.projectId,
+    agentSessionId: options.agentSessionId,
     runtimeKind: normalizeText(options.runtimeKind, 'openai_codex'),
     runId: normalizeOptionalText(options.runId),
     sessionId: normalizeOptionalText(options.sessionId),
@@ -644,6 +650,7 @@ export function createRuntimeStreamFromSubscription(
 ): RuntimeStreamView {
   return createRuntimeStreamView({
     projectId: response.projectId,
+    agentSessionId: response.agentSessionId,
     runtimeKind: response.runtimeKind,
     runId: response.runId,
     sessionId: response.sessionId,
@@ -663,6 +670,12 @@ export function mergeRuntimeStreamEvent(
     )
   }
 
+  if (current && current.agentSessionId !== event.agentSessionId) {
+    throw new Error(
+      `Cadence received a runtime stream item for agent session ${event.agentSessionId} while ${current.agentSessionId} is active.`,
+    )
+  }
+
   if (current?.runId && current.runId !== event.runId) {
     return current
   }
@@ -671,6 +684,7 @@ export function mergeRuntimeStreamEvent(
     current ??
     createRuntimeStreamView({
       projectId: event.projectId,
+      agentSessionId: event.agentSessionId,
       runtimeKind: event.runtimeKind,
       runId: event.runId,
       sessionId: event.sessionId,
@@ -739,6 +753,7 @@ export function mergeRuntimeStreamEvent(
 
   return {
     ...base,
+    agentSessionId: event.agentSessionId,
     runtimeKind: normalizeText(event.runtimeKind, base.runtimeKind),
     runId: normalizeOptionalText(event.runId) ?? base.runId,
     sessionId: normalizeOptionalText(event.sessionId) ?? base.sessionId,
@@ -778,6 +793,7 @@ export function applyRuntimeStreamIssue(
   current: RuntimeStreamView | null,
   options: {
     projectId: string
+    agentSessionId: string
     runtimeKind: string
     runId?: string | null
     sessionId?: string | null
@@ -794,6 +810,7 @@ export function applyRuntimeStreamIssue(
     current ??
     createRuntimeStreamView({
       projectId: options.projectId,
+      agentSessionId: options.agentSessionId,
       runtimeKind: options.runtimeKind,
       runId: options.runId,
       sessionId: options.sessionId,
@@ -804,6 +821,7 @@ export function applyRuntimeStreamIssue(
 
   return {
     ...base,
+    agentSessionId: normalizeText(options.agentSessionId, base.agentSessionId),
     runtimeKind: normalizeText(options.runtimeKind, base.runtimeKind),
     runId: normalizeOptionalText(options.runId) ?? base.runId,
     sessionId: normalizeOptionalText(options.sessionId) ?? base.sessionId,

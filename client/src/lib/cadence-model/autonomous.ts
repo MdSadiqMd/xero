@@ -19,6 +19,7 @@ import {
 } from './shared'
 import {
   runtimeRunDiagnosticSchema,
+  runtimeRunControlInputSchema,
   type RuntimeRunDiagnosticDto,
 } from './runtime'
 
@@ -124,6 +125,7 @@ export const autonomousArtifactPayloadSchema = z.discriminatedUnion('kind', [
 export const autonomousRunSchema = z
   .object({
     projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
     runId: z.string().trim().min(1),
     runtimeKind: z.string().trim().min(1),
     providerId: z.string().trim().min(1),
@@ -149,6 +151,30 @@ export const autonomousRunSchema = z
     lastErrorCode: nonEmptyOptionalTextSchema,
     lastError: runtimeRunDiagnosticSchema.nullable().optional(),
     updatedAt: isoTimestampSchema,
+  })
+  .strict()
+
+export const getAutonomousRunRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+  })
+  .strict()
+
+export const startAutonomousRunRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    initialControls: runtimeRunControlInputSchema.nullable().optional(),
+    initialPrompt: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+
+export const cancelAutonomousRunRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
   })
   .strict()
 
@@ -452,6 +478,9 @@ export type AutonomousVerificationEvidencePayloadDto = z.infer<typeof autonomous
 export type AutonomousPolicyDeniedPayloadDto = z.infer<typeof autonomousPolicyDeniedPayloadSchema>
 export type AutonomousArtifactPayloadDto = z.infer<typeof autonomousArtifactPayloadSchema>
 export type AutonomousRunDto = z.infer<typeof autonomousRunSchema>
+export type GetAutonomousRunRequestDto = z.infer<typeof getAutonomousRunRequestSchema>
+export type StartAutonomousRunRequestDto = z.infer<typeof startAutonomousRunRequestSchema>
+export type CancelAutonomousRunRequestDto = z.infer<typeof cancelAutonomousRunRequestSchema>
 export type AutonomousUnitDto = z.infer<typeof autonomousUnitSchema>
 export type AutonomousUnitAttemptDto = z.infer<typeof autonomousUnitAttemptSchema>
 export type AutonomousUnitArtifactDto = z.infer<typeof autonomousUnitArtifactSchema>
@@ -470,6 +499,7 @@ export interface AutonomousLifecycleReasonView {
 
 export interface AutonomousRunView {
   projectId: string
+  agentSessionId: string
   runId: string
   runtimeKind: string
   providerId: string
@@ -819,6 +849,7 @@ export function mapAutonomousRun(autonomousRun: AutonomousRunDto): AutonomousRun
 
   return {
     projectId: autonomousRun.projectId,
+    agentSessionId: autonomousRun.agentSessionId,
     runId: normalizeText(autonomousRun.runId, 'autonomous-run-unavailable'),
     runtimeKind,
     providerId,

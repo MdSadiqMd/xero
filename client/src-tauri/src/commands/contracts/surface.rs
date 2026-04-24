@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     autonomous::{AutonomousRunDto, AutonomousUnitDto},
+    runtime::AgentSessionDto,
     workflow::{
         OperatorApprovalDto, PhaseSummaryDto, PlanningLifecycleProjectionDto,
         ResumeHistoryEntryDto, VerificationRecordDto, WorkflowHandoffPackageDto,
@@ -11,6 +12,11 @@ use super::{
 pub const IMPORT_REPOSITORY_COMMAND: &str = "import_repository";
 pub const LIST_PROJECTS_COMMAND: &str = "list_projects";
 pub const REMOVE_PROJECT_COMMAND: &str = "remove_project";
+pub const CREATE_AGENT_SESSION_COMMAND: &str = "create_agent_session";
+pub const LIST_AGENT_SESSIONS_COMMAND: &str = "list_agent_sessions";
+pub const GET_AGENT_SESSION_COMMAND: &str = "get_agent_session";
+pub const UPDATE_AGENT_SESSION_COMMAND: &str = "update_agent_session";
+pub const ARCHIVE_AGENT_SESSION_COMMAND: &str = "archive_agent_session";
 pub const GET_AUTONOMOUS_RUN_COMMAND: &str = "get_autonomous_run";
 pub const GET_PROJECT_SNAPSHOT_COMMAND: &str = "get_project_snapshot";
 pub const GET_REPOSITORY_STATUS_COMMAND: &str = "get_repository_status";
@@ -62,6 +68,11 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     IMPORT_REPOSITORY_COMMAND,
     LIST_PROJECTS_COMMAND,
     REMOVE_PROJECT_COMMAND,
+    CREATE_AGENT_SESSION_COMMAND,
+    LIST_AGENT_SESSIONS_COMMAND,
+    GET_AGENT_SESSION_COMMAND,
+    UPDATE_AGENT_SESSION_COMMAND,
+    ARCHIVE_AGENT_SESSION_COMMAND,
     GET_AUTONOMOUS_RUN_COMMAND,
     GET_PROJECT_SNAPSHOT_COMMAND,
     GET_REPOSITORY_STATUS_COMMAND,
@@ -291,6 +302,8 @@ pub struct ProjectSnapshotResponseDto {
     pub resume_history: Vec<ResumeHistoryEntryDto>,
     #[serde(default)]
     pub handoff_packages: Vec<WorkflowHandoffPackageDto>,
+    #[serde(default)]
+    pub agent_sessions: Vec<AgentSessionDto>,
     #[serde(default)]
     pub autonomous_run: Option<AutonomousRunDto>,
     #[serde(default)]

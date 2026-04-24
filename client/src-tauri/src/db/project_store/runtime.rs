@@ -569,9 +569,7 @@ pub fn upsert_runtime_run(
         .as_ref()
         .and_then(|row| row.control_state_json.clone());
 
-    if let Some(run_id) =
-        existing_run_id.filter(|run_id| *run_id != payload.run.run_id.as_str())
-    {
+    if let Some(run_id) = existing_run_id.filter(|run_id| *run_id != payload.run.run_id.as_str()) {
         transaction
             .execute(
                 "DELETE FROM runtime_run_checkpoints WHERE project_id = ?1 AND run_id = ?2",
@@ -770,14 +768,14 @@ pub fn upsert_runtime_run(
         &payload.run.agent_session_id,
     )?
     .ok_or_else(|| {
-            CommandError::system_fault(
-                "runtime_run_missing_after_persist",
-                format!(
+        CommandError::system_fault(
+            "runtime_run_missing_after_persist",
+            format!(
                 "Cadence persisted durable runtime-run metadata in {} but could not read it back.",
                 database_path.display()
             ),
-            )
-        })
+        )
+    })
 }
 
 pub(crate) fn read_runtime_session_row(

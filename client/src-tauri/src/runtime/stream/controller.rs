@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -21,12 +22,13 @@ pub struct RuntimeStreamController {
 #[derive(Debug, Default)]
 struct RuntimeStreamRegistry {
     next_generation: u64,
-    active: Option<ActiveRuntimeStream>,
+    active: HashMap<String, ActiveRuntimeStream>,
 }
 
 #[derive(Debug, Clone)]
 struct ActiveRuntimeStream {
     project_id: String,
+    agent_session_id: String,
     session_id: String,
     run_id: String,
     generation: u64,
@@ -36,6 +38,7 @@ struct ActiveRuntimeStream {
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeStreamLease {
     project_id: String,
+    agent_session_id: String,
     session_id: String,
     run_id: String,
     generation: u64,
@@ -45,6 +48,7 @@ pub(super) struct RuntimeStreamLease {
 #[derive(Debug, Clone)]
 pub struct RuntimeStreamRequest {
     pub project_id: String,
+    pub agent_session_id: String,
     pub repo_root: PathBuf,
     pub session_id: String,
     pub flow_id: Option<String>,
@@ -54,10 +58,17 @@ pub struct RuntimeStreamRequest {
 }
 
 impl RuntimeStreamController {
-    fn begin_stream(&self, project_id: &str, session_id: &str, run_id: &str) -> RuntimeStreamLease {
+    fn begin_stream(
+        &self,
+        project_id: &str,
+        agent_session_id: &str,
+        session_id: &str,
+        run_id: &str,
+    ) -> RuntimeStreamLease {
         let mut registry = self.inner.lock().expect("runtime stream registry poisoned");
 
-        if let Some(active) = registry.active.take() {
+        let key = runtime_stream_key(project_id, agent_session_id);
+        if let Some(active) = registry.active.remove(&key) {
             active.cancelled.store(true, Ordering::SeqCst);
         }
 
@@ -65,16 +76,21 @@ impl RuntimeStreamController {
         let cancelled = Arc::new(AtomicBool::new(false));
         let generation = registry.next_generation;
 
-        registry.active = Some(ActiveRuntimeStream {
-            project_id: project_id.into(),
-            session_id: session_id.into(),
-            run_id: run_id.into(),
-            generation,
-            cancelled: cancelled.clone(),
-        });
+        registry.active.insert(
+            key,
+            ActiveRuntimeStream {
+                project_id: project_id.into(),
+                agent_session_id: agent_session_id.into(),
+                session_id: session_id.into(),
+                run_id: run_id.into(),
+                generation,
+                cancelled: cancelled.clone(),
+            },
+        );
 
         RuntimeStreamLease {
             project_id: project_id.into(),
+            agent_session_id: agent_session_id.into(),
             session_id: session_id.into(),
             run_id: run_id.into(),
             generation,
@@ -84,17 +100,23 @@ impl RuntimeStreamController {
 
     fn finish_stream(&self, lease: &RuntimeStreamLease) {
         let mut registry = self.inner.lock().expect("runtime stream registry poisoned");
-        let should_clear = registry.active.as_ref().is_some_and(|active| {
+        let key = runtime_stream_key(&lease.project_id, &lease.agent_session_id);
+        let should_clear = registry.active.get(&key).is_some_and(|active| {
             active.project_id == lease.project_id
+                && active.agent_session_id == lease.agent_session_id
                 && active.session_id == lease.session_id
                 && active.run_id == lease.run_id
                 && active.generation == lease.generation
         });
 
         if should_clear {
-            registry.active = None;
+            registry.active.remove(&key);
         }
     }
+}
+
+fn runtime_stream_key(project_id: &str, agent_session_id: &str) -> String {
+    format!("{project_id}\u{1f}{agent_session_id}")
 }
 
 impl RuntimeStreamLease {
@@ -111,6 +133,7 @@ pub fn start_runtime_stream<R: Runtime + 'static>(
 ) {
     let lease = state.runtime_stream_controller().begin_stream(
         &request.project_id,
+        &request.agent_session_id,
         &request.session_id,
         &request.run_id,
     );

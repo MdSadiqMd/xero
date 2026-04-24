@@ -16,6 +16,7 @@ pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplica
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -39,6 +40,7 @@ pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplica
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -68,6 +70,7 @@ pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplica
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get autonomous run after duplicate start")
@@ -85,6 +88,7 @@ pub(crate) fn start_autonomous_run_reuses_existing_boundary_and_persists_duplica
         app.state::<DesktopState>(),
         CancelAutonomousRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: running.run_id,
         },
     )
@@ -113,6 +117,7 @@ pub(crate) fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -235,6 +240,7 @@ pub(crate) fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_
         fresh_app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -257,6 +263,7 @@ pub(crate) fn autonomous_run_rehydrates_same_boundary_after_reload_and_prevents_
         fresh_app.state::<DesktopState>(),
         CancelAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: started_run.run_id.clone(),
         },
     )
@@ -293,6 +300,7 @@ pub(crate) fn get_autonomous_run_recovers_stale_boundary_after_fresh_host_reload
         fresh_app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get autonomous run after fresh-host restart");

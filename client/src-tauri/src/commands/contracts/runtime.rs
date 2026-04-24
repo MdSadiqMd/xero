@@ -145,6 +145,7 @@ pub struct RuntimeRunControlStateDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunDto {
     pub project_id: String,
+    pub agent_session_id: String,
     pub run_id: String,
     pub runtime_kind: String,
     pub provider_id: String,
@@ -179,6 +180,83 @@ pub struct RuntimeSessionDto {
     pub last_error_code: Option<String>,
     pub last_error: Option<RuntimeDiagnosticDto>,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionStatusDto {
+    Active,
+    Archived,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentSessionDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+    pub title: String,
+    pub summary: String,
+    pub status: AgentSessionStatusDto,
+    pub selected: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub archived_at: Option<String>,
+    pub last_run_id: Option<String>,
+    pub last_runtime_kind: Option<String>,
+    pub last_provider_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateAgentSessionRequestDto {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListAgentSessionsRequestDto {
+    pub project_id: String,
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetAgentSessionRequestDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateAgentSessionRequestDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArchiveAgentSessionRequestDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListAgentSessionsResponseDto {
+    pub sessions: Vec<AgentSessionDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -342,6 +420,7 @@ pub struct RuntimeUpdatedPayloadDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunUpdatedPayloadDto {
     pub project_id: String,
+    pub agent_session_id: String,
     pub run: Option<RuntimeRunDto>,
 }
 
@@ -366,6 +445,7 @@ pub struct SubmitOpenAiCallbackRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GetRuntimeRunRequestDto {
     pub project_id: String,
+    pub agent_session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -421,6 +501,7 @@ pub struct GetProviderModelCatalogRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartRuntimeRunRequestDto {
     pub project_id: String,
+    pub agent_session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_controls: Option<RuntimeRunControlInputDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -431,6 +512,7 @@ pub struct StartRuntimeRunRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateRuntimeRunControlsRequestDto {
     pub project_id: String,
+    pub agent_session_id: String,
     pub run_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls: Option<RuntimeRunControlInputDto>,
@@ -442,6 +524,7 @@ pub struct UpdateRuntimeRunControlsRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StopRuntimeRunRequestDto {
     pub project_id: String,
+    pub agent_session_id: String,
     pub run_id: String,
 }
 
@@ -537,6 +620,7 @@ impl RuntimeStreamItemDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubscribeRuntimeStreamRequestDto {
     pub project_id: String,
+    pub agent_session_id: String,
     pub channel: Option<String>,
     pub item_kinds: Vec<String>,
 }
@@ -545,6 +629,7 @@ pub struct SubscribeRuntimeStreamRequestDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubscribeRuntimeStreamResponseDto {
     pub project_id: String,
+    pub agent_session_id: String,
     pub runtime_kind: String,
     pub run_id: String,
     pub session_id: String,

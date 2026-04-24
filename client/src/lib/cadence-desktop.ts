@@ -2,7 +2,16 @@ import { Channel, invoke, isTauri } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 import { ZodError, z } from 'zod'
-import { autonomousRunStateSchema, type AutonomousRunStateDto } from '@/src/lib/cadence-model/autonomous'
+import {
+  autonomousRunStateSchema,
+  cancelAutonomousRunRequestSchema,
+  getAutonomousRunRequestSchema,
+  startAutonomousRunRequestSchema,
+  type AutonomousRunStateDto,
+  type CancelAutonomousRunRequestDto,
+  type GetAutonomousRunRequestDto,
+  type StartAutonomousRunRequestDto,
+} from '@/src/lib/cadence-model/autonomous'
 import {
   listNotificationDispatchesRequestSchema,
   listNotificationDispatchesResponseSchema,
@@ -98,9 +107,25 @@ import {
   runtimeSessionSchema,
   runtimeSettingsSchema,
   runtimeUpdatedPayloadSchema,
+  archiveAgentSessionRequestSchema,
+  createAgentSessionRequestSchema,
+  getAgentSessionRequestSchema,
+  getRuntimeRunRequestSchema,
+  agentSessionSchema,
+  listAgentSessionsRequestSchema,
+  listAgentSessionsResponseSchema,
   startRuntimeRunRequestSchema,
+  stopRuntimeRunRequestSchema,
   updateRuntimeRunControlsRequestSchema,
+  updateAgentSessionRequestSchema,
   upsertRuntimeSettingsRequestSchema,
+  type AgentSessionDto,
+  type ArchiveAgentSessionRequestDto,
+  type CreateAgentSessionRequestDto,
+  type GetAgentSessionRequestDto,
+  type GetRuntimeRunRequestDto,
+  type ListAgentSessionsRequestDto,
+  type ListAgentSessionsResponseDto,
   type RuntimeRunControlInputDto,
   type RuntimeRunDto,
   type RuntimeRunUpdatedPayloadDto,
@@ -108,6 +133,8 @@ import {
   type RuntimeSettingsDto,
   type RuntimeUpdatedPayloadDto,
   type StartRuntimeRunRequestDto,
+  type StopRuntimeRunRequestDto,
+  type UpdateAgentSessionRequestDto,
   type UpdateRuntimeRunControlsRequestDto,
   type UpsertRuntimeSettingsRequestDto,
 } from '@/src/lib/cadence-model/runtime'
@@ -158,6 +185,11 @@ const COMMANDS = {
   deleteProjectEntry: 'delete_project_entry',
   searchProject: 'search_project',
   replaceInProject: 'replace_in_project',
+  createAgentSession: 'create_agent_session',
+  listAgentSessions: 'list_agent_sessions',
+  getAgentSession: 'get_agent_session',
+  updateAgentSession: 'update_agent_session',
+  archiveAgentSession: 'archive_agent_session',
   getAutonomousRun: 'get_autonomous_run',
   getRuntimeRun: 'get_runtime_run',
   getRuntimeSession: 'get_runtime_session',
@@ -377,8 +409,13 @@ export interface CadenceDesktopAdapter {
   deleteProjectEntry(projectId: string, path: string): Promise<DeleteProjectEntryResponseDto>
   searchProject(request: SearchProjectRequestDto): Promise<SearchProjectResponseDto>
   replaceInProject(request: ReplaceInProjectRequestDto): Promise<ReplaceInProjectResponseDto>
-  getAutonomousRun(projectId: string): Promise<AutonomousRunStateDto>
-  getRuntimeRun(projectId: string): Promise<RuntimeRunDto | null>
+  createAgentSession(request: CreateAgentSessionRequestDto): Promise<AgentSessionDto>
+  listAgentSessions(request: ListAgentSessionsRequestDto): Promise<ListAgentSessionsResponseDto>
+  getAgentSession(request: GetAgentSessionRequestDto): Promise<AgentSessionDto | null>
+  updateAgentSession(request: UpdateAgentSessionRequestDto): Promise<AgentSessionDto>
+  archiveAgentSession(request: ArchiveAgentSessionRequestDto): Promise<AgentSessionDto>
+  getAutonomousRun(projectId: string, agentSessionId: string): Promise<AutonomousRunStateDto>
+  getRuntimeRun(projectId: string, agentSessionId: string): Promise<RuntimeRunDto | null>
   getRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
   getRuntimeSettings(): Promise<RuntimeSettingsDto>
   listMcpServers(): Promise<McpRegistryDto>
@@ -397,12 +434,20 @@ export interface CadenceDesktopAdapter {
     flowId: string,
     options: SubmitOpenAiCallbackOptions,
   ): Promise<RuntimeSessionDto>
-  startAutonomousRun(projectId: string): Promise<AutonomousRunStateDto>
-  startRuntimeRun(projectId: string, options?: StartRuntimeRunOptions): Promise<RuntimeRunDto>
+  startAutonomousRun(
+    projectId: string,
+    agentSessionId: string,
+    options?: StartRuntimeRunOptions,
+  ): Promise<AutonomousRunStateDto>
+  startRuntimeRun(
+    projectId: string,
+    agentSessionId: string,
+    options?: StartRuntimeRunOptions,
+  ): Promise<RuntimeRunDto>
   updateRuntimeRunControls(request: UpdateRuntimeRunControlsRequestDto): Promise<RuntimeRunDto>
   startRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
-  cancelAutonomousRun(projectId: string, runId: string): Promise<AutonomousRunStateDto>
-  stopRuntimeRun(projectId: string, runId: string): Promise<RuntimeRunDto | null>
+  cancelAutonomousRun(projectId: string, agentSessionId: string, runId: string): Promise<AutonomousRunStateDto>
+  stopRuntimeRun(projectId: string, agentSessionId: string, runId: string): Promise<RuntimeRunDto | null>
   logoutRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
   upsertRuntimeSettings(request: UpsertRuntimeSettingsRequestDto): Promise<RuntimeSettingsDto>
   upsertProviderProfile(request: UpsertProviderProfileRequestDto): Promise<ProviderProfilesDto>
@@ -497,6 +542,7 @@ export interface CadenceDesktopAdapter {
   ): Promise<UnlistenFn>
   subscribeRuntimeStream(
     projectId: string,
+    agentSessionId: string,
     itemKinds: RuntimeStreamItemKindDto[],
     handler: (payload: RuntimeStreamEventDto) => void,
     onError?: (error: CadenceDesktopError) => void,
@@ -569,7 +615,7 @@ function normalizeError(error: unknown, context: string): CadenceDesktopError {
 
 async function invokeTyped<TResponse>(
   command: string,
-  schema: z.ZodType<TResponse>,
+  schema: z.ZodType<TResponse, z.ZodTypeDef, unknown>,
   args?: Record<string, unknown>,
 ): Promise<TResponse> {
   ensureDesktopRuntime(`Command ${command}`)
@@ -584,7 +630,7 @@ async function invokeTyped<TResponse>(
 
 async function listenTyped<TPayload>(
   eventName: string,
-  schema: z.ZodType<TPayload>,
+  schema: z.ZodType<TPayload, z.ZodTypeDef, unknown>,
   handler: (payload: TPayload) => void,
   onError?: (error: CadenceDesktopError) => void,
 ): Promise<UnlistenFn> {
@@ -603,6 +649,7 @@ async function listenTyped<TPayload>(
 
 async function createRuntimeStreamSubscription(
   projectId: string,
+  agentSessionId: string,
   itemKinds: RuntimeStreamItemKindDto[],
   handler: (payload: RuntimeStreamEventDto) => void,
   onError?: (error: CadenceDesktopError) => void,
@@ -655,6 +702,7 @@ async function createRuntimeStreamSubscription(
 
       handler({
         projectId: activeResponse.projectId,
+        agentSessionId: activeResponse.agentSessionId,
         runtimeKind: activeResponse.runtimeKind,
         runId: activeResponse.runId,
         sessionId: activeResponse.sessionId,
@@ -681,10 +729,11 @@ async function createRuntimeStreamSubscription(
   }
 
   try {
-    const request = subscribeRuntimeStreamRequestSchema.parse({ projectId, itemKinds })
+    const request = subscribeRuntimeStreamRequestSchema.parse({ projectId, agentSessionId, itemKinds })
     response = await invokeTyped(COMMANDS.subscribeRuntimeStream, subscribeRuntimeStreamResponseSchema, {
       request: {
         projectId: request.projectId,
+        agentSessionId: request.agentSessionId,
         itemKinds: request.itemKinds,
         channel,
       },
@@ -818,15 +867,66 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
   },
 
-  getAutonomousRun(projectId) {
-    return invokeTyped(COMMANDS.getAutonomousRun, autonomousRunStateSchema, {
-      request: { projectId },
+  createAgentSession(request) {
+    const parsed = createAgentSessionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.createAgentSession, agentSessionSchema, {
+      request: {
+        projectId: parsed.projectId,
+        title: parsed.title ?? null,
+        summary: parsed.summary ?? '',
+        selected: parsed.selected ?? false,
+      },
     })
   },
 
-  getRuntimeRun(projectId) {
+  listAgentSessions(request) {
+    const parsed = listAgentSessionsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.listAgentSessions, listAgentSessionsResponseSchema, {
+      request: {
+        projectId: parsed.projectId,
+        includeArchived: parsed.includeArchived ?? false,
+      },
+    })
+  },
+
+  getAgentSession(request) {
+    const parsed = getAgentSessionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getAgentSession, agentSessionSchema.nullable(), {
+      request: parsed,
+    })
+  },
+
+  updateAgentSession(request) {
+    const parsed = updateAgentSessionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.updateAgentSession, agentSessionSchema, {
+      request: parsed,
+    })
+  },
+
+  archiveAgentSession(request) {
+    const parsed = archiveAgentSessionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.archiveAgentSession, agentSessionSchema, {
+      request: parsed,
+    })
+  },
+
+  getAutonomousRun(projectId, agentSessionId) {
+    const request: GetAutonomousRunRequestDto = getAutonomousRunRequestSchema.parse({
+      projectId,
+      agentSessionId,
+    })
+    return invokeTyped(COMMANDS.getAutonomousRun, autonomousRunStateSchema, {
+      request,
+    })
+  },
+
+  getRuntimeRun(projectId, agentSessionId) {
+    const request: GetRuntimeRunRequestDto = getRuntimeRunRequestSchema.parse({
+      projectId,
+      agentSessionId,
+    })
     return invokeTyped(COMMANDS.getRuntimeRun, runtimeRunSchema.nullable(), {
-      request: { projectId },
+      request,
     })
   },
 
@@ -922,15 +1022,22 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
   },
 
-  startAutonomousRun(projectId) {
+  startAutonomousRun(projectId, agentSessionId, options) {
+    const request: StartAutonomousRunRequestDto = startAutonomousRunRequestSchema.parse({
+      projectId,
+      agentSessionId,
+      initialControls: options?.initialControls ?? null,
+      initialPrompt: options?.initialPrompt ?? null,
+    })
     return invokeTyped(COMMANDS.startAutonomousRun, autonomousRunStateSchema, {
-      request: { projectId },
+      request,
     })
   },
 
-  startRuntimeRun(projectId, options) {
+  startRuntimeRun(projectId, agentSessionId, options) {
     const request: StartRuntimeRunRequestDto = startRuntimeRunRequestSchema.parse({
       projectId,
+      agentSessionId,
       initialControls: options?.initialControls ?? null,
       initialPrompt: options?.initialPrompt ?? null,
     })
@@ -953,15 +1060,25 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
   },
 
-  cancelAutonomousRun(projectId, runId) {
+  cancelAutonomousRun(projectId, agentSessionId, runId) {
+    const request: CancelAutonomousRunRequestDto = cancelAutonomousRunRequestSchema.parse({
+      projectId,
+      agentSessionId,
+      runId,
+    })
     return invokeTyped(COMMANDS.cancelAutonomousRun, autonomousRunStateSchema, {
-      request: { projectId, runId },
+      request,
     })
   },
 
-  stopRuntimeRun(projectId, runId) {
+  stopRuntimeRun(projectId, agentSessionId, runId) {
+    const request: StopRuntimeRunRequestDto = stopRuntimeRunRequestSchema.parse({
+      projectId,
+      agentSessionId,
+      runId,
+    })
     return invokeTyped(COMMANDS.stopRuntimeRun, runtimeRunSchema.nullable(), {
-      request: { projectId, runId },
+      request,
     })
   },
 
@@ -1260,8 +1377,8 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     return listenTyped(EVENTS.browserTabUpdated, browserTabUpdatedPayloadSchema, handler, onError)
   },
 
-  subscribeRuntimeStream(projectId, itemKinds, handler, onError) {
-    return createRuntimeStreamSubscription(projectId, itemKinds, handler, onError)
+  subscribeRuntimeStream(projectId, agentSessionId, itemKinds, handler, onError) {
+    return createRuntimeStreamSubscription(projectId, agentSessionId, itemKinds, handler, onError)
   },
 
   onProjectUpdated(handler, onError) {

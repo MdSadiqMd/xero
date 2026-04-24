@@ -30,6 +30,7 @@ pub fn subscribe_runtime_stream<R: Runtime>(
     request: SubscribeRuntimeStreamRequestDto,
 ) -> CommandResult<SubscribeRuntimeStreamResponseDto> {
     validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
 
     let item_kinds = parse_requested_item_kinds(&request.item_kinds)?;
     let channel = resolve_channel(&webview, request.channel.as_deref())?;
@@ -52,7 +53,11 @@ pub fn subscribe_runtime_stream<R: Runtime>(
         ));
     };
 
-    let runtime_run = load_persisted_runtime_run(&repo_root, &request.project_id)?
+    let runtime_run = load_persisted_runtime_run(
+        &repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+    )?
         .ok_or_else(|| {
             CommandError::retryable(
                 "runtime_stream_run_unavailable",
@@ -66,6 +71,7 @@ pub fn subscribe_runtime_stream<R: Runtime>(
         state.inner().clone(),
         RuntimeStreamRequest {
             project_id: runtime.project_id.clone(),
+            agent_session_id: request.agent_session_id.clone(),
             repo_root,
             session_id: session_id.clone(),
             flow_id: runtime.flow_id.clone(),
@@ -78,6 +84,7 @@ pub fn subscribe_runtime_stream<R: Runtime>(
 
     Ok(SubscribeRuntimeStreamResponseDto {
         project_id: runtime.project_id,
+        agent_session_id: request.agent_session_id,
         runtime_kind: runtime.runtime_kind,
         run_id: runtime_run.run.run_id,
         session_id,

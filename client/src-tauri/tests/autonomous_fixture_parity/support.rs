@@ -339,6 +339,7 @@ pub(crate) fn launch_scripted_runtime_run_with_runtime_kind(
         state,
         RuntimeSupervisorLaunchRequest {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             repo_root: repo_root.to_path_buf(),
             runtime_kind: runtime_kind.into(),
             run_id: run_id.into(),
@@ -397,6 +398,7 @@ pub(crate) fn wait_for_runtime_run(
             app.state::<DesktopState>(),
             GetRuntimeRunRequestDto {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
             },
         )
         .expect("get runtime run should succeed")
@@ -427,6 +429,7 @@ pub(crate) fn wait_for_autonomous_run(
             app.state::<DesktopState>(),
             GetAutonomousRunRequestDto {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
             },
         )
         .expect("get autonomous run should succeed");
@@ -856,6 +859,7 @@ pub(crate) fn start_direct_runtime_stream(
         app.state::<DesktopState>().inner().clone(),
         RuntimeStreamRequest {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             repo_root: repo_root.to_path_buf(),
             session_id: runtime
                 .session_id

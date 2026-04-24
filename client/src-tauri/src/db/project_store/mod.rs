@@ -10,8 +10,7 @@ pub(crate) mod workflow;
 
 pub use agent_session::*;
 pub(crate) use agent_session::{
-    ensure_agent_session_active, read_agent_session_row, read_selected_agent_session_row,
-    touch_agent_session_runtime_run,
+    ensure_agent_session_active, read_selected_agent_session_row, touch_agent_session_runtime_run,
 };
 pub use autonomous::*;
 pub(crate) use connection::{open_project_database, open_runtime_database};

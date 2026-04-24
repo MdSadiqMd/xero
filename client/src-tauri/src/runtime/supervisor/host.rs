@@ -331,7 +331,12 @@ pub fn launch_detached_runtime_supervisor(
     })?;
     sidecar.arg("--control-state-json").arg(control_state_json);
 
-    apply_sidecar_launch_environment(&mut sidecar, &request.launch_context, &request.launch_env);
+    apply_sidecar_launch_environment(
+        &mut sidecar,
+        &request.agent_session_id,
+        &request.launch_context,
+        &request.launch_env,
+    );
 
     for arg in &request.args {
         sidecar.arg("--command-arg").arg(arg);
@@ -490,42 +495,41 @@ pub fn launch_detached_runtime_supervisor(
                 SupervisorProcessStatus::Failed => RuntimeRunStatus::Failed,
             };
 
-            let snapshot =
-                project_store::load_runtime_run(
+            let snapshot = project_store::load_runtime_run(
+                &request.repo_root,
+                &request.project_id,
+                &request.agent_session_id,
+            )?
+            .filter(|snapshot| snapshot.run.run_id == request.run_id)
+            .map(Ok)
+            .unwrap_or_else(|| {
+                project_store::upsert_runtime_run(
                     &request.repo_root,
-                    &request.project_id,
-                    &request.agent_session_id,
-                )?
-                    .filter(|snapshot| snapshot.run.run_id == request.run_id)
-                    .map(Ok)
-                    .unwrap_or_else(|| {
-                        project_store::upsert_runtime_run(
-                            &request.repo_root,
-                            &RuntimeRunUpsertRecord {
-                                run: RuntimeRunRecord {
-                                    project_id: request.project_id.clone(),
-                                    agent_session_id: request.agent_session_id.clone(),
-                                    run_id: request.run_id.clone(),
-                                    runtime_kind: request.runtime_kind.clone(),
-                                    provider_id: request.launch_context.provider_id.clone(),
-                                    supervisor_kind: SUPERVISOR_KIND_DETACHED_PTY.into(),
-                                    status: expected_status,
-                                    transport: RuntimeRunTransportRecord {
-                                        kind: SUPERVISOR_TRANSPORT_KIND_TCP.into(),
-                                        endpoint: endpoint.clone(),
-                                        liveness: RuntimeRunTransportLiveness::Reachable,
-                                    },
-                                    started_at: now_timestamp(),
-                                    last_heartbeat_at: Some(now_timestamp()),
-                                    stopped_at: None,
-                                    last_error: None,
-                                    updated_at: now_timestamp(),
-                                },
-                                checkpoint: None,
-                                control_state: Some(request.run_controls.clone()),
+                    &RuntimeRunUpsertRecord {
+                        run: RuntimeRunRecord {
+                            project_id: request.project_id.clone(),
+                            agent_session_id: request.agent_session_id.clone(),
+                            run_id: request.run_id.clone(),
+                            runtime_kind: request.runtime_kind.clone(),
+                            provider_id: request.launch_context.provider_id.clone(),
+                            supervisor_kind: SUPERVISOR_KIND_DETACHED_PTY.into(),
+                            status: expected_status,
+                            transport: RuntimeRunTransportRecord {
+                                kind: SUPERVISOR_TRANSPORT_KIND_TCP.into(),
+                                endpoint: endpoint.clone(),
+                                liveness: RuntimeRunTransportLiveness::Reachable,
                             },
-                        )
-                    })?;
+                            started_at: now_timestamp(),
+                            last_heartbeat_at: Some(now_timestamp()),
+                            stopped_at: None,
+                            last_error: None,
+                            updated_at: now_timestamp(),
+                        },
+                        checkpoint: None,
+                        control_state: Some(request.run_controls.clone()),
+                    },
+                )
+            })?;
 
             state.runtime_supervisor_controller().remember(
                 &request.project_id,
@@ -566,10 +570,12 @@ pub fn probe_runtime_run(
     request: RuntimeSupervisorProbeRequest,
 ) -> Result<Option<RuntimeRunSnapshotRecord>, CommandError> {
     validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
     probe_runtime_run_with_timeout(
         state,
         &request.repo_root,
         &request.project_id,
+        &request.agent_session_id,
         request.control_timeout,
     )
 }
@@ -579,12 +585,17 @@ pub fn stop_runtime_run(
     request: RuntimeSupervisorStopRequest,
 ) -> Result<Option<RuntimeRunSnapshotRecord>, CommandError> {
     validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
 
-    let Some(snapshot) = project_store::load_runtime_run(&request.repo_root, &request.project_id)?
+    let Some(snapshot) = project_store::load_runtime_run(
+        &request.repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+    )?
     else {
         state
             .runtime_supervisor_controller()
-            .forget(&request.project_id);
+            .forget(&request.project_id, &request.agent_session_id);
         return Ok(None);
     };
 
@@ -594,7 +605,7 @@ pub fn stop_runtime_run(
     ) {
         state
             .runtime_supervisor_controller()
-            .forget(&request.project_id);
+            .forget(&request.project_id, &request.agent_session_id);
         return Ok(Some(snapshot));
     }
 
@@ -632,7 +643,11 @@ pub fn stop_runtime_run(
 
     let deadline = std::time::Instant::now() + request.shutdown_timeout;
     loop {
-        let latest = project_store::load_runtime_run(&request.repo_root, &request.project_id)?;
+        let latest = project_store::load_runtime_run(
+            &request.repo_root,
+            &request.project_id,
+            &request.agent_session_id,
+        )?;
         if let Some(snapshot) = latest {
             if matches!(
                 snapshot.run.status,
@@ -640,18 +655,21 @@ pub fn stop_runtime_run(
             ) {
                 state
                     .runtime_supervisor_controller()
-                    .forget(&request.project_id);
+                    .forget(&request.project_id, &request.agent_session_id);
                 return Ok(Some(snapshot));
             }
         }
 
         if std::time::Instant::now() >= deadline {
-            let Some(latest) =
-                project_store::load_runtime_run(&request.repo_root, &request.project_id)?
+            let Some(latest) = project_store::load_runtime_run(
+                &request.repo_root,
+                &request.project_id,
+                &request.agent_session_id,
+            )?
             else {
                 state
                     .runtime_supervisor_controller()
-                    .forget(&request.project_id);
+                    .forget(&request.project_id, &request.agent_session_id);
                 return Ok(None);
             };
             let latest = mark_runtime_run_after_probe_failure(
@@ -679,6 +697,7 @@ pub fn submit_runtime_run_input(
     request: RuntimeSupervisorSubmitInputRequest,
 ) -> Result<String, CommandError> {
     validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
     validate_non_empty(&request.run_id, "runId")?;
     validate_non_empty(&request.session_id, "sessionId")?;
     validate_non_empty(&request.action_id, "actionId")?;
@@ -694,11 +713,15 @@ pub fn submit_runtime_run_input(
         ));
     }
 
-    let Some(snapshot) = project_store::load_runtime_run(&request.repo_root, &request.project_id)?
+    let Some(snapshot) = project_store::load_runtime_run(
+        &request.repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+    )?
     else {
         state
             .runtime_supervisor_controller()
-            .forget(&request.project_id);
+            .forget(&request.project_id, &request.agent_session_id);
         return Err(CommandError::retryable(
             "runtime_run_missing",
             format!(
@@ -720,7 +743,7 @@ pub fn submit_runtime_run_input(
 
     if let Some(active) = state
         .runtime_supervisor_controller()
-        .snapshot(&request.project_id)
+        .snapshot(&request.project_id, &request.agent_session_id)
         .filter(|active| active.run_id != request.run_id)
     {
         return Err(CommandError::retryable(
@@ -806,6 +829,7 @@ pub fn submit_runtime_run_input(
                 refresh_runtime_run_after_control_response(&request.repo_root, &snapshot, None)?;
             state.runtime_supervisor_controller().remember(
                 &refreshed.run.project_id,
+                &refreshed.run.agent_session_id,
                 &refreshed.run.run_id,
                 &refreshed.run.transport.endpoint,
             );
@@ -859,7 +883,7 @@ pub fn submit_runtime_run_input(
             )?;
             state
                 .runtime_supervisor_controller()
-                .forget(&request.project_id);
+                .forget(&request.project_id, &request.agent_session_id);
             Err(error)
         }
     }
@@ -870,6 +894,7 @@ pub fn update_runtime_run_controls(
     request: RuntimeSupervisorUpdateControlsRequest,
 ) -> Result<RuntimeRunSnapshotRecord, CommandError> {
     validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
     validate_non_empty(&request.run_id, "runId")?;
     if request.controls.is_none() && request.prompt.is_none() {
         return Err(CommandError::user_fixable(
@@ -884,11 +909,15 @@ pub fn update_runtime_run_controls(
         ));
     }
 
-    let Some(snapshot) = project_store::load_runtime_run(&request.repo_root, &request.project_id)?
+    let Some(snapshot) = project_store::load_runtime_run(
+        &request.repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+    )?
     else {
         state
             .runtime_supervisor_controller()
-            .forget(&request.project_id);
+            .forget(&request.project_id, &request.agent_session_id);
         return Err(CommandError::retryable(
             "runtime_run_missing",
             format!(
@@ -910,7 +939,7 @@ pub fn update_runtime_run_controls(
 
     if let Some(active) = state
         .runtime_supervisor_controller()
-        .snapshot(&request.project_id)
+        .snapshot(&request.project_id, &request.agent_session_id)
         .filter(|active| active.run_id != request.run_id)
     {
         return Err(CommandError::retryable(
@@ -1014,6 +1043,7 @@ pub fn update_runtime_run_controls(
                 refresh_runtime_run_after_control_response(&request.repo_root, &snapshot, None)?;
             state.runtime_supervisor_controller().remember(
                 &refreshed.run.project_id,
+                &refreshed.run.agent_session_id,
                 &refreshed.run.run_id,
                 &refreshed.run.transport.endpoint,
             );
@@ -1067,7 +1097,7 @@ pub fn update_runtime_run_controls(
             )?;
             state
                 .runtime_supervisor_controller()
-                .forget(&request.project_id);
+                .forget(&request.project_id, &request.agent_session_id);
             Err(error)
         }
     }
@@ -1075,10 +1105,12 @@ pub fn update_runtime_run_controls(
 
 fn apply_sidecar_launch_environment(
     sidecar: &mut Command,
+    agent_session_id: &str,
     launch_context: &RuntimeSupervisorLaunchContext,
     launch_env: &RuntimeSupervisorLaunchEnv,
 ) {
     sidecar
+        .env_remove(CADENCE_AGENT_SESSION_ID_ENV)
         .env_remove(CADENCE_RUNTIME_PROVIDER_ID_ENV)
         .env_remove(CADENCE_RUNTIME_SESSION_ID_ENV)
         .env_remove(CADENCE_RUNTIME_FLOW_ID_ENV)
@@ -1091,6 +1123,7 @@ fn apply_sidecar_launch_environment(
         .env_remove(OPENAI_BASE_URL_ENV)
         .env_remove(OPENAI_API_VERSION_ENV);
 
+    sidecar.env(CADENCE_AGENT_SESSION_ID_ENV, agent_session_id);
     sidecar.env(CADENCE_RUNTIME_PROVIDER_ID_ENV, &launch_context.provider_id);
     sidecar.env(CADENCE_RUNTIME_SESSION_ID_ENV, &launch_context.session_id);
     sidecar.env(CADENCE_RUNTIME_MODEL_ID_ENV, &launch_context.model_id);
@@ -1151,10 +1184,14 @@ fn probe_runtime_run_with_timeout(
     state: &DesktopState,
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
     control_timeout: Duration,
 ) -> Result<Option<RuntimeRunSnapshotRecord>, CommandError> {
-    let Some(snapshot) = project_store::load_runtime_run(repo_root, project_id)? else {
-        state.runtime_supervisor_controller().forget(project_id);
+    let Some(snapshot) = project_store::load_runtime_run(repo_root, project_id, agent_session_id)?
+    else {
+        state
+            .runtime_supervisor_controller()
+            .forget(project_id, agent_session_id);
         return Ok(None);
     };
 
@@ -1162,7 +1199,9 @@ fn probe_runtime_run_with_timeout(
         snapshot.run.status,
         RuntimeRunStatus::Stopped | RuntimeRunStatus::Failed
     ) {
-        state.runtime_supervisor_controller().forget(project_id);
+        state
+            .runtime_supervisor_controller()
+            .forget(project_id, agent_session_id);
         return Ok(Some(snapshot));
     }
 
@@ -1194,7 +1233,8 @@ fn probe_runtime_run_with_timeout(
                 return Ok(Some(updated));
             }
 
-            let Some(latest) = project_store::load_runtime_run(repo_root, project_id.as_str())?
+            let Some(latest) =
+                project_store::load_runtime_run(repo_root, project_id.as_str(), agent_session_id)?
             else {
                 let updated = mark_runtime_run_after_probe_failure(
                     state,
@@ -1227,13 +1267,14 @@ fn probe_runtime_run_with_timeout(
                 ) {
                     state.runtime_supervisor_controller().remember(
                         &latest.run.project_id,
+                        &latest.run.agent_session_id,
                         &latest.run.run_id,
                         &latest.run.transport.endpoint,
                     );
                 } else {
                     state
                         .runtime_supervisor_controller()
-                        .forget(&latest.run.project_id);
+                        .forget(&latest.run.project_id, &latest.run.agent_session_id);
                 }
                 return Ok(Some(latest));
             }
@@ -1254,19 +1295,22 @@ fn probe_runtime_run_with_timeout(
             ) {
                 state.runtime_supervisor_controller().remember(
                     &updated.run.project_id,
+                    &updated.run.agent_session_id,
                     &updated.run.run_id,
                     &updated.run.transport.endpoint,
                 );
             } else {
                 state
                     .runtime_supervisor_controller()
-                    .forget(&updated.run.project_id);
+                    .forget(&updated.run.project_id, &updated.run.agent_session_id);
             }
 
             Ok(Some(updated))
         }
         Ok(SupervisorControlResponse::Error { code, message, .. }) => {
-            if let Some(latest) = project_store::load_runtime_run(repo_root, project_id)? {
+            if let Some(latest) =
+                project_store::load_runtime_run(repo_root, project_id, agent_session_id)?
+            {
                 if latest.run.run_id == snapshot.run.run_id
                     && matches!(
                         latest.run.status,
@@ -1275,7 +1319,7 @@ fn probe_runtime_run_with_timeout(
                 {
                     state
                         .runtime_supervisor_controller()
-                        .forget(&latest.run.project_id);
+                        .forget(&latest.run.project_id, &latest.run.agent_session_id);
                     return Ok(Some(latest));
                 }
             }
@@ -1285,7 +1329,9 @@ fn probe_runtime_run_with_timeout(
             Ok(Some(updated))
         }
         Ok(_) => {
-            if let Some(latest) = project_store::load_runtime_run(repo_root, project_id)? {
+            if let Some(latest) =
+                project_store::load_runtime_run(repo_root, project_id, agent_session_id)?
+            {
                 if latest.run.run_id == snapshot.run.run_id
                     && matches!(
                         latest.run.status,
@@ -1294,7 +1340,7 @@ fn probe_runtime_run_with_timeout(
                 {
                     state
                         .runtime_supervisor_controller()
-                        .forget(&latest.run.project_id);
+                        .forget(&latest.run.project_id, &latest.run.agent_session_id);
                     return Ok(Some(latest));
                 }
             }
@@ -1309,7 +1355,9 @@ fn probe_runtime_run_with_timeout(
             Ok(Some(updated))
         }
         Err(error) => {
-            if let Some(latest) = project_store::load_runtime_run(repo_root, project_id)? {
+            if let Some(latest) =
+                project_store::load_runtime_run(repo_root, project_id, agent_session_id)?
+            {
                 if latest.run.run_id == snapshot.run.run_id
                     && matches!(
                         latest.run.status,
@@ -1318,7 +1366,7 @@ fn probe_runtime_run_with_timeout(
                 {
                     state
                         .runtime_supervisor_controller()
-                        .forget(&latest.run.project_id);
+                        .forget(&latest.run.project_id, &latest.run.agent_session_id);
                     return Ok(Some(latest));
                 }
             }
@@ -1356,7 +1404,7 @@ fn mark_runtime_run_after_probe_failure(
     )?;
     state
         .runtime_supervisor_controller()
-        .forget(&updated.run.project_id);
+        .forget(&updated.run.project_id, &updated.run.agent_session_id);
     Ok(updated)
 }
 
@@ -1365,9 +1413,13 @@ fn refresh_runtime_run_after_control_response(
     snapshot: &RuntimeRunSnapshotRecord,
     last_error: Option<RuntimeRunDiagnosticRecord>,
 ) -> Result<RuntimeRunSnapshotRecord, CommandError> {
-    let latest = project_store::load_runtime_run(repo_root, &snapshot.run.project_id)?
-        .filter(|latest| latest.run.run_id == snapshot.run.run_id)
-        .unwrap_or_else(|| snapshot.clone());
+    let latest = project_store::load_runtime_run(
+        repo_root,
+        &snapshot.run.project_id,
+        &snapshot.run.agent_session_id,
+    )?
+    .filter(|latest| latest.run.run_id == snapshot.run.run_id)
+    .unwrap_or_else(|| snapshot.clone());
 
     upsert_runtime_run_projection(
         repo_root,
@@ -1403,6 +1455,7 @@ fn upsert_runtime_run_projection(
         &RuntimeRunUpsertRecord {
             run: RuntimeRunRecord {
                 project_id: snapshot.run.project_id.clone(),
+                agent_session_id: snapshot.run.agent_session_id.clone(),
                 run_id: snapshot.run.run_id.clone(),
                 runtime_kind: snapshot.run.runtime_kind.clone(),
                 provider_id: snapshot.run.provider_id.clone(),
@@ -1438,6 +1491,7 @@ fn runtime_run_status_label(status: &RuntimeRunStatus) -> &'static str {
 fn persist_failed_launch(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
     run_id: &str,
     runtime_kind: &str,
     provider_id: &str,
@@ -1450,6 +1504,7 @@ fn persist_failed_launch(
         &RuntimeRunUpsertRecord {
             run: RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: agent_session_id.into(),
                 run_id: run_id.into(),
                 runtime_kind: runtime_kind.into(),
                 provider_id: provider_id.into(),

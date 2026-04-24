@@ -9,7 +9,10 @@ pub(crate) fn get_runtime_run_returns_none_when_selected_project_has_no_durable_
     let runtime_run = get_runtime_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
-        GetRuntimeRunRequestDto { project_id },
+        GetRuntimeRunRequestDto {
+            project_id,
+            agent_session_id: "agent-session-main".into(),
+        },
     )
     .expect("get runtime run should succeed");
 
@@ -44,6 +47,7 @@ pub(crate) fn get_runtime_run_fails_closed_for_malformed_durable_rows_without_pr
         app.state::<DesktopState>(),
         GetRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect_err("malformed runtime run rows should fail closed");
@@ -64,6 +68,7 @@ pub(crate) fn start_runtime_run_requires_authenticated_runtime_session() {
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -89,6 +94,7 @@ pub(crate) fn start_runtime_run_reconnects_existing_run_without_duplicate_launch
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -107,6 +113,7 @@ pub(crate) fn start_runtime_run_reconnects_existing_run_without_duplicate_launch
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -132,6 +139,7 @@ pub(crate) fn start_runtime_run_reconnects_existing_run_without_duplicate_launch
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: first.run_id,
         },
     )
@@ -180,6 +188,7 @@ pub(crate) fn start_runtime_run_reconnects_original_provider_run_after_active_pr
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -220,6 +229,7 @@ pub(crate) fn start_runtime_run_reconnects_original_provider_run_after_active_pr
         fresh_app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -235,6 +245,7 @@ pub(crate) fn start_runtime_run_reconnects_original_provider_run_after_active_pr
         fresh_app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run_id,
         },
     )
@@ -291,6 +302,7 @@ pub(crate) fn start_runtime_run_fails_closed_when_active_profile_switches_provid
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -370,6 +382,7 @@ pub(crate) fn start_runtime_run_fails_closed_for_stale_cross_provider_run_withou
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -381,9 +394,13 @@ pub(crate) fn start_runtime_run_fails_closed_for_stale_cross_provider_run_withou
     assert!(error.message.contains("anthropic"));
     assert_eq!(count_runtime_run_rows(&repo_root), 1);
 
-    let runtime_run = project_store::load_runtime_run(&repo_root, &project_id)
-        .expect("load durable runtime run after mismatch")
-        .expect("stale runtime run should remain persisted");
+    let runtime_run = project_store::load_runtime_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable runtime run after mismatch")
+    .expect("stale runtime run should remain persisted");
     assert_eq!(runtime_run.run.run_id, "run-openai-stale");
     assert_eq!(runtime_run.run.provider_id, "openai_api");
     assert_eq!(runtime_run.run.runtime_kind, "openai_compatible");
@@ -425,6 +442,7 @@ pub(crate) fn get_runtime_run_recovers_truthful_running_state_after_fresh_host_r
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -445,6 +463,7 @@ pub(crate) fn get_runtime_run_recovers_truthful_running_state_after_fresh_host_r
         fresh_app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run_id,
         },
     )
@@ -471,6 +490,7 @@ pub(crate) fn get_runtime_run_recovers_stale_unreachable_state_once_after_fresh_
         fresh_app.state::<DesktopState>(),
         GetRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get runtime run after fresh-host restart")
@@ -506,6 +526,7 @@ pub(crate) fn get_runtime_run_recovers_stale_unreachable_state_once_after_fresh_
         fresh_app.state::<DesktopState>(),
         GetRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("reload stale runtime run projection")
@@ -545,6 +566,7 @@ pub(crate) fn start_runtime_run_replaces_stale_row_with_new_reachable_run() {
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -563,6 +585,7 @@ pub(crate) fn start_runtime_run_replaces_stale_row_with_new_reachable_run() {
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run_id,
         },
     )
@@ -584,6 +607,7 @@ pub(crate) fn stop_runtime_run_rejects_mismatched_run_id_and_marks_unreachable_s
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-2".into(),
         },
     )
@@ -595,6 +619,7 @@ pub(crate) fn stop_runtime_run_rejects_mismatched_run_id_and_marks_unreachable_s
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-1".into(),
         },
     )
@@ -624,6 +649,7 @@ pub(crate) fn stop_runtime_run_returns_existing_terminal_snapshot_after_sidecar_
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-failed".into(),
         },
     )
@@ -671,6 +697,7 @@ pub(crate) fn start_runtime_run_launches_anthropic_with_truthful_provider_identi
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -712,6 +739,7 @@ pub(crate) fn start_runtime_run_launches_anthropic_with_truthful_provider_identi
         fresh_app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run_id,
         },
     )
@@ -761,6 +789,7 @@ pub(crate) fn start_runtime_run_launches_bedrock_with_truthful_provider_identity
                 app.state::<DesktopState>(),
                 StartRuntimeRunRequestDto {
                     project_id: project_id.clone(),
+                    agent_session_id: "agent-session-main".into(),
                     initial_controls: None,
                     initial_prompt: None,
                 },
@@ -791,6 +820,7 @@ pub(crate) fn start_runtime_run_launches_bedrock_with_truthful_provider_identity
                 app.state::<DesktopState>(),
                 StopRuntimeRunRequestDto {
                     project_id,
+                    agent_session_id: "agent-session-main".into(),
                     run_id: launched.run_id,
                 },
             )
@@ -845,6 +875,7 @@ pub(crate) fn start_runtime_run_launches_vertex_with_truthful_provider_identity_
                 app.state::<DesktopState>(),
                 StartRuntimeRunRequestDto {
                     project_id: project_id.clone(),
+                    agent_session_id: "agent-session-main".into(),
                     initial_controls: None,
                     initial_prompt: None,
                 },
@@ -870,6 +901,7 @@ pub(crate) fn start_runtime_run_launches_vertex_with_truthful_provider_identity_
                 app.state::<DesktopState>(),
                 StopRuntimeRunRequestDto {
                     project_id,
+                    agent_session_id: "agent-session-main".into(),
                     run_id: launched.run_id,
                 },
             )
@@ -921,6 +953,7 @@ pub(crate) fn start_runtime_run_surfaces_typed_vertex_adc_missing_diagnostic_bef
                 app.state::<DesktopState>(),
                 StartRuntimeRunRequestDto {
                     project_id,
+                    agent_session_id: "agent-session-main".into(),
                     initial_controls: None,
                     initial_prompt: None,
                 },
@@ -973,6 +1006,7 @@ pub(crate) fn start_runtime_run_launches_openai_compatible_with_truthful_provide
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -1014,6 +1048,7 @@ pub(crate) fn start_runtime_run_launches_openai_compatible_with_truthful_provide
         fresh_app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run_id,
         },
     )
@@ -1071,6 +1106,7 @@ pub(crate) fn start_runtime_run_launches_ollama_with_truthful_provider_identity_
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -1109,6 +1145,7 @@ pub(crate) fn start_runtime_run_launches_ollama_with_truthful_provider_identity_
         fresh_app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run_id,
         },
     )
@@ -1163,6 +1200,7 @@ pub(crate) fn start_runtime_run_launches_github_models_with_truthful_provider_id
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -1201,6 +1239,7 @@ pub(crate) fn start_runtime_run_launches_github_models_with_truthful_provider_id
         fresh_app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run_id,
         },
     )
@@ -1317,6 +1356,7 @@ pub(crate) fn start_runtime_run_projects_connected_mcp_servers_into_run_scoped_p
                 app.state::<DesktopState>(),
                 StartRuntimeRunRequestDto {
                     project_id: project_id.clone(),
+                    agent_session_id: "agent-session-main".into(),
                     initial_controls: None,
                     initial_prompt: None,
                 },
@@ -1356,6 +1396,7 @@ pub(crate) fn start_runtime_run_projects_connected_mcp_servers_into_run_scoped_p
                 app.state::<DesktopState>(),
                 StopRuntimeRunRequestDto {
                     project_id,
+                    agent_session_id: "agent-session-main".into(),
                     run_id: launched.run_id,
                 },
             )
@@ -1470,6 +1511,7 @@ pub(crate) fn start_runtime_run_projects_empty_projection_contract_when_registry
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -1500,6 +1542,7 @@ pub(crate) fn start_runtime_run_projects_empty_projection_contract_when_registry
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run_id,
         },
     )
@@ -1549,6 +1592,7 @@ pub(crate) fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_unrea
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -1628,6 +1672,7 @@ pub(crate) fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_malfo
         app.state::<DesktopState>(),
         StartRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },

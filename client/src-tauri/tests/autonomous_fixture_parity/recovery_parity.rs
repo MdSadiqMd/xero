@@ -272,6 +272,7 @@ pub(crate) fn autonomous_fixture_repo_parity_binds_openrouter_truth_and_replays_
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id.clone(),
             runtime_kind: launched.run.runtime_kind.clone(),
             session_id: runtime_session_id.clone(),
@@ -295,6 +296,7 @@ pub(crate) fn autonomous_fixture_repo_parity_binds_openrouter_truth_and_replays_
     persist_supervisor_event(
         &repo_root,
         &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
         &SupervisorLiveEventPayload::ActionRequired {
             action_id: persisted_action_id.clone(),
             boundary_id: boundary_id.clone(),
@@ -399,9 +401,13 @@ pub(crate) fn autonomous_fixture_repo_parity_binds_openrouter_truth_and_replays_
         .expect("telegram dispatch row should exist")
         .clone();
 
-    let paused_durable = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load durable paused autonomous run")
-        .expect("durable paused autonomous run should exist");
+    let paused_durable = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable paused autonomous run")
+    .expect("durable paused autonomous run should exist");
     let paused_artifacts = paused_durable
         .history
         .iter()
@@ -685,9 +691,13 @@ pub(crate) fn autonomous_fixture_repo_parity_binds_openrouter_truth_and_replays_
     });
     assert_eq!(resumed_runtime.run_id, launched.run.run_id);
 
-    let resumed_durable = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load durable autonomous run after resume")
-        .expect("durable autonomous run should still exist after resume");
+    let resumed_durable = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable autonomous run after resume")
+    .expect("durable autonomous run should still exist after resume");
     let resumed_artifacts = resumed_durable
         .history
         .iter()
@@ -1141,9 +1151,13 @@ pub(crate) fn autonomous_fixture_repo_parity_replays_fixture_driven_skill_lifecy
         .count();
     assert_eq!(observed_skill_count, 3);
 
-    let durable = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load durable autonomous run after fixture skill story")
-        .expect("durable autonomous run should exist after fixture skill story");
+    let durable = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable autonomous run after fixture skill story")
+    .expect("durable autonomous run should exist after fixture skill story");
     let skill_artifacts = durable
         .history
         .iter()

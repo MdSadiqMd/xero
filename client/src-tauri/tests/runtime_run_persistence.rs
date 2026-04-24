@@ -13,6 +13,11 @@ fn legacy_repo_local_state_is_upgraded_before_runtime_run_reads() {
 }
 
 #[test]
+fn pre_agent_session_runtime_rows_migrate_into_default_session_scope() {
+    runtime_rows::pre_agent_session_runtime_rows_migrate_into_default_session_scope();
+}
+
+#[test]
 fn runtime_run_recovery_distinguishes_running_stale_stopped_and_failed_states() {
     runtime_rows::runtime_run_recovery_distinguishes_running_stale_stopped_and_failed_states();
 }
@@ -20,6 +25,11 @@ fn runtime_run_recovery_distinguishes_running_stale_stopped_and_failed_states() 
 #[test]
 fn runtime_run_persists_active_and_pending_control_snapshots_with_queued_prompt() {
     runtime_rows::runtime_run_persists_active_and_pending_control_snapshots_with_queued_prompt();
+}
+
+#[test]
+fn runtime_run_persistence_isolates_runs_by_agent_session() {
+    runtime_rows::runtime_run_persistence_isolates_runs_by_agent_session();
 }
 
 #[test]

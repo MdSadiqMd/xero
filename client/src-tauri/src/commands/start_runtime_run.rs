@@ -14,11 +14,13 @@ pub fn start_runtime_run<R: Runtime>(
     request: StartRuntimeRunRequestDto,
 ) -> CommandResult<RuntimeRunDto> {
     validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
 
     let outcome = launch_or_reconnect_runtime_run(
         &app,
         state.inner(),
         &request.project_id,
+        &request.agent_session_id,
         request.initial_controls,
         request.initial_prompt,
     )?;

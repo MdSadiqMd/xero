@@ -7,6 +7,8 @@ import {
   normalizeText,
 } from './shared'
 
+export const DEFAULT_AGENT_SESSION_ID = 'agent-session-main'
+
 export const runtimeAuthPhaseSchema = z.enum([
   'idle',
   'starting',
@@ -60,7 +62,7 @@ function validateWritableRuntimeSettingsProvider(
   providerId: z.infer<typeof runtimeProviderIdSchema>,
   ctx: z.RefinementCtx,
 ): void {
-  if (!writableRuntimeSettingsProviderIdSchema.options.includes(providerId)) {
+  if (!(writableRuntimeSettingsProviderIdSchema.options as readonly RuntimeProviderIdDto[]).includes(providerId)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['providerId'],
@@ -214,9 +216,70 @@ export const runtimeRunControlStateSchema = z
     }
   })
 
+export const agentSessionStatusSchema = z.enum(['active', 'archived'])
+
+export const agentSessionSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    title: z.string().trim().min(1),
+    summary: z.string(),
+    status: agentSessionStatusSchema,
+    selected: z.boolean(),
+    createdAt: isoTimestampSchema,
+    updatedAt: isoTimestampSchema,
+    archivedAt: nonEmptyOptionalTextSchema,
+    lastRunId: nonEmptyOptionalTextSchema,
+    lastRuntimeKind: nonEmptyOptionalTextSchema,
+    lastProviderId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
+export const createAgentSessionRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    title: z.string().trim().min(1).nullable().optional(),
+    summary: z.string().optional(),
+    selected: z.boolean().optional(),
+  })
+  .strict()
+
+export const listAgentSessionsRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    includeArchived: z.boolean().optional(),
+  })
+  .strict()
+
+export const getAgentSessionRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+  })
+  .strict()
+
+export const updateAgentSessionRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    title: z.string().trim().min(1).nullable().optional(),
+    summary: z.string().nullable().optional(),
+    selected: z.boolean().nullable().optional(),
+  })
+  .strict()
+
+export const archiveAgentSessionRequestSchema = getAgentSessionRequestSchema
+
+export const listAgentSessionsResponseSchema = z
+  .object({
+    sessions: z.array(agentSessionSchema),
+  })
+  .strict()
+
 export const runtimeRunSchema = z
   .object({
     projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
     runId: z.string().trim().min(1),
     runtimeKind: z.string().trim().min(1),
     providerId: z.string().trim().min(1),
@@ -239,6 +302,7 @@ export const runtimeRunSchema = z
 export const runtimeRunUpdatedPayloadSchema = z
   .object({
     projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
     run: runtimeRunSchema.nullable(),
   })
   .strict()
@@ -250,19 +314,36 @@ export const runtimeRunUpdatedPayloadSchema = z
         message: 'Cadence received a runtime-run update for a different project than the event envelope.',
       })
     }
+
+    if (payload.run && payload.run.agentSessionId !== payload.agentSessionId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['run', 'agentSessionId'],
+        message: 'Cadence received a runtime-run update for a different agent session than the event envelope.',
+      })
+    }
   })
 
 export const startRuntimeRunRequestSchema = z
   .object({
     projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
     initialControls: runtimeRunControlInputSchema.nullable().optional(),
     initialPrompt: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+
+export const getRuntimeRunRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
   })
   .strict()
 
 export const updateRuntimeRunControlsRequestSchema = z
   .object({
     projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
     runId: z.string().trim().min(1),
     controls: runtimeRunControlInputSchema.nullable().optional(),
     prompt: z.string().trim().min(1).nullable().optional(),
@@ -277,6 +358,14 @@ export const updateRuntimeRunControlsRequestSchema = z
       })
     }
   })
+
+export const stopRuntimeRunRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    runId: z.string().trim().min(1),
+  })
+  .strict()
 
 export type RuntimeAuthPhaseDto = z.infer<typeof runtimeAuthPhaseSchema>
 export type RuntimeDiagnosticDto = z.infer<typeof runtimeDiagnosticSchema>
@@ -297,10 +386,20 @@ export type RuntimeRunControlInputDto = z.infer<typeof runtimeRunControlInputSch
 export type RuntimeRunActiveControlSnapshotDto = z.infer<typeof runtimeRunActiveControlSnapshotSchema>
 export type RuntimeRunPendingControlSnapshotDto = z.infer<typeof runtimeRunPendingControlSnapshotSchema>
 export type RuntimeRunControlStateDto = z.infer<typeof runtimeRunControlStateSchema>
+export type AgentSessionStatusDto = z.infer<typeof agentSessionStatusSchema>
+export type AgentSessionDto = z.infer<typeof agentSessionSchema>
+export type CreateAgentSessionRequestDto = z.infer<typeof createAgentSessionRequestSchema>
+export type ListAgentSessionsRequestDto = z.infer<typeof listAgentSessionsRequestSchema>
+export type GetAgentSessionRequestDto = z.infer<typeof getAgentSessionRequestSchema>
+export type UpdateAgentSessionRequestDto = z.infer<typeof updateAgentSessionRequestSchema>
+export type ArchiveAgentSessionRequestDto = z.infer<typeof archiveAgentSessionRequestSchema>
+export type ListAgentSessionsResponseDto = z.infer<typeof listAgentSessionsResponseSchema>
 export type RuntimeRunDto = z.infer<typeof runtimeRunSchema>
 export type RuntimeRunUpdatedPayloadDto = z.infer<typeof runtimeRunUpdatedPayloadSchema>
+export type GetRuntimeRunRequestDto = z.infer<typeof getRuntimeRunRequestSchema>
 export type StartRuntimeRunRequestDto = z.infer<typeof startRuntimeRunRequestSchema>
 export type UpdateRuntimeRunControlsRequestDto = z.infer<typeof updateRuntimeRunControlsRequestSchema>
+export type StopRuntimeRunRequestDto = z.infer<typeof stopRuntimeRunRequestSchema>
 
 export interface RuntimeSessionView {
   projectId: string
@@ -382,6 +481,7 @@ export interface RuntimeRunControlStateView {
 
 export interface RuntimeRunView {
   projectId: string
+  agentSessionId: string
   runId: string
   runtimeKind: string
   providerId: string
@@ -408,6 +508,24 @@ export interface RuntimeRunView {
   isTerminal: boolean
   isStale: boolean
   isFailed: boolean
+}
+
+export interface AgentSessionView {
+  projectId: string
+  agentSessionId: string
+  title: string
+  summary: string
+  status: AgentSessionStatusDto
+  statusLabel: string
+  selected: boolean
+  createdAt: string
+  updatedAt: string
+  archivedAt: string | null
+  lastRunId: string | null
+  lastRuntimeKind: string | null
+  lastProviderId: string | null
+  isActive: boolean
+  isArchived: boolean
 }
 
 function timestampToSortValue(value: string | null): number {
@@ -521,6 +639,15 @@ export function getRuntimeRunThinkingEffortLabel(effort: RuntimeRunThinkingEffor
 
 function getRuntimeRunLabel(runtimeKind: string, status: RuntimeRunStatusDto): string {
   return `${humanizeRuntimeKind(runtimeKind)} · ${getRuntimeRunStatusLabel(status)}`
+}
+
+function getAgentSessionStatusLabel(status: AgentSessionStatusDto): string {
+  switch (status) {
+    case 'active':
+      return 'Active'
+    case 'archived':
+      return 'Archived'
+  }
 }
 
 function mapRuntimeRunControlInput(control: RuntimeRunControlInputDto): RuntimeRunControlInputView {
@@ -647,6 +774,7 @@ export function mapRuntimeRun(runtimeRun: RuntimeRunDto): RuntimeRunView {
 
   return {
     projectId: runtimeRun.projectId,
+    agentSessionId: runtimeRun.agentSessionId,
     runId: normalizeText(runtimeRun.runId, 'run-unavailable'),
     runtimeKind,
     providerId,
@@ -679,6 +807,34 @@ export function mapRuntimeRun(runtimeRun: RuntimeRunDto): RuntimeRunView {
     isStale: runtimeRun.status === 'stale',
     isFailed: runtimeRun.status === 'failed',
   }
+}
+
+export function mapAgentSession(agentSession: AgentSessionDto): AgentSessionView {
+  return {
+    projectId: agentSession.projectId,
+    agentSessionId: normalizeText(agentSession.agentSessionId, DEFAULT_AGENT_SESSION_ID),
+    title: normalizeText(agentSession.title, 'Agent session'),
+    summary: agentSession.summary,
+    status: agentSession.status,
+    statusLabel: getAgentSessionStatusLabel(agentSession.status),
+    selected: agentSession.selected,
+    createdAt: agentSession.createdAt,
+    updatedAt: agentSession.updatedAt,
+    archivedAt: normalizeOptionalText(agentSession.archivedAt),
+    lastRunId: normalizeOptionalText(agentSession.lastRunId),
+    lastRuntimeKind: normalizeOptionalText(agentSession.lastRuntimeKind),
+    lastProviderId: normalizeOptionalText(agentSession.lastProviderId),
+    isActive: agentSession.status === 'active',
+    isArchived: agentSession.status === 'archived',
+  }
+}
+
+export function selectAgentSessionId(agentSessions: readonly AgentSessionView[] | null | undefined): string {
+  return (
+    agentSessions?.find((session) => session.selected && session.isActive)?.agentSessionId ??
+    agentSessions?.find((session) => session.isActive)?.agentSessionId ??
+    DEFAULT_AGENT_SESSION_ID
+  )
 }
 
 export function mergeRuntimeUpdated(

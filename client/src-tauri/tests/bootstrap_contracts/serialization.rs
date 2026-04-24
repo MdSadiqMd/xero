@@ -950,6 +950,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let runtime_run = serde_json::to_value(RuntimeRunDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         run_id: "run-1".into(),
         runtime_kind: "openai_codex".into(),
         provider_id: "openai_codex".into(),
@@ -1058,8 +1059,10 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let runtime_run_updated = serde_json::to_value(RuntimeRunUpdatedPayloadDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         run: Some(RuntimeRunDto {
             project_id: "project-1".into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-1".into(),
             runtime_kind: "openai_codex".into(),
             provider_id: "openai_codex".into(),
@@ -1356,6 +1359,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let get_autonomous_run_request = serde_json::to_value(GetAutonomousRunRequestDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
     })
     .expect("get autonomous run request should serialize");
     assert_eq!(
@@ -1365,12 +1369,14 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let get_runtime_run_request = serde_json::to_value(GetRuntimeRunRequestDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
     })
     .expect("get runtime run request should serialize");
     assert_eq!(get_runtime_run_request, json!({ "projectId": "project-1" }));
 
     let start_autonomous_run_request = serde_json::to_value(StartAutonomousRunRequestDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         initial_controls: Some(RuntimeRunControlInputDto {
             model_id: "openai_codex".into(),
             thinking_effort: Some(ProviderModelThinkingEffortDto::High),
@@ -1396,6 +1402,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let start_runtime_run_request = serde_json::to_value(StartRuntimeRunRequestDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         initial_controls: Some(RuntimeRunControlInputDto {
             model_id: "openai_codex".into(),
             thinking_effort: Some(ProviderModelThinkingEffortDto::Low),
@@ -1420,6 +1427,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let cancel_autonomous_run_request = serde_json::to_value(CancelAutonomousRunRequestDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         run_id: "run-1".into(),
     })
     .expect("cancel autonomous run request should serialize");
@@ -1430,6 +1438,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let stop_runtime_run_request = serde_json::to_value(StopRuntimeRunRequestDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         run_id: "run-1".into(),
     })
     .expect("stop runtime run request should serialize");
@@ -2111,6 +2120,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let subscribe_request = serde_json::to_value(SubscribeRuntimeStreamRequestDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         channel: Some("__CHANNEL__:77".into()),
         item_kinds: vec![
             "transcript".into(),
@@ -2132,6 +2142,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
 
     let subscribe_response = serde_json::to_value(SubscribeRuntimeStreamResponseDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         runtime_kind: "openai_codex".into(),
         run_id: "run-1".into(),
         session_id: "session-1".into(),

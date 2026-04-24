@@ -1,9 +1,10 @@
 pub(crate) use cadence_desktop_lib::{
     commands::{
-        ApplyWorkflowTransitionRequestDto, ApplyWorkflowTransitionResponseDto,
-        AutonomousArtifactPayloadDto, AutonomousCommandResultDto, AutonomousLifecycleReasonDto,
-        AutonomousRunDto, AutonomousRunRecoveryStateDto, AutonomousRunStateDto,
-        AutonomousRunStatusDto, AutonomousSkillCacheStatusDto, AutonomousSkillLifecycleCacheDto,
+        AgentSessionDto, AgentSessionStatusDto, ApplyWorkflowTransitionRequestDto,
+        ApplyWorkflowTransitionResponseDto, AutonomousArtifactPayloadDto,
+        AutonomousCommandResultDto, AutonomousLifecycleReasonDto, AutonomousRunDto,
+        AutonomousRunRecoveryStateDto, AutonomousRunStateDto, AutonomousRunStatusDto,
+        AutonomousSkillCacheStatusDto, AutonomousSkillLifecycleCacheDto,
         AutonomousSkillLifecycleDiagnosticDto, AutonomousSkillLifecyclePayloadDto,
         AutonomousSkillLifecycleResultDto, AutonomousSkillLifecycleSourceDto,
         AutonomousSkillLifecycleStageDto, AutonomousToolCallStateDto,
@@ -233,6 +234,7 @@ pub(crate) fn sample_skipped_automatic_dispatch_outcome() -> WorkflowAutomaticDi
 pub(crate) fn sample_autonomous_run(duplicate_start_detected: bool) -> AutonomousRunDto {
     AutonomousRunDto {
         project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
         run_id: "run-1".into(),
         runtime_kind: "openai_codex".into(),
         provider_id: "openai_codex".into(),
@@ -455,6 +457,23 @@ pub(crate) fn sample_autonomous_history() -> Vec<AutonomousUnitHistoryEntryDto> 
     }]
 }
 
+pub(crate) fn sample_agent_session() -> AgentSessionDto {
+    AgentSessionDto {
+        project_id: "project-1".into(),
+        agent_session_id: "agent-session-main".into(),
+        title: "Main".into(),
+        summary: String::new(),
+        status: AgentSessionStatusDto::Active,
+        selected: true,
+        created_at: "2026-04-13T20:00:49Z".into(),
+        updated_at: "2026-04-13T20:00:49Z".into(),
+        archived_at: None,
+        last_run_id: Some("run-1".into()),
+        last_runtime_kind: Some("openai_codex".into()),
+        last_provider_id: Some("openai_codex".into()),
+    }
+}
+
 pub(crate) fn sample_snapshot() -> ProjectSnapshotResponseDto {
     ProjectSnapshotResponseDto {
         project: sample_project(),
@@ -520,6 +539,7 @@ pub(crate) fn sample_snapshot() -> ProjectSnapshotResponseDto {
             created_at: "2026-04-13T20:06:33Z".into(),
         }],
         handoff_packages: vec![sample_handoff_package()],
+        agent_sessions: vec![sample_agent_session()],
         autonomous_run: Some(sample_autonomous_run(false)),
         autonomous_unit: Some(sample_autonomous_unit()),
     }

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::params;
+use rusqlite::{params, Error as SqlError};
 
 use crate::{
     commands::{CommandError, OperatorApprovalDto, OperatorApprovalStatus, ResumeHistoryEntryDto},
@@ -37,6 +37,7 @@ pub struct ResumeOperatorRunRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedRuntimeOperatorResume {
     pub project_id: String,
+    pub agent_session_id: String,
     pub approval_request: OperatorApprovalDto,
     pub session_id: String,
     pub flow_id: Option<String>,
@@ -457,9 +458,38 @@ pub fn prepare_runtime_operator_run_resume(
     let flow_id = approval_request.flow_id.clone();
     let session_id = session_id.to_string();
     let user_answer = user_answer.to_string();
+    let agent_session_id = connection
+        .query_row(
+            r#"
+            SELECT agent_session_id
+            FROM runtime_runs
+            WHERE project_id = ?1
+              AND run_id = ?2
+            "#,
+            params![project_id, runtime_target.run_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|error| match error {
+            SqlError::QueryReturnedNoRows => CommandError::retryable(
+                "operator_resume_runtime_run_missing",
+                format!(
+                    "Cadence cannot resume operator request `{action_id}` because runtime run `{}` is no longer durable.",
+                    runtime_target.run_id
+                ),
+            ),
+            other => CommandError::system_fault(
+                "runtime_run_query_failed",
+                format!(
+                    "Cadence could not read the agent session for runtime run `{}` from {}: {other}",
+                    runtime_target.run_id,
+                    database_path.display()
+                ),
+            ),
+        })?;
 
     Ok(Some(PreparedRuntimeOperatorResume {
         project_id: project_id.to_string(),
+        agent_session_id,
         approval_request,
         session_id,
         flow_id,

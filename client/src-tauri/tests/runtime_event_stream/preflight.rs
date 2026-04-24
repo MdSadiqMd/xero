@@ -100,6 +100,7 @@ pub(crate) fn subscribe_runtime_stream_returns_run_scoped_response_for_an_attach
         ),
         Ok(SubscribeRuntimeStreamResponseDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             runtime_kind: seeded_runtime.runtime_kind.clone(),
             run_id: launched.run.run_id.clone(),
             session_id: seeded_runtime

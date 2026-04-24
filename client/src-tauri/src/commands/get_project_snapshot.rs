@@ -61,18 +61,48 @@ pub fn get_project_snapshot<R: Runtime>(
     {
         match project_store::load_project_snapshot(Path::new(&root_path), &project_id) {
             Ok(record) => {
-                let before = load_persisted_runtime_run(Path::new(&root_path), &project_id)?;
-                let after =
-                    load_runtime_run_status(state.inner(), Path::new(&root_path), &project_id)?;
-                emit_runtime_run_updated_if_changed(&app, &project_id, &before, &after)?;
+                let mut snapshot = record.snapshot;
+                let agent_sessions =
+                    project_store::list_agent_sessions(Path::new(&root_path), &project_id, false)?;
+                let selected_agent_session_id = agent_sessions
+                    .iter()
+                    .find(|session| session.selected)
+                    .map(|session| session.agent_session_id.clone());
+                snapshot.agent_sessions = agent_sessions
+                    .iter()
+                    .map(super::agent_session::agent_session_dto)
+                    .collect();
+
+                let Some(agent_session_id) = selected_agent_session_id else {
+                    return Ok(snapshot);
+                };
+
+                let before = load_persisted_runtime_run(
+                    Path::new(&root_path),
+                    &project_id,
+                    &agent_session_id,
+                )?;
+                let after = load_runtime_run_status(
+                    state.inner(),
+                    Path::new(&root_path),
+                    &project_id,
+                    &agent_session_id,
+                )?;
+                emit_runtime_run_updated_if_changed(
+                    &app,
+                    &project_id,
+                    &agent_session_id,
+                    &before,
+                    &after,
+                )?;
 
                 let autonomous_state = sync_autonomous_run_state(
                     Path::new(&root_path),
                     &project_id,
+                    &agent_session_id,
                     after.as_ref(),
                     AutonomousSyncIntent::Observe,
                 )?;
-                let mut snapshot = record.snapshot;
                 snapshot.autonomous_run = autonomous_state.run;
                 snapshot.autonomous_unit = autonomous_state.unit;
                 return Ok(snapshot);

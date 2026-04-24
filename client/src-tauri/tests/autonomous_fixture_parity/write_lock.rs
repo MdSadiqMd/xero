@@ -38,6 +38,7 @@ pub(crate) fn get_autonomous_run_returns_transient_state_when_initial_persist_hi
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get autonomous run should fall back to the transient snapshot while the durable autonomous row is locked");
@@ -107,6 +108,7 @@ pub(crate) fn get_autonomous_run_reuses_unchanged_snapshot_without_write_lock_co
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("seed autonomous snapshot before lock");
@@ -126,6 +128,7 @@ pub(crate) fn get_autonomous_run_reuses_unchanged_snapshot_without_write_lock_co
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get autonomous run should reuse existing snapshot without writes");

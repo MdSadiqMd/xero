@@ -80,14 +80,19 @@ pub(super) fn load_terminal_runtime_snapshot(
     let mut latest_snapshot: Option<RuntimeRunSnapshotRecord> = None;
 
     for attempt in 0..TERMINAL_SNAPSHOT_RETRY_ATTEMPTS {
-        let snapshot = load_runtime_run_status(state, &request.repo_root, &request.project_id)
-            .map_err(|error| {
+        let snapshot = load_runtime_run_status(
+            state,
+            &request.repo_root,
+            &request.project_id,
+            &request.agent_session_id,
+        )
+        .map_err(|error| {
                 StreamExit::Failed(StreamFailure {
                     error,
                     last_sequence,
                 })
             })?
-            .ok_or_else(|| {
+        .ok_or_else(|| {
                 StreamExit::Failed(StreamFailure {
                     error: CommandError::retryable(
                         "runtime_stream_run_unavailable",
@@ -139,7 +144,11 @@ pub(super) fn load_streamable_runtime_run(
     request: &RuntimeStreamRequest,
     last_sequence: u64,
 ) -> StreamResult<RuntimeRunSnapshotRecord> {
-    let snapshot = load_persisted_runtime_run(&request.repo_root, &request.project_id)
+    let snapshot = load_persisted_runtime_run(
+        &request.repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+    )
         .map_err(|error| StreamExit::Failed(StreamFailure { error, last_sequence }))?
         .ok_or_else(|| {
             StreamExit::Failed(StreamFailure {

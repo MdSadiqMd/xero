@@ -14,6 +14,7 @@ pub(crate) fn runtime_action_required_persistence_enqueues_notification_dispatch
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-dispatch".into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-1".into(),
@@ -53,6 +54,7 @@ pub(crate) fn runtime_action_required_persistence_enqueues_notification_dispatch
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-dispatch".into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-1".into(),
@@ -497,6 +499,7 @@ pub(crate) fn resume_operator_run_delivers_approved_terminal_input_without_auth_
         app.state::<DesktopState>(),
         GetRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get runtime run after resume")
@@ -513,6 +516,7 @@ pub(crate) fn resume_operator_run_delivers_approved_terminal_input_without_auth_
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )
@@ -593,6 +597,7 @@ pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_
     persist_supervisor_event(
         &repo_root,
         &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
         &SupervisorLiveEventPayload::ActionRequired {
             action_id: action_id.clone(),
             boundary_id: blocked_boundary_id.clone(),
@@ -611,6 +616,7 @@ pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("load autonomous run after action-required persistence");
@@ -657,9 +663,13 @@ pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_
         .find(|dispatch| dispatch.route_id == "route-discord")
         .expect("discord dispatch row for autonomous reply test");
 
-    let blocked_durable = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load durable autonomous run after boundary pause")
-        .expect("durable autonomous run should exist after boundary pause");
+    let blocked_durable = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable autonomous run after boundary pause")
+    .expect("durable autonomous run should exist after boundary pause");
     let blocked_evidence = blocked_durable
         .history
         .iter()
@@ -743,6 +753,7 @@ pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("load autonomous run after resume");
@@ -768,9 +779,13 @@ pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_
         None
     );
 
-    let resumed_durable = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load durable autonomous run after resume")
-        .expect("durable autonomous run should still exist after resume");
+    let resumed_durable = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable autonomous run after resume")
+    .expect("durable autonomous run should still exist after resume");
     let boundary_evidence = resumed_durable
         .history
         .iter()
@@ -838,6 +853,7 @@ pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("reload autonomous run after resume");
@@ -845,9 +861,13 @@ pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_
         replayed.run.as_ref().map(|run| run.run_id.as_str()),
         Some(launched.run.run_id.as_str())
     );
-    let replayed_durable = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("reload durable autonomous run after resume replay")
-        .expect("durable autonomous run should still exist after replay");
+    let replayed_durable = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("reload durable autonomous run after resume replay")
+    .expect("durable autonomous run should still exist after replay");
     let replayed_boundary_evidence = replayed_durable
         .history
         .iter()
@@ -872,6 +892,7 @@ pub(crate) fn submit_notification_reply_persists_autonomous_boundary_and_resume_
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )
@@ -981,9 +1002,13 @@ pub(crate) fn resume_operator_run_records_failed_history_when_runtime_identity_s
         Some(action_id.as_str())
     );
 
-    let durable_runtime_run = project_store::load_runtime_run(&repo_root, &project_id)
-        .expect("load durable runtime run after stale-session resume failure")
-        .expect("durable runtime run should still exist after stale-session resume failure");
+    let durable_runtime_run = project_store::load_runtime_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable runtime run after stale-session resume failure")
+    .expect("durable runtime run should still exist after stale-session resume failure");
     assert_eq!(
         durable_runtime_run
             .run
@@ -998,6 +1023,7 @@ pub(crate) fn resume_operator_run_records_failed_history_when_runtime_identity_s
         app.state::<DesktopState>(),
         GetRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get runtime run after stale-session resume failure")
@@ -1013,6 +1039,7 @@ pub(crate) fn resume_operator_run_records_failed_history_when_runtime_identity_s
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )
@@ -1034,6 +1061,7 @@ pub(crate) fn resume_operator_run_records_failed_history_when_detached_control_c
         &repo_root,
         &project_store::RuntimeActionRequiredUpsertRecord {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             run_id: "run-submit-failed".into(),
             runtime_kind: "openai_codex".into(),
             session_id: "session-1".into(),
@@ -1097,9 +1125,13 @@ pub(crate) fn resume_operator_run_records_failed_history_when_detached_control_c
         Some(snapshot.approval_requests[0].action_id.as_str())
     );
 
-    let durable_runtime_run = project_store::load_runtime_run(&repo_root, &project_id)
-        .expect("load durable runtime run after failed resume")
-        .expect("durable runtime run should still exist after failed resume");
+    let durable_runtime_run = project_store::load_runtime_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load durable runtime run after failed resume")
+    .expect("durable runtime run should still exist after failed resume");
     assert_eq!(
         durable_runtime_run
             .run
@@ -1114,6 +1146,7 @@ pub(crate) fn resume_operator_run_records_failed_history_when_detached_control_c
         app.state::<DesktopState>(),
         GetRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get runtime run after failed resume")
@@ -1269,6 +1302,7 @@ pub(crate) fn submit_notification_reply_resumes_shell_review_boundary_without_du
         app.state::<DesktopState>(),
         GetRuntimeRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("get shell-review runtime run after remote approval")
@@ -1284,6 +1318,7 @@ pub(crate) fn submit_notification_reply_resumes_shell_review_boundary_without_du
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )

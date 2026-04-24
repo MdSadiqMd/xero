@@ -1454,6 +1454,7 @@ pub(crate) fn start_autonomous_run_mints_fresh_child_unit_and_attempt_identity_p
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -1715,6 +1716,7 @@ pub(crate) fn start_autonomous_run_mints_fresh_child_unit_and_attempt_identity_p
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect("replayed autonomous refresh should succeed");
@@ -1781,6 +1783,7 @@ pub(crate) fn start_autonomous_run_mints_fresh_child_unit_and_attempt_identity_p
         app.state::<DesktopState>(),
         CancelAutonomousRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: started_run.run_id,
         },
     )
@@ -1822,6 +1825,7 @@ pub(crate) fn get_autonomous_run_fails_closed_when_workflow_graph_has_no_active_
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect_err("missing active workflow node should fail closed");
@@ -1834,6 +1838,7 @@ pub(crate) fn get_autonomous_run_fails_closed_when_workflow_graph_has_no_active_
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )
@@ -1885,6 +1890,7 @@ pub(crate) fn get_autonomous_run_fails_closed_for_invalid_workflow_node_to_unit_
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect_err("invalid workflow mapping should fail closed");
@@ -1897,6 +1903,7 @@ pub(crate) fn get_autonomous_run_fails_closed_for_invalid_workflow_node_to_unit_
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id,
         },
     )
@@ -1919,6 +1926,7 @@ pub(crate) fn get_autonomous_run_rejects_stale_workflow_linkage_after_active_sta
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -1956,6 +1964,7 @@ pub(crate) fn get_autonomous_run_rejects_stale_workflow_linkage_after_active_sta
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect_err("stale workflow linkage should fail closed when active stage drifts");
@@ -1968,6 +1977,7 @@ pub(crate) fn get_autonomous_run_rejects_stale_workflow_linkage_after_active_sta
         app.state::<DesktopState>(),
         CancelAutonomousRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: started_run.run_id,
         },
     )
@@ -2033,23 +2043,32 @@ pub(crate) fn get_autonomous_run_rejects_runtime_run_id_mismatch_without_mutatin
         "run-autonomous-mismatch-1",
     );
 
-    let before = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load autonomous snapshot before run mismatch")
-        .expect("autonomous snapshot should exist before run mismatch");
+    let before = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot before run mismatch")
+    .expect("autonomous snapshot should exist before run mismatch");
 
     let error = get_autonomous_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect_err("run-id mismatch should fail closed during autonomous progression");
     assert_eq!(error.code, "autonomous_workflow_run_mismatch");
 
-    let after = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load autonomous snapshot after run mismatch")
-        .expect("autonomous snapshot should remain after run mismatch");
+    let after = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot after run mismatch")
+    .expect("autonomous snapshot should remain after run mismatch");
     assert_eq!(after.run.run_id, before.run.run_id);
     assert_eq!(after.run.status, before.run.status);
     assert_eq!(after.attempt, before.attempt);
@@ -2071,6 +2090,7 @@ pub(crate) fn get_autonomous_run_rejects_linkage_identity_drift_without_syntheti
         app.state::<DesktopState>(),
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
             initial_controls: None,
             initial_prompt: None,
         },
@@ -2088,9 +2108,13 @@ pub(crate) fn get_autonomous_run_rejects_linkage_identity_drift_without_syntheti
             .is_some_and(|linkage| linkage.workflow_node_id == "roadmap")
     });
 
-    let snapshot = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load autonomous snapshot before linkage identity drift")
-        .expect("autonomous snapshot should exist before linkage identity drift");
+    let snapshot = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot before linkage identity drift")
+    .expect("autonomous snapshot should exist before linkage identity drift");
     let active_linkage = snapshot
         .unit
         .as_ref()
@@ -2228,6 +2252,7 @@ pub(crate) fn get_autonomous_run_rejects_linkage_identity_drift_without_syntheti
         app.state::<DesktopState>(),
         GetAutonomousRunRequestDto {
             project_id: project_id.clone(),
+            agent_session_id: "agent-session-main".into(),
         },
     )
     .expect_err("stale linkage identity should fail closed during progression");
@@ -2237,9 +2262,13 @@ pub(crate) fn get_autonomous_run_rejects_linkage_identity_drift_without_syntheti
     ));
 
     if error.code == "autonomous_workflow_linkage_identity_conflict" {
-        let after = project_store::load_autonomous_run(&repo_root, &project_id)
-            .expect("load autonomous snapshot after linkage identity mismatch")
-            .expect("autonomous snapshot should remain after linkage identity mismatch");
+        let after = project_store::load_autonomous_run(
+            &repo_root,
+            &project_id,
+            project_store::DEFAULT_AGENT_SESSION_ID,
+        )
+        .expect("load autonomous snapshot after linkage identity mismatch")
+        .expect("autonomous snapshot should remain after linkage identity mismatch");
         let after_linkage = after
             .unit
             .as_ref()
@@ -2264,6 +2293,7 @@ pub(crate) fn get_autonomous_run_rejects_linkage_identity_drift_without_syntheti
         app.state::<DesktopState>(),
         StopRuntimeRunRequestDto {
             project_id,
+            agent_session_id: "agent-session-main".into(),
             run_id: started_run.run_id,
         },
     )
@@ -2288,13 +2318,18 @@ pub(crate) fn persist_supervisor_event_rejects_runtime_run_mismatch_without_muta
         "run-autonomous-live-event-1",
     );
 
-    let before = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load autonomous snapshot before live-event mismatch")
-        .expect("autonomous snapshot should exist before live-event mismatch");
+    let before = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot before live-event mismatch")
+    .expect("autonomous snapshot should exist before live-event mismatch");
 
     let error = persist_supervisor_event(
         &repo_root,
         &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
         &SupervisorLiveEventPayload::Activity {
             code: "policy_denied_runtime".into(),
             title: "Policy denied".into(),
@@ -2304,9 +2339,13 @@ pub(crate) fn persist_supervisor_event_rejects_runtime_run_mismatch_without_muta
     .expect_err("live supervisor event should fail closed on run mismatch");
     assert_eq!(error.code, "autonomous_live_event_run_mismatch");
 
-    let after = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load autonomous snapshot after live-event mismatch")
-        .expect("autonomous snapshot should remain after live-event mismatch");
+    let after = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot after live-event mismatch")
+    .expect("autonomous snapshot should remain after live-event mismatch");
     assert_eq!(after.run.run_id, before.run.run_id);
     assert_eq!(after.run.status, before.run.status);
     assert_eq!(after.attempt, before.attempt);
@@ -2322,13 +2361,18 @@ pub(crate) fn persist_supervisor_event_rejects_empty_boundary_identity_without_m
     seed_unreachable_runtime_run(&repo_root, &project_id, "run-live-event-boundary-1");
     seed_active_autonomous_run(&repo_root, &project_id, "run-live-event-boundary-1");
 
-    let before = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load autonomous snapshot before malformed boundary event")
-        .expect("autonomous snapshot should exist before malformed boundary event");
+    let before = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot before malformed boundary event")
+    .expect("autonomous snapshot should exist before malformed boundary event");
 
     let error = persist_supervisor_event(
         &repo_root,
         &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
         &SupervisorLiveEventPayload::ActionRequired {
             action_id: "action-boundary-test".into(),
             boundary_id: " ".into(),
@@ -2343,9 +2387,13 @@ pub(crate) fn persist_supervisor_event_rejects_empty_boundary_identity_without_m
         "autonomous_live_event_boundary_identity_invalid"
     );
 
-    let after = project_store::load_autonomous_run(&repo_root, &project_id)
-        .expect("load autonomous snapshot after malformed boundary event")
-        .expect("autonomous snapshot should remain after malformed boundary event");
+    let after = project_store::load_autonomous_run(
+        &repo_root,
+        &project_id,
+        project_store::DEFAULT_AGENT_SESSION_ID,
+    )
+    .expect("load autonomous snapshot after malformed boundary event")
+    .expect("autonomous snapshot should remain after malformed boundary event");
     assert_eq!(after.run.run_id, before.run.run_id);
     assert_eq!(after.run.status, before.run.status);
     assert_eq!(after.attempt, before.attempt);

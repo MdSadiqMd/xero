@@ -31,9 +31,9 @@ use super::{
     validate_runtime_supervisor_launch_context, write_json_line, PtyEventNormalizer,
     RuntimeSupervisorSidecarArgs, SharedPtyWriter, SidecarSharedState, SupervisorEventHub,
     ANTHROPIC_API_KEY_ENV, BEDROCK_BASE_URL_ENV, BEDROCK_DEFAULT_REGION_ENV, BEDROCK_ENABLE_ENV,
-    BEDROCK_REGION_ENV, CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV,
-    CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
-    CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
+    BEDROCK_REGION_ENV, CADENCE_AGENT_SESSION_ID_ENV, CADENCE_RUNTIME_FLOW_ID_ENV,
+    CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV, CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV,
+    CADENCE_RUNTIME_MODEL_ID_ENV, CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
     CADENCE_RUNTIME_THINKING_EFFORT_ENV, HEARTBEAT_INTERVAL, OPENAI_API_KEY_ENV,
     OPENAI_API_VERSION_ENV, OPENAI_BASE_URL_ENV, TERMINAL_ATTACH_GRACE_PERIOD, VERTEX_BASE_URL_ENV,
     VERTEX_ENABLE_ENV, VERTEX_PROJECT_ENV, VERTEX_REGION_ENV,
@@ -54,6 +54,7 @@ fn parse_sidecar_args(
     args: impl IntoIterator<Item = String>,
 ) -> Result<RuntimeSupervisorSidecarArgs, CommandError> {
     let mut project_id = None;
+    let mut agent_session_id = None;
     let mut repo_root = None;
     let mut runtime_kind = None;
     let mut run_id = None;
@@ -68,6 +69,7 @@ fn parse_sidecar_args(
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--project-id" => project_id = args.next(),
+            "--agent-session-id" => agent_session_id = args.next(),
             "--repo-root" => repo_root = args.next().map(PathBuf::from),
             "--runtime-kind" => runtime_kind = args.next(),
             "--run-id" => run_id = args.next(),
@@ -96,6 +98,8 @@ fn parse_sidecar_args(
 
     let args = RuntimeSupervisorSidecarArgs {
         project_id: project_id.ok_or_else(|| CommandError::invalid_request("projectId"))?,
+        agent_session_id: agent_session_id
+            .ok_or_else(|| CommandError::invalid_request("agentSessionId"))?,
         repo_root: repo_root.ok_or_else(|| CommandError::invalid_request("repoRoot"))?,
         runtime_kind: runtime_kind.ok_or_else(|| CommandError::invalid_request("runtimeKind"))?,
         run_id: run_id.ok_or_else(|| CommandError::invalid_request("runId"))?,
@@ -129,6 +133,7 @@ fn parse_sidecar_args(
     };
 
     validate_non_empty(&args.project_id, "projectId")?;
+    validate_non_empty(&args.agent_session_id, "agentSessionId")?;
     validate_non_empty(&args.runtime_kind, "runtimeKind")?;
     validate_non_empty(&args.run_id, "runId")?;
     validate_non_empty(&args.session_id, "sessionId")?;
@@ -451,8 +456,10 @@ fn default_vertex_adc_path() -> Option<PathBuf> {
 
 fn apply_launch_context_to_child_environment(
     builder: &mut CommandBuilder,
+    agent_session_id: &str,
     launch_context: &RuntimeSupervisorLaunchContext,
 ) {
+    builder.env_remove(CADENCE_AGENT_SESSION_ID_ENV);
     builder.env_remove(CADENCE_RUNTIME_PROVIDER_ID_ENV);
     builder.env_remove(CADENCE_RUNTIME_SESSION_ID_ENV);
     builder.env_remove(CADENCE_RUNTIME_FLOW_ID_ENV);
@@ -473,6 +480,7 @@ fn apply_launch_context_to_child_environment(
     builder.env_remove(VERTEX_PROJECT_ENV);
     builder.env_remove(VERTEX_BASE_URL_ENV);
 
+    builder.env(CADENCE_AGENT_SESSION_ID_ENV, agent_session_id);
     builder.env(CADENCE_RUNTIME_PROVIDER_ID_ENV, &launch_context.provider_id);
     builder.env(CADENCE_RUNTIME_SESSION_ID_ENV, &launch_context.session_id);
     builder.env(CADENCE_RUNTIME_MODEL_ID_ENV, &launch_context.model_id);
@@ -592,7 +600,11 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
     let mut builder = CommandBuilder::new(&args.program);
     builder.args(&args.args);
     builder.cwd(&args.repo_root);
-    apply_launch_context_to_child_environment(&mut builder, &args.launch_context);
+    apply_launch_context_to_child_environment(
+        &mut builder,
+        &args.agent_session_id,
+        &args.launch_context,
+    );
 
     let mut child = match pair.slave.spawn_command(builder) {
         Ok(child) => child,
@@ -634,6 +646,7 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
         &RuntimeRunUpsertRecord {
             run: RuntimeRunRecord {
                 project_id: args.project_id.clone(),
+                agent_session_id: args.agent_session_id.clone(),
                 run_id: args.run_id.clone(),
                 runtime_kind: args.runtime_kind.clone(),
                 provider_id: args.launch_context.provider_id.clone(),
@@ -664,6 +677,7 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
 
     let shared = Arc::new(Mutex::new(SidecarSharedState {
         project_id: args.project_id.clone(),
+        agent_session_id: args.agent_session_id.clone(),
         run_id: args.run_id.clone(),
         runtime_kind: args.runtime_kind.clone(),
         provider_id: args.launch_context.provider_id.clone(),

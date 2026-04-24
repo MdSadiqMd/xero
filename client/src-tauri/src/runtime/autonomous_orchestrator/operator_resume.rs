@@ -30,15 +30,24 @@ struct OperatorResumeGuard {
 pub fn validate_operator_resume_target(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
     action_id: &str,
     boundary_id: &str,
 ) -> Result<(), CommandError> {
-    load_operator_resume_guard(repo_root, project_id, action_id, boundary_id).map(|_| ())
+    load_operator_resume_guard(
+        repo_root,
+        project_id,
+        agent_session_id,
+        action_id,
+        boundary_id,
+    )
+    .map(|_| ())
 }
 
 pub fn persist_operator_resume(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
     action_id: &str,
     boundary_id: &str,
 ) -> Result<Option<AutonomousRunSnapshotRecord>, CommandError> {
@@ -46,7 +55,13 @@ pub fn persist_operator_resume(
         runtime_snapshot,
         existing,
         blocked_artifact,
-    }) = load_operator_resume_guard(repo_root, project_id, action_id, boundary_id)?
+    }) = load_operator_resume_guard(
+        repo_root,
+        project_id,
+        agent_session_id,
+        action_id,
+        boundary_id,
+    )?
     else {
         return Ok(None);
     };
@@ -132,11 +147,13 @@ pub fn persist_operator_resume(
 fn load_operator_resume_guard(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
     action_id: &str,
     boundary_id: &str,
 ) -> Result<Option<OperatorResumeGuard>, CommandError> {
-    let runtime_snapshot = project_store::load_runtime_run(repo_root, project_id)?;
-    let existing = project_store::load_autonomous_run(repo_root, project_id)?;
+    let runtime_snapshot =
+        project_store::load_runtime_run(repo_root, project_id, agent_session_id)?;
+    let existing = project_store::load_autonomous_run(repo_root, project_id, agent_session_id)?;
 
     let (runtime_snapshot, existing) = match (runtime_snapshot, existing) {
         (Some(runtime_snapshot), Some(existing)) => (runtime_snapshot, existing),

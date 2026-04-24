@@ -73,19 +73,22 @@ struct ActiveProviderProfileSelection {
 pub(crate) fn load_persisted_runtime_run(
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
 ) -> CommandResult<Option<RuntimeRunSnapshotRecord>> {
-    project_store::load_runtime_run(repo_root, project_id)
+    project_store::load_runtime_run(repo_root, project_id, agent_session_id)
 }
 
 pub(crate) fn load_runtime_run_status(
     state: &DesktopState,
     repo_root: &Path,
     project_id: &str,
+    agent_session_id: &str,
 ) -> CommandResult<Option<RuntimeRunSnapshotRecord>> {
     probe_runtime_run(
         state,
         RuntimeSupervisorProbeRequest {
             project_id: project_id.into(),
+            agent_session_id: agent_session_id.into(),
             repo_root: repo_root.to_path_buf(),
             control_timeout: DEFAULT_RUNTIME_RUN_CONTROL_TIMEOUT,
         },
@@ -95,6 +98,7 @@ pub(crate) fn load_runtime_run_status(
 pub(crate) fn runtime_run_dto_from_snapshot(snapshot: &RuntimeRunSnapshotRecord) -> RuntimeRunDto {
     RuntimeRunDto {
         project_id: snapshot.run.project_id.clone(),
+        agent_session_id: snapshot.run.agent_session_id.clone(),
         run_id: snapshot.run.run_id.clone(),
         runtime_kind: snapshot.run.runtime_kind.clone(),
         provider_id: snapshot.run.provider_id.clone(),
@@ -142,11 +146,15 @@ pub(crate) fn emit_runtime_run_updated<R: Runtime>(
     let project_id = runtime_run
         .map(|runtime_run| runtime_run.project_id.clone())
         .unwrap_or_default();
+    let agent_session_id = runtime_run
+        .map(|runtime_run| runtime_run.agent_session_id.clone())
+        .unwrap_or_default();
 
     app.emit(
         RUNTIME_RUN_UPDATED_EVENT,
         RuntimeRunUpdatedPayloadDto {
             project_id,
+            agent_session_id,
             run: runtime_run.cloned(),
         },
     )
@@ -163,6 +171,7 @@ pub(crate) fn emit_runtime_run_updated<R: Runtime>(
 pub(crate) fn emit_runtime_run_updated_if_changed<R: Runtime>(
     app: &AppHandle<R>,
     project_id: &str,
+    agent_session_id: &str,
     before: &Option<RuntimeRunSnapshotRecord>,
     after: &Option<RuntimeRunSnapshotRecord>,
 ) -> CommandResult<()> {
@@ -179,6 +188,7 @@ pub(crate) fn emit_runtime_run_updated_if_changed<R: Runtime>(
         RUNTIME_RUN_UPDATED_EVENT,
         RuntimeRunUpdatedPayloadDto {
             project_id: project_id.into(),
+            agent_session_id: agent_session_id.into(),
             run: None,
         },
     )
@@ -196,13 +206,15 @@ pub(crate) fn launch_or_reconnect_runtime_run<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
     project_id: &str,
+    agent_session_id: &str,
     requested_controls: Option<RuntimeRunControlInputDto>,
     initial_prompt: Option<String>,
 ) -> CommandResult<RuntimeRunLaunchOutcome> {
     let repo_root = resolve_project_root(app, state, project_id)?;
-    let before = load_persisted_runtime_run(&repo_root, project_id)?;
-    let current = load_runtime_run_status(state, &repo_root, project_id)?;
-    emit_runtime_run_updated_if_changed(app, project_id, &before, &current)?;
+    project_store::ensure_agent_session_active(&repo_root, project_id, agent_session_id)?;
+    let before = load_persisted_runtime_run(&repo_root, project_id, agent_session_id)?;
+    let current = load_runtime_run_status(state, &repo_root, project_id, agent_session_id)?;
+    emit_runtime_run_updated_if_changed(app, project_id, agent_session_id, &before, &current)?;
 
     if let Some(existing) = current
         .as_ref()
@@ -268,6 +280,7 @@ pub(crate) fn launch_or_reconnect_runtime_run<R: Runtime>(
         state,
         RuntimeSupervisorLaunchRequest {
             project_id: project_id.into(),
+            agent_session_id: agent_session_id.into(),
             repo_root: repo_root.clone(),
             runtime_kind: runtime.runtime_kind.clone(),
             run_id,

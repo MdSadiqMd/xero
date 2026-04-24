@@ -207,6 +207,7 @@ pub(crate) fn launch_request_with_context(
     );
     RuntimeSupervisorLaunchRequest {
         project_id: project_id.into(),
+        agent_session_id: "agent-session-main".into(),
         repo_root: repo_root.to_path_buf(),
         runtime_kind: runtime_kind.into(),
         run_id: run_id.into(),
@@ -364,6 +365,7 @@ pub(crate) fn openai_compatible_launch_request(
 pub(crate) fn probe_request(project_id: &str, repo_root: &Path) -> RuntimeSupervisorProbeRequest {
     RuntimeSupervisorProbeRequest {
         project_id: project_id.into(),
+        agent_session_id: "agent-session-main".into(),
         repo_root: repo_root.to_path_buf(),
         control_timeout: Duration::from_millis(750),
     }
@@ -372,6 +374,7 @@ pub(crate) fn probe_request(project_id: &str, repo_root: &Path) -> RuntimeSuperv
 pub(crate) fn stop_request(project_id: &str, repo_root: &Path) -> RuntimeSupervisorStopRequest {
     RuntimeSupervisorStopRequest {
         project_id: project_id.into(),
+        agent_session_id: "agent-session-main".into(),
         repo_root: repo_root.to_path_buf(),
         control_timeout: Duration::from_millis(750),
         shutdown_timeout: Duration::from_secs(4),
@@ -391,6 +394,7 @@ pub(crate) fn seed_running_runtime_run(
         &project_store::RuntimeRunUpsertRecord {
             run: project_store::RuntimeRunRecord {
                 project_id: project_id.into(),
+                agent_session_id: "agent-session-main".into(),
                 run_id: run_id.into(),
                 runtime_kind: "openai_codex".into(),
                 provider_id: "openai_codex".into(),
@@ -419,6 +423,7 @@ pub(crate) fn seed_active_autonomous_run(repo_root: &Path, project_id: &str, run
     let payload = project_store::AutonomousRunUpsertRecord {
         run: project_store::AutonomousRunRecord {
             project_id: project_id.into(),
+            agent_session_id: "agent-session-main".into(),
             run_id: run_id.into(),
             runtime_kind: "openai_codex".into(),
             provider_id: "openai_codex".into(),
