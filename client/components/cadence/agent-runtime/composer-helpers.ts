@@ -186,6 +186,7 @@ export function getComposerControlInput(options: {
     modelId: model.modelId,
     thinkingEffort: resolveComposerThinkingSelection(model, options.thinkingEffort),
     approvalMode: options.approvalMode,
+    planModeRequired: false,
   }
 }
 
@@ -388,6 +389,27 @@ function hasConfiguredApiKey(options: {
   return false
 }
 
+export function isSelectedProviderReadyForSession(options: {
+  selectedProviderId: string
+  selectedProfileReadiness?: ProviderProfileReadinessDto | null
+  openrouterApiKeyConfigured: boolean
+}): boolean {
+  if (options.selectedProfileReadiness?.ready) {
+    return true
+  }
+
+  if (options.selectedProfileReadiness) {
+    return false
+  }
+
+  const authMode = getSelectedProviderAuthMode(options.selectedProviderId)
+  if (authMode === 'api_key') {
+    return hasConfiguredApiKey(options)
+  }
+
+  return false
+}
+
 function getApiKeyArticle(providerLabel: string): 'a' | 'an' {
   const normalizedProviderLabel = providerLabel.trim().toLowerCase()
   return normalizedProviderLabel.startsWith('a') ||
@@ -411,7 +433,7 @@ function getApiKeySetupPlaceholder(options: {
   }
 
   return hasConfiguredApiKey(options)
-    ? `Bind ${providerLabel} from the Agent tab to start.`
+    ? `Send a message to start with ${providerLabel}.`
     : `Configure ${getApiKeyArticle(providerLabel)} ${providerLabel} API key in Settings to start.`
 }
 
@@ -433,7 +455,7 @@ function getConfiguredProviderSetupPlaceholder(options: {
     }
 
     return options.selectedProfileReadiness?.ready
-      ? `Bind ${providerLabel} with the selected local provider profile to start.`
+      ? `Send a message to start with ${providerLabel}.`
       : `Save the selected ${providerLabel} local endpoint profile in Settings to start.`
   }
 
@@ -443,11 +465,17 @@ function getConfiguredProviderSetupPlaceholder(options: {
     }
 
     return options.selectedProfileReadiness?.ready
-      ? `Bind ${providerLabel} with the selected ambient-auth provider profile to start.`
+      ? `Send a message to start with ${providerLabel}.`
       : `Save the selected ${providerLabel} ambient-auth profile${getRequiredMetadataSuffix(options.selectedProviderId)} in Settings to start.`
   }
 
-  return 'Connect a provider to start.'
+  if (authMode === 'oauth') {
+    return options.selectedProfileReadiness?.ready
+      ? `Send a message to start with ${providerLabel}.`
+      : 'Connect a provider to start.'
+  }
+
+  return 'Connect a provider in Settings to start.'
 }
 
 function getInProgressProviderBindPlaceholder(selectedProviderId: string): string {

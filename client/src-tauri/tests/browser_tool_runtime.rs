@@ -30,6 +30,8 @@ impl BrowserExecutor for RecordingExecutor {
         action: AutonomousBrowserAction,
     ) -> Result<AutonomousBrowserOutput, CommandError> {
         let name = match &action {
+            AutonomousBrowserAction::Open { .. } => "open",
+            AutonomousBrowserAction::TabOpen { .. } => "tab_open",
             AutonomousBrowserAction::Navigate { .. } => "navigate",
             AutonomousBrowserAction::Click { .. } => "click",
             AutonomousBrowserAction::ReadText { .. } => "read_text",
@@ -38,7 +40,9 @@ impl BrowserExecutor for RecordingExecutor {
         }
         .to_string();
         let url = match &action {
-            AutonomousBrowserAction::Navigate { url } => Some(url.clone()),
+            AutonomousBrowserAction::Open { url }
+            | AutonomousBrowserAction::TabOpen { url }
+            | AutonomousBrowserAction::Navigate { url } => Some(url.clone()),
             _ => None,
         };
         self.calls.lock().unwrap().push(action);
@@ -83,6 +87,35 @@ fn unavailable_executor_denies_any_action() {
 }
 
 #[test]
+fn recording_executor_dispatches_open_and_propagates_result() {
+    let recorder = Arc::new(RecordingExecutor::new());
+    let executor: Arc<dyn BrowserExecutor> = recorder.clone();
+    let (runtime, _temp) = runtime_with_executor(executor);
+
+    let request = AutonomousToolRequest::Browser(AutonomousBrowserRequest {
+        action: AutonomousBrowserAction::Open {
+            url: "https://example.com/".to_string(),
+        },
+    });
+    let result = runtime.execute(request).expect("success");
+    assert_eq!(result.tool_name, "browser");
+    match result.output {
+        AutonomousToolOutput::Browser(output) => {
+            assert_eq!(output.action, "open");
+            assert_eq!(output.url.as_deref(), Some("https://example.com/"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+
+    let calls = recorder.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    match &calls[0] {
+        AutonomousBrowserAction::Open { url } => assert_eq!(url, "https://example.com/"),
+        other => panic!("unexpected action: {other:?}"),
+    }
+}
+
+#[test]
 fn recording_executor_dispatches_navigate_and_propagates_result() {
     let recorder = Arc::new(RecordingExecutor::new());
     let executor: Arc<dyn BrowserExecutor> = recorder.clone();
@@ -112,6 +145,27 @@ fn recording_executor_dispatches_navigate_and_propagates_result() {
 }
 
 #[test]
+fn recording_executor_dispatches_tab_open() {
+    let recorder = Arc::new(RecordingExecutor::new());
+    let executor: Arc<dyn BrowserExecutor> = recorder.clone();
+    let (runtime, _temp) = runtime_with_executor(executor);
+
+    let request = AutonomousToolRequest::Browser(AutonomousBrowserRequest {
+        action: AutonomousBrowserAction::TabOpen {
+            url: "https://example.com/new".to_string(),
+        },
+    });
+    let result = runtime.execute(request).expect("success");
+    match result.output {
+        AutonomousToolOutput::Browser(output) => {
+            assert_eq!(output.action, "tab_open");
+            assert_eq!(output.url.as_deref(), Some("https://example.com/new"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+}
+
+#[test]
 fn recording_executor_handles_click() {
     let recorder = Arc::new(RecordingExecutor::new());
     let executor: Arc<dyn BrowserExecutor> = recorder.clone();
@@ -134,16 +188,50 @@ fn recording_executor_handles_click() {
 fn browser_action_serializes_with_action_tag() {
     // Serialization contract — what the autonomous orchestrator encodes into
     // supervisor events should round-trip cleanly.
-    let request = AutonomousBrowserRequest {
+    let open = AutonomousBrowserRequest {
+        action: AutonomousBrowserAction::Open {
+            url: "https://example.com/".to_string(),
+        },
+    };
+    let open_json = serde_json::to_value(&open).unwrap();
+    assert_eq!(open_json["action"], "open");
+    assert_eq!(open_json["url"], "https://example.com/");
+    let open_roundtrip: AutonomousBrowserRequest = serde_json::from_value(open_json).unwrap();
+    assert_eq!(open_roundtrip, open);
+
+    let tab_open = AutonomousBrowserRequest {
+        action: AutonomousBrowserAction::TabOpen {
+            url: "https://example.com/new".to_string(),
+        },
+    };
+    let tab_open_json = serde_json::to_value(&tab_open).unwrap();
+    assert_eq!(tab_open_json["action"], "tab_open");
+    assert_eq!(tab_open_json["url"], "https://example.com/new");
+    let tab_open_roundtrip: AutonomousBrowserRequest =
+        serde_json::from_value(tab_open_json).unwrap();
+    assert_eq!(tab_open_roundtrip, tab_open);
+
+    let click = AutonomousBrowserRequest {
         action: AutonomousBrowserAction::Click {
             selector: "#login".to_string(),
             timeout_ms: None,
         },
     };
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["action"], "click");
-    assert_eq!(json["selector"], "#login");
+    let click_json = serde_json::to_value(&click).unwrap();
+    assert_eq!(click_json["action"], "click");
+    assert_eq!(click_json["selector"], "#login");
 
-    let roundtrip: AutonomousBrowserRequest = serde_json::from_value(json).unwrap();
-    assert_eq!(roundtrip, request);
+    let click_roundtrip: AutonomousBrowserRequest = serde_json::from_value(click_json).unwrap();
+    assert_eq!(click_roundtrip, click);
+}
+
+#[test]
+fn browser_action_rejects_unknown_action_tag() {
+    let payload = serde_json::json!({
+        "action": "open_in_new_window",
+        "url": "https://example.com/"
+    });
+    let error = serde_json::from_value::<AutonomousBrowserRequest>(payload)
+        .expect_err("unknown action tags should fail closed");
+    assert!(error.to_string().contains("unknown variant"));
 }

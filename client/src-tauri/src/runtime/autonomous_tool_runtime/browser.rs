@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use tauri::{AppHandle, Runtime};
 
-use crate::commands::browser::StorageArea;
+use crate::commands::browser::{provision_browser_tab, StorageArea};
 use crate::commands::{CommandError, CommandResult};
 use crate::state::DesktopState;
 
@@ -19,6 +19,12 @@ pub const BROWSER_POLICY_DENIED_CODE: &str = "policy_denied";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum AutonomousBrowserAction {
+    Open {
+        url: String,
+    },
+    TabOpen {
+        url: String,
+    },
     Navigate {
         url: String,
     },
@@ -135,6 +141,14 @@ pub fn execute_action_with_app<R: Runtime>(
     use crate::commands::browser::actions as browser_actions;
 
     let output_value = match action {
+        AutonomousBrowserAction::Open { url } => {
+            let tab = provision_browser_tab(app, browser_state.inner(), &url, None, false, None)?;
+            tab_to_json(tab)
+        }
+        AutonomousBrowserAction::TabOpen { url } => {
+            let tab = provision_browser_tab(app, browser_state.inner(), &url, None, true, None)?;
+            tab_to_json(tab)
+        }
         AutonomousBrowserAction::Navigate { url } => {
             let target = browser_actions::parse_url(&url)?;
             let label = tabs
@@ -325,6 +339,8 @@ pub fn execute_action_with_app<R: Runtime>(
 
 fn action_tool_name(action: &AutonomousBrowserAction) -> String {
     match action {
+        AutonomousBrowserAction::Open { .. } => "open",
+        AutonomousBrowserAction::TabOpen { .. } => "tab_open",
         AutonomousBrowserAction::Navigate { .. } => "navigate",
         AutonomousBrowserAction::Back => "back",
         AutonomousBrowserAction::Forward => "forward",

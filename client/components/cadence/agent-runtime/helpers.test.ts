@@ -6,7 +6,10 @@ import {
   getCheckpointControlLoopRecoveryAlertMeta,
   getPerActionResumeStateMeta,
 } from '@/components/cadence/agent-runtime/checkpoint-control-loop-helpers'
-import { getComposerPlaceholder } from '@/components/cadence/agent-runtime/composer-helpers'
+import {
+  getComposerPlaceholder,
+  isSelectedProviderReadyForSession,
+} from '@/components/cadence/agent-runtime/composer-helpers'
 import { getStreamStatusMeta, getToolSummaryContext } from '@/components/cadence/agent-runtime/runtime-stream-helpers'
 import { displayValue, formatSequence } from '@/components/cadence/agent-runtime/shared-helpers'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
@@ -336,6 +339,21 @@ describe('agent-runtime helpers', () => {
         providerMismatch: true,
       }),
     ).toBe('Rebind GitHub Models before trusting new live activity.')
+  })
+
+  it('does not allow malformed API-key readiness to masquerade as session-ready', () => {
+    expect(
+      isSelectedProviderReadyForSession({
+        selectedProviderId: 'openrouter',
+        selectedProfileReadiness: {
+          ready: false,
+          status: 'malformed',
+          proof: 'stored_secret',
+          proofUpdatedAt: '2026-04-20T12:00:00Z',
+        },
+        openrouterApiKeyConfigured: true,
+      }),
+    ).toBe(false)
   })
 
   it('keeps the stream meta and degraded checkpoint alert copy stable', () => {

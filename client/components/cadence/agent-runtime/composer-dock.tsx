@@ -44,6 +44,7 @@ interface ComposerDockProps {
   composerApprovalMode: RuntimeRunApprovalModeDto
   composerApprovalOptions: ComposerApprovalOption[]
   controlsDisabled: boolean
+  runtimeSessionBindInFlight: boolean
   runtimeRunActionStatus: RuntimeRunActionStatus
   pendingRuntimeRunAction: RuntimeRunActionKind | null
   runtimeRunActionError: OperatorActionErrorView | null
@@ -78,6 +79,7 @@ export function ComposerDock({
   composerApprovalMode,
   composerApprovalOptions,
   controlsDisabled,
+  runtimeSessionBindInFlight,
   runtimeRunActionStatus,
   pendingRuntimeRunAction,
   runtimeRunActionError,
@@ -93,7 +95,8 @@ export function ComposerDock({
   const hasComposerModelOptions = composerModelGroups.length > 0
   const hasThinkingOptions = composerThinkingOptions.length > 0
   const isUpdatingControls = runtimeRunActionStatus === 'running' && pendingRuntimeRunAction === 'update_controls'
-  const isStartingRun = runtimeRunActionStatus === 'running' && pendingRuntimeRunAction === 'start'
+  const isStartingRun =
+    runtimeSessionBindInFlight || (runtimeRunActionStatus === 'running' && pendingRuntimeRunAction === 'start')
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey) {
@@ -199,7 +202,7 @@ export function ComposerDock({
                     type="button"
                     variant="secondary"
                   >
-                    {isUpdatingControls ? (
+                    {isUpdatingControls || isStartingRun ? (
                       <LoaderCircle className="h-3.5 w-3.5 animate-spin" strokeWidth={2.5} />
                     ) : (
                       <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />

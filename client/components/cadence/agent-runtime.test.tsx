@@ -871,7 +871,7 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByRole('button', { name: 'Resume run' })).toBeVisible()
   })
 
-  it('renders worker lifecycle cards with truthful lag and handoff-pending linkage states', () => {
+  it('does not render worker lifecycle cards on the Agent tab', () => {
     const recentAutonomousUnits = makeRecentAutonomousUnits({
       items: [
         makeRecentAutonomousUnits().items[0],
@@ -930,16 +930,15 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Recent autonomous workers' })).toBeVisible()
-    expect(screen.getByText('Snapshot lag')).toBeVisible()
-    expect(screen.getByText('Handoff pending')).toBeVisible()
-    expect(screen.getByText('Only the latest durable attempt per unit is shown here.')).toBeVisible()
-    expect(screen.getByText('Showing 2 of 4 durable units in the bounded recent-history window.')).toBeVisible()
-    expect(screen.getByText('+2 older units')).toBeVisible()
-    expect(screen.getAllByText('Pending durable linkage').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('heading', { name: 'Recent autonomous workers' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Snapshot lag')).not.toBeInTheDocument()
+    expect(screen.queryByText('Handoff pending')).not.toBeInTheDocument()
+    expect(screen.queryByText('Only the latest durable attempt per unit is shown here.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Showing 2 of 4 durable units in the bounded recent-history window.')).not.toBeInTheDocument()
+    expect(screen.queryByText('+2 older units')).not.toBeInTheDocument()
   })
 
-  it('renders the empty worker lifecycle state when no bounded recent-unit rows are available', () => {
+  it('does not render the empty worker lifecycle state', () => {
     render(
       <AgentRuntime
         agent={makeAgent({
@@ -957,11 +956,11 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Recent autonomous workers' })).toBeVisible()
-    expect(screen.getByText('No recent autonomous units recorded')).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Recent autonomous workers' })).not.toBeInTheDocument()
+    expect(screen.queryByText('No recent autonomous units recorded')).not.toBeInTheDocument()
     expect(
-      screen.getByText('Cadence has not persisted a bounded autonomous unit history for this project yet.'),
-    ).toBeVisible()
+      screen.queryByText('Cadence has not persisted a bounded autonomous unit history for this project yet.'),
+    ).not.toBeInTheDocument()
   })
 
   it('renders recovered durable denial cards on the Agent tab', () => {
@@ -1972,6 +1971,7 @@ describe('AgentRuntime current UI', () => {
           modelId: 'openai_codex',
           thinkingEffort: null,
           approvalMode: 'suggest',
+          planModeRequired: false,
         },
         prompt: 'Kick off the first run.',
       }),
@@ -2018,6 +2018,165 @@ describe('AgentRuntime current UI', () => {
     )
 
     await waitFor(() => expect(screen.getByLabelText('Agent input unavailable')).toHaveValue(''))
+  })
+
+  it('binds a ready provider profile and starts the first run from the send button', async () => {
+    const onStartRuntimeSession = vi.fn(async () =>
+      makeRuntimeSession({
+        runtimeKind: 'openrouter',
+        providerId: 'openrouter',
+        sessionId: 'session-openrouter',
+      }),
+    )
+    const onStartRuntimeRun = vi.fn(async () =>
+      makeRuntimeRun({
+        runtimeKind: 'openrouter',
+        providerId: 'openrouter',
+        runtimeLabel: 'OpenRouter · Supervisor running',
+      }),
+    )
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: null,
+          runtimeRun: null,
+          selectedProfileId: 'openrouter-default',
+          selectedProfileLabel: 'OpenRouter',
+          selectedProviderId: 'openrouter',
+          selectedProviderLabel: 'OpenRouter',
+          selectedModelId: 'openai/gpt-4.1-mini',
+          selectedThinkingEffort: 'medium',
+          selectedProfileReadiness: {
+            ready: true,
+            status: 'ready',
+            proof: 'stored_secret',
+            proofUpdatedAt: '2026-04-20T12:00:00Z',
+          },
+          providerModelCatalog: makeProviderModelCatalog({
+            profileId: 'openrouter-default',
+            profileLabel: 'OpenRouter',
+            providerId: 'openrouter',
+            providerLabel: 'OpenRouter',
+            models: [
+              makeAgentModel({
+                modelId: 'openai/gpt-4.1-mini',
+                label: 'openai/gpt-4.1-mini',
+                displayName: 'OpenAI GPT-4.1 Mini',
+                groupId: 'openai',
+                groupLabel: 'OpenAI',
+                availability: 'available',
+                availabilityLabel: 'Available',
+                thinkingSupported: true,
+                thinkingEffortOptions: ['low', 'medium', 'high'],
+                defaultThinkingEffort: 'medium',
+              }),
+            ],
+          }),
+        })}
+        onStartRuntimeSession={onStartRuntimeSession}
+        onStartRuntimeRun={onStartRuntimeRun}
+      />,
+    )
+
+    expect(screen.queryByText('Configure agent runtime')).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Model selector' })).toBeEnabled()
+    expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toBeEnabled()
+    expect(screen.getByLabelText('Agent input')).toHaveAttribute(
+      'placeholder',
+      'Send a message to start with OpenRouter.',
+    )
+
+    fireEvent.change(screen.getByLabelText('Agent input'), {
+      target: { value: 'Build the provider path.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => expect(onStartRuntimeSession).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(onStartRuntimeRun).toHaveBeenCalledWith({
+        controls: {
+          modelId: 'openai/gpt-4.1-mini',
+          thinkingEffort: 'medium',
+          approvalMode: 'suggest',
+          planModeRequired: false,
+        },
+        prompt: 'Build the provider path.',
+      }),
+    )
+  })
+
+  it('keeps the first prompt queued when provider binding does not authenticate', async () => {
+    const onStartRuntimeSession = vi.fn(async () =>
+      makeRuntimeSession({
+        runtimeKind: 'openrouter',
+        providerId: 'openrouter',
+        phase: 'idle',
+        phaseLabel: 'Idle',
+        sessionId: null,
+        isAuthenticated: false,
+        isSignedOut: true,
+        lastError: {
+          code: 'provider_validation_failed',
+          message: 'OpenRouter rejected the saved API key.',
+          retryable: false,
+        },
+      }),
+    )
+    const onStartRuntimeRun = vi.fn(async () => makeRuntimeRun())
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: null,
+          runtimeRun: null,
+          selectedProfileId: 'openrouter-default',
+          selectedProfileLabel: 'OpenRouter',
+          selectedProviderId: 'openrouter',
+          selectedProviderLabel: 'OpenRouter',
+          selectedModelId: 'openai/gpt-4.1-mini',
+          selectedThinkingEffort: 'medium',
+          selectedProfileReadiness: {
+            ready: true,
+            status: 'ready',
+            proof: 'stored_secret',
+            proofUpdatedAt: '2026-04-20T12:00:00Z',
+          },
+          providerModelCatalog: makeProviderModelCatalog({
+            profileId: 'openrouter-default',
+            profileLabel: 'OpenRouter',
+            providerId: 'openrouter',
+            providerLabel: 'OpenRouter',
+            models: [
+              makeAgentModel({
+                modelId: 'openai/gpt-4.1-mini',
+                label: 'openai/gpt-4.1-mini',
+                displayName: 'OpenAI GPT-4.1 Mini',
+                groupId: 'openai',
+                groupLabel: 'OpenAI',
+                availability: 'available',
+                availabilityLabel: 'Available',
+                thinkingSupported: true,
+                thinkingEffortOptions: ['medium'],
+                defaultThinkingEffort: 'medium',
+              }),
+            ],
+          }),
+        })}
+        onStartRuntimeSession={onStartRuntimeSession}
+        onStartRuntimeRun={onStartRuntimeRun}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Agent input'), {
+      target: { value: 'Do not lose this.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => expect(onStartRuntimeSession).toHaveBeenCalledTimes(1))
+    expect(onStartRuntimeRun).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Agent input')).toHaveValue('Do not lose this.')
+    expect(await screen.findByText('OpenRouter rejected the saved API key.')).toBeVisible()
   })
 
   it('queues the next prompt against the active run while preserving truthful selected controls', async () => {

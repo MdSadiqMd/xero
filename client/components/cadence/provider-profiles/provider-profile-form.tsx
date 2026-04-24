@@ -608,6 +608,7 @@ export function ProviderProfileForm({
   const cards = getProfileCards(providerProfiles)
   const isRefreshing = providerProfilesLoadStatus === "loading"
   const isSaving = providerProfilesSaveStatus === "running"
+  const isMutationDisabled = isSaving || !onUpsertProviderProfile
   const selectedProfile = getActiveProviderProfile(providerProfiles)
   const selectedProvider = resolveSelectedRuntimeProvider(providerProfiles, null, runtimeSession ?? null)
   const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession ?? null)
@@ -1023,7 +1024,7 @@ export function ProviderProfileForm({
                       size="sm"
                       variant="outline"
                       className="h-8 text-[12px]"
-                      disabled={isSaving || isRefreshing || !onUpsertProviderProfile}
+                      disabled={isMutationDisabled}
                       onClick={() => void handleActivate(card)}
                     >
                       Use this
@@ -1035,7 +1036,7 @@ export function ProviderProfileForm({
                       size="sm"
                       variant="secondary"
                       className="h-8 text-[12px]"
-                      disabled={isSaving || isRefreshing}
+                      disabled={isSaving}
                       onClick={() => openEditor(card)}
                     >
                       Edit label
@@ -1045,7 +1046,7 @@ export function ProviderProfileForm({
                       size="sm"
                       variant={hasSavedApiKey ? "secondary" : "outline"}
                       className="h-8 text-[12px]"
-                      disabled={isSaving || isRefreshing}
+                      disabled={isSaving}
                       onClick={() => openEditor(card)}
                     >
                       {hasSavedApiKey ? "Edit" : "Set up"}
@@ -1058,7 +1059,7 @@ export function ProviderProfileForm({
                         variant="outline"
                         size="sm"
                         className="h-8 gap-1.5 text-[12px]"
-                        disabled={pendingAuth !== null || isRefreshing || isSaving}
+                        disabled={pendingAuth !== null || isSaving}
                         onClick={() => void handleOpenAiDisconnect()}
                       >
                         {pendingAuth === "logout" ? (
@@ -1081,7 +1082,7 @@ export function ProviderProfileForm({
                       <Button
                         size="sm"
                         className="h-8 gap-1.5 text-[12px]"
-                        disabled={pendingAuth !== null || isRefreshing || isSaving}
+                        disabled={pendingAuth !== null || isSaving}
                         onClick={() => void handleOpenAiConnect()}
                       >
                         {pendingAuth === "login" ? (
@@ -1105,7 +1106,7 @@ export function ProviderProfileForm({
                     <Input
                       id={`${card.key}-label`}
                       className="h-9 text-[13px]"
-                      disabled={isSaving || isRefreshing}
+                      disabled={isSaving}
                       onChange={(event) =>
                         setDraft(card, {
                           ...draft,
@@ -1128,7 +1129,7 @@ export function ProviderProfileForm({
                           variant="outline"
                           size="sm"
                           className="h-7 gap-1.5 px-2.5 text-[11px]"
-                          disabled={isSaving || isRefreshing || isCatalogRefreshing}
+                          disabled={isSaving || isCatalogRefreshing}
                           onClick={() => void handleRefreshCatalog(card)}
                         >
                           {isCatalogRefreshing ? <LoaderCircle className="h-3 w-3 animate-spin" /> : null}
@@ -1146,7 +1147,7 @@ export function ProviderProfileForm({
                       </div>
                     ) : cardCatalogState.choices.length > 0 ? (
                       <Select
-                        disabled={isSaving || isRefreshing}
+                        disabled={isSaving}
                         value={draft.modelId}
                         onValueChange={(value) =>
                           setDraft(card, {
@@ -1178,7 +1179,7 @@ export function ProviderProfileForm({
                       <Input
                         id={`${card.key}-model`}
                         className="h-9 font-mono text-[13px]"
-                        disabled={isSaving || isRefreshing}
+                        disabled={isSaving}
                         onChange={(event) =>
                           setDraft(card, {
                             ...draft,
@@ -1222,7 +1223,7 @@ export function ProviderProfileForm({
                           <Input
                             id={`${card.key}-base-url`}
                             className="h-9 font-mono text-[13px]"
-                            disabled={isSaving || isRefreshing}
+                            disabled={isSaving}
                             onChange={(event) =>
                               setDraft(card, {
                                 ...draft,
@@ -1249,7 +1250,7 @@ export function ProviderProfileForm({
                           <Input
                             id={`${card.key}-api-version`}
                             className="h-9 font-mono text-[13px]"
-                            disabled={isSaving || isRefreshing}
+                            disabled={isSaving}
                             onChange={(event) =>
                               setDraft(card, {
                                 ...draft,
@@ -1270,7 +1271,7 @@ export function ProviderProfileForm({
                           <Input
                             id={`${card.key}-region`}
                             className="h-9 font-mono text-[13px]"
-                            disabled={isSaving || isRefreshing}
+                            disabled={isSaving}
                             onChange={(event) =>
                               setDraft(card, {
                                 ...draft,
@@ -1291,7 +1292,7 @@ export function ProviderProfileForm({
                           <Input
                             id={`${card.key}-project-id`}
                             className="h-9 font-mono text-[13px]"
-                            disabled={isSaving || isRefreshing}
+                            disabled={isSaving}
                             onChange={(event) =>
                               setDraft(card, {
                                 ...draft,
@@ -1326,7 +1327,7 @@ export function ProviderProfileForm({
                           autoComplete="off"
                           spellCheck={false}
                           className="h-9 flex-1 font-mono text-[13px]"
-                          disabled={isSaving || isRefreshing}
+                          disabled={isSaving}
                           onChange={(event) =>
                             setDraft(card, {
                               ...draft,
@@ -1350,7 +1351,7 @@ export function ProviderProfileForm({
                             variant="outline"
                             size="sm"
                             className="h-9 px-2.5 text-[12px]"
-                            disabled={isSaving || isRefreshing}
+                            disabled={isSaving}
                             onClick={() =>
                               setDraft(card, {
                                 ...draft,
@@ -1392,7 +1393,7 @@ export function ProviderProfileForm({
                     <Button
                       size="sm"
                       className="h-8 gap-1.5 text-[12px]"
-                      disabled={isSaving || isRefreshing || !onUpsertProviderProfile}
+                      disabled={isMutationDisabled}
                       onClick={() => void handleSave(card)}
                     >
                       {isSaving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
@@ -1402,7 +1403,7 @@ export function ProviderProfileForm({
                       size="sm"
                       variant="ghost"
                       className="h-8 text-[12px]"
-                      disabled={isSaving || isRefreshing}
+                      disabled={isSaving}
                       onClick={() => closeEditor(card.key)}
                     >
                       Cancel

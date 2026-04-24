@@ -28,8 +28,8 @@ import {
   getComposerPlaceholder,
   getComposerThinkingOptions,
   getSelectedProviderId,
+  isSelectedProviderReadyForSession,
 } from './agent-runtime/composer-helpers'
-import { RecentAutonomousUnitsSection } from './agent-runtime/recent-autonomous-units-section'
 import { ComposerDock } from './agent-runtime/composer-dock'
 import {
   getStreamRunId,
@@ -78,6 +78,7 @@ export function AgentRuntime({
   onStartRuntimeRun,
   onUpdateRuntimeRunControls,
   onStopRuntimeRun,
+  onStartRuntimeSession,
   onResolveOperatorAction,
   onResumeOperatorRun,
 }: AgentRuntimeProps) {
@@ -104,7 +105,19 @@ export function AgentRuntime({
   const openrouterApiKeyConfigured = agent.openrouterApiKeyConfigured ?? false
   const providerMismatch = agent.providerMismatch ?? false
   const hasRepositoryBinding = Boolean(agent.repositoryPath?.trim())
+  const selectedProviderReadyForSession = isSelectedProviderReadyForSession({
+    selectedProviderId,
+    selectedProfileReadiness: agent.selectedProfileReadiness ?? null,
+    openrouterApiKeyConfigured,
+  })
   const canMutateRuntimeRun = !providerMismatch
+  const canStartRuntimeSession = Boolean(
+    canMutateRuntimeRun &&
+      hasRepositoryBinding &&
+      typeof onStartRuntimeSession === 'function' &&
+      selectedProviderReadyForSession &&
+      (!runtimeSession?.isAuthenticated || runtimeSession.providerId !== selectedProviderId),
+  )
   const canStartRuntimeRun = Boolean(
     canMutateRuntimeRun &&
       hasRepositoryBinding &&
@@ -133,8 +146,10 @@ export function AgentRuntime({
     runtimeRunActionStatus: agent.runtimeRunActionStatus,
     runtimeRunActionError: agent.runtimeRunActionError,
     canStartRuntimeRun,
+    canStartRuntimeSession,
     canStopRuntimeRun,
     onStartRuntimeRun,
+    onStartRuntimeSession,
     onUpdateRuntimeRunControls: canMutateRuntimeRun ? onUpdateRuntimeRunControls : undefined,
     onStopRuntimeRun,
     onResolveOperatorAction,
@@ -142,21 +157,21 @@ export function AgentRuntime({
   })
 
   const selectedComposerModel = useMemo(
-    () => getComposerModelOption(availableModels, selectedModelId),
-    [availableModels, selectedModelId],
+    () => getComposerModelOption(availableModels, controller.composerModelId),
+    [availableModels, controller.composerModelId],
   )
   const composerModelGroups = useMemo(
-    () => getComposerModelGroups(availableModels, selectedModelId),
-    [availableModels, selectedModelId],
+    () => getComposerModelGroups(availableModels, controller.composerModelId),
+    [availableModels, controller.composerModelId],
   )
   const composerThinkingOptions = useMemo(
     () => getComposerThinkingOptions(selectedComposerModel),
     [selectedComposerModel],
   )
   const composerApprovalOptions = useMemo(() => getComposerApprovalOptions(), [])
-  const composerThinkingPlaceholder = agent.selectedThinkingEffort
-    ? getRuntimeRunThinkingEffortLabel(agent.selectedThinkingEffort)
-    : selectedModelId
+  const composerThinkingPlaceholder = controller.composerThinkingEffort
+    ? getRuntimeRunThinkingEffortLabel(controller.composerThinkingEffort)
+    : controller.composerModelId
       ? 'Thinking unavailable'
       : 'Choose model'
   const streamStatusMeta = useMemo(() => getStreamStatusMeta(agent, runtimeSession), [agent, runtimeSession])
@@ -181,8 +196,6 @@ export function AgentRuntime({
       runtimeStream?.completion ||
       runtimeStream?.failure,
   )
-  const recentAutonomousUnits = agent.recentAutonomousUnits ?? null
-  const showRecentAutonomousUnitsSection = Boolean(recentAutonomousUnits)
   const checkpointControlLoop = agent.checkpointControlLoop ?? createEmptyCheckpointControlLoop()
   const checkpointControlLoopRecoveryAlert = getCheckpointControlLoopRecoveryAlertMeta({
     controlLoop: checkpointControlLoop,
@@ -215,7 +228,9 @@ export function AgentRuntime({
     },
   )
   const showAgentSetupEmptyState = Boolean(
-    !providerMismatch && (!runtimeSession || runtimeSession.isSignedOut || runtimeSession.phase === 'idle'),
+    !providerMismatch &&
+      !selectedProviderReadyForSession &&
+      (!runtimeSession || runtimeSession.isSignedOut || runtimeSession.phase === 'idle'),
   )
   const promptInputLabel = controller.promptInputAvailable ? 'Agent input' : 'Agent input unavailable'
   const sendButtonLabel = controller.promptInputAvailable ? 'Send message' : 'Send message unavailable'
@@ -252,9 +267,6 @@ export function AgentRuntime({
                   transcriptItems={transcriptItems}
                 />
               ) : null}
-              {showRecentAutonomousUnitsSection && recentAutonomousUnits ? (
-                <RecentAutonomousUnitsSection recentAutonomousUnits={recentAutonomousUnits} />
-              ) : null}
               {showCheckpointControlLoopSection ? (
                 <CheckpointControlLoopSection
                   checkpointControlLoop={checkpointControlLoop}
@@ -276,11 +288,11 @@ export function AgentRuntime({
         </div>
 
         <ComposerDock
-          composerApprovalMode={agent.selectedApprovalMode}
+          composerApprovalMode={controller.composerApprovalMode}
           composerApprovalOptions={composerApprovalOptions}
           composerModelGroups={composerModelGroups}
-          composerModelId={selectedModelId}
-          composerThinkingLevel={agent.selectedThinkingEffort}
+          composerModelId={controller.composerModelId}
+          composerThinkingLevel={controller.composerThinkingEffort}
           composerThinkingOptions={composerThinkingOptions}
           composerThinkingPlaceholder={composerThinkingPlaceholder}
           controlsDisabled={controller.areControlsDisabled}
@@ -296,11 +308,12 @@ export function AgentRuntime({
           pendingRuntimeRunAction={agent.pendingRuntimeRunAction ?? null}
           placeholder={composerPlaceholder}
           promptInputLabel={promptInputLabel}
+          runtimeSessionBindInFlight={controller.runtimeSessionBindInFlight}
           runtimeRunActionError={controller.runtimeRunActionError}
           runtimeRunActionErrorTitle={controller.runtimeRunActionErrorTitle}
           runtimeRunActionStatus={agent.runtimeRunActionStatus}
           sendButtonLabel={sendButtonLabel}
-          showStartRunButton={canStartRuntimeRun && !renderableRuntimeRun}
+          showStartRunButton={(canStartRuntimeRun || canStartRuntimeSession) && !renderableRuntimeRun}
         />
       </div>
     </div>

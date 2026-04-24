@@ -14,6 +14,7 @@ use tauri::{
     webview::{PageLoadEvent, WebviewBuilder},
     AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, State, WebviewUrl,
 };
+use url::Url;
 
 use crate::commands::{CommandError, CommandResult};
 
@@ -33,6 +34,27 @@ use tabs::{BrowserTabs, BROWSER_MAIN_WINDOW_LABEL};
 
 pub const BROWSER_WEBVIEW_LABEL: &str = BROWSER_LEGACY_LABEL;
 const HIDDEN_OFFSET: f64 = -32_000.0;
+const DEFAULT_AUTONOMOUS_BROWSER_WIDTH: f64 = 1_280.0;
+const DEFAULT_AUTONOMOUS_BROWSER_HEIGHT: f64 = 720.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BrowserViewport {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl BrowserViewport {
+    fn sanitize(self) -> Self {
+        Self {
+            x: self.x,
+            y: self.y,
+            width: self.width.max(1.0),
+            height: self.height.max(1.0),
+        }
+    }
+}
 
 pub struct BrowserState {
     creation_lock: Mutex<()>,
@@ -99,47 +121,49 @@ pub fn browser_show<R: Runtime>(
     tab_id: Option<String>,
     new_tab: Option<bool>,
 ) -> CommandResult<BrowserTabMetadata> {
-    let target = actions::parse_url(&url)?;
+    provision_browser_tab(
+        &app,
+        &state,
+        &url,
+        tab_id.as_deref(),
+        new_tab.unwrap_or(false),
+        Some(BrowserViewport {
+            x,
+            y,
+            width,
+            height,
+        }),
+    )
+}
+
+pub fn provision_browser_tab<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &BrowserState,
+    url: &str,
+    requested_tab_id: Option<&str>,
+    force_new: bool,
+    viewport: Option<BrowserViewport>,
+) -> CommandResult<BrowserTabMetadata> {
+    let target = actions::parse_url(url)?;
     let tabs = state.tabs();
-    let force_new = new_tab.unwrap_or(false);
+    let viewport = resolve_browser_viewport(app, viewport);
 
     let _guard = state.creation_lock.lock().map_err(|_| {
         CommandError::system_fault("browser_lock_poisoned", "Browser state lock poisoned.")
     })?;
 
-    // Explicit new-tab requests always create a fresh webview, regardless of
-    // whether the caller also supplied a tab_id. Without this the "+" button
-    // would reuse the active tab and silently replace its contents.
+    let previous_active = tabs.active_tab_id();
+    let mut inserted_tab = false;
+
     let (tab_id, label) = if force_new {
+        inserted_tab = true;
         let (id, label) = tabs.new_tab_label();
-        let label = if id == "tab-1" {
-            BROWSER_LEGACY_LABEL.to_string()
-        } else {
-            label
-        };
+        let label = first_tab_legacy_label(&id, label);
         tabs.insert(id.clone(), label.clone())?;
-        // Focus the freshly created tab so the UI (and the tab_updated event)
-        // sees the new tab as active. Without this, the active marker stays on
-        // whatever tab was focused before and the frontend snaps back to it.
-        tabs.set_active(&id)?;
         (id, label)
     } else {
-        match tab_id {
-            Some(existing) => {
-                let label = tabs
-                    .list()?
-                    .into_iter()
-                    .find(|tab| tab.id == existing)
-                    .map(|tab| tab.label)
-                    .ok_or_else(|| {
-                        CommandError::user_fixable(
-                            "browser_tab_not_found",
-                            format!("Browser tab `{existing}` was not found."),
-                        )
-                    })?;
-                tabs.set_active(&existing)?;
-                (existing, label)
-            }
+        match requested_tab_id {
+            Some(existing) => (existing.to_string(), tabs.tab_label(existing)?),
             None => {
                 if let Some(active) = tabs.active_tab_id() {
                     let label = tabs
@@ -147,13 +171,9 @@ pub fn browser_show<R: Runtime>(
                         .unwrap_or_else(|| BROWSER_LEGACY_LABEL.to_string());
                     (active, label)
                 } else {
+                    inserted_tab = true;
                     let (id, label) = tabs.new_tab_label();
-                    // First tab gets the legacy label so existing screenshot/capability code keeps working.
-                    let label = if id == "tab-1" {
-                        BROWSER_LEGACY_LABEL.to_string()
-                    } else {
-                        label
-                    };
+                    let label = first_tab_legacy_label(&id, label);
                     tabs.insert(id.clone(), label.clone())?;
                     (id, label)
                 }
@@ -161,9 +181,37 @@ pub fn browser_show<R: Runtime>(
         }
     };
 
-    if let Some(existing) = app.get_webview(&label) {
+    if let Err(error) = ensure_browser_webview(app, &tabs, &tab_id, &label, &target, viewport) {
+        if inserted_tab {
+            let _ = tabs.remove(&tab_id);
+            if let Some(previous) = previous_active.as_deref() {
+                let _ = tabs.set_active(previous);
+            }
+            hide_inactive_webviews(app, &tabs);
+            emit_tab_list(app, &tabs);
+        }
+        return Err(error);
+    }
+
+    tabs.set_active(&tab_id)?;
+    tabs.record_page_state(&tab_id, Some(target.to_string()), None, Some(true));
+    hide_inactive_webviews(app, &tabs);
+    emit_tab_list(app, &tabs);
+    Ok(current_tab_meta(&tabs, &tab_id))
+}
+
+fn ensure_browser_webview<R: Runtime>(
+    app: &AppHandle<R>,
+    tabs: &Arc<BrowserTabs>,
+    tab_id: &str,
+    label: &str,
+    target: &Url,
+    viewport: BrowserViewport,
+) -> CommandResult<()> {
+    let viewport = viewport.sanitize();
+    if let Some(existing) = app.get_webview(label) {
         existing
-            .set_position(LogicalPosition::new(x, y))
+            .set_position(LogicalPosition::new(viewport.x, viewport.y))
             .map_err(|error| {
                 CommandError::system_fault(
                     "browser_set_position_failed",
@@ -171,7 +219,7 @@ pub fn browser_show<R: Runtime>(
                 )
             })?;
         existing
-            .set_size(LogicalSize::new(width.max(1.0), height.max(1.0)))
+            .set_size(LogicalSize::new(viewport.width, viewport.height))
             .map_err(|error| {
                 CommandError::system_fault(
                     "browser_set_size_failed",
@@ -184,10 +232,7 @@ pub fn browser_show<R: Runtime>(
                 format!("Cadence could not navigate the browser webview: {error}"),
             )
         })?;
-        tabs.record_page_state(&tab_id, Some(target.to_string()), None, Some(true));
-        hide_inactive_webviews(&app, &tabs);
-        emit_tab_list(&app, &tabs);
-        return Ok(current_tab_meta(&tabs, &tab_id));
+        return Ok(());
     }
 
     let window = app.get_window(BROWSER_MAIN_WINDOW_LABEL).ok_or_else(|| {
@@ -197,23 +242,18 @@ pub fn browser_show<R: Runtime>(
         )
     })?;
 
-    let tab_id_for_nav = tab_id.clone();
-    let tabs_for_nav = Arc::clone(&tabs);
+    let tab_id_for_nav = tab_id.to_string();
+    let tabs_for_nav = Arc::clone(tabs);
     let app_for_nav = app.clone();
 
-    let tab_id_for_load = tab_id.clone();
-    let tabs_for_load = Arc::clone(&tabs);
+    let tab_id_for_load = tab_id.to_string();
+    let tabs_for_load = Arc::clone(tabs);
     let app_for_load = app.clone();
 
-    let builder = WebviewBuilder::new(label.clone(), WebviewUrl::External(target.clone()))
+    let builder = WebviewBuilder::new(label.to_string(), WebviewUrl::External(target.clone()))
         .initialization_script(BROWSER_BRIDGE_INIT_SCRIPT)
         .on_navigation(move |url| {
-            tabs_for_nav.record_page_state(
-                &tab_id_for_nav,
-                Some(url.to_string()),
-                None,
-                Some(true),
-            );
+            tabs_for_nav.record_page_state(&tab_id_for_nav, Some(url.to_string()), None, Some(true));
             events::emit(
                 &app_for_nav,
                 BROWSER_URL_CHANGED_EVENT,
@@ -230,12 +270,7 @@ pub fn browser_show<R: Runtime>(
         .on_page_load(move |_webview, payload| {
             let url = payload.url().to_string();
             let loading = matches!(payload.event(), PageLoadEvent::Started);
-            tabs_for_load.record_page_state(
-                &tab_id_for_load,
-                Some(url.clone()),
-                None,
-                Some(loading),
-            );
+            tabs_for_load.record_page_state(&tab_id_for_load, Some(url.clone()), None, Some(loading));
             events::emit(
                 &app_for_load,
                 BROWSER_LOAD_STATE_EVENT,
@@ -251,8 +286,8 @@ pub fn browser_show<R: Runtime>(
     window
         .add_child(
             builder,
-            LogicalPosition::new(x, y),
-            LogicalSize::new(width.max(1.0), height.max(1.0)),
+            LogicalPosition::new(viewport.x, viewport.y),
+            LogicalSize::new(viewport.width, viewport.height),
         )
         .map_err(|error| {
             CommandError::system_fault(
@@ -260,11 +295,43 @@ pub fn browser_show<R: Runtime>(
                 format!("Cadence could not create the browser webview: {error}"),
             )
         })?;
+    Ok(())
+}
 
-    tabs.record_page_state(&tab_id, Some(target.to_string()), None, Some(true));
-    hide_inactive_webviews(&app, &tabs);
-    emit_tab_list(&app, &tabs);
-    Ok(current_tab_meta(&tabs, &tab_id))
+fn first_tab_legacy_label(id: &str, label: String) -> String {
+    if id == "tab-1" {
+        BROWSER_LEGACY_LABEL.to_string()
+    } else {
+        label
+    }
+}
+
+fn resolve_browser_viewport<R: Runtime>(
+    app: &AppHandle<R>,
+    viewport: Option<BrowserViewport>,
+) -> BrowserViewport {
+    if let Some(viewport) = viewport {
+        return viewport.sanitize();
+    }
+
+    if let Some(window) = app.get_window(BROWSER_MAIN_WINDOW_LABEL) {
+        if let Ok(size) = window.inner_size() {
+            return BrowserViewport {
+                x: 0.0,
+                y: 0.0,
+                width: size.width as f64,
+                height: size.height as f64,
+            }
+            .sanitize();
+        }
+    }
+
+    BrowserViewport {
+        x: 0.0,
+        y: 0.0,
+        width: DEFAULT_AUTONOMOUS_BROWSER_WIDTH,
+        height: DEFAULT_AUTONOMOUS_BROWSER_HEIGHT,
+    }
 }
 
 #[tauri::command]
@@ -821,17 +888,7 @@ pub fn browser_internal_event<R: Runtime>(
 
 fn resolve_label(tabs: &BrowserTabs, requested: Option<&str>) -> CommandResult<String> {
     match requested {
-        Some(id) => tabs
-            .list()?
-            .into_iter()
-            .find(|tab| tab.id == id)
-            .map(|tab| tab.label)
-            .ok_or_else(|| {
-                CommandError::user_fixable(
-                    "browser_tab_not_found",
-                    format!("Browser tab `{id}` was not found."),
-                )
-            }),
+        Some(id) => tabs.tab_label(id),
         None => tabs.active_label_soft().ok_or_else(|| {
             CommandError::user_fixable(
                 "browser_not_open",
@@ -918,5 +975,12 @@ mod tests {
         assert_eq!(tabs.active_tab_id().as_deref(), Some(id_b.as_str()));
         tabs.remove(&id_b).unwrap();
         assert_eq!(tabs.active_tab_id().as_deref(), Some(id_a.as_str()));
+    }
+
+    #[test]
+    fn tab_label_rejects_unknown_id() {
+        let tabs = BrowserTabs::new();
+        let error = tabs.tab_label("tab-missing").expect_err("missing tab should fail");
+        assert_eq!(error.code, "browser_tab_not_found");
     }
 }

@@ -98,6 +98,20 @@ impl BrowserTabs {
         guard.active.clone()
     }
 
+    pub fn tab_label(&self, id: &str) -> CommandResult<String> {
+        let guard = self.lock()?;
+        guard
+            .tabs
+            .get(id)
+            .map(|tab| tab.label.clone())
+            .ok_or_else(|| {
+                CommandError::user_fixable(
+                    "browser_tab_not_found",
+                    format!("Browser tab `{id}` was not found."),
+                )
+            })
+    }
+
     pub fn new_tab_label(&self) -> (String, String) {
         let next = self.counter.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         let id = format!("tab-{next:x}");

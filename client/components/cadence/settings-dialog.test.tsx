@@ -547,6 +547,64 @@ describe('SettingsDialog', () => {
     ).toBeVisible()
   })
 
+  it('keeps provider setup usable while the provider snapshot is refreshing', async () => {
+    const onUpsertProviderProfile = vi.fn(async (_request: UpsertProviderProfileRequestDto) =>
+      makeProviderProfiles({
+        activeProfileId: 'openai_codex-default',
+        profiles: [
+          makeOpenAiProfile({ active: true }),
+          makeOpenRouterProfile({
+            active: false,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'stored_secret',
+              proofUpdatedAt: '2026-04-20T12:00:00Z',
+            },
+          }),
+        ],
+      }),
+    )
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: null,
+          providerProfilesLoadStatus: 'loading',
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    const setupButton = within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Set up' })
+    expect(setupButton).toBeEnabled()
+
+    fireEvent.click(setupButton)
+
+    const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
+    expect(keyInput).toBeEnabled()
+
+    fireEvent.change(keyInput, { target: { value: 'sk-or-refreshing' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'openrouter-default',
+        providerId: 'openrouter',
+        runtimeKind: 'openrouter',
+        label: 'OpenRouter',
+        modelId: 'openai/gpt-4.1-mini',
+        presetId: 'openrouter',
+        baseUrl: null,
+        apiVersion: null,
+        region: null,
+        projectId: null,
+        apiKey: 'sk-or-refreshing',
+        activate: false,
+      }),
+    )
+  })
+
   it('shows route target validation errors and omits project metadata when creating routes', async () => {
     const onUpsertNotificationRoute = vi.fn(async (_request: NotificationRouteRequest) => ({ route: makeNotificationRoute() }))
 
