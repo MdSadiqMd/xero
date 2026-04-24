@@ -1884,6 +1884,43 @@ describe('CadenceApp current UI', () => {
     expect(screen.getByText(/Anthropic .*API key saved/)).toBeVisible()
   })
 
+  it('keeps onboarding provider review truthful for missing GitHub Models token readiness', async () => {
+    const { adapter } = createAdapter({
+      projects: [],
+      providerProfiles: {
+        activeProfileId: 'github_models-default',
+        profiles: [
+          makeProviderProfile({
+            profileId: 'github_models-default',
+            providerId: 'github_models',
+            label: 'GitHub Models',
+            modelId: 'openai/gpt-4.1',
+            active: true,
+            readiness: makeMissingProviderReadiness(),
+          }),
+        ],
+        migration: null,
+      },
+      runtimeSession: makeRuntimeSession('project-1', {
+        providerId: 'github_models',
+        runtimeKind: 'openai_compatible',
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+    })
+
+    render(<CadenceApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+
+    expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
+    expect(screen.getByText(/GitHub Models .*API key required/)).toBeVisible()
+  })
+
   it('keeps onboarding provider review truthful for Ollama local endpoint readiness', async () => {
     const { adapter } = createAdapter({
       projects: [],
@@ -2738,6 +2775,208 @@ describe('CadenceApp current UI', () => {
       }),
     )
     await waitFor(() => expect(screen.getByText('Approval active · Suggest')).toBeVisible())
+  })
+
+  it('starts the shipped Agent path with GitHub Models provider identity and shared catalog truth', async () => {
+    const setup = createAdapter({
+      providerProfiles: {
+        activeProfileId: 'github_models-default',
+        profiles: [
+          makeProviderProfile({
+            profileId: 'github_models-default',
+            providerId: 'github_models',
+            label: 'GitHub Models',
+            modelId: 'openai/gpt-4.1',
+            active: true,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'stored_secret',
+              proofUpdatedAt: '2026-04-20T12:00:00Z',
+            },
+          }),
+          makeProviderProfile({
+            profileId: 'openai_codex-default',
+            providerId: 'openai_codex',
+            label: 'OpenAI Codex',
+            modelId: 'openai_codex',
+            active: false,
+          }),
+        ],
+        migration: null,
+      },
+      runtimeSession: makeRuntimeSession('project-1', {
+        runtimeKind: 'openai_compatible',
+        providerId: 'github_models',
+        phase: 'authenticated',
+        sessionId: 'session-github-models',
+        accountId: 'acct-github-models',
+        lastErrorCode: null,
+        lastError: null,
+      }),
+      runtimeRun: null,
+      autonomousState: null,
+    })
+
+    render(<CadenceApp adapter={setup.adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('openai/gpt-4.1')
+    expect(screen.getByText(/Showing 2 discovered models/)).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }))
+
+    await waitFor(() =>
+      expect(setup.startRuntimeRun).toHaveBeenCalledWith('project-1', {
+        initialControls: {
+          modelId: 'openai/gpt-4.1',
+          thinkingEffort: 'medium',
+          approvalMode: 'suggest',
+        },
+        initialPrompt: null,
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('Approval active · Suggest')).toBeVisible())
+  })
+
+  it('starts the shipped Agent path with Ollama provider identity and local model truth', async () => {
+    const setup = createAdapter({
+      providerProfiles: {
+        activeProfileId: 'ollama-default',
+        profiles: [
+          makeProviderProfile({
+            profileId: 'ollama-default',
+            providerId: 'ollama',
+            label: 'Ollama',
+            modelId: 'llama3.2',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            active: true,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'local',
+              proofUpdatedAt: '2026-04-20T12:00:00Z',
+            },
+          }),
+          makeProviderProfile({
+            profileId: 'openai_codex-default',
+            providerId: 'openai_codex',
+            label: 'OpenAI Codex',
+            modelId: 'openai_codex',
+            active: false,
+          }),
+        ],
+        migration: null,
+      },
+      runtimeSession: makeRuntimeSession('project-1', {
+        runtimeKind: 'openai_compatible',
+        providerId: 'ollama',
+        phase: 'authenticated',
+        sessionId: 'session-ollama',
+        accountId: 'acct-ollama',
+        lastErrorCode: null,
+        lastError: null,
+      }),
+      runtimeRun: null,
+      autonomousState: null,
+    })
+
+    render(<CadenceApp adapter={setup.adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('llama3.2')
+    expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toHaveTextContent('Thinking unavailable')
+    expect(screen.getByText(/Showing 1 discovered model/)).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }))
+
+    await waitFor(() =>
+      expect(setup.startRuntimeRun).toHaveBeenCalledWith('project-1', {
+        initialControls: {
+          modelId: 'llama3.2',
+          thinkingEffort: null,
+          approvalMode: 'suggest',
+        },
+        initialPrompt: null,
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('Approval active · Suggest')).toBeVisible())
+  })
+
+  it('keeps recovered OpenAI Codex run truth visible when Settings drift to Ollama and blocks relaunch under the selected profile', async () => {
+    const setup = createAdapter({
+      providerProfiles: {
+        activeProfileId: 'ollama-default',
+        profiles: [
+          makeProviderProfile({
+            profileId: 'ollama-default',
+            providerId: 'ollama',
+            label: 'Ollama',
+            modelId: 'llama3.2',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            active: true,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'local',
+              proofUpdatedAt: '2026-04-20T12:00:00Z',
+            },
+          }),
+        ],
+        migration: null,
+      },
+      runtimeSession: makeRuntimeSession('project-1', {
+        runtimeKind: 'openai_codex',
+        providerId: 'openai_codex',
+        phase: 'authenticated',
+        sessionId: 'session-openai-codex',
+        accountId: 'acct-openai-codex',
+        lastErrorCode: null,
+        lastError: null,
+      }),
+      runtimeRun: makeRuntimeRun('project-1', {
+        runtimeKind: 'openai_codex',
+        providerId: 'openai_codex',
+        status: 'stale',
+        transport: {
+          kind: 'tcp',
+          endpoint: '127.0.0.1:4455',
+          liveness: 'unreachable',
+        },
+        lastHeartbeatAt: '2026-04-22T12:06:00Z',
+        updatedAt: '2026-04-22T12:06:00Z',
+      }),
+      autonomousState: null,
+    })
+
+    render(<CadenceApp adapter={setup.adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+
+    expect(await screen.findByRole('heading', { name: 'Recovered run snapshot' })).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('openai_codex')
+    expect(screen.getByText('Catalog unavailable')).toBeVisible()
+    expect(screen.getByText(/OpenAI Codex run-scoped control truth/)).toBeVisible()
+    expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
+      'placeholder',
+      'Rebind Ollama before trusting new live activity.',
+    )
+    expect(screen.getAllByText(/Settings now select provider profile Ollama \(ollama-default\), but the persisted runtime session still reflects OpenAI Codex\./).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
   })
 
   it('proves auth, provider-backed model truth, and pending-to-active boundary application through the shipped Agent path', async () => {
