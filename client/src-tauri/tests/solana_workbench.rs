@@ -37,6 +37,9 @@ mod audit_engine;
 #[path = "solana/wallet_and_token.rs"]
 mod wallet_and_token;
 
+#[path = "solana/phase9_safety.rs"]
+mod phase9_safety;
+
 #[test]
 fn spin_restore_cycle_runs_three_consecutive_times() {
     spin_restore_cycle::spin_restore_cycle_runs_three_consecutive_times();
@@ -204,4 +207,61 @@ fn mwa_scaffold_writes_phone_testing_checklist() {
 #[test]
 fn wallet_scaffold_refuses_missing_node() {
     wallet_and_token::wallet_scaffold_refuses_missing_node();
+}
+
+// -- Phase 9 — safety (secrets / drift / cost / docs) ---------------------
+
+#[test]
+fn phase9_committed_id_json_with_mainnet_keypair_is_critical() {
+    phase9_safety::committed_id_json_with_mainnet_keypair_is_critical();
+}
+
+#[test]
+fn phase9_secret_patterns_registry_exposes_stable_rule_ids() {
+    phase9_safety::secret_patterns_registry_exposes_stable_rule_ids();
+}
+
+#[test]
+fn phase9_drift_check_flags_metaplex_version_delta_between_devnet_and_mainnet() {
+    phase9_safety::drift_check_flags_metaplex_version_delta_between_devnet_and_mainnet();
+}
+
+#[test]
+fn phase9_drift_registry_includes_required_programs() {
+    phase9_safety::drift_registry_includes_required_programs();
+}
+
+#[test]
+fn phase9_cost_snapshot_rolls_up_local_ledger_activity() {
+    phase9_safety::cost_snapshot_rolls_up_local_ledger_activity();
+}
+
+#[test]
+fn phase9_cost_snapshot_matches_provider_dashboard_within_5_percent() {
+    phase9_safety::cost_snapshot_matches_provider_dashboard_within_5_percent();
+}
+
+#[test]
+fn phase9_doc_catalog_covers_every_phase9_tool() {
+    phase9_safety::doc_catalog_covers_every_phase9_tool();
+}
+
+#[test]
+fn phase9_doc_snippets_for_unknown_tool_returns_empty() {
+    phase9_safety::doc_snippets_for_unknown_tool_returns_empty();
+}
+
+#[test]
+fn phase9_doc_snippets_for_known_tool_has_non_empty_body_and_url() {
+    phase9_safety::doc_snippets_for_known_tool_has_non_empty_body_and_url();
+}
+
+#[test]
+fn phase9_deploy_gate_blocks_on_committed_mainnet_keypair() {
+    phase9_safety::deploy_gate_blocks_on_committed_mainnet_keypair();
+}
+
+#[test]
+fn phase9_deploy_gate_is_silent_when_project_root_is_none() {
+    phase9_safety::deploy_gate_is_silent_when_project_root_is_none();
 }

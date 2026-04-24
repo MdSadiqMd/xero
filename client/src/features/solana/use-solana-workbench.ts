@@ -1246,6 +1246,173 @@ export interface WalletScaffoldResult {
   nextSteps: string[]
 }
 
+// -- Phase 9 — safety (secrets / drift / cost / docs) ---------------------
+
+export type SecretSeverity = "critical" | "high" | "medium" | "low"
+
+export type SecretPatternKind =
+  | "solana_keypair_json"
+  | "regex"
+  | "literal_marker"
+
+export interface SecretPattern {
+  ruleId: string
+  title: string
+  severity: SecretSeverity
+  kind: SecretPatternKind
+  description: string
+  pattern: string
+  fileGlobs: string[]
+  remediation: string
+  referenceUrl?: string | null
+}
+
+export interface SecretFinding {
+  ruleId: string
+  title: string
+  severity: SecretSeverity
+  path: string
+  line?: number | null
+  evidence: string
+  remediation: string
+  referenceUrl?: string | null
+}
+
+export interface SecretScanReport {
+  projectRoot: string
+  filesScanned: number
+  filesSkipped: number
+  durationMs: number
+  findings: SecretFinding[]
+  blocksDeploy: boolean
+  patternsApplied: number
+}
+
+export type ScopeWarningKind =
+  | "cross_cluster_reuse"
+  | "mainnet_label_on_non_mainnet"
+  | "suspected_real_key_on_fork_or_devnet"
+
+export interface ScopeWarning {
+  kind: ScopeWarningKind
+  severity: SecretSeverity
+  persona: string
+  cluster: ClusterKind
+  relatedClusters: ClusterKind[]
+  pubkey: string
+  message: string
+  remediation: string
+}
+
+export interface ScopeCheckReport {
+  warnings: ScopeWarning[]
+  personasInspected: number
+  blocksDeploy: boolean
+}
+
+export interface TrackedProgram {
+  label: string
+  programId: string
+  description: string
+  referenceUrl?: string | null
+}
+
+export type DriftStatus =
+  | "in_sync"
+  | "drift"
+  | "partially_deployed"
+  | "inconclusive"
+
+export interface DriftProbe {
+  cluster: ClusterKind
+  rpcUrl: string
+  programDataSha256?: string | null
+  programDataLength?: number | null
+  upgradeAuthority?: string | null
+  lastDeployedSlot?: number | null
+  error?: string | null
+}
+
+export interface DriftEntry {
+  program: TrackedProgram
+  status: DriftStatus
+  probes: DriftProbe[]
+  summary: string
+}
+
+export interface ClusterDriftReport {
+  entries: DriftEntry[]
+  clustersChecked: ClusterKind[]
+  durationMs: number
+  hasDrift: boolean
+}
+
+export type ProviderKind =
+  | "helius_free"
+  | "triton_free"
+  | "quick_node_free"
+  | "alchemy_free"
+  | "solana_public"
+  | "localnet"
+  | "unknown"
+
+export type ProviderHealth = "healthy" | "degraded" | "unknown"
+
+export interface ProviderUsage {
+  cluster: ClusterKind
+  endpointId: string
+  endpointUrl: string
+  kind: ProviderKind
+  health: ProviderHealth
+  usageAvailable: boolean
+  requestsLastWindow?: number | null
+  quotaLimit?: number | null
+  windowSeconds?: number | null
+  warning?: string | null
+}
+
+export interface ClusterCostBreakdown {
+  cluster: ClusterKind
+  txCount: number
+  lamportsSpent: number
+  computeUnitsUsed: number
+  rentLockedLamports: number
+}
+
+export interface LocalCostSummary {
+  txCount: number
+  lamportsSpent: number
+  computeUnitsUsed: number
+  rentLockedLamports: number
+  byCluster: ClusterCostBreakdown[]
+}
+
+export interface CostTotals {
+  lamportsSpent: number
+  computeUnitsUsed: number
+  txCount: number
+  rentLockedLamports: number
+  providersHealthy: number
+  providersDegraded: number
+}
+
+export interface CostSnapshot {
+  generatedAtMs: number
+  windowS?: number | null
+  clustersIncluded: ClusterKind[]
+  local: LocalCostSummary
+  providers: ProviderUsage[]
+  totals: CostTotals
+}
+
+export interface DocSnippet {
+  tool: string
+  title: string
+  referenceUrl: string
+  version: number
+  body: string
+}
+
 // PDA types.
 export type SeedPart =
   | { kind: "utf8"; value: string }
@@ -1585,6 +1752,35 @@ export interface UseSolanaWorkbench {
   generateWalletScaffold: (
     request: WalletScaffoldRequest,
   ) => Promise<WalletScaffoldResult | null>
+  // Phase 9 — safety (secrets / drift / cost / docs).
+  safetyBusy: boolean
+  secretPatterns: SecretPattern[]
+  lastSecretScan: SecretScanReport | null
+  lastScopeCheck: ScopeCheckReport | null
+  trackedPrograms: TrackedProgram[]
+  lastClusterDrift: ClusterDriftReport | null
+  lastCostSnapshot: CostSnapshot | null
+  docCatalog: DocSnippet[]
+  scanSecrets: (args: {
+    projectRoot: string
+    skipPaths?: string[]
+    minSeverity?: SecretSeverity | null
+  }) => Promise<SecretScanReport | null>
+  refreshSecretPatterns: () => Promise<void>
+  runScopeCheck: () => Promise<ScopeCheckReport | null>
+  refreshTrackedPrograms: () => Promise<void>
+  checkClusterDrift: (args?: {
+    additional?: TrackedProgram[]
+    clusters?: ClusterKind[]
+    skipBuiltins?: boolean
+  }) => Promise<ClusterDriftReport | null>
+  refreshCostSnapshot: (args?: {
+    clusters?: ClusterKind[]
+    windowS?: number | null
+    skipProviderProbes?: boolean
+  }) => Promise<CostSnapshot | null>
+  resetCostLedger: () => Promise<void>
+  refreshDocCatalog: () => Promise<void>
 }
 
 const SOLANA_VALIDATOR_STATUS_EVENT = "solana:validator:status"
@@ -1721,6 +1917,23 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     useState<WalletDescriptor[]>([])
   const [lastWalletScaffold, setLastWalletScaffold] =
     useState<WalletScaffoldResult | null>(null)
+
+  // Phase 9 — safety (secrets, drift, cost, docs).
+  const [safetyBusy, setSafetyBusy] = useState(false)
+  const [secretPatterns, setSecretPatterns] = useState<SecretPattern[]>([])
+  const [lastSecretScan, setLastSecretScan] = useState<SecretScanReport | null>(
+    null,
+  )
+  const [lastScopeCheck, setLastScopeCheck] = useState<ScopeCheckReport | null>(
+    null,
+  )
+  const [trackedPrograms, setTrackedPrograms] = useState<TrackedProgram[]>([])
+  const [lastDriftReport2, setLastDriftReport2] =
+    useState<ClusterDriftReport | null>(null)
+  const [lastCostSnapshot, setLastCostSnapshot] = useState<CostSnapshot | null>(
+    null,
+  )
+  const [docCatalog, setDocCatalog] = useState<DocSnippet[]>([])
 
   const activeRef = useRef(active)
   activeRef.current = active
@@ -3000,6 +3213,165 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     [],
   )
 
+  // --------- Phase 9 — safety actions --------------------------------------
+  const scanSecrets = useCallback(
+    async (args: {
+      projectRoot: string
+      skipPaths?: string[]
+      minSeverity?: SecretSeverity | null
+    }): Promise<SecretScanReport | null> => {
+      if (!isTauri()) return null
+      setSafetyBusy(true)
+      setError(null)
+      try {
+        const report = await invoke<SecretScanReport>("solana_secrets_scan", {
+          request: {
+            request: {
+              projectRoot: args.projectRoot,
+              skipPaths: args.skipPaths ?? [],
+              minSeverity: args.minSeverity ?? null,
+            },
+          },
+        })
+        setLastSecretScan(report)
+        return report
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setSafetyBusy(false)
+      }
+    },
+    [],
+  )
+
+  const refreshSecretPatterns = useCallback(async () => {
+    if (!isTauri()) return
+    try {
+      const next = await invoke<SecretPattern[]>("solana_secrets_patterns")
+      setSecretPatterns(next)
+    } catch (err) {
+      setError(errorMessage(err))
+    }
+  }, [])
+
+  const runScopeCheck = useCallback(async (): Promise<ScopeCheckReport | null> => {
+    if (!isTauri()) return null
+    setSafetyBusy(true)
+    setError(null)
+    try {
+      const report = await invoke<ScopeCheckReport>(
+        "solana_secrets_scope_check",
+      )
+      setLastScopeCheck(report)
+      return report
+    } catch (err) {
+      setError(errorMessage(err))
+      return null
+    } finally {
+      setSafetyBusy(false)
+    }
+  }, [])
+
+  const refreshTrackedPrograms = useCallback(async () => {
+    if (!isTauri()) return
+    try {
+      const next = await invoke<TrackedProgram[]>(
+        "solana_cluster_drift_tracked_programs",
+      )
+      setTrackedPrograms(next)
+    } catch (err) {
+      setError(errorMessage(err))
+    }
+  }, [])
+
+  const checkClusterDrift = useCallback(
+    async (args?: {
+      additional?: TrackedProgram[]
+      clusters?: ClusterKind[]
+      skipBuiltins?: boolean
+    }): Promise<ClusterDriftReport | null> => {
+      if (!isTauri()) return null
+      setSafetyBusy(true)
+      setError(null)
+      try {
+        const report = await invoke<ClusterDriftReport>(
+          "solana_cluster_drift_check",
+          {
+            request: {
+              request: {
+                additional: args?.additional ?? [],
+                clusters: args?.clusters ?? [],
+                rpcUrls: {},
+                skipBuiltins: args?.skipBuiltins ?? false,
+                timeoutMs: null,
+              },
+            },
+          },
+        )
+        setLastDriftReport2(report)
+        return report
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setSafetyBusy(false)
+      }
+    },
+    [],
+  )
+
+  const refreshCostSnapshot = useCallback(
+    async (args?: {
+      clusters?: ClusterKind[]
+      windowS?: number | null
+      skipProviderProbes?: boolean
+    }): Promise<CostSnapshot | null> => {
+      if (!isTauri()) return null
+      setSafetyBusy(true)
+      setError(null)
+      try {
+        const snap = await invoke<CostSnapshot>("solana_cost_snapshot", {
+          request: {
+            request: {
+              clusters: args?.clusters ?? [],
+              windowS: args?.windowS ?? null,
+              skipProviderProbes: args?.skipProviderProbes ?? false,
+            },
+          },
+        })
+        setLastCostSnapshot(snap)
+        return snap
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setSafetyBusy(false)
+      }
+    },
+    [],
+  )
+
+  const resetCostLedger = useCallback(async () => {
+    if (!isTauri()) return
+    try {
+      await invoke("solana_cost_reset")
+      setLastCostSnapshot(null)
+    } catch (err) {
+      setError(errorMessage(err))
+    }
+  }, [])
+
+  const refreshDocCatalog = useCallback(async () => {
+    if (!isTauri()) return
+    try {
+      const catalog = await invoke<DocSnippet[]>("solana_doc_catalog")
+      setDocCatalog(catalog)
+    } catch (err) {
+      setError(errorMessage(err))
+    }
+  }, [])
+
   // Mount: probe toolchain + cluster catalogue + status + persona catalog.
   useEffect(() => {
     if (!active || !isTauri()) return
@@ -3013,6 +3385,9 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     void refreshActiveLogSubscriptions()
     void refreshExtensionMatrix()
     void refreshWalletDescriptors()
+    void refreshSecretPatterns()
+    void refreshTrackedPrograms()
+    void refreshDocCatalog()
   }, [
     active,
     refreshClusters,
@@ -3025,6 +3400,9 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     refreshActiveLogSubscriptions,
     refreshExtensionMatrix,
     refreshWalletDescriptors,
+    refreshSecretPatterns,
+    refreshTrackedPrograms,
+    refreshDocCatalog,
   ])
 
   // Listen for status events while the sidebar is visible.
@@ -3346,5 +3724,22 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     createToken,
     mintMetaplex,
     generateWalletScaffold,
+    // Phase 9 — safety
+    safetyBusy,
+    secretPatterns,
+    lastSecretScan,
+    lastScopeCheck,
+    trackedPrograms,
+    lastClusterDrift: lastDriftReport2,
+    lastCostSnapshot,
+    docCatalog,
+    scanSecrets,
+    refreshSecretPatterns,
+    runScopeCheck,
+    refreshTrackedPrograms,
+    checkClusterDrift,
+    refreshCostSnapshot,
+    resetCostLedger,
+    refreshDocCatalog,
   }
 }

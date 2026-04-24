@@ -233,6 +233,16 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::solana::solana_metaplex_mint,
             commands::solana::solana_wallet_scaffold_list,
             commands::solana::solana_wallet_scaffold_generate,
+            commands::solana::solana_secrets_scan,
+            commands::solana::solana_secrets_patterns,
+            commands::solana::solana_secrets_scope_check,
+            commands::solana::solana_cluster_drift_check,
+            commands::solana::solana_cluster_drift_tracked_programs,
+            commands::solana::solana_cost_snapshot,
+            commands::solana::solana_cost_record,
+            commands::solana::solana_cost_reset,
+            commands::solana::solana_doc_catalog,
+            commands::solana::solana_doc_snippets,
             commands::solana::solana_subscribe_ready,
         ])
 }

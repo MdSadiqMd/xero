@@ -16,22 +16,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::commands::solana::{
+    cost, drift,
     idl::{self, codama::CodamaGenerationRequest},
-    indexer, pda, program, AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport,
-    AnalyzerKind, AuditEngine, BuildKind, BuildProfile, BuildReport, BuildRequest, BumpAnalysis,
-    ClusterHandle, ClusterKind, ClusterPda, ClusterStatus, CodamaGenerationReport, CodamaTarget,
+    indexer, pda, program, secrets, AltCandidate, AltCreateResult, AltExtendResult,
+    AltResolveReport, AnalyzerKind, AuditEngine, BuildKind, BuildProfile, BuildReport,
+    BuildRequest, BumpAnalysis, ClusterDriftReport, ClusterHandle, ClusterKind, ClusterPda,
+    ClusterStatus, CodamaGenerationReport, CodamaTarget, CostSnapshot, CostSnapshotRequest,
     CoverageReport, CoverageRequest, DeployAuthority, DeployResult, DeployServices, DeploySpec,
-    DerivedAddress, DriftReport, EndpointHealth, ExplainRequest, ExploitDescriptor, ExploitKey,
-    ExternalAnalyzerReport, ExternalAnalyzerRequest, FeeEstimate, FuzzReport, FuzzRequest, Idl,
-    IdlPublishMode, IdlPublishReport, IdlPublishRequest, IdlRegistry, IdlSubscriptionToken,
-    IndexerKind, IndexerRunReport, IndexerRunRequest, KnownProgramLookup, LogFilter,
-    LogSubscriptionToken, NullAuditEventSink, PdaSite, PostDeployOptions, ReplayReport,
-    ReplayRequest, ResolveArgs, RollbackRequest, RollbackResult, RpcRouter, RpcTransport,
-    SamplePercentile, ScaffoldRequest, ScaffoldResult, SeedPart, SendRequest, SimulateRequest,
-    SimulationResult, SnapshotMeta, SnapshotStore, SolanaState, SquadsProposalDescriptor,
-    SquadsProposalRequest, StartOpts, StaticLintReport, StaticLintRequest, TridentHarnessRequest,
-    TridentHarnessResult, TxPipeline, TxPlan, TxResult, TxSpec, UpgradeSafetyReport,
-    UpgradeSafetyRequest, ValidatorSupervisor, VerifiedBuildRequest, VerifiedBuildResult,
+    DerivedAddress, DocSnippet, DriftCheckRequest, DriftReport, EndpointHealth, ExplainRequest,
+    ExploitDescriptor, ExploitKey, ExternalAnalyzerReport, ExternalAnalyzerRequest, FeeEstimate,
+    FuzzReport, FuzzRequest, Idl, IdlPublishMode, IdlPublishReport, IdlPublishRequest,
+    IdlRegistry, IdlSubscriptionToken, IndexerKind, IndexerRunReport, IndexerRunRequest,
+    KnownProgramLookup, LocalCostLedger, LogFilter, LogSubscriptionToken, NullAuditEventSink,
+    PdaSite, PostDeployOptions, ProviderUsageRunner, ReplayReport, ReplayRequest, ResolveArgs,
+    RollbackRequest, RollbackResult, RpcRouter, RpcTransport, SamplePercentile, ScaffoldRequest,
+    ScaffoldResult, ScopeCheckReport, SecretScanReport, SecretsScanRequest, SeedPart, SendRequest,
+    SimulateRequest, SimulationResult, SnapshotMeta, SnapshotStore, SolanaState,
+    SquadsProposalDescriptor, SquadsProposalRequest, StartOpts, StaticLintReport,
+    StaticLintRequest, TrackedProgram, TridentHarnessRequest, TridentHarnessResult, TxCostRecord,
+    TxPipeline, TxPlan, TxResult, TxSpec, UpgradeSafetyReport, UpgradeSafetyRequest,
+    ValidatorSupervisor, VerifiedBuildRequest, VerifiedBuildResult,
 };
 use crate::commands::{CommandError, CommandResult};
 
@@ -55,6 +59,10 @@ pub const AUTONOMOUS_TOOL_SOLANA_AUDIT_FUZZ: &str = "solana_audit_fuzz";
 pub const AUTONOMOUS_TOOL_SOLANA_AUDIT_COVERAGE: &str = "solana_audit_coverage";
 pub const AUTONOMOUS_TOOL_SOLANA_REPLAY: &str = "solana_replay";
 pub const AUTONOMOUS_TOOL_SOLANA_INDEXER: &str = "solana_indexer";
+pub const AUTONOMOUS_TOOL_SOLANA_SECRETS: &str = "solana_secrets";
+pub const AUTONOMOUS_TOOL_SOLANA_CLUSTER_DRIFT: &str = "solana_cluster_drift";
+pub const AUTONOMOUS_TOOL_SOLANA_COST: &str = "solana_cost";
+pub const AUTONOMOUS_TOOL_SOLANA_DOCS: &str = "solana_docs";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -383,6 +391,12 @@ pub struct AutonomousSolanaDeployRequest {
     pub post: Option<PostDeployOptions>,
     #[serde(default)]
     pub rpc_url: Option<String>,
+    /// Phase 9: project root for the pre-deploy secrets scan.
+    #[serde(default)]
+    pub project_root: Option<String>,
+    /// Phase 9: block on `High`/`Medium` secret findings too.
+    #[serde(default)]
+    pub block_on_any_secret: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -515,6 +529,74 @@ pub struct AutonomousSolanaReplayRequest {
     pub action: AutonomousSolanaReplayAction,
 }
 
+// ---------- Phase 9 — secrets / drift / cost / docs -----------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaSecretsAction {
+    Scan { request: SecretsScanRequest },
+    Patterns,
+    Scope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaSecretsRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaSecretsAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaDriftAction {
+    Tracked,
+    Check {
+        #[serde(flatten)]
+        request: DriftCheckRequest,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaDriftRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaDriftAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaCostAction {
+    Snapshot {
+        #[serde(default)]
+        request: Option<CostSnapshotRequest>,
+    },
+    Record {
+        record: TxCostRecord,
+    },
+    Reset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaCostRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaCostAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaDocsAction {
+    Catalog,
+    Tool { tool: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaDocsRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaDocsAction,
+}
+
 pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
     fn cluster(
         &self,
@@ -583,6 +665,20 @@ pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
         &self,
         request: AutonomousSolanaReplayRequest,
     ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn secrets(
+        &self,
+        request: AutonomousSolanaSecretsRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn drift(
+        &self,
+        request: AutonomousSolanaDriftRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn cost(&self, request: AutonomousSolanaCostRequest) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn docs(&self, request: AutonomousSolanaDocsRequest) -> CommandResult<AutonomousSolanaOutput>;
 }
 
 /// Executor that dispatches against a live `SolanaState`. Safe to clone
@@ -605,6 +701,9 @@ struct StateInner {
     audit_engine: Arc<AuditEngine>,
     log_bus: Arc<crate::commands::solana::LogBus>,
     log_source: Arc<dyn crate::commands::solana::RpcLogSource>,
+    personas: Arc<crate::commands::solana::PersonaStore>,
+    cost_ledger: Arc<LocalCostLedger>,
+    cost_provider_runner: Arc<dyn ProviderUsageRunner>,
 }
 
 impl StateSolanaExecutor {
@@ -621,6 +720,9 @@ impl StateSolanaExecutor {
                 audit_engine: state.audit_engine(),
                 log_bus: state.log_bus(),
                 log_source: state.log_source(),
+                personas: state.personas(),
+                cost_ledger: state.cost_ledger(),
+                cost_provider_runner: state.cost_provider_runner(),
             }),
         }
     }
@@ -1236,6 +1338,8 @@ impl SolanaExecutor for StateSolanaExecutor {
             authority: request.authority,
             is_first_deploy: request.is_first_deploy,
             post: request.post.unwrap_or_default(),
+            project_root: request.project_root,
+            block_on_any_secret: request.block_on_any_secret,
         };
         let sink = idl::publish::NullProgressSink;
         let result = program::deploy::deploy(self.inner.deploy_services.as_ref(), &sink, &spec)?;
@@ -1565,6 +1669,123 @@ impl SolanaExecutor for StateSolanaExecutor {
             value_json,
         })
     }
+
+    fn secrets(
+        &self,
+        request: AutonomousSolanaSecretsRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaSecretsAction::Scan { request } => {
+                let report = secrets::scan_project(&request)?;
+                (
+                    "scan".to_string(),
+                    serde_json::to_value::<SecretScanReport>(report).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaSecretsAction::Patterns => {
+                let patterns = secrets::builtin_patterns();
+                (
+                    "patterns".to_string(),
+                    serde_json::to_value(patterns).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaSecretsAction::Scope => {
+                let report = secrets::check_scope(&self.inner.personas)?;
+                (
+                    "scope".to_string(),
+                    serde_json::to_value::<ScopeCheckReport>(report).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
+
+    fn drift(
+        &self,
+        request: AutonomousSolanaDriftRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaDriftAction::Tracked => {
+                let tracked = drift::builtin_tracked_programs();
+                (
+                    "tracked".to_string(),
+                    serde_json::to_value::<Vec<TrackedProgram>>(tracked).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaDriftAction::Check { request } => {
+                let report =
+                    drift::check(&self.inner.transport, &self.inner.router, &request)?;
+                (
+                    "check".to_string(),
+                    serde_json::to_value::<ClusterDriftReport>(report).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
+
+    fn cost(&self, request: AutonomousSolanaCostRequest) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaCostAction::Snapshot { request } => {
+                let args = request.unwrap_or_default();
+                let snap = cost::snapshot(
+                    &args,
+                    &self.inner.cost_ledger,
+                    &self.inner.router,
+                    self.inner.cost_provider_runner.as_ref(),
+                )?;
+                (
+                    "snapshot".to_string(),
+                    serde_json::to_value::<CostSnapshot>(snap).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaCostAction::Record { record } => {
+                self.inner.cost_ledger.record(record);
+                ("record".to_string(), JsonValue::Bool(true))
+            }
+            AutonomousSolanaCostAction::Reset => {
+                self.inner.cost_ledger.clear();
+                ("reset".to_string(), JsonValue::Bool(true))
+            }
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
+
+    fn docs(&self, request: AutonomousSolanaDocsRequest) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaDocsAction::Catalog => {
+                let catalog = crate::commands::solana::builtin_doc_catalog();
+                (
+                    "catalog".to_string(),
+                    serde_json::to_value::<Vec<DocSnippet>>(catalog).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaDocsAction::Tool { tool } => {
+                let snippets = crate::commands::solana::doc_snippets_for(&tool);
+                (
+                    "tool".to_string(),
+                    serde_json::to_value::<Vec<DocSnippet>>(snippets).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
 }
 
 /// No-op executor. Returns `policy_denied` for every action so environments
@@ -1879,6 +2100,94 @@ impl SolanaExecutor for UnavailableSolanaExecutor {
             value_json,
         })
     }
+
+    fn secrets(
+        &self,
+        request: AutonomousSolanaSecretsRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        // The filesystem scanner is pure — run it even without a
+        // SolanaState. Scope checks need a persona store and get
+        // denied instead.
+        match request.action {
+            AutonomousSolanaSecretsAction::Scan { request } => {
+                let report = secrets::scan_project(&request)?;
+                let value = serde_json::to_value::<SecretScanReport>(report)
+                    .unwrap_or(JsonValue::Null);
+                let value_json =
+                    serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+                Ok(AutonomousSolanaOutput {
+                    action: "scan".to_string(),
+                    value_json,
+                })
+            }
+            AutonomousSolanaSecretsAction::Patterns => {
+                let value = serde_json::to_value(secrets::builtin_patterns())
+                    .unwrap_or(JsonValue::Null);
+                let value_json =
+                    serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+                Ok(AutonomousSolanaOutput {
+                    action: "patterns".to_string(),
+                    value_json,
+                })
+            }
+            AutonomousSolanaSecretsAction::Scope => Err(CommandError::policy_denied(
+                "Persona scope check requires the desktop runtime; no SolanaState is wired.",
+            )),
+        }
+    }
+
+    fn drift(
+        &self,
+        request: AutonomousSolanaDriftRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        match request.action {
+            AutonomousSolanaDriftAction::Tracked => {
+                let value = serde_json::to_value::<Vec<TrackedProgram>>(
+                    drift::builtin_tracked_programs(),
+                )
+                .unwrap_or(JsonValue::Null);
+                let value_json =
+                    serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+                Ok(AutonomousSolanaOutput {
+                    action: "tracked".to_string(),
+                    value_json,
+                })
+            }
+            AutonomousSolanaDriftAction::Check { .. } => Err(CommandError::policy_denied(
+                "Cluster drift check requires the desktop runtime; no SolanaState is wired.",
+            )),
+        }
+    }
+
+    fn cost(&self, _request: AutonomousSolanaCostRequest) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Cost snapshot requires the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
+    fn docs(&self, request: AutonomousSolanaDocsRequest) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaDocsAction::Catalog => (
+                "catalog".to_string(),
+                serde_json::to_value::<Vec<DocSnippet>>(
+                    crate::commands::solana::builtin_doc_catalog(),
+                )
+                .unwrap_or(JsonValue::Null),
+            ),
+            AutonomousSolanaDocsAction::Tool { tool } => (
+                "tool".to_string(),
+                serde_json::to_value::<Vec<DocSnippet>>(
+                    crate::commands::solana::doc_snippets_for(&tool),
+                )
+                .unwrap_or(JsonValue::Null),
+            ),
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1993,6 +2302,8 @@ mod tests {
                 is_first_deploy: false,
                 post: None,
                 rpc_url: None,
+                project_root: None,
+                block_on_any_secret: false,
             })
             .unwrap_err(),
             exec.upgrade_check(AutonomousSolanaUpgradeCheckRequest {

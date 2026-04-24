@@ -165,6 +165,17 @@ pub struct DeploySpec {
     pub is_first_deploy: bool,
     #[serde(default)]
     pub post: PostDeployOptions,
+    /// Phase 9 deploy-gate — when set, the project tree rooted here is
+    /// scanned for committed secrets before the deploy runs. A
+    /// `Critical` finding (committed keypair JSON) is a policy-denied
+    /// block. `None` skips the scan (unchanged Phase 5 behaviour).
+    #[serde(default)]
+    pub project_root: Option<String>,
+    /// Phase 9 — when true, even `High`/`Medium` findings block the
+    /// deploy. Defaults to false so the block behaviour is scoped to
+    /// the same "committed keypair" signal called out in the plan.
+    #[serde(default)]
+    pub block_on_any_secret: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -325,6 +336,7 @@ pub fn deploy(
     spec: &DeploySpec,
 ) -> CommandResult<DeployResult> {
     validate_spec(spec)?;
+    secrets_preflight(sink, spec)?;
     emit(
         sink,
         spec,
@@ -876,6 +888,10 @@ pub fn rollback(
             run_codama: false,
             ..request.post.clone()
         },
+        // Rollbacks skip the secrets-scan gate: the archive is
+        // produced from an already-vetted deploy.
+        project_root: None,
+        block_on_any_secret: false,
     };
     let outcome = deploy(services, sink, &spec)?;
     Ok(RollbackResult {
@@ -887,6 +903,97 @@ pub fn rollback(
 }
 
 // ---------- Helpers ---------------------------------------------------
+
+/// Pre-deploy secrets scan. Silently no-ops when `project_root` is
+/// `None` so Phase 5 callers keep their existing behaviour.
+///
+/// Blocks the deploy with a `policy_denied` when the scanner flags at
+/// least one `Critical` finding (committed keypair JSON), and — when
+/// the caller opts in via `block_on_any_secret` — also on `High` and
+/// `Medium` findings.
+fn secrets_preflight(sink: &dyn DeployProgressSink, spec: &DeploySpec) -> CommandResult<()> {
+    let Some(root) = spec.project_root.as_deref() else {
+        return Ok(());
+    };
+    emit(
+        sink,
+        spec,
+        DeployProgressPhase::Planning,
+        format!("Scanning {root} for committed secrets before deploy."),
+    );
+    let report = crate::commands::solana::secrets::scan_project(
+        &crate::commands::solana::secrets::ScanRequest {
+            project_root: root.to_string(),
+            skip_paths: Vec::new(),
+            min_severity: None,
+            file_budget: None,
+        },
+    )?;
+
+    let critical_count = report
+        .findings
+        .iter()
+        .filter(|f| f.severity == crate::commands::solana::secrets::SecretSeverity::Critical)
+        .count();
+    let high_count = report
+        .findings
+        .iter()
+        .filter(|f| {
+            matches!(
+                f.severity,
+                crate::commands::solana::secrets::SecretSeverity::High
+                    | crate::commands::solana::secrets::SecretSeverity::Medium
+            )
+        })
+        .count();
+
+    if critical_count == 0 && (!spec.block_on_any_secret || high_count == 0) {
+        emit(
+            sink,
+            spec,
+            DeployProgressPhase::Planning,
+            format!(
+                "Secrets scan clean ({} files, {} non-blocking findings).",
+                report.files_scanned,
+                report.findings.len(),
+            ),
+        );
+        return Ok(());
+    }
+
+    let worst = report
+        .findings
+        .iter()
+        .find(|f| {
+            f.severity == crate::commands::solana::secrets::SecretSeverity::Critical
+                || (spec.block_on_any_secret
+                    && matches!(
+                        f.severity,
+                        crate::commands::solana::secrets::SecretSeverity::High
+                            | crate::commands::solana::secrets::SecretSeverity::Medium
+                    ))
+        })
+        .cloned();
+    let detail = match worst {
+        Some(f) => format!(
+            "{} at {}{}",
+            f.title,
+            f.path,
+            f.line.map(|l| format!(":{}", l)).unwrap_or_default(),
+        ),
+        None => "secrets-scan blocked deploy".to_string(),
+    };
+    emit(
+        sink,
+        spec,
+        DeployProgressPhase::Failed,
+        format!("Deploy blocked by secrets-scan: {detail}"),
+    );
+    Err(CommandError::policy_denied(format!(
+        "Secrets-scan blocked deploy. {detail}. Run `solana_secrets_scan` for the full report, rotate the secret, \
+         and retry."
+    )))
+}
 
 fn emit(
     sink: &dyn DeployProgressSink,
@@ -1073,6 +1180,8 @@ mod tests {
                 archive_artifact: false,
                 program_archive_root: None,
             },
+            project_root: None,
+            block_on_any_secret: false,
         }
     }
 

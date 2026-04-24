@@ -28,6 +28,7 @@ import { SolanaIndexerPanel } from "./solana-indexer-panel"
 import { SolanaLogFeed } from "./solana-log-feed"
 import { SolanaMissingToolchain } from "./solana-missing-toolchain"
 import { SolanaPersonaPanel } from "./solana-persona-panel"
+import { SolanaSafetyPanel } from "./solana-safety-panel"
 import { SolanaScenarioPanel } from "./solana-scenario-panel"
 import { SolanaTokenPanel } from "./solana-token-panel"
 import { SolanaTxInspector } from "./solana-tx-inspector"
@@ -58,6 +59,7 @@ type TabId =
   | "audit"
   | "token"
   | "wallet"
+  | "safety"
   | "rpc"
 
 interface SolanaWorkbenchSidebarProps {
@@ -400,6 +402,16 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
       icon: Wallet,
       label: "Wallet",
       count: workbench.walletDescriptors.length || undefined,
+    },
+    {
+      id: "safety",
+      icon: ShieldCheck,
+      label: "Safety",
+      count:
+        (workbench.lastSecretScan?.findings.length ?? 0) +
+          (workbench.lastScopeCheck?.warnings.length ?? 0) +
+          (workbench.lastClusterDrift?.entries.filter((e) => e.status === "drift").length ?? 0) ||
+        undefined,
     },
     {
       id: "rpc",
@@ -757,6 +769,22 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
               descriptors={workbench.walletDescriptors}
               lastScaffold={workbench.lastWalletScaffold}
               onGenerate={workbench.generateWalletScaffold}
+            />
+          ) : null}
+
+          {activeTab === "safety" ? (
+            <SolanaSafetyPanel
+              busy={workbench.safetyBusy}
+              lastSecretScan={workbench.lastSecretScan}
+              lastScopeCheck={workbench.lastScopeCheck}
+              lastDrift={workbench.lastClusterDrift}
+              lastCost={workbench.lastCostSnapshot}
+              trackedPrograms={workbench.trackedPrograms}
+              onScanSecrets={workbench.scanSecrets}
+              onRunScopeCheck={workbench.runScopeCheck}
+              onCheckDrift={() => workbench.checkClusterDrift()}
+              onRefreshCost={() => workbench.refreshCostSnapshot()}
+              onResetCost={workbench.resetCostLedger}
             />
           ) : null}
 

@@ -254,6 +254,17 @@ impl RpcRouter {
         self.snapshot_all()
     }
 
+    /// Ordered list of every endpoint configured for `cluster`. Used
+    /// by callers (e.g. the cost-governance probe) that iterate across
+    /// every provider, not just the healthy one.
+    pub fn endpoints_for(&self, cluster: ClusterKind) -> Vec<EndpointSpec> {
+        let pools = self.pools.read().expect("rpc router pool poisoned");
+        pools
+            .get(&cluster)
+            .map(|pool| pool.endpoints.iter().map(|e| e.spec.clone()).collect())
+            .unwrap_or_default()
+    }
+
     /// Returns the first healthy endpoint for `cluster`. Prefers endpoints
     /// that have passed a health check; falls back to the first configured
     /// endpoint when every one has failed so the UI can still surface a URL.

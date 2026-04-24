@@ -8,6 +8,9 @@
 
 pub mod audit;
 pub mod cluster;
+pub mod cost;
+pub mod docs;
+pub mod drift;
 pub mod events;
 pub mod idl;
 pub mod indexer;
@@ -17,6 +20,7 @@ pub mod persona;
 pub mod program;
 pub mod rpc_router;
 pub mod scenario;
+pub mod secrets;
 pub mod snapshot;
 pub mod token;
 pub mod toolchain;
@@ -50,6 +54,16 @@ pub use audit::{
     FindingSeverity, FindingSource, NullAuditEventSink, SeverityCounts,
 };
 pub use cluster::{descriptors as cluster_descriptors, ClusterDescriptor, ClusterKind};
+pub use cost::{
+    snapshot as cost_snapshot, CostSnapshot, CostSnapshotRequest, CostTotals, LocalCostLedger,
+    LocalCostSummary, ProviderHealth, ProviderKind, ProviderUsage, ProviderUsageRunner,
+    SystemProviderUsageRunner, TxCostRecord,
+};
+pub use docs::{builtin_doc_catalog, snippets_for as doc_snippets_for, DocSnippet};
+pub use drift::{
+    builtin_tracked_programs, check as drift_check, DriftCheckRequest, DriftEntry, DriftProbe,
+    DriftReport as ClusterDriftReport, DriftStatus, TrackedProgram,
+};
 pub use events::{
     PersonaEventKind, PersonaEventPayload, ScenarioEventKind, ScenarioEventPayload, TxEventKind,
     TxEventPayload, ValidatorLogLevel, ValidatorLogPayload, ValidatorPhase, ValidatorStatusPayload,
@@ -104,6 +118,12 @@ pub use rpc_router::{EndpointHealth, EndpointSpec, RpcRouter};
 pub use scenario::{
     scenarios as scenario_descriptors, ScenarioDescriptor, ScenarioEngine, ScenarioKind,
     ScenarioRun, ScenarioSpec, ScenarioStatus,
+};
+pub use secrets::{
+    builtin_patterns as secrets_builtin_patterns, check_scope as secrets_check_scope,
+    scan_project as secrets_scan_project, ScanRequest as SecretsScanRequest, ScopeCheckReport,
+    ScopeWarning, ScopeWarningKind, SecretFinding, SecretPattern, SecretPatternKind,
+    SecretScanReport, SecretSeverity,
 };
 pub use snapshot::{
     AccountFetcher, AccountRecord, RpcAccountFetcher, SnapshotManifest, SnapshotMeta, SnapshotStore,
@@ -175,6 +195,13 @@ pub struct SolanaState {
     /// Lives under the OS data dir by default; tests redirect it to a
     /// `TempDir`.
     metaplex_worker_root: Arc<Mutex<PathBuf>>,
+    /// Phase 9 — in-process cost ledger aggregating the lamport + CU
+    /// spend of every tx the workbench sends. Survives panels closing
+    /// and reopening; reset explicitly via `solana_cost_reset`.
+    cost_ledger: Arc<LocalCostLedger>,
+    /// Phase 9 — provider usage prober. Tests swap in scripted
+    /// runners via `with_cost_provider_runner`.
+    cost_provider_runner: Arc<dyn ProviderUsageRunner>,
 }
 
 const LOG_POLL_INTERVAL: Duration = Duration::from_secs(4);
@@ -295,6 +322,8 @@ impl Default for SolanaState {
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
             metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            cost_ledger: Arc::new(LocalCostLedger::new()),
+            cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
     }
 }
@@ -337,6 +366,8 @@ impl SolanaState {
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
             metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            cost_ledger: Arc::new(LocalCostLedger::new()),
+            cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
     }
 
@@ -373,6 +404,8 @@ impl SolanaState {
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
             metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            cost_ledger: Arc::new(LocalCostLedger::new()),
+            cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
     }
 
@@ -413,6 +446,8 @@ impl SolanaState {
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
             metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            cost_ledger: Arc::new(LocalCostLedger::new()),
+            cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
     }
 
@@ -452,6 +487,8 @@ impl SolanaState {
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
             metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            cost_ledger: Arc::new(LocalCostLedger::new()),
+            cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
     }
 
@@ -491,6 +528,21 @@ impl SolanaState {
             .metaplex_worker_root
             .lock()
             .expect("metaplex worker root mutex not poisoned") = root;
+        self
+    }
+
+    /// Test/integration hook: swap the cost ledger — useful to
+    /// pre-populate synthetic tx activity without touching a live
+    /// validator.
+    pub fn with_cost_ledger(mut self, ledger: Arc<LocalCostLedger>) -> Self {
+        self.cost_ledger = ledger;
+        self
+    }
+
+    /// Test/integration hook: provide a scripted provider-usage
+    /// runner so cost-snapshot tests don't hit the network.
+    pub fn with_cost_provider_runner(mut self, runner: Arc<dyn ProviderUsageRunner>) -> Self {
+        self.cost_provider_runner = runner;
         self
     }
 
@@ -551,6 +603,14 @@ impl SolanaState {
 
     pub fn log_source(&self) -> Arc<dyn RpcLogSource> {
         Arc::clone(&self.log_source)
+    }
+
+    pub fn cost_ledger(&self) -> Arc<LocalCostLedger> {
+        Arc::clone(&self.cost_ledger)
+    }
+
+    pub fn cost_provider_runner(&self) -> Arc<dyn ProviderUsageRunner> {
+        Arc::clone(&self.cost_provider_runner)
     }
 
     /// Resolve the RPC URL the persona / scenario commands should use when
@@ -1722,6 +1782,14 @@ pub struct DeployArgs {
     pub post: Option<PostDeployOptions>,
     #[serde(default)]
     pub rpc_url: Option<String>,
+    /// Phase 9 — project root to secrets-scan before deploy. Absent
+    /// means no scan runs (Phase 5 behaviour).
+    #[serde(default)]
+    pub project_root: Option<String>,
+    /// Phase 9 — when true, `High`/`Medium` findings also block the
+    /// deploy. Default false: only committed keypairs block.
+    #[serde(default)]
+    pub block_on_any_secret: bool,
 }
 
 #[tauri::command]
@@ -1748,6 +1816,8 @@ pub fn solana_program_deploy<R: Runtime>(
         authority: request.authority,
         is_first_deploy: request.is_first_deploy,
         post: request.post.unwrap_or_default(),
+        project_root: request.project_root,
+        block_on_any_secret: request.block_on_any_secret,
     };
     let services = state.deploy_services();
     let sink = TauriDeployProgressSink { app };
@@ -2273,6 +2343,116 @@ pub fn solana_wallet_scaffold_generate(
     let toolchain = toolchain::probe();
     wallet::generate(&toolchain, &request.request)
 }
+
+// ---------- Phase 9 — secrets / drift / cost commands ---------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SecretsScanArgs {
+    pub request: SecretsScanRequest,
+}
+
+#[tauri::command]
+pub fn solana_secrets_scan(
+    request: SecretsScanArgs,
+) -> CommandResult<SecretScanReport> {
+    secrets_scan_project(&request.request)
+}
+
+#[tauri::command]
+pub fn solana_secrets_patterns() -> CommandResult<Vec<SecretPattern>> {
+    Ok(secrets_builtin_patterns())
+}
+
+#[tauri::command]
+pub fn solana_secrets_scope_check(
+    state: State<'_, SolanaState>,
+) -> CommandResult<ScopeCheckReport> {
+    let personas = state.personas();
+    secrets_check_scope(&personas)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClusterDriftArgs {
+    pub request: DriftCheckRequest,
+}
+
+#[tauri::command]
+pub fn solana_cluster_drift_check(
+    state: State<'_, SolanaState>,
+    request: ClusterDriftArgs,
+) -> CommandResult<ClusterDriftReport> {
+    let transport = state.transport();
+    let router = state.rpc_router();
+    drift_check(&transport, &router, &request.request)
+}
+
+#[tauri::command]
+pub fn solana_cluster_drift_tracked_programs() -> CommandResult<Vec<TrackedProgram>> {
+    Ok(builtin_tracked_programs())
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CostSnapshotArgs {
+    #[serde(default)]
+    pub request: CostSnapshotRequest,
+}
+
+#[tauri::command]
+pub fn solana_cost_snapshot(
+    state: State<'_, SolanaState>,
+    request: Option<CostSnapshotArgs>,
+) -> CommandResult<CostSnapshot> {
+    let args = request.unwrap_or_default().request;
+    let ledger = state.cost_ledger();
+    let router = state.rpc_router();
+    let runner = state.cost_provider_runner();
+    cost_snapshot(&args, &ledger, &router, runner.as_ref())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CostRecordArgs {
+    pub record: TxCostRecord,
+}
+
+/// Agent + frontend hook to feed confirmed tx metadata back into the
+/// cost ledger. The runtime calls this after every `tx_send` that
+/// lands so the snapshot aggregates real work. Pure JSON in, no return.
+#[tauri::command]
+pub fn solana_cost_record(
+    state: State<'_, SolanaState>,
+    request: CostRecordArgs,
+) -> CommandResult<()> {
+    state.cost_ledger.record(request.record);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn solana_cost_reset(state: State<'_, SolanaState>) -> CommandResult<()> {
+    state.cost_ledger.clear();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn solana_doc_catalog() -> CommandResult<Vec<DocSnippet>> {
+    Ok(builtin_doc_catalog())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocSnippetsArgs {
+    pub tool: String,
+}
+
+#[tauri::command]
+pub fn solana_doc_snippets(request: DocSnippetsArgs) -> CommandResult<Vec<DocSnippet>> {
+    Ok(doc_snippets_for(&request.tool))
+}
+
+// -----
 
 /// Lightweight acknowledgement that the frontend can call when it opens
 /// the sidebar so the backend emits the current validator status on a
