@@ -117,6 +117,34 @@ function makeGithubProfile(overrides: Partial<ProviderProfileDto> = {}): Provide
   }
 }
 
+function makeOpenAiApiProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
+  const ready = overrides.readiness?.ready ?? false
+
+  return {
+    profileId: 'openai_api-default',
+    providerId: 'openai_api',
+    label: 'OpenAI-compatible',
+    modelId: 'gpt-4.1-mini',
+    active: false,
+    baseUrl: null,
+    apiVersion: null,
+    readiness: ready
+      ? {
+          ready: true,
+          status: 'ready',
+          credentialUpdatedAt: '2026-04-20T00:00:00Z',
+        }
+      : {
+          ready: false,
+          status: 'missing',
+          credentialUpdatedAt: null,
+        },
+    migratedFromLegacy: false,
+    migratedAt: null,
+    ...overrides,
+  }
+}
+
 function makeProviderProfiles(overrides: Partial<ProviderProfilesDto> = {}): ProviderProfilesDto {
   return {
     activeProfileId: overrides.activeProfileId ?? 'openai_codex-default',
@@ -136,14 +164,22 @@ function makeProviderModelCatalog(
       ? 'openrouter'
       : profileId.startsWith('anthropic')
         ? 'anthropic'
-        : 'openai_codex')
+        : profileId.startsWith('github_models')
+          ? 'github_models'
+          : profileId.startsWith('openai_api')
+            ? 'openai_api'
+            : 'openai_codex')
   const configuredModelId =
     overrides.configuredModelId ??
     (providerId === 'openrouter'
       ? 'openai/gpt-4.1-mini'
       : providerId === 'anthropic'
         ? 'claude-3-7-sonnet-latest'
-        : 'openai_codex')
+        : providerId === 'github_models'
+          ? 'openai/gpt-4.1'
+          : providerId === 'openai_api'
+            ? 'gpt-4.1-mini'
+            : 'openai_codex')
 
   return {
     profileId,
@@ -197,17 +233,41 @@ function makeProviderModelCatalog(
                 },
               },
             ]
-          : [
-              {
-                modelId: 'openai_codex',
-                displayName: 'OpenAI Codex',
-                thinking: {
-                  supported: true,
-                  effortOptions: ['low', 'medium', 'high'],
-                  defaultEffort: 'medium',
+          : providerId === 'github_models'
+            ? [
+                {
+                  modelId: 'openai/gpt-4.1',
+                  displayName: 'OpenAI GPT-4.1',
+                  thinking: {
+                    supported: true,
+                    effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
+                    defaultEffort: 'medium',
+                  },
                 },
-              },
-            ]),
+              ]
+            : providerId === 'openai_api'
+              ? [
+                  {
+                    modelId: 'gpt-4.1-mini',
+                    displayName: 'GPT-4.1 Mini',
+                    thinking: {
+                      supported: true,
+                      effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
+                      defaultEffort: 'medium',
+                    },
+                  },
+                ]
+              : [
+                  {
+                    modelId: 'openai_codex',
+                    displayName: 'OpenAI Codex',
+                    thinking: {
+                      supported: true,
+                      effortOptions: ['low', 'medium', 'high'],
+                      defaultEffort: 'medium',
+                    },
+                  },
+                ]),
   }
 }
 
@@ -865,6 +925,110 @@ describe('SettingsDialog', () => {
 
     const keyInputAfter = screen.getByLabelText('API Key') as HTMLInputElement
     expect(keyInputAfter).toHaveValue('')
+    expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument()
+    expect(screen.queryByText(secret)).not.toBeInTheDocument()
+  })
+
+  it('lets OpenAI-compatible use the shared generic save flow and preserves connection metadata on edit', async () => {
+    const secret = 'sk-openai-api-test-secret'
+
+    let nextProviderProfiles = makeProviderProfiles({
+      activeProfileId: 'openai_codex-default',
+      profiles: [makeOpenAiProfile({ active: true }), makeOpenRouterProfile({ active: false })],
+    })
+
+    const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
+      nextProviderProfiles = makeProviderProfiles({
+        activeProfileId: 'openai_codex-default',
+        profiles: [
+          makeOpenAiProfile({ active: true }),
+          makeOpenRouterProfile({ active: false }),
+          makeOpenAiApiProfile({
+            active: false,
+            label: request.label,
+            modelId: request.modelId,
+            baseUrl: request.baseUrl,
+            apiVersion: request.apiVersion,
+            readiness: request.apiKey === ''
+              ? {
+                  ready: false,
+                  status: 'missing',
+                  credentialUpdatedAt: null,
+                }
+              : {
+                  ready: true,
+                  status: 'ready',
+                  credentialUpdatedAt: '2026-04-20T12:00:00Z',
+                },
+          }),
+        ],
+      })
+
+      return nextProviderProfiles
+    })
+
+    const { rerender } = render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: nextProviderProfiles,
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    fireEvent.click(within(getProviderCard('OpenAI-compatible')).getByRole('button', { name: 'Set up' }))
+
+    const labelInput = screen.getByLabelText('Profile label') as HTMLInputElement
+    const modelInput = screen.getByLabelText('Model') as HTMLInputElement
+    const baseUrlInput = screen.getByLabelText('Base URL') as HTMLInputElement
+    const apiVersionInput = screen.getByLabelText('API version') as HTMLInputElement
+    const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
+
+    expect(labelInput).toHaveValue('OpenAI-compatible')
+    expect(keyInput).toHaveValue('')
+
+    fireEvent.change(labelInput, { target: { value: 'OpenAI Work' } })
+    fireEvent.change(modelInput, { target: { value: 'gpt-4.1-mini' } })
+    fireEvent.change(baseUrlInput, { target: { value: 'https://api.openai.example/v1' } })
+    fireEvent.change(apiVersionInput, { target: { value: '2024-10-21' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('OpenAI-compatible requires an API key.')).toBeVisible()
+
+    fireEvent.change(keyInput, { target: { value: secret } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'openai_api-default',
+        providerId: 'openai_api',
+        runtimeKind: 'openai_compatible',
+        label: 'OpenAI Work',
+        modelId: 'gpt-4.1-mini',
+        presetId: 'openai_api',
+        baseUrl: 'https://api.openai.example/v1',
+        apiVersion: '2024-10-21',
+        region: null,
+        projectId: null,
+        apiKey: secret,
+        activate: false,
+      }),
+    )
+
+    rerender(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: nextProviderProfiles,
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Ready')).toBeVisible()
+    fireEvent.click(within(getProviderCard('OpenAI Work')).getByRole('button', { name: 'Edit' }))
+
+    expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.openai.example/v1')
+    expect((screen.getByLabelText('API version') as HTMLInputElement).value).toBe('2024-10-21')
+    expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe('')
     expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument()
     expect(screen.queryByText(secret)).not.toBeInTheDocument()
   })

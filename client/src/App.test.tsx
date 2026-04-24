@@ -29,10 +29,23 @@ vi.mock('../components/cadence/code-editor', () => ({
 
 afterEach(() => {
   openUrlMock.mockReset()
+  if (typeof window.localStorage?.clear === 'function') {
+    window.localStorage.clear()
+  }
+  if (typeof window.sessionStorage?.clear === 'function') {
+    window.sessionStorage.clear()
+  }
 })
 
 import { CadenceApp } from './App'
 import { CadenceDesktopError, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
+import {
+  projectRuntimeSettingsFromProviderProfiles,
+  providerModelCatalogSchema,
+  providerProfileSchema,
+  providerProfilesSchema,
+  upsertProviderProfileRequestSchema,
+} from '@/src/lib/cadence-model'
 import type {
   ApplyWorkflowTransitionResponseDto,
   AutonomousRunStateDto,
@@ -48,6 +61,8 @@ import type {
   ProjectSnapshotResponseDto,
   ProjectUpdatedPayloadDto,
   ProviderModelCatalogDto,
+  ProviderProfileDto,
+  ProviderProfileReadinessDto,
   ProviderProfilesDto,
   RepositoryDiffResponseDto,
   RepositoryStatusChangedPayloadDto,
@@ -63,9 +78,14 @@ import type {
   SubscribeRuntimeStreamResponseDto,
   SyncNotificationAdaptersResponseDto,
   UpsertNotificationRouteRequestDto,
+  UpsertProviderProfileRequestDto,
   UpsertRuntimeSettingsRequestDto,
   UpsertWorkflowGraphResponseDto,
 } from '@/src/lib/cadence-model'
+import {
+  getCloudProviderPreset,
+  type CloudProviderPreset,
+} from '@/src/lib/cadence-model/provider-presets'
 
 function makeProjectSummary(id: string, name: string): ListProjectsResponseDto['projects'][number] {
   return {
@@ -200,136 +220,196 @@ function makeRuntimeSettings(overrides: Partial<RuntimeSettingsDto> = {}): Runti
   }
 }
 
-function makeProviderProfilesFromRuntimeSettings(runtimeSettings: RuntimeSettingsDto): ProviderProfilesDto {
-  const activeProfileId =
-    runtimeSettings.providerId === 'openrouter'
-      ? 'openrouter-default'
-      : runtimeSettings.providerId === 'anthropic'
-        ? 'anthropic-default'
-        : 'openai_codex-default'
+function getRequiredCloudProviderPreset(providerId: ProviderProfileDto['providerId'], context: string): CloudProviderPreset {
+  const preset = getCloudProviderPreset(providerId)
+  if (!preset) {
+    throw new Error(`${context} could not resolve provider preset for \`${providerId}\`.`)
+  }
 
+  return preset
+}
+
+function makeMissingProviderReadiness(
+  status: ProviderProfileReadinessDto['status'] = 'missing',
+  proofUpdatedAt: string | null = null,
+): ProviderProfileReadinessDto {
   return {
-    activeProfileId,
+    ready: false,
+    status,
+    proof: null,
+    proofUpdatedAt: status === 'malformed' ? proofUpdatedAt ?? '2026-04-16T14:05:00Z' : null,
+  }
+}
+
+function makeReadyProviderReadiness(preset: CloudProviderPreset): ProviderProfileReadinessDto {
+  return {
+    ready: true,
+    status: 'ready',
+    proof:
+      preset.authMode === 'oauth'
+        ? 'oauth_session'
+        : preset.authMode === 'api_key'
+          ? 'stored_secret'
+          : preset.authMode,
+    proofUpdatedAt: '2026-04-16T14:05:00Z',
+  }
+}
+
+function getLegacyProviderReadiness(runtimeSettings: RuntimeSettingsDto, preset: CloudProviderPreset): ProviderProfileReadinessDto {
+  switch (preset.providerId) {
+    case 'openrouter':
+      return runtimeSettings.openrouterApiKeyConfigured
+        ? makeReadyProviderReadiness(preset)
+        : makeMissingProviderReadiness()
+    case 'anthropic':
+      return runtimeSettings.anthropicApiKeyConfigured
+        ? makeReadyProviderReadiness(preset)
+        : makeMissingProviderReadiness()
+    default:
+      return makeMissingProviderReadiness()
+  }
+}
+
+function makeProviderProfilesFromRuntimeSettings(runtimeSettings: RuntimeSettingsDto): ProviderProfilesDto {
+  const preset = getRequiredCloudProviderPreset(
+    runtimeSettings.providerId,
+    'makeProviderProfilesFromRuntimeSettings',
+  )
+
+  return providerProfilesSchema.parse({
+    activeProfileId: preset.defaultProfileId,
     profiles: [
       {
-        profileId: activeProfileId,
-        providerId: runtimeSettings.providerId,
-        label:
-          runtimeSettings.providerId === 'openrouter'
-            ? 'OpenRouter'
-            : runtimeSettings.providerId === 'anthropic'
-              ? 'Anthropic'
-              : 'OpenAI Codex',
+        profileId: preset.defaultProfileId,
+        providerId: preset.providerId,
+        runtimeKind: preset.runtimeKind,
+        label: preset.defaultProfileLabel,
         modelId: runtimeSettings.modelId,
+        presetId: preset.presetId ?? null,
+        baseUrl: null,
+        apiVersion: null,
+        region: null,
+        projectId: null,
         active: true,
-        readiness:
-          runtimeSettings.providerId === 'openrouter'
-            ? {
-                ready: runtimeSettings.openrouterApiKeyConfigured,
-                status: runtimeSettings.openrouterApiKeyConfigured ? 'ready' : 'missing',
-                credentialUpdatedAt: runtimeSettings.openrouterApiKeyConfigured ? '2026-04-16T14:05:00Z' : null,
-              }
-            : runtimeSettings.providerId === 'anthropic'
-              ? {
-                  ready: runtimeSettings.anthropicApiKeyConfigured,
-                  status: runtimeSettings.anthropicApiKeyConfigured ? 'ready' : 'missing',
-                  credentialUpdatedAt: runtimeSettings.anthropicApiKeyConfigured ? '2026-04-16T14:05:00Z' : null,
-                }
-              : {
-                  ready: false,
-                  status: 'missing',
-                  credentialUpdatedAt: null,
-                },
+        readiness: getLegacyProviderReadiness(runtimeSettings, preset),
         migratedFromLegacy: false,
         migratedAt: null,
       },
     ],
     migration: null,
-  }
+  })
 }
 
 function makeProviderProfile(
-  overrides: Partial<ProviderProfilesDto['profiles'][number]> &
-    Pick<ProviderProfilesDto['profiles'][number], 'profileId' | 'providerId' | 'label' | 'modelId'>,
-): ProviderProfilesDto['profiles'][number] {
-  return {
+  overrides: Partial<ProviderProfileDto> &
+    Pick<ProviderProfileDto, 'profileId' | 'providerId' | 'label' | 'modelId'>,
+): ProviderProfileDto {
+  const preset = getRequiredCloudProviderPreset(overrides.providerId, 'makeProviderProfile')
+
+  return providerProfileSchema.parse({
     profileId: overrides.profileId,
     providerId: overrides.providerId,
+    runtimeKind: overrides.runtimeKind ?? preset.runtimeKind,
     label: overrides.label,
     modelId: overrides.modelId,
-    active: overrides.active ?? true,
-    readiness:
-      overrides.readiness ?? {
-        ready: false,
-        status: 'missing',
-        credentialUpdatedAt: null,
-      },
-    migratedFromLegacy: overrides.migratedFromLegacy ?? false,
-    migratedAt: overrides.migratedAt ?? null,
+    presetId: overrides.presetId ?? preset.presetId ?? null,
     baseUrl: overrides.baseUrl ?? null,
     apiVersion: overrides.apiVersion ?? null,
     region: overrides.region ?? null,
     projectId: overrides.projectId ?? null,
-    ...overrides,
-  }
+    active: overrides.active ?? true,
+    readiness: overrides.readiness ?? makeMissingProviderReadiness(),
+    migratedFromLegacy: overrides.migratedFromLegacy ?? false,
+    migratedAt: overrides.migratedAt ?? null,
+  })
 }
 
-function buildProviderModelCatalog(profile: ProviderProfilesDto['profiles'][number]): ProviderModelCatalogDto {
-  const isOpenRouter = profile.providerId === 'openrouter'
-  const isAnthropic = profile.providerId === 'anthropic'
-  const isOllama = profile.providerId === 'ollama'
-  const isBedrock = profile.providerId === 'bedrock'
-  const isVertex = profile.providerId === 'vertex'
-  const isReady = isOpenRouter || isAnthropic || isOllama || isBedrock || isVertex ? profile.readiness.ready : true
+function buildProviderModelCatalog(profile: ProviderProfileDto): ProviderModelCatalogDto {
+  const preset = getRequiredCloudProviderPreset(profile.providerId, 'buildProviderModelCatalog')
+  const isReady = preset.authMode === 'oauth' ? true : profile.readiness.ready
 
-  return {
-    profileId: profile.profileId,
-    providerId: profile.providerId,
-    configuredModelId: profile.modelId,
-    source: isReady ? 'live' : 'unavailable',
-    fetchedAt: isReady ? '2026-04-21T12:00:00Z' : null,
-    lastSuccessAt: isReady ? '2026-04-21T12:00:00Z' : null,
-    lastRefreshError:
-      !isReady
-        ? {
-            code: isOpenRouter
-              ? 'openrouter_credentials_missing'
-              : isAnthropic
-                ? 'anthropic_api_key_missing'
-                : isOllama
-                  ? 'local_provider_unreachable'
-                  : isBedrock
-                    ? 'bedrock_aws_credentials_missing'
-                    : 'vertex_adc_missing',
-            message: isOpenRouter
-              ? 'Configure an OpenRouter API key before refreshing provider models.'
-              : isAnthropic
-                ? 'Configure an Anthropic API key before refreshing provider models.'
-                : isOllama
-                  ? 'Save a reachable Ollama local endpoint before refreshing provider models.'
-                  : isBedrock
-                    ? 'Save Amazon Bedrock region metadata and ambient AWS credentials before refreshing provider models.'
-                    : 'Save Google Vertex AI region/project metadata and ambient ADC credentials before refreshing provider models.',
-            retryable: false,
-          }
-        : null,
-    models: isOpenRouter
-      ? isReady
-        ? [
-            {
-              modelId: profile.modelId,
-              displayName: 'OpenRouter model',
-              thinking: {
-                supported: true,
-                effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
-                defaultEffort: 'medium',
+  const lastRefreshError = (() => {
+    if (isReady) {
+      return null
+    }
+
+    switch (preset.providerId) {
+      case 'openrouter':
+        return {
+          code: 'openrouter_api_key_missing',
+          message: `Cadence cannot discover OpenRouter models for provider profile \`${profile.profileId}\` because no app-local API key is configured for that profile.`,
+          retryable: false,
+        }
+      case 'anthropic':
+        return {
+          code: 'anthropic_api_key_missing',
+          message: `Cadence cannot discover Anthropic models for provider profile \`${profile.profileId}\` because no app-local API key is configured for that profile.`,
+          retryable: false,
+        }
+      case 'github_models':
+        return {
+          code: 'github_models_token_missing',
+          message: `Cadence cannot discover GitHub Models for provider profile \`${profile.profileId}\` because no app-local GitHub token is configured for that profile.`,
+          retryable: false,
+        }
+      case 'openai_api':
+        return {
+          code: 'openai_api_key_missing',
+          message: `Cadence cannot discover OpenAI-compatible models for provider profile \`${profile.profileId}\` because no app-local API key is configured for that profile.`,
+          retryable: false,
+        }
+      case 'ollama':
+        return {
+          code: 'local_provider_unreachable',
+          message: `Cadence cannot discover Ollama models for provider profile \`${profile.profileId}\` because the local endpoint is not ready yet.`,
+          retryable: false,
+        }
+      case 'azure_openai':
+        return {
+          code: 'azure_openai_api_key_missing',
+          message: `Cadence cannot discover Azure OpenAI models for provider profile \`${profile.profileId}\` because no app-local API key is configured for that profile.`,
+          retryable: false,
+        }
+      case 'gemini_ai_studio':
+        return {
+          code: 'gemini_ai_studio_api_key_missing',
+          message: `Cadence cannot discover Gemini AI Studio models for provider profile \`${profile.profileId}\` because no app-local API key is configured for that profile.`,
+          retryable: false,
+        }
+      case 'bedrock':
+        return {
+          code: 'bedrock_ambient_proof_missing',
+          message: `Cadence cannot validate Amazon Bedrock model availability for provider profile \`${profile.profileId}\` because the profile is missing its ambient readiness proof link. Save the profile again so Cadence records ambient-auth intent.`,
+          retryable: false,
+        }
+      case 'vertex':
+        return {
+          code: 'vertex_ambient_proof_missing',
+          message: `Cadence cannot validate Google Vertex AI model availability for provider profile \`${profile.profileId}\` because the profile is missing its ambient readiness proof link. Save the profile again so Cadence records ambient-auth intent.`,
+          retryable: false,
+        }
+      case 'openai_codex':
+        return null
+    }
+  })()
+
+  const models = isReady
+    ? (() => {
+        switch (preset.providerId) {
+          case 'openrouter':
+            return [
+              {
+                modelId: profile.modelId,
+                displayName: 'OpenRouter model',
+                thinking: {
+                  supported: true,
+                  effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
+                  defaultEffort: 'medium',
+                },
               },
-            },
-          ]
-        : []
-      : isAnthropic
-        ? isReady
-          ? [
+            ]
+          case 'anthropic':
+            return [
               {
                 modelId: 'claude-3-7-sonnet-latest',
                 displayName: 'Claude 3.7 Sonnet',
@@ -349,61 +429,125 @@ function buildProviderModelCatalog(profile: ProviderProfilesDto['profiles'][numb
                 },
               },
             ]
-          : []
-        : isOllama
-          ? isReady
-            ? [
-                {
-                  modelId: 'llama3.2',
-                  displayName: 'Llama 3.2',
-                  thinking: {
-                    supported: false,
-                    effortOptions: [],
-                    defaultEffort: null,
-                  },
+          case 'github_models':
+            return [
+              {
+                modelId: 'openai/gpt-4.1',
+                displayName: 'OpenAI GPT-4.1',
+                thinking: {
+                  supported: true,
+                  effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
+                  defaultEffort: 'medium',
                 },
-              ]
-            : []
-          : isBedrock
-            ? isReady
-              ? [
-                  {
-                    modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
-                    displayName: 'Claude 3.7 Sonnet (Bedrock)',
-                    thinking: {
-                      supported: true,
-                      effortOptions: ['low', 'medium', 'high'],
-                      defaultEffort: 'medium',
-                    },
-                  },
-                ]
-              : []
-            : isVertex
-              ? isReady
-                ? [
-                    {
-                      modelId: 'claude-3-7-sonnet@20250219',
-                      displayName: 'Claude 3.7 Sonnet (Vertex)',
-                      thinking: {
-                        supported: true,
-                        effortOptions: ['low', 'medium', 'high'],
-                        defaultEffort: 'medium',
-                      },
-                    },
-                  ]
-                : []
-              : [
-                  {
-                    modelId: 'openai_codex',
-                    displayName: 'OpenAI Codex',
-                    thinking: {
-                      supported: true,
-                      effortOptions: ['low', 'medium', 'high'],
-                      defaultEffort: 'medium',
-                    },
-                  },
-                ],
-  }
+              },
+              {
+                modelId: 'meta/Llama-4-Scout-17B-16E-Instruct',
+                displayName: 'Llama 4 Scout 17B',
+                thinking: {
+                  supported: false,
+                  effortOptions: [],
+                  defaultEffort: null,
+                },
+              },
+            ]
+          case 'openai_api':
+            return [
+              {
+                modelId: profile.modelId,
+                displayName: 'OpenAI-compatible model',
+                thinking: {
+                  supported: true,
+                  effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
+                  defaultEffort: 'medium',
+                },
+              },
+            ]
+          case 'ollama':
+            return [
+              {
+                modelId: 'llama3.2',
+                displayName: 'Llama 3.2',
+                thinking: {
+                  supported: false,
+                  effortOptions: [],
+                  defaultEffort: null,
+                },
+              },
+            ]
+          case 'azure_openai':
+            return [
+              {
+                modelId: profile.modelId,
+                displayName: 'Azure OpenAI deployment',
+                thinking: {
+                  supported: true,
+                  effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
+                  defaultEffort: 'medium',
+                },
+              },
+            ]
+          case 'gemini_ai_studio':
+            return [
+              {
+                modelId: 'gemini-2.5-flash',
+                displayName: 'Gemini 2.5 Flash',
+                thinking: {
+                  supported: true,
+                  effortOptions: ['low', 'medium', 'high'],
+                  defaultEffort: 'medium',
+                },
+              },
+            ]
+          case 'bedrock':
+            return [
+              {
+                modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
+                displayName: 'Claude 3.7 Sonnet (Bedrock)',
+                thinking: {
+                  supported: true,
+                  effortOptions: ['low', 'medium', 'high'],
+                  defaultEffort: 'medium',
+                },
+              },
+            ]
+          case 'vertex':
+            return [
+              {
+                modelId: 'claude-3-7-sonnet@20250219',
+                displayName: 'Claude 3.7 Sonnet (Vertex)',
+                thinking: {
+                  supported: true,
+                  effortOptions: ['low', 'medium', 'high'],
+                  defaultEffort: 'medium',
+                },
+              },
+            ]
+          case 'openai_codex':
+            return [
+              {
+                modelId: 'openai_codex',
+                displayName: 'OpenAI Codex',
+                thinking: {
+                  supported: true,
+                  effortOptions: ['low', 'medium', 'high'],
+                  defaultEffort: 'medium',
+                },
+              },
+            ]
+        }
+      })()
+    : []
+
+  return providerModelCatalogSchema.parse({
+    profileId: profile.profileId,
+    providerId: profile.providerId,
+    configuredModelId: profile.modelId,
+    source: isReady ? 'live' : 'unavailable',
+    fetchedAt: isReady ? '2026-04-21T12:00:00Z' : null,
+    lastSuccessAt: isReady ? '2026-04-21T12:00:00Z' : null,
+    lastRefreshError,
+    models,
+  })
 }
 
 function makeRuntimeRun(projectId = 'project-1', overrides: Partial<RuntimeRunDto> = {}): RuntimeRunDto {
@@ -774,8 +918,11 @@ function createAdapter(options?: {
   let currentStatus = options?.status ?? makeStatus()
   let currentDiff = options?.diff ?? makeDiff()
   let currentRuntimeSession = options?.runtimeSession ?? makeRuntimeSession()
-  let currentRuntimeSettings = options?.runtimeSettings ?? makeRuntimeSettings()
-  let currentProviderProfiles = options?.providerProfiles ?? makeProviderProfilesFromRuntimeSettings(currentRuntimeSettings)
+  let currentProviderProfiles = providerProfilesSchema.parse(
+    options?.providerProfiles ?? makeProviderProfilesFromRuntimeSettings(options?.runtimeSettings ?? makeRuntimeSettings()),
+  )
+  let currentRuntimeSettings =
+    projectRuntimeSettingsFromProviderProfiles(currentProviderProfiles) ?? options?.runtimeSettings ?? makeRuntimeSettings()
   let currentProviderModelCatalogs: Record<string, ProviderModelCatalogDto> = Object.fromEntries(
     currentProviderProfiles.profiles.map((profile) => [profile.profileId, buildProviderModelCatalog(profile)]),
   )
@@ -809,21 +956,22 @@ function createAdapter(options?: {
   }
 
   const syncRuntimeSettingsFromActiveProfile = () => {
+    currentRuntimeSettings =
+      projectRuntimeSettingsFromProviderProfiles(currentProviderProfiles) ?? currentRuntimeSettings
+  }
+
+  const getActiveProviderProfileSnapshot = (): ProviderProfileDto => {
     const activeProfile =
       currentProviderProfiles.profiles.find((profile) => profile.profileId === currentProviderProfiles.activeProfileId) ??
-      currentProviderProfiles.profiles[0] ??
       null
 
     if (!activeProfile) {
-      return
+      throw new Error(
+        `createAdapter expected activeProfileId \`${currentProviderProfiles.activeProfileId}\` to match a stored provider profile.`,
+      )
     }
 
-    currentRuntimeSettings = {
-      providerId: activeProfile.providerId,
-      modelId: activeProfile.modelId,
-      openrouterApiKeyConfigured: activeProfile.providerId === 'openrouter' ? activeProfile.readiness.ready : false,
-      anthropicApiKeyConfigured: activeProfile.providerId === 'anthropic' ? activeProfile.readiness.ready : false,
-    }
+    return activeProfile
   }
 
   const cloneRuntimeRunActiveControls = (runtimeRun: RuntimeRunDto) => ({
@@ -834,7 +982,7 @@ function createAdapter(options?: {
     runtimeRun.controls.pending ? { ...runtimeRun.controls.pending } : null
 
   const getRuntimeKindForProvider = (providerId: RuntimeSettingsDto['providerId']) =>
-    providerId === 'openrouter' || providerId === 'anthropic' ? providerId : 'openai_codex'
+    getRequiredCloudProviderPreset(providerId, 'createAdapter.getRuntimeKindForProvider').runtimeKind
 
   const buildRuntimeRunControls = (options: {
     base: RuntimeRunDto['controls']['active']
@@ -891,25 +1039,46 @@ function createAdapter(options?: {
   }
 
   const queuePendingRuntimeRunSnapshot = (request?: { controls?: RuntimeRunControlInputDto | null; prompt?: string | null }) => {
+    const activeProfile = getActiveProviderProfileSnapshot()
+
     currentRuntimeRun = currentRuntimeRun
       ? makeRuntimeRun('project-1', {
           ...currentRuntimeRun,
-          runtimeKind: getRuntimeKindForProvider(currentRuntimeSettings.providerId),
-          providerId: currentRuntimeSettings.providerId,
+          runtimeKind: getRuntimeKindForProvider(activeProfile.providerId),
+          providerId: activeProfile.providerId,
           controls: mergePendingRuntimeRunControls(currentRuntimeRun, request),
           lastHeartbeatAt: '2026-04-22T12:05:30Z',
           updatedAt: '2026-04-22T12:05:30Z',
         })
-      : makeRuntimeRun('project-1')
+      : makeRuntimeRun('project-1', {
+          runtimeKind: getRuntimeKindForProvider(activeProfile.providerId),
+          providerId: activeProfile.providerId,
+          controls: buildRuntimeRunControls({
+            base: makeRuntimeRun('project-1').controls.active,
+            nextControls: {
+              modelId: request?.controls?.modelId ?? activeProfile.modelId,
+              thinkingEffort: request?.controls?.thinkingEffort ?? 'medium',
+              approvalMode: request?.controls?.approvalMode ?? 'suggest',
+            },
+            revision: 1,
+            appliedAt: '2026-04-22T12:05:30Z',
+            queuedAt: request?.prompt ? '2026-04-22T12:05:30Z' : undefined,
+            queuedPrompt: request?.prompt ?? null,
+            queuedPromptAt: request?.prompt ? '2026-04-22T12:05:30Z' : null,
+          }),
+          lastHeartbeatAt: '2026-04-22T12:05:30Z',
+          updatedAt: '2026-04-22T12:05:30Z',
+        })
 
     return currentRuntimeRun
   }
 
   const startRuntimeRunSnapshot = (options?: { initialControls?: RuntimeRunControlInputDto | null; initialPrompt?: string | null }) => {
+    const activeProfile = getActiveProviderProfileSnapshot()
     const activeControls = buildRuntimeRunControls({
       base: makeRuntimeRun('project-1').controls.active,
       nextControls: {
-        modelId: options?.initialControls?.modelId ?? currentRuntimeSettings.modelId,
+        modelId: options?.initialControls?.modelId ?? activeProfile.modelId,
         thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
         approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
       },
@@ -921,8 +1090,8 @@ function createAdapter(options?: {
     })
 
     currentRuntimeRun = makeRuntimeRun('project-1', {
-      runtimeKind: getRuntimeKindForProvider(currentRuntimeSettings.providerId),
-      providerId: currentRuntimeSettings.providerId,
+      runtimeKind: getRuntimeKindForProvider(activeProfile.providerId),
+      providerId: activeProfile.providerId,
       controls: activeControls,
       startedAt: '2026-04-22T12:00:00Z',
       lastHeartbeatAt: '2026-04-22T12:00:05Z',
@@ -1025,32 +1194,73 @@ function createAdapter(options?: {
     return currentRuntimeSettings
   })
 
-  const upsertProviderProfile = vi.fn(async (request: {
-    profileId: string
-    providerId: 'openai_codex' | 'openrouter' | 'anthropic'
-    label: string
-    modelId: string
-    openrouterApiKey?: string | null
-    anthropicApiKey?: string | null
-    activate?: boolean
-  }) => {
-    currentRuntimeSettings = {
-      providerId: request.providerId,
-      modelId: request.modelId,
-      openrouterApiKeyConfigured:
-        request.providerId === 'openrouter'
-          ? request.openrouterApiKey == null
-            ? currentRuntimeSettings.openrouterApiKeyConfigured
-            : request.openrouterApiKey.trim().length > 0
-          : false,
-      anthropicApiKeyConfigured:
-        request.providerId === 'anthropic'
-          ? request.anthropicApiKey == null
-            ? currentRuntimeSettings.anthropicApiKeyConfigured
-            : request.anthropicApiKey.trim().length > 0
-          : false,
-    }
-    currentProviderProfiles = makeProviderProfilesFromRuntimeSettings(currentRuntimeSettings)
+  const upsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
+    const parsedRequest = upsertProviderProfileRequestSchema.parse(request)
+    const preset = getRequiredCloudProviderPreset(parsedRequest.providerId, 'createAdapter.upsertProviderProfile')
+    const existingProfile =
+      currentProviderProfiles.profiles.find((profile) => profile.profileId === parsedRequest.profileId) ?? null
+
+    const nextReadiness = (() => {
+      if (preset.authMode === 'oauth') {
+        return existingProfile?.readiness ?? makeMissingProviderReadiness()
+      }
+
+      if (preset.authMode === 'api_key') {
+        if (parsedRequest.apiKey === '') {
+          return makeMissingProviderReadiness()
+        }
+
+        if (typeof parsedRequest.apiKey === 'string' && parsedRequest.apiKey.trim().length > 0) {
+          return makeReadyProviderReadiness(preset)
+        }
+
+        return existingProfile?.readiness ?? makeMissingProviderReadiness()
+      }
+
+      if (preset.authMode === 'local') {
+        return makeReadyProviderReadiness(preset)
+      }
+
+      const hasRequiredRegion = preset.regionMode !== 'required' || Boolean(parsedRequest.region?.trim())
+      const hasRequiredProjectId =
+        preset.projectIdMode !== 'required' || Boolean(parsedRequest.projectId?.trim())
+
+      return hasRequiredRegion && hasRequiredProjectId
+        ? makeReadyProviderReadiness(preset)
+        : makeMissingProviderReadiness('malformed')
+    })()
+
+    const shouldActivate = parsedRequest.activate ?? currentProviderProfiles.profiles.length === 0
+    const nextProfile = providerProfileSchema.parse({
+      profileId: parsedRequest.profileId,
+      providerId: parsedRequest.providerId,
+      runtimeKind: parsedRequest.runtimeKind,
+      label: parsedRequest.label,
+      modelId: parsedRequest.modelId,
+      presetId: parsedRequest.presetId ?? null,
+      baseUrl: parsedRequest.baseUrl ?? null,
+      apiVersion: parsedRequest.apiVersion ?? null,
+      region: parsedRequest.region ?? null,
+      projectId: parsedRequest.projectId ?? null,
+      active: shouldActivate ? true : parsedRequest.profileId === currentProviderProfiles.activeProfileId,
+      readiness: nextReadiness,
+      migratedFromLegacy: existingProfile?.migratedFromLegacy ?? false,
+      migratedAt: existingProfile?.migratedAt ?? null,
+    })
+
+    const nextProfiles = currentProviderProfiles.profiles
+      .filter((profile) => profile.profileId !== parsedRequest.profileId)
+      .map((profile) => ({
+        ...profile,
+        active: shouldActivate ? false : profile.active,
+      }))
+
+    currentProviderProfiles = providerProfilesSchema.parse({
+      activeProfileId: shouldActivate ? parsedRequest.profileId : currentProviderProfiles.activeProfileId,
+      profiles: [...nextProfiles, nextProfile],
+      migration: currentProviderProfiles.migration ?? null,
+    })
+    syncRuntimeSettingsFromActiveProfile()
     rebuildProviderModelCatalogs()
     return currentProviderProfiles
   })
@@ -1691,7 +1901,6 @@ describe('CadenceApp current UI', () => {
               status: 'ready',
               proof: 'local',
               proofUpdatedAt: '2026-04-20T12:00:00Z',
-              credentialUpdatedAt: '2026-04-20T12:00:00Z',
             },
           }),
         ],
@@ -1734,7 +1943,6 @@ describe('CadenceApp current UI', () => {
               status: 'ready',
               proof: 'ambient',
               proofUpdatedAt: '2026-04-20T12:00:00Z',
-              credentialUpdatedAt: '2026-04-20T12:00:00Z',
             },
           }),
         ],
@@ -1776,7 +1984,7 @@ describe('CadenceApp current UI', () => {
             readiness: {
               ready: false,
               status: 'malformed',
-              credentialUpdatedAt: null,
+              proofUpdatedAt: '2026-04-20T12:00:00Z',
             },
           }),
         ],
@@ -1869,6 +2077,20 @@ describe('CadenceApp current UI', () => {
       apiKey: 'sk-ant-test-secret',
       activate: false,
     })
+  })
+
+  it('rejects legacy provider upsert fields instead of coercing them into generic profile saves', async () => {
+    const { adapter } = createAdapter()
+
+    await expect(
+      adapter.upsertProviderProfile({
+        profileId: 'openai_api-default',
+        providerId: 'openai_api',
+        label: 'OpenAI-compatible',
+        modelId: 'gpt-4.1-mini',
+        openrouterApiKey: 'sk-legacy-test-secret',
+      } as never),
+    ).rejects.toThrow()
   })
 
   it('imports a project and creates a notification route from onboarding', async () => {
@@ -2447,6 +2669,75 @@ describe('CadenceApp current UI', () => {
     await waitFor(() =>
       expect(screen.getByText('Event runtime_run:updated returned an unexpected payload shape.')).toBeVisible(),
     )
+  })
+
+  it('starts the shipped Agent path with openai_api provider identity and openai_compatible runtime truth', async () => {
+    const setup = createAdapter({
+      providerProfiles: {
+        activeProfileId: 'openai_api-default',
+        profiles: [
+          makeProviderProfile({
+            profileId: 'openai_api-default',
+            providerId: 'openai_api',
+            label: 'OpenAI-compatible',
+            modelId: 'gpt-4.1-mini',
+            baseUrl: 'https://api.openai.example/v1',
+            apiVersion: '2024-10-21',
+            active: true,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'stored_secret',
+              proofUpdatedAt: '2026-04-20T12:00:00Z',
+            },
+          }),
+          makeProviderProfile({
+            profileId: 'openai_codex-default',
+            providerId: 'openai_codex',
+            label: 'OpenAI Codex',
+            modelId: 'openai_codex',
+            active: false,
+          }),
+        ],
+        migration: null,
+      },
+      runtimeSession: makeRuntimeSession('project-1', {
+        runtimeKind: 'openai_compatible',
+        providerId: 'openai_api',
+        phase: 'authenticated',
+        sessionId: 'session-openai-api',
+        accountId: 'acct-openai-api',
+        lastErrorCode: null,
+        lastError: null,
+      }),
+      runtimeRun: null,
+      autonomousState: null,
+    })
+
+    render(<CadenceApp adapter={setup.adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('gpt-4.1-mini')
+    expect(screen.getByText(/Showing 1 discovered model/)).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start run' }))
+
+    await waitFor(() =>
+      expect(setup.startRuntimeRun).toHaveBeenCalledWith('project-1', {
+        initialControls: {
+          modelId: 'gpt-4.1-mini',
+          thinkingEffort: 'medium',
+          approvalMode: 'suggest',
+        },
+        initialPrompt: null,
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('Approval active · Suggest')).toBeVisible())
   })
 
   it('proves auth, provider-backed model truth, and pending-to-active boundary application through the shipped Agent path', async () => {
