@@ -182,6 +182,15 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::solana::solana_persona_export_keypair,
             commands::solana::solana_scenario_list,
             commands::solana::solana_scenario_run,
+            commands::solana::solana_tx_build,
+            commands::solana::solana_tx_simulate,
+            commands::solana::solana_tx_send,
+            commands::solana::solana_tx_explain,
+            commands::solana::solana_priority_fee_estimate,
+            commands::solana::solana_cpi_resolve,
+            commands::solana::solana_alt_create,
+            commands::solana::solana_alt_extend,
+            commands::solana::solana_alt_resolve,
             commands::solana::solana_subscribe_ready,
         ])
 }

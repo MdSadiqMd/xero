@@ -9,6 +9,7 @@ pub const SOLANA_TOOLCHAIN_STATUS_CHANGED_EVENT: &str = "solana:toolchain:change
 pub const SOLANA_RPC_HEALTH_EVENT: &str = "solana:rpc:health";
 pub const SOLANA_PERSONA_EVENT: &str = "solana:persona";
 pub const SOLANA_SCENARIO_EVENT: &str = "solana:scenario";
+pub const SOLANA_TX_EVENT: &str = "solana:tx";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -120,6 +121,49 @@ impl PersonaEventPayload {
 
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TxEventKind {
+    Building,
+    Simulated,
+    Sent,
+    Confirmed,
+    Failed,
+    Decoded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TxEventPayload {
+    pub kind: TxEventKind,
+    pub cluster: String,
+    pub signature: Option<String>,
+    pub summary: Option<String>,
+    pub ts_ms: u64,
+}
+
+impl TxEventPayload {
+    pub fn new(kind: TxEventKind, cluster: &str) -> Self {
+        Self {
+            kind,
+            cluster: cluster.to_string(),
+            signature: None,
+            summary: None,
+            ts_ms: now_ms(),
+        }
+    }
+
+    pub fn with_signature(mut self, signature: impl Into<String>) -> Self {
+        self.signature = Some(signature.into());
+        self
+    }
+
+    pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
+        self.summary = Some(summary.into());
         self
     }
 }

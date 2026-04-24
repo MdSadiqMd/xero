@@ -57,7 +57,7 @@ pub(crate) fn queued_runtime_controls_apply_on_next_model_boundary_and_recover_r
 
     let script = runtime_shell::script_join_steps(&[
         runtime_shell::script_print_line("boot"),
-        runtime_shell::script_sleep(3),
+        runtime_shell::script_sleep(8),
         runtime_shell::script_print_line(&control_boundary_event(
             "Harness reached the next model-call boundary.",
         )),
@@ -106,31 +106,33 @@ pub(crate) fn queued_runtime_controls_apply_on_next_model_boundary_and_recover_r
 
     let (fresh_state, _fresh_registry_path, _fresh_auth_store_path) = create_state(&root);
     let fresh_app = build_mock_app(fresh_state);
-    let before_apply = get_runtime_run(
-        fresh_app.handle().clone(),
-        fresh_app.state::<DesktopState>(),
-        GetRuntimeRunRequestDto {
-            project_id: project_id.clone(),
-        },
-    )
-    .expect("get runtime run before apply")
-    .expect("runtime run should exist before apply");
+    let before_apply = wait_for_runtime_run(&fresh_app, &project_id, |runtime_run| {
+        runtime_run.run_id == launched.run.run_id
+            && runtime_run.status == RuntimeRunStatusDto::Running
+            && runtime_run
+                .controls
+                .pending
+                .as_ref()
+                .and_then(|pending| pending.queued_prompt.as_deref())
+                == Some(queued_prompt)
+    });
     assert_eq!(before_apply.run_id, launched.run.run_id);
-    assert_eq!(
-        before_apply
-            .controls
-            .pending
-            .as_ref()
-            .and_then(|pending| pending.queued_prompt.as_deref()),
-        Some(queued_prompt)
-    );
 
     let applied = wait_for_runtime_run(&fresh_app, &project_id, |runtime_run| {
+        let checkpoint_dump = runtime_run
+            .checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.summary.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         runtime_run.run_id == launched.run.run_id
             && runtime_run.status == RuntimeRunStatusDto::Running
             && runtime_run.controls.pending.is_none()
             && runtime_run.controls.active.revision == pending.revision
             && runtime_run.controls.active.approval_mode == RuntimeRunApprovalModeDto::AutoEdit
+            && checkpoint_dump.contains("runtime_run_controls_queued")
+            && checkpoint_dump.contains(CONTROL_APPLY_BOUNDARY_ACTIVITY_CODE)
+            && checkpoint_dump.contains(CONTROL_APPLIED_ACTIVITY_CODE)
     });
     assert_eq!(
         applied.controls.active.model_id,

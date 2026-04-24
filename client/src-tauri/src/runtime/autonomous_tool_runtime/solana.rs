@@ -14,12 +14,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::commands::solana::{
-    ClusterHandle, ClusterKind, ClusterStatus, EndpointHealth, SnapshotMeta, SolanaState, StartOpts,
+    AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport, ClusterHandle, ClusterKind,
+    ClusterStatus, EndpointHealth, ExplainRequest, FeeEstimate, KnownProgramLookup,
+    ResolveArgs, SamplePercentile, SendRequest, SimulateRequest, SimulationResult, SnapshotMeta,
+    SolanaState, StartOpts, TxPipeline, TxPlan, TxResult, TxSpec,
 };
 use crate::commands::{CommandError, CommandResult};
 
 pub const AUTONOMOUS_TOOL_SOLANA_CLUSTER: &str = "solana_cluster";
 pub const AUTONOMOUS_TOOL_SOLANA_LOGS: &str = "solana_logs";
+pub const AUTONOMOUS_TOOL_SOLANA_TX: &str = "solana_tx";
+pub const AUTONOMOUS_TOOL_SOLANA_SIMULATE: &str = "solana_simulate";
+pub const AUTONOMOUS_TOOL_SOLANA_EXPLAIN: &str = "solana_explain";
+pub const AUTONOMOUS_TOOL_SOLANA_ALT: &str = "solana_alt";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -72,6 +79,86 @@ pub struct AutonomousSolanaOutput {
     pub value_json: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaTxAction {
+    Build {
+        spec: TxSpec,
+    },
+    Send {
+        request: SendRequest,
+    },
+    PriorityFee {
+        cluster: ClusterKind,
+        #[serde(default)]
+        program_ids: Vec<String>,
+        #[serde(default = "default_percentile")]
+        target: SamplePercentile,
+        #[serde(default)]
+        rpc_url: Option<String>,
+    },
+    Cpi {
+        program_id: String,
+        instruction: String,
+        #[serde(default)]
+        args: ResolveArgs,
+    },
+}
+
+fn default_percentile() -> SamplePercentile {
+    SamplePercentile::Median
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaTxRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaTxAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSolanaSimulateRequest {
+    pub request: SimulateRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSolanaExplainRequest {
+    pub request: ExplainRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaAltAction {
+    Create {
+        cluster: ClusterKind,
+        authority_persona: String,
+        #[serde(default)]
+        rpc_url: Option<String>,
+    },
+    Extend {
+        cluster: ClusterKind,
+        alt: String,
+        addresses: Vec<String>,
+        authority_persona: String,
+        #[serde(default)]
+        rpc_url: Option<String>,
+    },
+    Resolve {
+        addresses: Vec<String>,
+        #[serde(default)]
+        candidates: Vec<AltCandidate>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaAltRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaAltAction,
+}
+
 pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
     fn cluster(
         &self,
@@ -79,6 +166,20 @@ pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
     ) -> CommandResult<AutonomousSolanaOutput>;
 
     fn logs(&self, request: AutonomousSolanaLogsRequest) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn tx(&self, request: AutonomousSolanaTxRequest) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn simulate(
+        &self,
+        request: AutonomousSolanaSimulateRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn explain(
+        &self,
+        request: AutonomousSolanaExplainRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn alt(&self, request: AutonomousSolanaAltRequest) -> CommandResult<AutonomousSolanaOutput>;
 }
 
 /// Executor that dispatches against a live `SolanaState`. Safe to clone
@@ -94,6 +195,7 @@ struct StateInner {
     supervisor: Arc<crate::commands::solana::ValidatorSupervisor>,
     router: Arc<crate::commands::solana::RpcRouter>,
     snapshots: Arc<crate::commands::solana::SnapshotStore>,
+    tx_pipeline: Arc<TxPipeline>,
 }
 
 impl StateSolanaExecutor {
@@ -103,6 +205,7 @@ impl StateSolanaExecutor {
                 supervisor: state.supervisor(),
                 router: state.rpc_router(),
                 snapshots: state.snapshots(),
+                tx_pipeline: state.tx_pipeline(),
             }),
         }
     }
@@ -210,6 +313,140 @@ impl SolanaExecutor for StateSolanaExecutor {
             value_json,
         })
     }
+
+    fn tx(&self, request: AutonomousSolanaTxRequest) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaTxAction::Build { spec } => {
+                let plan = self.inner.tx_pipeline.build(spec)?;
+                (
+                    "build".to_string(),
+                    serde_json::to_value::<TxPlan>(plan).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaTxAction::Send { request } => {
+                let result = self.inner.tx_pipeline.send(request)?;
+                (
+                    "send".to_string(),
+                    serde_json::to_value::<TxResult>(result).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaTxAction::PriorityFee {
+                cluster,
+                program_ids,
+                target,
+                rpc_url,
+            } => {
+                let estimate = self.inner.tx_pipeline.priority_fee_estimate(
+                    cluster,
+                    &program_ids,
+                    target,
+                    rpc_url,
+                )?;
+                (
+                    "priority_fee".to_string(),
+                    serde_json::to_value::<FeeEstimate>(estimate).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaTxAction::Cpi {
+                program_id,
+                instruction,
+                args,
+            } => {
+                let lookup = self
+                    .inner
+                    .tx_pipeline
+                    .resolve_cpi(&program_id, &instruction, &args);
+                (
+                    "cpi".to_string(),
+                    serde_json::to_value::<KnownProgramLookup>(lookup).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
+
+    fn simulate(
+        &self,
+        request: AutonomousSolanaSimulateRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        let result = self.inner.tx_pipeline.simulate(request.request)?;
+        let value = serde_json::to_value::<SimulationResult>(result).unwrap_or(JsonValue::Null);
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: "simulate".to_string(),
+            value_json,
+        })
+    }
+
+    fn explain(
+        &self,
+        request: AutonomousSolanaExplainRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        let result = self.inner.tx_pipeline.explain(request.request)?;
+        let value = serde_json::to_value::<TxResult>(result).unwrap_or(JsonValue::Null);
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: "explain".to_string(),
+            value_json,
+        })
+    }
+
+    fn alt(&self, request: AutonomousSolanaAltRequest) -> CommandResult<AutonomousSolanaOutput> {
+        let (action_name, value) = match request.action {
+            AutonomousSolanaAltAction::Create {
+                cluster,
+                authority_persona,
+                rpc_url,
+            } => {
+                let result =
+                    self.inner
+                        .tx_pipeline
+                        .alt_create(cluster, &authority_persona, rpc_url)?;
+                (
+                    "alt_create".to_string(),
+                    serde_json::to_value::<AltCreateResult>(result).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaAltAction::Extend {
+                cluster,
+                alt,
+                addresses,
+                authority_persona,
+                rpc_url,
+            } => {
+                let result = self.inner.tx_pipeline.alt_extend(
+                    cluster,
+                    &alt,
+                    &addresses,
+                    &authority_persona,
+                    rpc_url,
+                )?;
+                (
+                    "alt_extend".to_string(),
+                    serde_json::to_value::<AltExtendResult>(result).unwrap_or(JsonValue::Null),
+                )
+            }
+            AutonomousSolanaAltAction::Resolve {
+                addresses,
+                candidates,
+            } => {
+                let report = self.inner.tx_pipeline.alt_suggest(&addresses, &candidates);
+                (
+                    "alt_resolve".to_string(),
+                    serde_json::to_value::<AltResolveReport>(report).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+        let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+        Ok(AutonomousSolanaOutput {
+            action: action_name,
+            value_json,
+        })
+    }
 }
 
 /// No-op executor. Returns `policy_denied` for every action so environments
@@ -231,6 +468,36 @@ impl SolanaExecutor for UnavailableSolanaExecutor {
     fn logs(&self, _request: AutonomousSolanaLogsRequest) -> CommandResult<AutonomousSolanaOutput> {
         Err(CommandError::policy_denied(
             "Solana log streaming requires the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
+    fn tx(&self, _request: AutonomousSolanaTxRequest) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Solana tx pipeline requires the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
+    fn simulate(
+        &self,
+        _request: AutonomousSolanaSimulateRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Solana simulate requires the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
+    fn explain(
+        &self,
+        _request: AutonomousSolanaExplainRequest,
+    ) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Solana explain requires the desktop runtime; no SolanaState is wired.",
+        ))
+    }
+
+    fn alt(&self, _request: AutonomousSolanaAltRequest) -> CommandResult<AutonomousSolanaOutput> {
+        Err(CommandError::policy_denied(
+            "Solana ALT actions require the desktop runtime; no SolanaState is wired.",
         ))
     }
 }

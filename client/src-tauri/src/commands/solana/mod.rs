@@ -13,6 +13,7 @@ pub mod rpc_router;
 pub mod scenario;
 pub mod snapshot;
 pub mod toolchain;
+pub mod tx;
 pub mod validator;
 
 use std::path::PathBuf;
@@ -26,10 +27,10 @@ use crate::commands::{CommandError, CommandResult};
 pub use cluster::{descriptors as cluster_descriptors, ClusterDescriptor, ClusterKind};
 pub use events::{
     PersonaEventKind, PersonaEventPayload, ScenarioEventKind, ScenarioEventPayload,
-    ValidatorLogLevel, ValidatorLogPayload, ValidatorPhase, ValidatorStatusPayload,
-    SOLANA_PERSONA_EVENT, SOLANA_RPC_HEALTH_EVENT, SOLANA_SCENARIO_EVENT,
-    SOLANA_TOOLCHAIN_STATUS_CHANGED_EVENT, SOLANA_VALIDATOR_LOG_EVENT,
-    SOLANA_VALIDATOR_STATUS_EVENT,
+    TxEventKind, TxEventPayload, ValidatorLogLevel, ValidatorLogPayload, ValidatorPhase,
+    ValidatorStatusPayload, SOLANA_PERSONA_EVENT, SOLANA_RPC_HEALTH_EVENT,
+    SOLANA_SCENARIO_EVENT, SOLANA_TOOLCHAIN_STATUS_CHANGED_EVENT, SOLANA_TX_EVENT,
+    SOLANA_VALIDATOR_LOG_EVENT, SOLANA_VALIDATOR_STATUS_EVENT,
 };
 pub use persona::fund::{
     DefaultFundingBackend, FundingBackend, FundingDelta, FundingReceipt, FundingStep,
@@ -49,6 +50,14 @@ pub use snapshot::{
     AccountFetcher, AccountRecord, RpcAccountFetcher, SnapshotManifest, SnapshotMeta, SnapshotStore,
 };
 pub use toolchain::{ToolProbe, ToolchainStatus};
+pub use tx::{
+    AccountMetaSpec, AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport, AltRunner,
+    BundleStatus, BundleSubmission, Commitment, CompiledComputeInstruction, ComputeBudgetPlan,
+    CpiResolution, DecodedLogs, ExplainRequest, Explanation, FeeEstimate, FeeSample,
+    HttpRpcTransport, IdlErrorMap, KnownProgramLookup, LandingStrategy, PercentileFee,
+    ResolveArgs, RpcTransport, SamplePercentile, SendRequest, SimulateRequest, SimulationResult,
+    TxPipeline, TxPlan, TxResult, TxSpec,
+};
 pub use validator::{
     ClusterHandle, ClusterStatus, StartOpts, ValidatorLauncher, ValidatorSession,
     ValidatorSupervisor,
@@ -62,6 +71,23 @@ pub struct SolanaState {
     snapshots: Arc<SnapshotStore>,
     personas: Arc<PersonaStore>,
     scenarios: Arc<ScenarioEngine>,
+    tx_pipeline: Arc<TxPipeline>,
+}
+
+fn build_tx_pipeline(
+    supervisor: &Arc<ValidatorSupervisor>,
+    router: &Arc<RpcRouter>,
+    personas: &Arc<PersonaStore>,
+) -> Arc<TxPipeline> {
+    let transport: Arc<dyn RpcTransport> = Arc::new(HttpRpcTransport::new());
+    let alt_runner: Arc<dyn AltRunner> = Arc::new(tx::alt::SolanaCliRunner::new());
+    Arc::new(TxPipeline::new(
+        transport,
+        Arc::clone(router),
+        Arc::clone(personas),
+        Arc::clone(supervisor),
+        alt_runner,
+    ))
 }
 
 impl Default for SolanaState {
@@ -89,12 +115,15 @@ impl Default for SolanaState {
             Arc::clone(&personas),
             Arc::clone(&supervisor),
         ));
+        let rpc_router = Arc::new(RpcRouter::new_with_default_pool());
+        let tx_pipeline = build_tx_pipeline(&supervisor, &rpc_router, &personas);
         Self {
             supervisor,
-            rpc_router: Arc::new(RpcRouter::new_with_default_pool()),
+            rpc_router,
             snapshots: Arc::new(snapshots),
             personas,
             scenarios,
+            tx_pipeline,
         }
     }
 }
@@ -118,12 +147,14 @@ impl SolanaState {
             Arc::clone(&personas),
             Arc::clone(&supervisor),
         ));
+        let tx_pipeline = build_tx_pipeline(&supervisor, &rpc_router, &personas);
         Self {
             supervisor,
             rpc_router,
             snapshots,
             personas,
             scenarios,
+            tx_pipeline,
         }
     }
 
@@ -139,12 +170,38 @@ impl SolanaState {
             Arc::clone(&personas),
             Arc::clone(&supervisor),
         ));
+        let tx_pipeline = build_tx_pipeline(&supervisor, &rpc_router, &personas);
         Self {
             supervisor,
             rpc_router,
             snapshots,
             personas,
             scenarios,
+            tx_pipeline,
+        }
+    }
+
+    /// Test/integration constructor that takes a caller-provided
+    /// `TxPipeline`. Phase 3 integration tests use this to inject a
+    /// scripted transport + mock ALT runner without touching the network.
+    pub fn with_tx_pipeline(
+        supervisor: Arc<ValidatorSupervisor>,
+        rpc_router: Arc<RpcRouter>,
+        snapshots: Arc<SnapshotStore>,
+        personas: Arc<PersonaStore>,
+        tx_pipeline: Arc<TxPipeline>,
+    ) -> Self {
+        let scenarios = Arc::new(ScenarioEngine::new(
+            Arc::clone(&personas),
+            Arc::clone(&supervisor),
+        ));
+        Self {
+            supervisor,
+            rpc_router,
+            snapshots,
+            personas,
+            scenarios,
+            tx_pipeline,
         }
     }
 
@@ -166,6 +223,10 @@ impl SolanaState {
 
     pub fn scenarios(&self) -> Arc<ScenarioEngine> {
         Arc::clone(&self.scenarios)
+    }
+
+    pub fn tx_pipeline(&self) -> Arc<TxPipeline> {
+        Arc::clone(&self.tx_pipeline)
     }
 
     /// Resolve the RPC URL the persona / scenario commands should use when
@@ -608,6 +669,215 @@ pub fn solana_scenario_run<R: Runtime>(
     .with_signature_count(run.signatures.len().min(u32::MAX as usize) as u32);
     let _ = app.emit(SOLANA_SCENARIO_EVENT, payload);
     Ok(run)
+}
+
+// ---------- Transaction pipeline commands (Phase 3) -----------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TxBuildRequest {
+    pub spec: TxSpec,
+}
+
+#[tauri::command]
+pub fn solana_tx_build<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: TxBuildRequest,
+) -> CommandResult<TxPlan> {
+    let cluster = request.spec.cluster;
+    let plan = state.tx_pipeline.build(request.spec)?;
+    let _ = app.emit(
+        SOLANA_TX_EVENT,
+        TxEventPayload::new(TxEventKind::Building, cluster.as_str())
+            .with_summary(plan.compute_budget.rationale.clone()),
+    );
+    Ok(plan)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TxSimulateRequest {
+    pub request: SimulateRequest,
+}
+
+#[tauri::command]
+pub fn solana_tx_simulate<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: TxSimulateRequest,
+) -> CommandResult<SimulationResult> {
+    let cluster = request.request.cluster;
+    let result = state.tx_pipeline.simulate(request.request)?;
+    let _ = app.emit(
+        SOLANA_TX_EVENT,
+        TxEventPayload::new(TxEventKind::Simulated, cluster.as_str())
+            .with_summary(result.explanation.summary.clone()),
+    );
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TxSendRequest {
+    pub request: SendRequest,
+}
+
+#[tauri::command]
+pub fn solana_tx_send<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: TxSendRequest,
+) -> CommandResult<TxResult> {
+    let cluster = request.request.cluster;
+    let result = state.tx_pipeline.send(request.request)?;
+    let kind = if result.err.is_some() || !result.explanation.ok {
+        TxEventKind::Failed
+    } else {
+        TxEventKind::Confirmed
+    };
+    let _ = app.emit(
+        SOLANA_TX_EVENT,
+        TxEventPayload::new(kind, cluster.as_str())
+            .with_signature(&result.signature)
+            .with_summary(result.explanation.summary.clone()),
+    );
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TxExplainRequest {
+    pub request: ExplainRequest,
+}
+
+#[tauri::command]
+pub fn solana_tx_explain<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: TxExplainRequest,
+) -> CommandResult<TxResult> {
+    let cluster = request.request.cluster;
+    let signature = request.request.signature.clone();
+    let result = state.tx_pipeline.explain(request.request)?;
+    let _ = app.emit(
+        SOLANA_TX_EVENT,
+        TxEventPayload::new(TxEventKind::Decoded, cluster.as_str())
+            .with_signature(signature)
+            .with_summary(result.explanation.summary.clone()),
+    );
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PriorityFeeRequest {
+    pub cluster: ClusterKind,
+    #[serde(default)]
+    pub program_ids: Vec<String>,
+    #[serde(default = "default_priority_percentile")]
+    pub target: SamplePercentile,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+fn default_priority_percentile() -> SamplePercentile {
+    SamplePercentile::Median
+}
+
+#[tauri::command]
+pub fn solana_priority_fee_estimate(
+    state: State<'_, SolanaState>,
+    request: PriorityFeeRequest,
+) -> CommandResult<FeeEstimate> {
+    state.tx_pipeline.priority_fee_estimate(
+        request.cluster,
+        &request.program_ids,
+        request.target,
+        request.rpc_url,
+    )
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CpiResolveRequest {
+    pub program_id: String,
+    pub instruction: String,
+    #[serde(default)]
+    pub args: ResolveArgs,
+}
+
+#[tauri::command]
+pub fn solana_cpi_resolve(request: CpiResolveRequest) -> CommandResult<KnownProgramLookup> {
+    Ok(tx::cpi_resolver::resolve(
+        &request.program_id,
+        &request.instruction,
+        &request.args,
+    ))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AltCreateRequest {
+    pub cluster: ClusterKind,
+    pub authority_persona: String,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[tauri::command]
+pub fn solana_alt_create(
+    state: State<'_, SolanaState>,
+    request: AltCreateRequest,
+) -> CommandResult<AltCreateResult> {
+    state.tx_pipeline.alt_create(
+        request.cluster,
+        &request.authority_persona,
+        request.rpc_url,
+    )
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AltExtendRequest {
+    pub cluster: ClusterKind,
+    pub alt: String,
+    pub addresses: Vec<String>,
+    pub authority_persona: String,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[tauri::command]
+pub fn solana_alt_extend(
+    state: State<'_, SolanaState>,
+    request: AltExtendRequest,
+) -> CommandResult<AltExtendResult> {
+    state.tx_pipeline.alt_extend(
+        request.cluster,
+        &request.alt,
+        &request.addresses,
+        &request.authority_persona,
+        request.rpc_url,
+    )
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AltResolveRequest {
+    pub addresses: Vec<String>,
+    #[serde(default)]
+    pub candidates: Vec<AltCandidate>,
+}
+
+#[tauri::command]
+pub fn solana_alt_resolve(
+    state: State<'_, SolanaState>,
+    request: AltResolveRequest,
+) -> CommandResult<AltResolveReport> {
+    Ok(state
+        .tx_pipeline
+        .alt_suggest(&request.addresses, &request.candidates))
 }
 
 /// Lightweight acknowledgement that the frontend can call when it opens
