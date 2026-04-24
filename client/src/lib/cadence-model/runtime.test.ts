@@ -24,6 +24,7 @@ function makeRuntimeRunDto(overrides: Record<string, unknown> = {}) {
         modelId: 'openai/gpt-4.1-mini',
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
+        planModeRequired: true,
         revision: 1,
         appliedAt: '2026-04-15T20:00:00Z',
       },
@@ -31,6 +32,7 @@ function makeRuntimeRunDto(overrides: Record<string, unknown> = {}) {
         modelId: 'anthropic/claude-3.5-haiku',
         thinkingEffort: 'low',
         approvalMode: 'auto_edit',
+        planModeRequired: true,
         revision: 2,
         queuedAt: '2026-04-15T20:01:00Z',
         queuedPrompt: 'Review the diff before continuing.',
@@ -59,12 +61,14 @@ describe('runtime run control schemas', () => {
       modelId: 'openai/gpt-4.1-mini',
       thinkingEffort: 'medium',
       approvalMode: 'suggest',
+      planModeRequired: true,
       revision: 1,
     })
     expect(view.controls.pending).toMatchObject({
       modelId: 'anthropic/claude-3.5-haiku',
       thinkingEffort: 'low',
       approvalMode: 'auto_edit',
+      planModeRequired: true,
       revision: 2,
       queuedPrompt: 'Review the diff before continuing.',
       hasQueuedPrompt: true,
@@ -74,6 +78,7 @@ describe('runtime run control schemas', () => {
       modelId: 'anthropic/claude-3.5-haiku',
       thinkingEffort: 'low',
       approvalMode: 'auto_edit',
+      planModeRequired: true,
       revision: 2,
       queuedPrompt: 'Review the diff before continuing.',
       hasQueuedPrompt: true,
@@ -101,6 +106,7 @@ describe('runtime run control schemas', () => {
           modelId: 'openai/gpt-4.1-mini',
           thinkingEffort: 'medium',
           approvalMode: 'suggest',
+          planModeRequired: true,
           revision: 1,
           appliedAt: '2026-04-15T20:00:00Z',
         },
@@ -108,6 +114,7 @@ describe('runtime run control schemas', () => {
           modelId: 'anthropic/claude-3.5-haiku',
           thinkingEffort: 'low',
           approvalMode: 'ship_it',
+          planModeRequired: true,
           revision: 2,
           queuedAt: '2026-04-15T20:01:00Z',
           queuedPrompt: 'Review the diff before continuing.',
@@ -134,6 +141,7 @@ describe('runtime run control schemas', () => {
         modelId: 'openai/gpt-4.1-mini',
         thinkingEffort: 'high',
         approvalMode: 'yolo',
+        planModeRequired: true,
       },
       initialPrompt: 'Continue with the next verifier step.',
     })
@@ -145,8 +153,56 @@ describe('runtime run control schemas', () => {
         modelId: 'openai/gpt-4.1-mini',
         thinkingEffort: 'high',
         approvalMode: 'yolo',
+        planModeRequired: true,
       },
       initialPrompt: 'Continue with the next verifier step.',
     })
+  })
+
+  it('defaults planModeRequired to false and rejects malformed plan mode values', () => {
+    const defaulted = startRuntimeRunRequestSchema.parse({
+      projectId: 'project-1',
+      initialControls: {
+        modelId: 'openai/gpt-4.1-mini',
+        approvalMode: 'suggest',
+      },
+    })
+
+    const malformed = runtimeRunSchema.safeParse(
+      makeRuntimeRunDto({
+        controls: {
+          active: {
+            modelId: 'openai/gpt-4.1-mini',
+            thinkingEffort: 'medium',
+            approvalMode: 'suggest',
+            planModeRequired: 'yes',
+            revision: 1,
+            appliedAt: '2026-04-15T20:00:00Z',
+          },
+        },
+      }),
+    )
+    const malformedRequest = updateRuntimeRunControlsRequestSchema.safeParse({
+      projectId: 'project-1',
+      runId: 'run-project-1',
+      controls: {
+        modelId: 'openai/gpt-4.1-mini',
+        approvalMode: 'suggest',
+        planModeRequired: 'true',
+      },
+    })
+
+    expect(defaulted.initialControls?.planModeRequired).toBe(false)
+    expect(malformed.success).toBe(false)
+    expect(malformedRequest.success).toBe(false)
+    if (malformed.success) {
+      throw new Error('Expected runtimeRunSchema to reject non-boolean planModeRequired values.')
+    }
+    expect(malformed.error.issues.some((issue) => issue.path.join('.') === 'controls.active.planModeRequired')).toBe(true)
+
+    if (malformedRequest.success) {
+      throw new Error('Expected updateRuntimeRunControlsRequestSchema to reject non-boolean planModeRequired values.')
+    }
+    expect(malformedRequest.error.issues.some((issue) => issue.path.join('.') === 'controls.planModeRequired')).toBe(true)
   })
 })

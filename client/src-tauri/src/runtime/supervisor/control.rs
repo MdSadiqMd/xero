@@ -781,6 +781,10 @@ fn build_pending_control_snapshot(
         .map(|controls| controls.approval_mode.clone())
         .or_else(|| base.map(|pending| pending.approval_mode.clone()))
         .unwrap_or_else(|| control_state.active.approval_mode.clone());
+    let plan_mode_required = controls
+        .map(|controls| controls.plan_mode_required)
+        .or_else(|| base.map(|pending| pending.plan_mode_required))
+        .unwrap_or(control_state.active.plan_mode_required);
 
     let existing_prompt = base.and_then(|pending| pending.queued_prompt.clone());
     let existing_prompt_at = base.and_then(|pending| pending.queued_prompt_at.clone());
@@ -801,6 +805,7 @@ fn build_pending_control_snapshot(
         model_id,
         thinking_effort,
         approval_mode,
+        plan_mode_required,
         revision: pending_revision,
         queued_at: queued_at.to_owned(),
         queued_prompt,

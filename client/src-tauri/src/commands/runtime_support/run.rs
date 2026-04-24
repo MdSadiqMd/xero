@@ -24,7 +24,7 @@ use crate::{
         RUNTIME_RUN_UPDATED_EVENT,
     },
     db::project_store::{
-        self, build_runtime_run_control_state, RuntimeRunCheckpointKind,
+        self, build_runtime_run_control_state_with_plan_mode, RuntimeRunCheckpointKind,
         RuntimeRunControlStateRecord, RuntimeRunDiagnosticRecord, RuntimeRunSnapshotRecord,
         RuntimeRunStatus, RuntimeRunTransportLiveness,
     },
@@ -305,6 +305,7 @@ pub(crate) fn normalize_requested_runtime_run_controls<R: Runtime>(
         model_id: control_state.active.model_id,
         thinking_effort: control_state.active.thinking_effort,
         approval_mode: control_state.active.approval_mode,
+        plan_mode_required: control_state.active.plan_mode_required,
     })
 }
 
@@ -456,12 +457,16 @@ fn resolve_initial_runtime_run_control_state<R: Runtime>(
     let approval_mode = requested_controls
         .map(|controls| controls.approval_mode.clone())
         .unwrap_or(RuntimeRunApprovalModeDto::Suggest);
+    let plan_mode_required = requested_controls
+        .map(|controls| controls.plan_mode_required)
+        .unwrap_or(false);
     let timestamp = crate::auth::now_timestamp();
 
-    build_runtime_run_control_state(
+    build_runtime_run_control_state_with_plan_mode(
         &model_id,
         thinking_effort,
         approval_mode,
+        plan_mode_required,
         &timestamp,
         initial_prompt,
     )
@@ -744,6 +749,7 @@ fn runtime_run_control_state_dto(
             model_id: controls.active.model_id.clone(),
             thinking_effort: controls.active.thinking_effort.clone(),
             approval_mode: controls.active.approval_mode.clone(),
+            plan_mode_required: controls.active.plan_mode_required,
             revision: controls.active.revision,
             applied_at: controls.active.applied_at.clone(),
         },
@@ -754,6 +760,7 @@ fn runtime_run_control_state_dto(
                 model_id: pending.model_id.clone(),
                 thinking_effort: pending.thinking_effort.clone(),
                 approval_mode: pending.approval_mode.clone(),
+                plan_mode_required: pending.plan_mode_required,
                 revision: pending.revision,
                 queued_at: pending.queued_at.clone(),
                 queued_prompt: pending.queued_prompt.clone(),

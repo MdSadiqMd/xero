@@ -221,9 +221,20 @@ export function useRunControlMutations({
         activeProjectIdRef,
         'Select an imported project before queueing supervised runtime-run controls.',
       )
-      const runId =
+      let runId =
         runtimeRunsRef.current[projectId]?.runId?.trim() ??
-        activeProjectRef.current?.runtimeRun?.runId?.trim()
+        activeProjectRef.current?.runtimeRun?.runId?.trim() ??
+        null
+
+      if (!runId) {
+        try {
+          const hydratedRun = await syncRuntimeRun(projectId)
+          runId = hydratedRun?.runId?.trim() ?? null
+        } catch {
+          // Ignore refresh failure here; the queue attempt should still fail with the explicit missing-run copy below.
+        }
+      }
+
       if (!runId) {
         throw new Error('Cadence cannot queue runtime-run controls until a supervised runtime run exists for this project.')
       }

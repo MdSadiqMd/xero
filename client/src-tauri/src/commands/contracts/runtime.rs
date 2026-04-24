@@ -99,6 +99,8 @@ pub struct RuntimeRunControlInputDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
     pub approval_mode: RuntimeRunApprovalModeDto,
+    #[serde(default)]
+    pub plan_mode_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,6 +110,8 @@ pub struct RuntimeRunActiveControlSnapshotDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
     pub approval_mode: RuntimeRunApprovalModeDto,
+    #[serde(default)]
+    pub plan_mode_required: bool,
     pub revision: u32,
     pub applied_at: String,
 }
@@ -119,6 +123,8 @@ pub struct RuntimeRunPendingControlSnapshotDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
     pub approval_mode: RuntimeRunApprovalModeDto,
+    #[serde(default)]
+    pub plan_mode_required: bool,
     pub revision: u32,
     pub queued_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -157,6 +157,7 @@ export const runtimeRunControlInputSchema = z
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
     approvalMode: runtimeRunApprovalModeSchema,
+    planModeRequired: z.boolean().default(false),
   })
   .strict()
 
@@ -165,6 +166,7 @@ export const runtimeRunActiveControlSnapshotSchema = z
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
     approvalMode: runtimeRunApprovalModeSchema,
+    planModeRequired: z.boolean().default(false),
     revision: z.number().int().positive(),
     appliedAt: isoTimestampSchema,
   })
@@ -175,6 +177,7 @@ export const runtimeRunPendingControlSnapshotSchema = z
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
     approvalMode: runtimeRunApprovalModeSchema,
+    planModeRequired: z.boolean().default(false),
     revision: z.number().int().positive(),
     queuedAt: isoTimestampSchema,
     queuedPrompt: z.string().trim().min(1).nullable().optional(),
@@ -345,6 +348,7 @@ export interface RuntimeRunControlInputView {
   thinkingEffortLabel: string
   approvalMode: RuntimeRunApprovalModeDto
   approvalModeLabel: string
+  planModeRequired: boolean
 }
 
 export interface RuntimeRunActiveControlSnapshotView extends RuntimeRunControlInputView {
@@ -526,6 +530,7 @@ function mapRuntimeRunControlInput(control: RuntimeRunControlInputDto): RuntimeR
     thinkingEffortLabel: getRuntimeRunThinkingEffortLabel(control.thinkingEffort ?? null),
     approvalMode: control.approvalMode,
     approvalModeLabel: getRuntimeRunApprovalModeLabel(control.approvalMode),
+    planModeRequired: control.planModeRequired ?? false,
   }
 }
 

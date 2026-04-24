@@ -162,6 +162,7 @@ impl Default for RuntimeSupervisorLaunchRequest {
                     model_id: "openai_codex".into(),
                     thinking_effort: None,
                     approval_mode: crate::commands::RuntimeRunApprovalModeDto::Suggest,
+                    plan_mode_required: false,
                     revision: 1,
                     applied_at: crate::auth::now_timestamp(),
                 },

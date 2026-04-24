@@ -63,6 +63,7 @@ pub(super) fn apply_pending_controls_at_boundary(
             model_id: pending.model_id.clone(),
             thinking_effort: pending.thinking_effort.clone(),
             approval_mode: pending.approval_mode.clone(),
+            plan_mode_required: pending.plan_mode_required,
             revision: pending.revision,
             applied_at: applied_at.clone(),
         };

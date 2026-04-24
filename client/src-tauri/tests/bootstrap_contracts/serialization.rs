@@ -922,6 +922,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                 model_id: "openai_codex".into(),
                 thinking_effort: Some(ProviderModelThinkingEffortDto::Medium),
                 approval_mode: RuntimeRunApprovalModeDto::Suggest,
+                plan_mode_required: true,
                 revision: 1,
                 applied_at: "2026-04-15T23:10:00Z".into(),
             },
@@ -929,6 +930,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                 model_id: "openai_codex".into(),
                 thinking_effort: Some(ProviderModelThinkingEffortDto::High),
                 approval_mode: RuntimeRunApprovalModeDto::AutoEdit,
+                plan_mode_required: true,
                 revision: 2,
                 queued_at: "2026-04-15T23:10:01Z".into(),
                 queued_prompt: Some("Review the latest diff before continuing.".into()),
@@ -974,6 +976,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                     "modelId": "openai_codex",
                     "thinkingEffort": "medium",
                     "approvalMode": "suggest",
+                    "planModeRequired": true,
                     "revision": 1,
                     "appliedAt": "2026-04-15T23:10:00Z"
                 },
@@ -981,6 +984,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                     "modelId": "openai_codex",
                     "thinkingEffort": "high",
                     "approvalMode": "auto_edit",
+                    "planModeRequired": true,
                     "revision": 2,
                     "queuedAt": "2026-04-15T23:10:01Z",
                     "queuedPrompt": "Review the latest diff before continuing.",
@@ -1028,6 +1032,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                     model_id: "openai_codex".into(),
                     thinking_effort: Some(ProviderModelThinkingEffortDto::Medium),
                     approval_mode: RuntimeRunApprovalModeDto::Suggest,
+                    plan_mode_required: false,
                     revision: 1,
                     applied_at: "2026-04-15T23:10:00Z".into(),
                 },
@@ -1066,6 +1071,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                         "modelId": "openai_codex",
                         "thinkingEffort": "medium",
                         "approvalMode": "suggest",
+                        "planModeRequired": false,
                         "revision": 1,
                         "appliedAt": "2026-04-15T23:10:00Z"
                     }
@@ -1326,6 +1332,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             model_id: "openai_codex".into(),
             thinking_effort: Some(ProviderModelThinkingEffortDto::High),
             approval_mode: RuntimeRunApprovalModeDto::Yolo,
+            plan_mode_required: true,
         }),
         initial_prompt: Some("Continue with the next verifier step.".into()),
     })
@@ -1337,7 +1344,8 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             "initialControls": {
                 "modelId": "openai_codex",
                 "thinkingEffort": "high",
-                "approvalMode": "yolo"
+                "approvalMode": "yolo",
+                "planModeRequired": true
             },
             "initialPrompt": "Continue with the next verifier step."
         })
@@ -1349,6 +1357,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             model_id: "openai_codex".into(),
             thinking_effort: Some(ProviderModelThinkingEffortDto::Low),
             approval_mode: RuntimeRunApprovalModeDto::Suggest,
+            plan_mode_required: false,
         }),
         initial_prompt: None,
     })
@@ -1360,7 +1369,8 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             "initialControls": {
                 "modelId": "openai_codex",
                 "thinkingEffort": "low",
-                "approvalMode": "suggest"
+                "approvalMode": "suggest",
+                "planModeRequired": false
             }
         })
     );
