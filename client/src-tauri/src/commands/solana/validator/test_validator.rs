@@ -16,7 +16,9 @@ use crate::commands::solana::cluster::ClusterKind;
 use crate::commands::solana::toolchain;
 use crate::commands::{CommandError, CommandResult};
 
-use super::process_launcher::{resolve_ledger_dir, surfpool_args, test_validator_args};
+use super::process_launcher::{
+    resolve_ledger_dir, surfpool_args, test_validator_args, test_validator_fork_args,
+};
 use super::{ClusterHandle, StartOpts, ValidatorLauncher, ValidatorSession, DEFAULT_RPC_PORT};
 
 const READINESS_PROBE_INTERVAL: Duration = Duration::from_millis(250);
@@ -26,9 +28,9 @@ pub struct CliLauncher;
 
 impl ValidatorLauncher for CliLauncher {
     fn launch(&self, kind: ClusterKind, opts: &StartOpts) -> CommandResult<ValidatorSession> {
-        let (tag, binary_name) = match kind {
-            ClusterKind::Localnet => ("localnet", "solana-test-validator"),
-            ClusterKind::MainnetFork => ("fork", "surfpool"),
+        let command = match kind {
+            ClusterKind::Localnet => ValidatorCommand::solana_test_validator("localnet")?,
+            ClusterKind::MainnetFork => ValidatorCommand::mainnet_fork()?,
             _ => {
                 return Err(CommandError::user_fixable(
                     "solana_cluster_not_startable",
@@ -37,17 +39,12 @@ impl ValidatorLauncher for CliLauncher {
             }
         };
 
-        let binary = resolve_binary(binary_name)?;
-        let ledger_dir = resolve_ledger_dir(opts, tag);
+        let ledger_dir = resolve_ledger_dir(opts, command.ledger_tag);
         ensure_dir(&ledger_dir)?;
 
-        let args = match kind {
-            ClusterKind::Localnet => test_validator_args(opts, &ledger_dir),
-            ClusterKind::MainnetFork => surfpool_args(opts, &ledger_dir),
-            _ => unreachable!("covered above"),
-        };
+        let args = command.args(opts, &ledger_dir);
 
-        let mut cmd = Command::new(&binary);
+        let mut cmd = Command::new(&command.binary);
         cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -58,17 +55,12 @@ impl ValidatorLauncher for CliLauncher {
                 "solana_validator_spawn_failed",
                 format!(
                     "Could not spawn {} at {}: {err}",
-                    binary_name,
-                    binary.display()
+                    command.label,
+                    command.binary.display()
                 ),
             )
         })?;
-        let label: &'static str = match kind {
-            ClusterKind::Localnet => "solana-test-validator",
-            ClusterKind::MainnetFork => "surfpool",
-            _ => unreachable!("covered above"),
-        };
-        let mut guard = ChildGuard::new(label, child);
+        let mut guard = ChildGuard::new(command.label, child);
 
         let rpc_port = opts.rpc_port.unwrap_or(DEFAULT_RPC_PORT);
         let ws_port = opts.ws_port.unwrap_or(rpc_port + 1);
@@ -93,6 +85,79 @@ impl ValidatorLauncher for CliLauncher {
             child: guard,
             started_at: Instant::now(),
         })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ValidatorCommandKind {
+    SolanaTestValidator,
+    SolanaTestValidatorFork,
+    Surfpool,
+}
+
+#[derive(Debug)]
+struct ValidatorCommand {
+    binary: PathBuf,
+    label: &'static str,
+    ledger_tag: &'static str,
+    kind: ValidatorCommandKind,
+}
+
+impl ValidatorCommand {
+    fn solana_test_validator(ledger_tag: &'static str) -> CommandResult<Self> {
+        Ok(Self {
+            binary: resolve_binary("solana-test-validator")?,
+            label: "solana-test-validator",
+            ledger_tag,
+            kind: ValidatorCommandKind::SolanaTestValidator,
+        })
+    }
+
+    fn mainnet_fork() -> CommandResult<Self> {
+        if let Some(binary) = resolve_binary_optional("surfpool")? {
+            return Ok(Self {
+                binary,
+                label: "surfpool",
+                ledger_tag: "fork",
+                kind: ValidatorCommandKind::Surfpool,
+            });
+        }
+
+        Ok(Self {
+            binary: resolve_binary("solana-test-validator").map_err(|_| {
+                CommandError::user_fixable(
+                    "solana_toolchain_missing",
+                    "surfpool was not found on PATH, and solana-test-validator is unavailable for the fork fallback. Install surfpool or the Solana CLI.",
+                )
+            })?,
+            label: "solana-test-validator",
+            ledger_tag: "fork",
+            kind: ValidatorCommandKind::SolanaTestValidatorFork,
+        })
+    }
+
+    fn args(&self, opts: &StartOpts, ledger_dir: &Path) -> Vec<String> {
+        match self.kind {
+            ValidatorCommandKind::SolanaTestValidator => test_validator_args(opts, ledger_dir),
+            ValidatorCommandKind::SolanaTestValidatorFork => {
+                test_validator_fork_args(opts, ledger_dir)
+            }
+            ValidatorCommandKind::Surfpool => surfpool_args(opts, ledger_dir),
+        }
+    }
+}
+
+fn resolve_binary_optional(name: &str) -> CommandResult<Option<PathBuf>> {
+    let probe = toolchain::probe_tool(name, &["--version"]);
+    if !probe.present {
+        return Ok(None);
+    }
+    match probe.path {
+        Some(path) => Ok(Some(PathBuf::from(path))),
+        None => Err(CommandError::system_fault(
+            "solana_toolchain_path_unavailable",
+            format!("Could not resolve filesystem path for {name}."),
+        )),
     }
 }
 

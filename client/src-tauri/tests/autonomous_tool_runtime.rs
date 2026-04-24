@@ -164,6 +164,7 @@ fn runtime_control_state(
             model_id: "model-1".into(),
             thinking_effort: None,
             approval_mode: active,
+            plan_mode_required: false,
             revision: 1,
             applied_at: "2026-04-22T00:00:00Z".into(),
         },
@@ -171,6 +172,7 @@ fn runtime_control_state(
             model_id: "model-1".into(),
             thinking_effort: None,
             approval_mode,
+            plan_mode_required: false,
             revision: 2,
             queued_at: "2026-04-22T00:01:00Z".into(),
             queued_prompt: None,
@@ -520,6 +522,42 @@ fn tool_runtime_executes_web_search_and_fetch_with_backend_owned_config() {
         invalid_fetch_error.code,
         "autonomous_web_fetch_scheme_unsupported"
     );
+}
+
+#[test]
+fn tool_runtime_dispatches_solana_tools_through_project_runtime() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, _repo_root) = seed_project(&root, &app);
+
+    let runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    let request: AutonomousToolRequest = serde_json::from_value(serde_json::json!({
+        "tool": "solana_docs",
+        "input": {
+            "action": "catalog"
+        }
+    }))
+    .expect("solana docs request should deserialize");
+
+    let result = runtime
+        .execute(request)
+        .expect("solana docs should dispatch");
+    assert_eq!(result.tool_name, "solana_docs");
+    match result.output {
+        AutonomousToolOutput::Solana(output) => {
+            assert_eq!(output.action, "catalog");
+            let value: serde_json::Value =
+                serde_json::from_str(&output.value_json).expect("catalog json");
+            assert!(value.as_array().is_some_and(|entries| !entries.is_empty()));
+        }
+        other => panic!("unexpected solana output: {other:?}"),
+    }
 }
 
 #[test]

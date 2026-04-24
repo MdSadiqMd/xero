@@ -9,10 +9,11 @@ pub mod solana;
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 use super::autonomous_web_runtime::{
     AutonomousWebConfig, AutonomousWebFetchContentKind, AutonomousWebFetchOutput,
@@ -55,8 +56,8 @@ pub use solana::{
     AUTONOMOUS_TOOL_SOLANA_EXPLAIN, AUTONOMOUS_TOOL_SOLANA_IDL, AUTONOMOUS_TOOL_SOLANA_INDEXER,
     AUTONOMOUS_TOOL_SOLANA_LOGS, AUTONOMOUS_TOOL_SOLANA_PDA, AUTONOMOUS_TOOL_SOLANA_PROGRAM,
     AUTONOMOUS_TOOL_SOLANA_REPLAY, AUTONOMOUS_TOOL_SOLANA_SECRETS, AUTONOMOUS_TOOL_SOLANA_SIMULATE,
-    AUTONOMOUS_TOOL_SOLANA_SQUADS, AUTONOMOUS_TOOL_SOLANA_TX,
-    AUTONOMOUS_TOOL_SOLANA_UPGRADE_CHECK, AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD,
+    AUTONOMOUS_TOOL_SOLANA_SQUADS, AUTONOMOUS_TOOL_SOLANA_TX, AUTONOMOUS_TOOL_SOLANA_UPGRADE_CHECK,
+    AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD,
 };
 
 pub const AUTONOMOUS_TOOL_READ: &str = "read";
@@ -116,7 +117,8 @@ pub struct AutonomousToolRuntime {
     pub(super) limits: AutonomousToolRuntimeLimits,
     pub(super) web_runtime: AutonomousWebRuntime,
     pub(super) command_controls: Option<RuntimeRunControlStateDto>,
-    pub(super) browser_executor: Option<std::sync::Arc<dyn BrowserExecutor>>,
+    pub(super) browser_executor: Option<Arc<dyn BrowserExecutor>>,
+    pub(super) solana_executor: Option<Arc<dyn SolanaExecutor>>,
 }
 
 impl AutonomousToolRuntime {
@@ -168,16 +170,26 @@ impl AutonomousToolRuntime {
             web_runtime: AutonomousWebRuntime::new(web_config),
             command_controls: None,
             browser_executor: None,
+            solana_executor: None,
         })
     }
 
-    pub fn with_browser_executor(mut self, executor: std::sync::Arc<dyn BrowserExecutor>) -> Self {
+    pub fn with_browser_executor(mut self, executor: Arc<dyn BrowserExecutor>) -> Self {
         self.browser_executor = Some(executor);
         self
     }
 
-    pub fn browser_executor(&self) -> Option<&std::sync::Arc<dyn BrowserExecutor>> {
+    pub fn browser_executor(&self) -> Option<&Arc<dyn BrowserExecutor>> {
         self.browser_executor.as_ref()
+    }
+
+    pub fn with_solana_executor(mut self, executor: Arc<dyn SolanaExecutor>) -> Self {
+        self.solana_executor = Some(executor);
+        self
+    }
+
+    pub fn solana_executor(&self) -> Option<&Arc<dyn SolanaExecutor>> {
+        self.solana_executor.as_ref()
     }
 
     pub fn for_project<R: Runtime>(
@@ -186,13 +198,22 @@ impl AutonomousToolRuntime {
         project_id: &str,
     ) -> CommandResult<Self> {
         let repo_root = resolve_imported_repo_root(app, state, project_id)?;
-        let executor = browser::tauri_browser_executor(app.clone(), state.clone());
-        Ok(Self::with_limits_and_web_config(
+        let browser_executor = browser::tauri_browser_executor(app.clone(), state.clone());
+        let runtime = Self::with_limits_and_web_config(
             repo_root,
             AutonomousToolRuntimeLimits::default(),
             state.autonomous_web_config(),
         )?
-        .with_browser_executor(executor))
+        .with_browser_executor(browser_executor);
+
+        let runtime = match app.try_state::<crate::commands::SolanaState>() {
+            Some(solana_state) => runtime.with_solana_executor(Arc::new(
+                StateSolanaExecutor::from_state(solana_state.inner()),
+            )),
+            None => runtime,
+        };
+
+        Ok(runtime)
     }
 
     pub fn repo_root(&self) -> &Path {
@@ -225,7 +246,121 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::Write(request) => self.write(request),
             AutonomousToolRequest::Command(request) => self.command(request),
             AutonomousToolRequest::Browser(request) => self.browser(request),
+            AutonomousToolRequest::SolanaCluster(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_CLUSTER, |executor| {
+                    executor.cluster(request)
+                }),
+            AutonomousToolRequest::SolanaLogs(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_LOGS, |executor| {
+                    executor.logs(request)
+                }),
+            AutonomousToolRequest::SolanaTx(request) => {
+                self.solana(AUTONOMOUS_TOOL_SOLANA_TX, |executor| executor.tx(request))
+            }
+            AutonomousToolRequest::SolanaSimulate(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_SIMULATE, |executor| {
+                    executor.simulate(request)
+                }),
+            AutonomousToolRequest::SolanaExplain(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_EXPLAIN, |executor| {
+                    executor.explain(request)
+                }),
+            AutonomousToolRequest::SolanaAlt(request) => {
+                self.solana(AUTONOMOUS_TOOL_SOLANA_ALT, |executor| executor.alt(request))
+            }
+            AutonomousToolRequest::SolanaIdl(request) => {
+                self.solana(AUTONOMOUS_TOOL_SOLANA_IDL, |executor| executor.idl(request))
+            }
+            AutonomousToolRequest::SolanaCodama(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_CODAMA, |executor| {
+                    executor.codama(request)
+                }),
+            AutonomousToolRequest::SolanaPda(request) => {
+                self.solana(AUTONOMOUS_TOOL_SOLANA_PDA, |executor| executor.pda(request))
+            }
+            AutonomousToolRequest::SolanaProgram(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_PROGRAM, |executor| {
+                    executor.program(request)
+                }),
+            AutonomousToolRequest::SolanaDeploy(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_DEPLOY, |executor| {
+                    executor.deploy(request)
+                }),
+            AutonomousToolRequest::SolanaUpgradeCheck(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_UPGRADE_CHECK, |executor| {
+                    executor.upgrade_check(request)
+                }),
+            AutonomousToolRequest::SolanaSquads(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_SQUADS, |executor| {
+                    executor.squads(request)
+                }),
+            AutonomousToolRequest::SolanaVerifiedBuild(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD, |executor| {
+                    executor.verified_build(request)
+                }),
+            AutonomousToolRequest::SolanaAuditStatic(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_AUDIT_STATIC, |executor| {
+                    executor.audit(request)
+                }),
+            AutonomousToolRequest::SolanaAuditExternal(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_AUDIT_EXTERNAL, |executor| {
+                    executor.audit(request)
+                }),
+            AutonomousToolRequest::SolanaAuditFuzz(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_AUDIT_FUZZ, |executor| {
+                    executor.audit(request)
+                }),
+            AutonomousToolRequest::SolanaAuditCoverage(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_AUDIT_COVERAGE, |executor| {
+                    executor.audit(request)
+                }),
+            AutonomousToolRequest::SolanaReplay(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_REPLAY, |executor| {
+                    executor.replay(request)
+                }),
+            AutonomousToolRequest::SolanaIndexer(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_INDEXER, |executor| {
+                    executor.indexer(request)
+                }),
+            AutonomousToolRequest::SolanaSecrets(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_SECRETS, |executor| {
+                    executor.secrets(request)
+                }),
+            AutonomousToolRequest::SolanaClusterDrift(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_CLUSTER_DRIFT, |executor| {
+                    executor.drift(request)
+                }),
+            AutonomousToolRequest::SolanaCost(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_COST, |executor| {
+                    executor.cost(request)
+                }),
+            AutonomousToolRequest::SolanaDocs(request) => self
+                .solana(AUTONOMOUS_TOOL_SOLANA_DOCS, |executor| {
+                    executor.docs(request)
+                }),
         }
+    }
+
+    fn solana<F>(&self, tool_name: &'static str, run: F) -> CommandResult<AutonomousToolResult>
+    where
+        F: FnOnce(&dyn SolanaExecutor) -> CommandResult<AutonomousSolanaOutput>,
+    {
+        let executor = self.solana_executor.as_ref().ok_or_else(|| {
+            CommandError::policy_denied(
+                "Solana actions require the desktop runtime; no SolanaState is wired.",
+            )
+        })?;
+        let output = run(executor.as_ref())?;
+        let summary = format!(
+            "Executed Solana action `{}` with `{tool_name}`.",
+            output.action
+        );
+        Ok(AutonomousToolResult {
+            tool_name: tool_name.into(),
+            summary,
+            command_result: None,
+            output: AutonomousToolOutput::Solana(output),
+        })
     }
 
     pub fn browser(
@@ -327,6 +462,30 @@ pub enum AutonomousToolRequest {
     Write(AutonomousWriteRequest),
     Command(AutonomousCommandRequest),
     Browser(AutonomousBrowserRequest),
+    SolanaCluster(AutonomousSolanaClusterRequest),
+    SolanaLogs(AutonomousSolanaLogsRequest),
+    SolanaTx(AutonomousSolanaTxRequest),
+    SolanaSimulate(AutonomousSolanaSimulateRequest),
+    SolanaExplain(AutonomousSolanaExplainRequest),
+    SolanaAlt(AutonomousSolanaAltRequest),
+    SolanaIdl(AutonomousSolanaIdlRequest),
+    SolanaCodama(AutonomousSolanaCodamaRequest),
+    SolanaPda(AutonomousSolanaPdaRequest),
+    SolanaProgram(AutonomousSolanaProgramRequest),
+    SolanaDeploy(AutonomousSolanaDeployRequest),
+    SolanaUpgradeCheck(AutonomousSolanaUpgradeCheckRequest),
+    SolanaSquads(AutonomousSolanaSquadsRequest),
+    SolanaVerifiedBuild(AutonomousSolanaVerifiedBuildRequest),
+    SolanaAuditStatic(AutonomousSolanaAuditRequest),
+    SolanaAuditExternal(AutonomousSolanaAuditRequest),
+    SolanaAuditFuzz(AutonomousSolanaAuditRequest),
+    SolanaAuditCoverage(AutonomousSolanaAuditRequest),
+    SolanaReplay(AutonomousSolanaReplayRequest),
+    SolanaIndexer(AutonomousSolanaIndexerRequest),
+    SolanaSecrets(AutonomousSolanaSecretsRequest),
+    SolanaClusterDrift(AutonomousSolanaDriftRequest),
+    SolanaCost(AutonomousSolanaCostRequest),
+    SolanaDocs(AutonomousSolanaDocsRequest),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -434,6 +593,7 @@ pub enum AutonomousToolOutput {
     Write(AutonomousWriteOutput),
     Command(AutonomousCommandOutput),
     Browser(AutonomousBrowserOutput),
+    Solana(AutonomousSolanaOutput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

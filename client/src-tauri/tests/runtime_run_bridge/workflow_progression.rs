@@ -445,7 +445,8 @@ pub(crate) fn gate_linked_resume_auto_dispatch_emits_project_update_without_runt
             .expect("reload transition events after gate-linked auto-dispatch");
     assert_eq!(events, reloaded_events);
 
-    let transition_rows_before_linkage_drift = count_workflow_transition_rows(&repo_root, &project_id);
+    let transition_rows_before_linkage_drift =
+        count_workflow_transition_rows(&repo_root, &project_id);
     let handoff_rows_before_linkage_drift = count_workflow_handoff_rows(&repo_root, &project_id);
 
     let database_path = database_path_for_repo(&repo_root);
@@ -499,7 +500,10 @@ pub(crate) fn gate_linked_resume_auto_dispatch_emits_project_update_without_runt
         .transition_event
         .as_ref()
         .expect("replayed automatic dispatch should keep the persisted transition event");
-    assert_eq!(replayed_auto_transition.transition_id, auto_event.transition_id);
+    assert_eq!(
+        replayed_auto_transition.transition_id,
+        auto_event.transition_id
+    );
 
     let replayed_handoff_outcome = replayed_primary_trigger
         .automatic_dispatch

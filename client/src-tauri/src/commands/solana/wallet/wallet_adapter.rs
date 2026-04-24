@@ -28,7 +28,8 @@ pub fn render(ctx: &WalletScaffoldContext) -> (Vec<(String, String)>, ScaffoldMe
         next_steps: vec![
             "pnpm install".into(),
             "pnpm dev  # opens the connect page on http://localhost:5173".into(),
-            "Swap `CLUSTER` in src/WalletProviders.tsx once you're ready to move past devnet.".into(),
+            "Swap `CLUSTER` in src/WalletProviders.tsx once you're ready to move past devnet."
+                .into(),
         ],
     };
     (files, meta)

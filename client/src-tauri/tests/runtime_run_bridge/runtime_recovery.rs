@@ -1703,10 +1703,9 @@ pub(crate) fn runtime_mcp_projection_contract_rejects_non_connected_and_malforme
     )
     .expect("write malformed runtime projection contract");
 
-    let malformed_error = cadence_desktop_lib::mcp::load_runtime_mcp_projection_contract(
-        &projection_path,
-    )
-    .expect_err("malformed runtime projection contract should fail closed");
+    let malformed_error =
+        cadence_desktop_lib::mcp::load_runtime_mcp_projection_contract(&projection_path)
+            .expect_err("malformed runtime projection contract should fail closed");
     assert_eq!(
         malformed_error.code,
         "runtime_mcp_projection_contract_malformed"

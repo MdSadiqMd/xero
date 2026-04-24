@@ -229,11 +229,7 @@ pub fn mint_metaplex_nft(
         ),
         (
             "CADENCE_RECIPIENT".into(),
-            request
-                .recipient
-                .clone()
-                .unwrap_or_default()
-                .into(),
+            request.recipient.clone().unwrap_or_default().into(),
         ),
         ("CADENCE_NAME".into(), request.name.clone().into()),
         ("CADENCE_SYMBOL".into(), request.symbol.clone().into()),
@@ -243,11 +239,7 @@ pub fn mint_metaplex_nft(
         ),
         (
             "CADENCE_COLLECTION".into(),
-            request
-                .collection_mint
-                .clone()
-                .unwrap_or_default()
-                .into(),
+            request.collection_mint.clone().unwrap_or_default().into(),
         ),
         (
             "CADENCE_SELLER_FEE_BPS".into(),
@@ -546,7 +538,10 @@ mod tests {
                 "env var {key} missing"
             );
         }
-        assert_eq!(env[&OsString::from("CADENCE_SELLER_FEE_BPS")], OsString::from("500"));
+        assert_eq!(
+            env[&OsString::from("CADENCE_SELLER_FEE_BPS")],
+            OsString::from("500")
+        );
         assert_eq!(
             env[&OsString::from("CADENCE_STANDARD")],
             OsString::from("non_fungible")
@@ -566,13 +561,8 @@ mod tests {
         });
         let mut req = basic_request();
         req.symbol = "TOOLONGSYMBOL".into();
-        let err = mint_metaplex_nft(
-            &runner,
-            tmp.path(),
-            Path::new("/tmp/authority.json"),
-            req,
-        )
-        .unwrap_err();
+        let err = mint_metaplex_nft(&runner, tmp.path(), Path::new("/tmp/authority.json"), req)
+            .unwrap_err();
         assert_eq!(err.code, "solana_metaplex_mint_bad_symbol");
     }
 
@@ -589,13 +579,8 @@ mod tests {
         });
         let mut req = basic_request();
         req.rpc_url = None;
-        let err = mint_metaplex_nft(
-            &runner,
-            tmp.path(),
-            Path::new("/tmp/authority.json"),
-            req,
-        )
-        .unwrap_err();
+        let err = mint_metaplex_nft(&runner, tmp.path(), Path::new("/tmp/authority.json"), req)
+            .unwrap_err();
         assert_eq!(err.code, "solana_metaplex_mint_no_rpc");
     }
 

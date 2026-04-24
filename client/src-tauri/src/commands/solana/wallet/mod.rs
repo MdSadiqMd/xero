@@ -458,7 +458,9 @@ mod tests {
                 kind
             );
             assert!(
-                paths.iter().any(|p| p.ends_with(".tsx") || p.ends_with(".ts")),
+                paths
+                    .iter()
+                    .any(|p| p.ends_with(".tsx") || p.ends_with(".ts")),
                 "{:?} scaffold must write at least one ts/tsx source file",
                 kind
             );
@@ -503,9 +505,11 @@ mod tests {
     fn dynamic_scaffold_includes_api_key_env() {
         let tmp = TempDir::new().unwrap();
         let toolchain = full_toolchain();
-        let result =
-            generate(&toolchain, &base_request(WalletKind::Dynamic, tmp.path())).unwrap();
-        assert_eq!(result.api_key_env.as_deref(), Some("DYNAMIC_ENVIRONMENT_ID"));
+        let result = generate(&toolchain, &base_request(WalletKind::Dynamic, tmp.path())).unwrap();
+        assert_eq!(
+            result.api_key_env.as_deref(),
+            Some("DYNAMIC_ENVIRONMENT_ID")
+        );
     }
 
     #[test]

@@ -515,16 +515,15 @@ mod tests {
         })
         .unwrap();
         assert!(report.blocks_deploy);
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.rule_id == "solana_keypair_id_json"
-                && f.severity == SecretSeverity::Critical));
+        assert!(report.findings.iter().any(
+            |f| f.rule_id == "solana_keypair_id_json" && f.severity == SecretSeverity::Critical
+        ));
     }
 
     #[test]
     fn helius_url_in_source_flags_high() {
-        let content = "const URL = \"https://mainnet.helius-rpc.com/?api-key=abcdef0123456789abcd\";";
+        let content =
+            "const URL = \"https://mainnet.helius-rpc.com/?api-key=abcdef0123456789abcd\";";
         let findings = scan_content_for_tests("config.ts", content);
         assert!(findings
             .iter()
@@ -559,7 +558,11 @@ mod tests {
         let fixtures = dir.path().join("fixtures");
         fs::create_dir_all(&fixtures).unwrap();
         let bytes: Vec<u8> = (0..64).map(|i| i as u8).collect();
-        fs::write(fixtures.join("id.json"), serde_json::to_string(&bytes).unwrap()).unwrap();
+        fs::write(
+            fixtures.join("id.json"),
+            serde_json::to_string(&bytes).unwrap(),
+        )
+        .unwrap();
         let report = scan(&ScanRequest {
             project_root: dir.path().display().to_string(),
             skip_paths: vec!["fixtures".into()],
@@ -581,7 +584,10 @@ mod tests {
     fn glob_matches_common_forms() {
         assert!(simple_glob_match("**/id.json", "solana/id.json"));
         assert!(simple_glob_match("**/id.json", "id.json"));
-        assert!(simple_glob_match("**/*-keypair.json", "deploy-keypair.json"));
+        assert!(simple_glob_match(
+            "**/*-keypair.json",
+            "deploy-keypair.json"
+        ));
         assert!(!simple_glob_match("**/id.json", "id.txt"));
     }
 

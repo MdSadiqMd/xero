@@ -91,6 +91,7 @@ fn runtime_with_approval(
             model_id: "model-1".into(),
             thinking_effort: None,
             approval_mode,
+            plan_mode_required: false,
             revision: 1,
             applied_at: "2026-04-22T00:00:00Z".into(),
         },

@@ -233,10 +233,7 @@ mod tests {
 
     #[test]
     fn catalog_covers_phase_9_tools() {
-        let tools: HashSet<String> = builtin_doc_catalog()
-            .into_iter()
-            .map(|s| s.tool)
-            .collect();
+        let tools: HashSet<String> = builtin_doc_catalog().into_iter().map(|s| s.tool).collect();
         for tool in [
             "solana_secrets",
             "solana_cluster_drift",

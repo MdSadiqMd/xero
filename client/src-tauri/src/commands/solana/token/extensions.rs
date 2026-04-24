@@ -165,8 +165,7 @@ impl ExtensionMatrix {
     /// a warning banner; empty result = ship it.
     pub fn incompatibilities(&self, enabled: &[TokenExtension]) -> Vec<Incompatibility> {
         let mut out: Vec<Incompatibility> = Vec::new();
-        let wanted: std::collections::BTreeSet<TokenExtension> =
-            enabled.iter().copied().collect();
+        let wanted: std::collections::BTreeSet<TokenExtension> = enabled.iter().copied().collect();
         for entry in &self.entries {
             if !wanted.contains(&entry.extension) {
                 continue;

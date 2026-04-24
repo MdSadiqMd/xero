@@ -174,9 +174,7 @@ impl ProviderUsageRunner for SystemProviderUsageRunner {
                     );
                 }
             }
-            ProviderKind::TritonFree
-            | ProviderKind::QuickNodeFree
-            | ProviderKind::AlchemyFree => {
+            ProviderKind::TritonFree | ProviderKind::QuickNodeFree | ProviderKind::AlchemyFree => {
                 match json_rpc_get_version(&self.client, &request.endpoint_url) {
                     Ok(_) => {
                         usage.health = ProviderHealth::Healthy;

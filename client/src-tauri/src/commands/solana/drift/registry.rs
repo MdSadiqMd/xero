@@ -29,9 +29,7 @@ pub fn builtin_tracked_programs() -> Vec<TrackedProgram> {
                 "NFT + fungible metadata standard. Discriminator drift between devnet and mainnet \
                  is the classic failure mode."
                     .into(),
-            reference_url: Some(
-                "https://developers.metaplex.com/token-metadata".into(),
-            ),
+            reference_url: Some("https://developers.metaplex.com/token-metadata".into()),
         },
         TrackedProgram {
             label: "Jupiter Aggregator v6".into(),

@@ -29,6 +29,10 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::emulator::URI_SCHEME,
             commands::emulator::handle_uri_scheme,
         )
+        .register_asynchronous_uri_scheme_protocol(
+            commands::solana::URI_SCHEME,
+            commands::solana::handle_uri_scheme,
+        )
         .setup(|app| {
             window_state::configure_main_window(app.handle().clone());
 

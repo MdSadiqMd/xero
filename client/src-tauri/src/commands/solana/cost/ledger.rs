@@ -76,10 +76,7 @@ impl LocalCostLedger {
     }
 
     pub fn len(&self) -> usize {
-        self.records
-            .lock()
-            .map(|g| g.len())
-            .unwrap_or_default()
+        self.records.lock().map(|g| g.len()).unwrap_or_default()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -137,8 +134,7 @@ impl LocalCostLedger {
                 .saturating_add(record.priority_fee_lamports);
             tx_count = tx_count.saturating_add(1);
             lamports_spent = lamports_spent.saturating_add(spend);
-            compute_units_used =
-                compute_units_used.saturating_add(record.compute_units_consumed);
+            compute_units_used = compute_units_used.saturating_add(record.compute_units_consumed);
             rent_locked_lamports = rent_locked_lamports.saturating_add(record.rent_lamports);
             if let Some(bucket) = per_cluster.get_mut(&record.cluster) {
                 bucket.tx_count = bucket.tx_count.saturating_add(1);
@@ -259,8 +255,7 @@ mod tests {
             rent_lamports: 500,
             timestamp_ms: now_ms(),
         });
-        let summary =
-            ledger.summary(&[ClusterKind::Mainnet, ClusterKind::Devnet], None);
+        let summary = ledger.summary(&[ClusterKind::Mainnet, ClusterKind::Devnet], None);
         let mainnet = summary
             .by_cluster
             .iter()

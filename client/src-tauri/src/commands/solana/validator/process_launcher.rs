@@ -45,6 +45,17 @@ pub fn test_validator_args(opts: &StartOpts, ledger_dir: &Path) -> Vec<String> {
     args
 }
 
+/// Fallback argv for fork mode when `surfpool` is unavailable. This keeps
+/// fork ledgers warm by default but still forwards clone flags through
+/// `solana-test-validator --clone`.
+pub fn test_validator_fork_args(opts: &StartOpts, ledger_dir: &Path) -> Vec<String> {
+    let mut fork_opts = opts.clone();
+    if fork_opts.reset.is_none() {
+        fork_opts.reset = Some(false);
+    }
+    test_validator_args(&fork_opts, ledger_dir)
+}
+
 /// Argv for `surfpool start`. Surfpool exposes RPC/WS on the same ports as
 /// the Anza `solana-test-validator` by default, and forks mainnet
 /// implicitly.
@@ -140,6 +151,28 @@ mod tests {
         };
         let args = test_validator_args(&opts, &PathBuf::from("/tmp"));
         assert!(!args.contains(&"--reset".to_string()));
+    }
+
+    #[test]
+    fn test_validator_fork_args_uses_clones_without_default_reset() {
+        let opts = StartOpts {
+            clone_programs: vec!["JUP6i...".into()],
+            clone_accounts: vec!["So11111111111111111111111111111111111111112".into()],
+            ..StartOpts::default()
+        };
+        let args = test_validator_fork_args(&opts, &PathBuf::from("/tmp"));
+        assert!(!args.contains(&"--reset".to_string()));
+        assert_eq!(args.iter().filter(|arg| *arg == "--clone").count(), 2);
+    }
+
+    #[test]
+    fn test_validator_fork_args_respects_explicit_reset() {
+        let opts = StartOpts {
+            reset: Some(true),
+            ..StartOpts::default()
+        };
+        let args = test_validator_fork_args(&opts, &PathBuf::from("/tmp"));
+        assert!(args.contains(&"--reset".to_string()));
     }
 
     #[test]

@@ -25,10 +25,10 @@ use crate::commands::solana::{
     CoverageReport, CoverageRequest, DeployAuthority, DeployResult, DeployServices, DeploySpec,
     DerivedAddress, DocSnippet, DriftCheckRequest, DriftReport, EndpointHealth, ExplainRequest,
     ExploitDescriptor, ExploitKey, ExternalAnalyzerReport, ExternalAnalyzerRequest, FeeEstimate,
-    FuzzReport, FuzzRequest, Idl, IdlPublishMode, IdlPublishReport, IdlPublishRequest,
-    IdlRegistry, IdlSubscriptionToken, IndexerKind, IndexerRunReport, IndexerRunRequest,
-    KnownProgramLookup, LocalCostLedger, LogFilter, LogSubscriptionToken, NullAuditEventSink,
-    PdaSite, PostDeployOptions, ProviderUsageRunner, ReplayReport, ReplayRequest, ResolveArgs,
+    FuzzReport, FuzzRequest, Idl, IdlPublishMode, IdlPublishReport, IdlPublishRequest, IdlRegistry,
+    IdlSubscriptionToken, IndexerKind, IndexerRunReport, IndexerRunRequest, KnownProgramLookup,
+    LocalCostLedger, LogFilter, LogSubscriptionToken, NullAuditEventSink, PdaSite,
+    PostDeployOptions, ProviderUsageRunner, ReplayReport, ReplayRequest, ResolveArgs,
     RollbackRequest, RollbackResult, RpcRouter, RpcTransport, SamplePercentile, ScaffoldRequest,
     ScaffoldResult, ScopeCheckReport, SecretScanReport, SecretsScanRequest, SeedPart, SendRequest,
     SimulateRequest, SimulationResult, SnapshotMeta, SnapshotStore, SolanaState,
@@ -671,10 +671,8 @@ pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
         request: AutonomousSolanaSecretsRequest,
     ) -> CommandResult<AutonomousSolanaOutput>;
 
-    fn drift(
-        &self,
-        request: AutonomousSolanaDriftRequest,
-    ) -> CommandResult<AutonomousSolanaOutput>;
+    fn drift(&self, request: AutonomousSolanaDriftRequest)
+        -> CommandResult<AutonomousSolanaOutput>;
 
     fn cost(&self, request: AutonomousSolanaCostRequest) -> CommandResult<AutonomousSolanaOutput>;
 
@@ -1717,8 +1715,7 @@ impl SolanaExecutor for StateSolanaExecutor {
                 )
             }
             AutonomousSolanaDriftAction::Check { request } => {
-                let report =
-                    drift::check(&self.inner.transport, &self.inner.router, &request)?;
+                let report = drift::check(&self.inner.transport, &self.inner.router, &request)?;
                 (
                     "check".to_string(),
                     serde_json::to_value::<ClusterDriftReport>(report).unwrap_or(JsonValue::Null),
@@ -2111,8 +2108,8 @@ impl SolanaExecutor for UnavailableSolanaExecutor {
         match request.action {
             AutonomousSolanaSecretsAction::Scan { request } => {
                 let report = secrets::scan_project(&request)?;
-                let value = serde_json::to_value::<SecretScanReport>(report)
-                    .unwrap_or(JsonValue::Null);
+                let value =
+                    serde_json::to_value::<SecretScanReport>(report).unwrap_or(JsonValue::Null);
                 let value_json =
                     serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
                 Ok(AutonomousSolanaOutput {
@@ -2121,8 +2118,8 @@ impl SolanaExecutor for UnavailableSolanaExecutor {
                 })
             }
             AutonomousSolanaSecretsAction::Patterns => {
-                let value = serde_json::to_value(secrets::builtin_patterns())
-                    .unwrap_or(JsonValue::Null);
+                let value =
+                    serde_json::to_value(secrets::builtin_patterns()).unwrap_or(JsonValue::Null);
                 let value_json =
                     serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
                 Ok(AutonomousSolanaOutput {
@@ -2142,10 +2139,9 @@ impl SolanaExecutor for UnavailableSolanaExecutor {
     ) -> CommandResult<AutonomousSolanaOutput> {
         match request.action {
             AutonomousSolanaDriftAction::Tracked => {
-                let value = serde_json::to_value::<Vec<TrackedProgram>>(
-                    drift::builtin_tracked_programs(),
-                )
-                .unwrap_or(JsonValue::Null);
+                let value =
+                    serde_json::to_value::<Vec<TrackedProgram>>(drift::builtin_tracked_programs())
+                        .unwrap_or(JsonValue::Null);
                 let value_json =
                     serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
                 Ok(AutonomousSolanaOutput {
@@ -2176,9 +2172,9 @@ impl SolanaExecutor for UnavailableSolanaExecutor {
             ),
             AutonomousSolanaDocsAction::Tool { tool } => (
                 "tool".to_string(),
-                serde_json::to_value::<Vec<DocSnippet>>(
-                    crate::commands::solana::doc_snippets_for(&tool),
-                )
+                serde_json::to_value::<Vec<DocSnippet>>(crate::commands::solana::doc_snippets_for(
+                    &tool,
+                ))
                 .unwrap_or(JsonValue::Null),
             ),
         };

@@ -25,6 +25,7 @@ pub mod snapshot;
 pub mod token;
 pub mod toolchain;
 pub mod tx;
+pub mod uri_scheme;
 pub mod validator;
 pub mod wallet;
 
@@ -145,6 +146,7 @@ pub use tx::{
     RpcTransport, SamplePercentile, SendRequest, SimulateRequest, SimulationResult, TxPipeline,
     TxPlan, TxResult, TxSpec,
 };
+pub use uri_scheme::{handle as handle_uri_scheme, URI_SCHEME};
 pub use validator::{
     ClusterHandle, ClusterStatus, StartOpts, ValidatorLauncher, ValidatorSession,
     ValidatorSupervisor,
@@ -2322,7 +2324,12 @@ pub fn solana_metaplex_mint(
         .keypair_path(req.cluster, &req.authority_persona)?;
     let services = state.token_services();
     let worker_root = state.metaplex_worker_root();
-    token::mint_metaplex_nft(services.metaplex.as_ref(), &worker_root, &authority_path, req)
+    token::mint_metaplex_nft(
+        services.metaplex.as_ref(),
+        &worker_root,
+        &authority_path,
+        req,
+    )
 }
 
 #[tauri::command]
@@ -2353,9 +2360,7 @@ pub struct SecretsScanArgs {
 }
 
 #[tauri::command]
-pub fn solana_secrets_scan(
-    request: SecretsScanArgs,
-) -> CommandResult<SecretScanReport> {
+pub fn solana_secrets_scan(request: SecretsScanArgs) -> CommandResult<SecretScanReport> {
     secrets_scan_project(&request.request)
 }
 

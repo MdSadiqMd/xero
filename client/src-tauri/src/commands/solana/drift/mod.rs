@@ -238,7 +238,10 @@ fn summarise(program: &TrackedProgram, probes: &[DriftProbe], status: DriftStatu
         DriftStatus::InSync => format!(
             "{} has identical bytes across {} cluster(s).",
             program.label,
-            probes.iter().filter(|p| p.program_data_sha256.is_some()).count(),
+            probes
+                .iter()
+                .filter(|p| p.program_data_sha256.is_some())
+                .count(),
         ),
         DriftStatus::Drift => {
             let mut clusters_by_hash: BTreeMap<String, Vec<&str>> = BTreeMap::new();
@@ -313,10 +316,7 @@ fn probe_program(
             return probe;
         }
     };
-    let Some(owner) = program_value
-        .get("owner")
-        .and_then(|o| o.as_str())
-    else {
+    let Some(owner) = program_value.get("owner").and_then(|o| o.as_str()) else {
         probe.error = Some("program_owner_missing".into());
         return probe;
     };
@@ -626,12 +626,7 @@ mod tests {
             "11111111111111111111111111111111",
             &base64::engine::general_purpose::STANDARD.encode(b"direct"),
         ));
-        let probe = probe_program(
-            &transport,
-            ClusterKind::Localnet,
-            "http://u",
-            "SomeProgram",
-        );
+        let probe = probe_program(&transport, ClusterKind::Localnet, "http://u", "SomeProgram");
         assert!(probe.error.is_none());
         assert_eq!(probe.program_data_length, Some(6));
     }
@@ -640,12 +635,7 @@ mod tests {
     fn probe_program_reports_missing_program() {
         let transport = ScriptedTransport::default();
         transport.push(json!({"result": {"value": null}}));
-        let probe = probe_program(
-            &transport,
-            ClusterKind::Devnet,
-            "http://u",
-            "Gone",
-        );
+        let probe = probe_program(&transport, ClusterKind::Devnet, "http://u", "Gone");
         assert_eq!(probe.error.as_deref(), Some("program_not_found"));
     }
 }

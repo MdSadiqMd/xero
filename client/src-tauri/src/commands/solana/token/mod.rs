@@ -571,9 +571,8 @@ fn is_likely_pubkey(s: &str) -> bool {
     if !(32..=44).contains(&len) {
         return false;
     }
-    s.chars().all(|c| {
-        c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l'
-    })
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
 }
 
 fn wait_with_timeout(
@@ -687,7 +686,10 @@ mod tests {
         spec.config.transfer_fee_basis_points = Some(25);
         spec.config.transfer_fee_maximum = Some(1_000_000);
         let err = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap_err();
-        assert_eq!(err.code, "solana_token_create_extensions_require_token_2022");
+        assert_eq!(
+            err.code,
+            "solana_token_create_extensions_require_token_2022"
+        );
     }
 
     #[test]
@@ -768,8 +770,7 @@ mod tests {
         assert!(report
             .incompatibilities
             .iter()
-            .any(|row| row.sdk.contains("wallet-adapter")
-                && !row.remediation_hint.is_empty()));
+            .any(|row| row.sdk.contains("wallet-adapter") && !row.remediation_hint.is_empty()));
     }
 
     #[test]

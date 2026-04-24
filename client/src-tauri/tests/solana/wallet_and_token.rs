@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use cadence_desktop_lib::commands::solana::persona::fund::FundingDelta;
 use cadence_desktop_lib::commands::solana::persona::roles::PersonaRole;
+use cadence_desktop_lib::commands::solana::toolchain::{ToolProbe, ToolchainStatus};
 use cadence_desktop_lib::commands::solana::{
     self, create_token, generate_wallet_scaffold, mint_metaplex_nft, token_extension_matrix,
     wallet_descriptors, ClusterKind, MetaplexMintInvocation, MetaplexMintOutcome,
@@ -17,7 +18,6 @@ use cadence_desktop_lib::commands::solana::{
     TokenCreateOutcome, TokenCreateRunner, TokenCreateSpec, TokenExtension, TokenExtensionConfig,
     TokenProgram, TokenServices, WalletKind, WalletScaffoldRequest,
 };
-use cadence_desktop_lib::commands::solana::toolchain::{ToolProbe, ToolchainStatus};
 use cadence_desktop_lib::commands::CommandResult;
 
 use super::support::{fixture_with_persona_store, FixtureState};
@@ -195,9 +195,7 @@ pub fn token_create_reports_transfer_hook_incompatibilities() {
         mint_keypair_path: None,
         extensions: vec![TokenExtension::TransferHook],
         config: TokenExtensionConfig {
-            transfer_hook_program_id: Some(
-                "HookPr0g111111111111111111111111111111111111".into(),
-            ),
+            transfer_hook_program_id: Some("HookPr0g111111111111111111111111111111111111".into()),
             ..Default::default()
         },
         spl_token_cli: None,
@@ -212,8 +210,7 @@ pub fn token_create_reports_transfer_hook_incompatibilities() {
     assert!(report
         .incompatibilities
         .iter()
-        .any(|row| row.sdk.contains("wallet-adapter")
-            && !row.remediation_hint.is_empty()));
+        .any(|row| row.sdk.contains("wallet-adapter") && !row.remediation_hint.is_empty()));
 }
 
 pub fn token_create_rejects_extensions_on_classic_program() {
@@ -302,9 +299,13 @@ pub fn metaplex_mint_materialises_worker_and_passes_env() {
         rpc_url: Some("http://127.0.0.1:8899".into()),
     };
     let worker_root = state.metaplex_worker_root();
-    let result =
-        mint_metaplex_nft(state.token_services().metaplex.as_ref(), &worker_root, &authority, req)
-            .expect("metaplex mint");
+    let result = mint_metaplex_nft(
+        state.token_services().metaplex.as_ref(),
+        &worker_root,
+        &authority,
+        req,
+    )
+    .expect("metaplex mint");
     assert!(result.success);
     assert_eq!(
         result.mint_address.as_deref(),
@@ -317,8 +318,7 @@ pub fn metaplex_mint_materialises_worker_and_passes_env() {
     // Worker script was materialised into the temp dir.
     assert!(captured[0].worker_path.exists());
     // Authority env var points at the persona's keypair file.
-    let env_map: std::collections::BTreeMap<_, _> =
-        captured[0].envs.iter().cloned().collect();
+    let env_map: std::collections::BTreeMap<_, _> = captured[0].envs.iter().cloned().collect();
     assert!(env_map.contains_key::<std::ffi::OsString>(&"CADENCE_AUTHORITY".into()));
     let authority_env = env_map
         .get::<std::ffi::OsString>(&"CADENCE_AUTHORITY".into())
@@ -448,10 +448,9 @@ pub fn wallet_adapter_scaffold_bakes_rpc_url_and_reports_free_tier() {
     let result = generate_wallet_scaffold(&toolchain, &request).expect("scaffold");
     assert!(result.api_key_env.is_none());
     assert_eq!(result.rpc_url, "https://rpc.example/free");
-    let providers = std::fs::read_to_string(
-        std::path::Path::new(&result.root).join("src/WalletProviders.tsx"),
-    )
-    .unwrap();
+    let providers =
+        std::fs::read_to_string(std::path::Path::new(&result.root).join("src/WalletProviders.tsx"))
+            .unwrap();
     assert!(providers.contains("https://rpc.example/free"));
     assert!(providers.contains("LedgerWalletAdapter"));
 }

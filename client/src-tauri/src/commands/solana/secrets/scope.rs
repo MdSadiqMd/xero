@@ -171,11 +171,7 @@ fn label_warning(persona: &Persona) -> Option<ScopeWarning> {
     let haystack = format!(
         "{} {}",
         persona.name.to_ascii_lowercase(),
-        persona
-            .note
-            .as_deref()
-            .unwrap_or("")
-            .to_ascii_lowercase()
+        persona.note.as_deref().unwrap_or("").to_ascii_lowercase()
     );
     let flagged = ["mainnet", "prod", "production", "authority-mainnet"]
         .iter()

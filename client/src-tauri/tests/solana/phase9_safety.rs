@@ -177,11 +177,9 @@ pub fn committed_id_json_with_mainnet_keypair_is_critical() {
 
     assert!(report.blocks_deploy);
     assert!(
-        report
-            .findings
-            .iter()
-            .any(|f| f.severity == SecretSeverity::Critical
-                && f.rule_id == "solana_keypair_id_json"),
+        report.findings.iter().any(
+            |f| f.severity == SecretSeverity::Critical && f.rule_id == "solana_keypair_id_json"
+        ),
         "expected a critical keypair finding; got {:?}",
         report.findings,
     );
@@ -241,9 +239,8 @@ pub fn drift_check_flags_metaplex_version_delta_between_devnet_and_mainnet() {
         ),
     );
 
-    let router = Arc::new(
-        cadence_desktop_lib::commands::solana::RpcRouter::new_with_default_pool(),
-    );
+    let router =
+        Arc::new(cadence_desktop_lib::commands::solana::RpcRouter::new_with_default_pool());
     let transport: Arc<dyn RpcTransport> = scripted.clone();
     let mut rpc_urls = BTreeMap::new();
     rpc_urls.insert(ClusterKind::Devnet, devnet_url.to_string());
@@ -324,9 +321,8 @@ pub fn cost_snapshot_rolls_up_local_ledger_activity() {
         });
     }
 
-    let router = Arc::new(
-        cadence_desktop_lib::commands::solana::RpcRouter::new_with_default_pool(),
-    );
+    let router =
+        Arc::new(cadence_desktop_lib::commands::solana::RpcRouter::new_with_default_pool());
     let runner = ScriptedProviderRunner {
         usage: ProviderUsage {
             cluster: ClusterKind::Mainnet,
@@ -493,7 +489,10 @@ pub fn deploy_gate_blocks_on_committed_mainnet_keypair() {
     // No deploy runner calls should have been made — the gate blocks
     // before the CLI spawn.
     let calls = runner.calls.lock().unwrap();
-    assert!(calls.is_empty(), "deploy runner should not have been called");
+    assert!(
+        calls.is_empty(),
+        "deploy runner should not have been called"
+    );
 }
 
 pub fn deploy_gate_is_silent_when_project_root_is_none() {
