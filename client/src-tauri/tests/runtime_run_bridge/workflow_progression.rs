@@ -444,6 +444,103 @@ pub(crate) fn gate_linked_resume_auto_dispatch_emits_project_update_without_runt
         project_store::load_recent_workflow_transition_events(&repo_root, &project_id, None)
             .expect("reload transition events after gate-linked auto-dispatch");
     assert_eq!(events, reloaded_events);
+
+    let transition_rows_before_linkage_drift = count_workflow_transition_rows(&repo_root, &project_id);
+    let handoff_rows_before_linkage_drift = count_workflow_handoff_rows(&repo_root, &project_id);
+
+    let database_path = database_path_for_repo(&repo_root);
+    let connection = rusqlite::Connection::open(&database_path).expect("open workflow db");
+    connection
+        .execute(
+            "UPDATE workflow_handoff_packages SET from_node_id = ?1 WHERE project_id = ?2 AND handoff_transition_id = ?3",
+            rusqlite::params!["plan", project_id, auto_event.transition_id],
+        )
+        .expect("corrupt auto-dispatch handoff linkage");
+
+    let tampered_package_before_replay = project_store::load_workflow_handoff_package(
+        &repo_root,
+        &project_id,
+        &auto_event.transition_id,
+    )
+    .expect("load tampered handoff package before replay")
+    .expect("tampered handoff package should still exist before replay");
+    assert_eq!(tampered_package_before_replay.from_node_id, "plan");
+
+    let replayed_primary_trigger = apply_workflow_transition(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        ApplyWorkflowTransitionRequestDto {
+            project_id: project_id.clone(),
+            transition_id: primary_event.transition_id.clone(),
+            causal_transition_id: primary_event.causal_transition_id.clone(),
+            from_node_id: primary_event.from_node_id.clone(),
+            to_node_id: primary_event.to_node_id.clone(),
+            transition_kind: primary_event.transition_kind.clone(),
+            gate_decision: "approved".into(),
+            gate_decision_context: Some("Execution gate approved by operator.".into()),
+            gate_updates: vec![
+                cadence_desktop_lib::commands::WorkflowTransitionGateUpdateRequestDto {
+                    gate_key: "execution_gate".into(),
+                    gate_state: "satisfied".into(),
+                    decision_context: Some("Execution gate approved by operator.".into()),
+                },
+            ],
+            occurred_at: primary_event.created_at.clone(),
+        },
+    )
+    .expect("replaying primary trigger should fail closed when handoff linkage drifts");
+
+    assert_eq!(
+        replayed_primary_trigger.automatic_dispatch.status,
+        WorkflowAutomaticDispatchStatusDto::Replayed
+    );
+    let replayed_auto_transition = replayed_primary_trigger
+        .automatic_dispatch
+        .transition_event
+        .as_ref()
+        .expect("replayed automatic dispatch should keep the persisted transition event");
+    assert_eq!(replayed_auto_transition.transition_id, auto_event.transition_id);
+
+    let replayed_handoff_outcome = replayed_primary_trigger
+        .automatic_dispatch
+        .handoff_package
+        .as_ref()
+        .expect("replayed automatic dispatch should still report handoff package outcome");
+    assert_eq!(
+        replayed_handoff_outcome.code.as_deref(),
+        Some("workflow_handoff_linkage_mismatch")
+    );
+    assert!(
+        replayed_handoff_outcome
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains(auto_event.transition_id.as_str())),
+        "expected linkage-mismatch diagnostics to reference replayed transition id, got {:?}",
+        replayed_handoff_outcome.message
+    );
+    assert!(
+        replayed_handoff_outcome.package.is_none(),
+        "linkage mismatch must not fabricate synthetic handoff packages"
+    );
+
+    assert_eq!(
+        count_workflow_transition_rows(&repo_root, &project_id),
+        transition_rows_before_linkage_drift
+    );
+    assert_eq!(
+        count_workflow_handoff_rows(&repo_root, &project_id),
+        handoff_rows_before_linkage_drift
+    );
+
+    let tampered_package_after_replay = project_store::load_workflow_handoff_package(
+        &repo_root,
+        &project_id,
+        &auto_event.transition_id,
+    )
+    .expect("load handoff package after linkage mismatch replay")
+    .expect("handoff package row should remain persisted after linkage mismatch replay");
+    assert_eq!(tampered_package_after_replay.id, persisted_auto_package.id);
+    assert_eq!(tampered_package_after_replay.from_node_id, "plan");
 }
 
 pub(crate) fn planning_lifecycle_completion_branch_auto_dispatches_to_roadmap_without_duplicate_rows(
@@ -938,16 +1035,47 @@ pub(crate) fn plan_mode_required_true_pauses_and_requires_explicit_resolve_resum
     let (project_id, repo_root) = seed_project(&root, &app);
 
     seed_plan_mode_continuation_workflow(&repo_root, &project_id, None, None);
+    let run_id = "run-plan-mode-true";
     seed_unreachable_runtime_run_with_identity_and_plan_mode(
         &repo_root,
         &project_id,
-        "run-plan-mode-true",
+        run_id,
         "openai_codex",
         "openai_codex",
         "openai_codex",
         None,
         true,
     );
+
+    let mut connected_projection = cadence_desktop_lib::mcp::default_mcp_registry();
+    connected_projection.servers = vec![cadence_desktop_lib::mcp::McpServerRecord {
+        id: "mcp-connected-plan-mode".into(),
+        name: "Connected MCP".into(),
+        transport: cadence_desktop_lib::mcp::McpTransport::Stdio {
+            command: "npx".into(),
+            args: vec!["-y".into(), "@acme/connected-mcp".into()],
+        },
+        env: Vec::new(),
+        cwd: None,
+        connection: cadence_desktop_lib::mcp::McpConnectionState {
+            status: cadence_desktop_lib::mcp::McpConnectionStatus::Connected,
+            diagnostic: None,
+            last_checked_at: Some("2026-04-24T07:40:00Z".into()),
+            last_healthy_at: Some("2026-04-24T07:40:00Z".into()),
+        },
+        updated_at: "2026-04-24T07:40:00Z".into(),
+    }];
+    persist_runtime_mcp_projection_snapshot(&app, run_id, &connected_projection);
+
+    let projection_before_gate_pause = load_runtime_mcp_projection_snapshot(&app, run_id);
+    assert_eq!(projection_before_gate_pause.servers.len(), 1);
+    assert_eq!(
+        projection_before_gate_pause.servers[0].id,
+        "mcp-connected-plan-mode"
+    );
+    assert!(projection_before_gate_pause.servers.iter().all(|server| {
+        server.connection.status == cadence_desktop_lib::mcp::McpConnectionStatus::Connected
+    }));
 
     let request = ApplyWorkflowTransitionRequestDto {
         project_id: project_id.clone(),
@@ -1041,6 +1169,9 @@ pub(crate) fn plan_mode_required_true_pauses_and_requires_explicit_resolve_resum
         1
     );
 
+    let projection_after_replay = load_runtime_mcp_projection_snapshot(&app, run_id);
+    assert_eq!(projection_after_replay, projection_before_gate_pause);
+
     let missing_approval_error = resume_operator_run(
         app.handle().clone(),
         app.state::<DesktopState>(),
@@ -1104,6 +1235,9 @@ pub(crate) fn plan_mode_required_true_pauses_and_requires_explicit_resolve_resum
         !(approval.gate_key.as_deref() == Some("plan_mode_required")
             && approval.status == OperatorApprovalStatus::Pending)
     }));
+
+    let projection_after_resume = load_runtime_mcp_projection_snapshot(&app, run_id);
+    assert_eq!(projection_after_resume, projection_before_gate_pause);
 }
 
 pub(crate) fn plan_mode_required_missing_required_gate_metadata_keeps_dispatch_blocked() {

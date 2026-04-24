@@ -208,6 +208,19 @@ pub(crate) fn load_runtime_mcp_projection_snapshot(
         .expect("load runtime mcp projection snapshot")
 }
 
+pub(crate) fn persist_runtime_mcp_projection_snapshot(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    run_id: &str,
+    registry: &cadence_desktop_lib::mcp::McpRegistry,
+) {
+    let path = runtime_mcp_projection_path(app, run_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create runtime mcp projection parent directory");
+    }
+    cadence_desktop_lib::mcp::persist_mcp_registry(&path, registry)
+        .expect("persist runtime mcp projection snapshot");
+}
+
 pub(crate) fn create_state(root: &TempDir) -> (DesktopState, PathBuf, PathBuf) {
     let registry_path = root.path().join("app-data").join("project-registry.json");
     let auth_store_path = root.path().join("app-data").join("openai-auth.json");

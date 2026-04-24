@@ -299,3 +299,8 @@ fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_unreadable() {
 fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_malformed() {
     runtime_recovery::start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_malformed();
 }
+
+#[test]
+fn runtime_mcp_projection_contract_rejects_non_connected_and_malformed_rows() {
+    runtime_recovery::runtime_mcp_projection_contract_rejects_non_connected_and_malformed_rows();
+}

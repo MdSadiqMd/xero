@@ -1639,3 +1639,76 @@ pub(crate) fn start_runtime_run_fails_closed_when_mcp_registry_snapshot_is_malfo
         .contains("runtime_mcp_projection_registry_malformed"));
     assert_eq!(count_runtime_run_rows(&repo_root), 0);
 }
+
+pub(crate) fn runtime_mcp_projection_contract_rejects_non_connected_and_malformed_rows() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (state, _registry_path, _auth_store_path) = create_state(&root);
+    let app = build_mock_app(state);
+    let projection_path = runtime_mcp_projection_path(&app, "run-projection-contract-invalid");
+    std::fs::create_dir_all(
+        projection_path
+            .parent()
+            .expect("runtime projection contract parent path"),
+    )
+    .expect("create runtime projection contract parent");
+
+    let mut disconnected_projection = cadence_desktop_lib::mcp::default_mcp_registry();
+    disconnected_projection.servers = vec![cadence_desktop_lib::mcp::McpServerRecord {
+        id: "mcp-stale-contract".into(),
+        name: "Stale MCP Contract".into(),
+        transport: cadence_desktop_lib::mcp::McpTransport::Http {
+            url: "https://stale.example.com/mcp".into(),
+        },
+        env: Vec::new(),
+        cwd: None,
+        connection: cadence_desktop_lib::mcp::McpConnectionState {
+            status: cadence_desktop_lib::mcp::McpConnectionStatus::Stale,
+            diagnostic: Some(cadence_desktop_lib::mcp::McpConnectionDiagnostic {
+                code: "mcp_status_unchecked".into(),
+                message: "Server has not been checked yet.".into(),
+                retryable: true,
+            }),
+            last_checked_at: None,
+            last_healthy_at: None,
+        },
+        updated_at: "2026-04-24T08:15:00Z".into(),
+    }];
+    cadence_desktop_lib::mcp::persist_mcp_registry(&projection_path, &disconnected_projection)
+        .expect("persist disconnected runtime projection contract");
+
+    let disconnected_error =
+        cadence_desktop_lib::mcp::load_runtime_mcp_projection_contract(&projection_path)
+            .expect_err("non-connected runtime projection contract should fail closed");
+    assert_eq!(
+        disconnected_error.code,
+        "runtime_mcp_projection_contract_disconnected"
+    );
+
+    std::fs::write(
+        &projection_path,
+        r#"{
+  "version": 1,
+  "servers": [
+    {
+      "id": "bad id",
+      "name": "Bad Projection",
+      "transport": { "kind": "stdio", "command": "npx", "args": ["-y", "bad"] },
+      "connection": { "status": "connected" },
+      "updatedAt": "2026-04-24T08:15:01Z"
+    }
+  ],
+  "updatedAt": "2026-04-24T08:15:01Z"
+}
+"#,
+    )
+    .expect("write malformed runtime projection contract");
+
+    let malformed_error = cadence_desktop_lib::mcp::load_runtime_mcp_projection_contract(
+        &projection_path,
+    )
+    .expect_err("malformed runtime projection contract should fail closed");
+    assert_eq!(
+        malformed_error.code,
+        "runtime_mcp_projection_contract_malformed"
+    );
+}
