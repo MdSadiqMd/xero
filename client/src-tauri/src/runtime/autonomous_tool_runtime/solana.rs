@@ -172,9 +172,7 @@ pub struct AutonomousSolanaAltRequest {
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum AutonomousSolanaIdlAction {
     /// Read a local IDL file into the registry.
-    Load {
-        path: String,
-    },
+    Load { path: String },
     /// Fetch from chain via the injected RPC transport.
     Fetch {
         program_id: String,
@@ -189,13 +187,9 @@ pub enum AutonomousSolanaIdlAction {
         cluster: Option<ClusterKind>,
     },
     /// Start watching a local IDL file. Returns a subscription token.
-    Watch {
-        path: String,
-    },
+    Watch { path: String },
     /// Stop a previously-started watch.
-    Unwatch {
-        token: IdlSubscriptionToken,
-    },
+    Unwatch { token: IdlSubscriptionToken },
     /// Classify local-vs-on-chain drift.
     Drift {
         program_id: String,
@@ -588,18 +582,18 @@ impl SolanaExecutor for StateSolanaExecutor {
                 cluster,
                 rpc_url,
             } => {
-                let rpc_url = rpc_url.or_else(|| self.resolve_rpc_url(cluster)).ok_or_else(
-                    || {
+                let rpc_url = rpc_url
+                    .or_else(|| self.resolve_rpc_url(cluster))
+                    .ok_or_else(|| {
                         CommandError::user_fixable(
                             "solana_idl_no_rpc",
                             "No RPC URL available — start a cluster or provide rpcUrl.",
                         )
-                    },
-                )?;
-                let idl =
-                    self.inner
-                        .idl_registry
-                        .fetch_on_chain(cluster, &rpc_url, &program_id)?;
+                    })?;
+                let idl = self
+                    .inner
+                    .idl_registry
+                    .fetch_on_chain(cluster, &rpc_url, &program_id)?;
                 (
                     "fetch".to_string(),
                     serde_json::to_value::<Option<Idl>>(idl).unwrap_or(JsonValue::Null),
@@ -624,10 +618,7 @@ impl SolanaExecutor for StateSolanaExecutor {
             }
             AutonomousSolanaIdlAction::Unwatch { token } => {
                 let ok = self.inner.idl_registry.unwatch(&token)?;
-                (
-                    "unwatch".to_string(),
-                    JsonValue::Bool(ok),
-                )
+                ("unwatch".to_string(), JsonValue::Bool(ok))
             }
             AutonomousSolanaIdlAction::Drift {
                 program_id,
@@ -636,14 +627,14 @@ impl SolanaExecutor for StateSolanaExecutor {
                 rpc_url,
             } => {
                 let local = self.inner.idl_registry.load_file(Path::new(&local_path))?;
-                let rpc_url = rpc_url.or_else(|| self.resolve_rpc_url(cluster)).ok_or_else(
-                    || {
+                let rpc_url = rpc_url
+                    .or_else(|| self.resolve_rpc_url(cluster))
+                    .ok_or_else(|| {
                         CommandError::user_fixable(
                             "solana_idl_no_rpc",
                             "No RPC URL available — start a cluster or provide rpcUrl.",
                         )
-                    },
-                )?;
+                    })?;
                 let chain =
                     self.inner
                         .idl_registry
@@ -702,7 +693,8 @@ impl SolanaExecutor for StateSolanaExecutor {
                 output_dir: request.output_dir,
             },
         )?;
-        let value = serde_json::to_value::<CodamaGenerationReport>(report).unwrap_or(JsonValue::Null);
+        let value =
+            serde_json::to_value::<CodamaGenerationReport>(report).unwrap_or(JsonValue::Null);
         let value_json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
         Ok(AutonomousSolanaOutput {
             action: "generate".to_string(),

@@ -76,18 +76,8 @@ export function SolanaTxInspector({
   const disabled = txBusy || !clusterRunning
 
   return (
-    <section className="border-b border-border/70 px-3 py-3">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Search aria-hidden className="h-3 w-3 text-muted-foreground" />
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Tx inspector
-          </div>
-        </div>
-        {txBusy ? <Loader2 className="h-3 w-3 animate-spin text-primary" /> : null}
-      </div>
-
-      <div className="mb-2 flex gap-1">
+    <div className="flex flex-col gap-3">
+      <div className="inline-flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
         <TabButton
           active={tab === "simulate"}
           onClick={() => setTab("simulate")}
@@ -106,19 +96,18 @@ export function SolanaTxInspector({
       </div>
 
       {!clusterRunning ? (
-        <p className="mb-2 rounded-md bg-muted/40 px-2 py-1.5 text-[10.5px] text-muted-foreground">
-          Start a cluster on{" "}
-          <span className="font-mono">{cluster}</span> to use the tx inspector.
+        <p className="text-[11px] text-muted-foreground">
+          Start a cluster on <span className="font-mono text-foreground/80">{cluster}</span> to use the tx inspector.
         </p>
       ) : null}
 
       {tab === "simulate" ? (
-        <div className="space-y-2">
-          <label className="block text-[10.5px] text-muted-foreground">
+        <div className="flex flex-col gap-2">
+          <label className="text-[11px] font-medium text-muted-foreground">
             Base64 v0 transaction
           </label>
           <textarea
-            className="w-full resize-y rounded-md border border-border/70 bg-background/60 p-2 font-mono text-[10.5px] leading-tight"
+            className="w-full resize-y rounded-md border border-border/60 bg-background p-2 font-mono text-[11px] leading-snug outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
             placeholder="AQABAv..."
             rows={4}
             value={txBytes}
@@ -129,14 +118,14 @@ export function SolanaTxInspector({
             disabled={disabled}
             onClick={handleSimulate}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
-              "hover:bg-primary/25 disabled:opacity-50",
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
+              "hover:bg-primary/90 disabled:opacity-50",
             )}
           >
             {txBusy ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Gauge className="h-3 w-3" />
+              <Gauge className="h-3.5 w-3.5" />
             )}
             Simulate
           </button>
@@ -147,8 +136,8 @@ export function SolanaTxInspector({
       ) : null}
 
       {tab === "explain" ? (
-        <div className="space-y-2">
-          <label className="block text-[10.5px] text-muted-foreground">
+        <div className="flex flex-col gap-2">
+          <label className="text-[11px] font-medium text-muted-foreground">
             Signature
           </label>
           <input
@@ -156,21 +145,21 @@ export function SolanaTxInspector({
             value={signature}
             onChange={(event) => setSignature(event.target.value)}
             placeholder="4Ck7..."
-            className="w-full rounded-md border border-border/70 bg-background/60 px-2 py-1 font-mono text-[10.5px]"
+            className="h-8 w-full rounded-md border border-border/60 bg-background px-2.5 font-mono text-[11.5px] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
           />
           <button
             type="button"
             disabled={disabled}
             onClick={handleExplain}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
-              "hover:bg-primary/25 disabled:opacity-50",
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
+              "hover:bg-primary/90 disabled:opacity-50",
             )}
           >
             {txBusy ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Search className="h-3 w-3" />
+              <Search className="h-3.5 w-3.5" />
             )}
             Decode
           </button>
@@ -181,12 +170,12 @@ export function SolanaTxInspector({
       ) : null}
 
       {tab === "priority" ? (
-        <div className="space-y-2">
-          <label className="block text-[10.5px] text-muted-foreground">
-            Program IDs (comma or newline separated, optional)
+        <div className="flex flex-col gap-2">
+          <label className="text-[11px] font-medium text-muted-foreground">
+            Program IDs <span className="font-normal">(comma or newline separated, optional)</span>
           </label>
           <textarea
-            className="w-full resize-y rounded-md border border-border/70 bg-background/60 p-2 font-mono text-[10.5px] leading-tight"
+            className="w-full resize-y rounded-md border border-border/60 bg-background p-2 font-mono text-[11px] leading-snug outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
             placeholder="JUP6Lkb..., whirLb..."
             rows={2}
             value={programIds}
@@ -197,14 +186,14 @@ export function SolanaTxInspector({
             disabled={txBusy || !clusterRunning}
             onClick={handleEstimateFee}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
-              "hover:bg-primary/25 disabled:opacity-50",
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
+              "hover:bg-primary/90 disabled:opacity-50",
             )}
           >
             {txBusy ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Gauge className="h-3 w-3" />
+              <Gauge className="h-3.5 w-3.5" />
             )}
             Estimate
           </button>
@@ -213,9 +202,9 @@ export function SolanaTxInspector({
       ) : null}
 
       {localError ? (
-        <p className="mt-2 text-[11px] text-destructive">{localError}</p>
+        <p className="text-[11px] text-destructive">{localError}</p>
       ) : null}
-    </section>
+    </div>
   )
 }
 
@@ -233,9 +222,9 @@ function TabButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-md px-2 py-0.5 text-[10.5px] transition-colors",
+        "flex-1 rounded px-2 py-1 text-[11.5px] font-medium transition-colors",
         active
-          ? "bg-primary/15 text-primary"
+          ? "bg-background text-foreground shadow-sm"
           : "text-muted-foreground hover:text-foreground",
       )}
     >

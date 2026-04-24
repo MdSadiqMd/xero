@@ -1,7 +1,20 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { CircleCheckBig, CircleSlash, Loader2, Play, RefreshCw, Square, Waves } from "lucide-react"
+import {
+  CircleCheckBig,
+  CircleSlash,
+  FileJson,
+  Loader2,
+  Play,
+  RefreshCw,
+  Search,
+  Server,
+  Square,
+  Users,
+  Waves,
+  Zap,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SolanaIdlPanel } from "./solana-idl-panel"
 import { SolanaMissingToolchain } from "./solana-missing-toolchain"
@@ -21,6 +34,8 @@ const MIN_WIDTH = 320
 const DEFAULT_WIDTH = 420
 const MAX_WIDTH = 900
 const STORAGE_KEY = "cadence.solana.workbench.width"
+
+type TabId = "personas" | "scenarios" | "tx" | "idl" | "rpc"
 
 interface SolanaWorkbenchSidebarProps {
   open: boolean
@@ -56,6 +71,7 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
 
   const workbench = useSolanaWorkbench({ active: open })
   const [selectedKind, setSelectedKind] = useState<ClusterKind>("localnet")
+  const [activeTab, setActiveTab] = useState<TabId>("personas")
 
   useEffect(() => {
     if (!workbench.clusters.length) return
@@ -116,6 +132,8 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
     () => workbench.clusters.find((c) => c.kind === selectedKind) ?? null,
     [workbench.clusters, selectedKind],
   )
+
+  const clusterRunning = workbench.status.running && workbench.status.kind === selectedKind
 
   const refreshPersonasForCluster = useCallback(() => {
     void workbench.refreshPersonas(selectedKind)
@@ -196,6 +214,49 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
     [workbench, selectedKind],
   )
 
+  const scenariosForCluster = useMemo(
+    () =>
+      workbench.scenarios.filter((s) =>
+        s.supportedClusters.includes(selectedKind),
+      ),
+    [workbench.scenarios, selectedKind],
+  )
+
+  const tabs: TabDescriptor[] = [
+    {
+      id: "personas",
+      icon: Users,
+      label: "Personas",
+      count: workbench.personas.length || undefined,
+    },
+    {
+      id: "scenarios",
+      icon: Zap,
+      label: "Scenarios",
+      count: scenariosForCluster.length || undefined,
+    },
+    {
+      id: "tx",
+      icon: Search,
+      label: "Tx",
+    },
+    {
+      id: "idl",
+      icon: FileJson,
+      label: "IDL",
+      count: Object.keys(workbench.idls).length || undefined,
+    },
+    {
+      id: "rpc",
+      icon: Server,
+      label: "RPC",
+      count:
+        workbench.rpcHealth.length > 0
+          ? `${workbench.rpcHealth.filter((h) => h.healthy).length}/${workbench.rpcHealth.length}`
+          : undefined,
+    },
+  ]
+
   return (
     <aside
       aria-hidden={!open}
@@ -214,7 +275,7 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
         aria-valuemin={MIN_WIDTH}
         aria-valuenow={width}
         className={cn(
-          "absolute inset-y-0 -left-[3px] z-10 w-[6px] cursor-col-resize bg-transparent transition-colors",
+          "absolute inset-y-0 -left-[3px] z-20 w-[6px] cursor-col-resize bg-transparent transition-colors",
           "hover:bg-primary/30",
           isResizing && "bg-primary/40",
         )}
@@ -223,7 +284,7 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
         tabIndex={open ? 0 : -1}
       />
 
-      <div className="flex h-10 items-center justify-between border-b border-border/70 pl-3 pr-2">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/70 pl-3 pr-2">
         <div className="flex items-center gap-2">
           <Waves aria-hidden className="h-3.5 w-3.5 text-primary" />
           <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
@@ -290,17 +351,35 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
               Validator
             </div>
-            <StatusDot status={workbench.status} />
+            <StatusDot
+              running={workbench.status.running}
+              starting={workbench.isStarting}
+            />
           </div>
-          <div className="space-y-2 text-[11px] text-foreground/85">
-            <KV label="State" value={workbench.status.running ? "Running" : "Stopped"} />
-            <KV label="RPC" value={workbench.status.rpcUrl ?? "—"} />
-            <KV label="WS" value={workbench.status.wsUrl ?? "—"} />
+          <div className="space-y-1.5 text-[11px] text-foreground/85">
+            <KV
+              label="State"
+              value={
+                workbench.isStarting
+                  ? "Starting…"
+                  : workbench.isStopping
+                    ? "Stopping…"
+                    : workbench.status.running
+                      ? "Running"
+                      : "Stopped"
+              }
+            />
+            <KV label="RPC" value={workbench.status.rpcUrl ?? "—"} mono />
+            <KV label="WS" value={workbench.status.wsUrl ?? "—"} mono />
             {workbench.status.uptimeS != null ? (
-              <KV label="Uptime" value={`${workbench.status.uptimeS}s`} />
+              <KV
+                label="Uptime"
+                value={`${workbench.status.uptimeS}s`}
+                mono
+              />
             ) : null}
             {workbench.lastEvent?.message ? (
-              <div className="text-[11px] text-muted-foreground italic">
+              <div className="text-[11px] italic text-muted-foreground">
                 {workbench.lastEvent.message}
               </div>
             ) : null}
@@ -312,7 +391,8 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
               disabled={
                 !selectedCluster?.startable ||
                 workbench.isStarting ||
-                workbench.isStopping
+                workbench.isStopping ||
+                workbench.status.running
               }
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
@@ -344,145 +424,261 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
             </button>
           </div>
           {workbench.error ? (
-            <p className="mt-2 text-[11px] text-destructive">{workbench.error}</p>
+            <p className="mt-2 text-[11px] text-destructive">
+              {workbench.error}
+            </p>
           ) : null}
         </section>
 
-        <SolanaPersonaPanel
-          busy={workbench.personaBusy}
-          cluster={selectedKind}
-          clusterRunning={
-            workbench.status.running && workbench.status.kind === selectedKind
-          }
-          onCreate={handleCreatePersona}
-          onDelete={handleDeletePersona}
-          onFund={handleFundPersona}
-          onRefresh={refreshPersonasForCluster}
-          personas={workbench.personas}
-          roles={workbench.personaRoles}
-        />
+        <div
+          role="tablist"
+          aria-label="Workbench tools"
+          className="sticky top-0 z-10 flex h-9 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/70 bg-sidebar px-2 scrollbar-thin"
+        >
+          {tabs.map((tab) => (
+            <TabButton
+              key={tab.id}
+              tab={tab}
+              active={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+            />
+          ))}
+        </div>
 
-        <SolanaScenarioPanel
-          busy={workbench.scenarioBusy}
-          cluster={selectedKind}
-          clusterRunning={
-            workbench.status.running && workbench.status.kind === selectedKind
-          }
-          lastRun={workbench.lastScenarioRun}
-          onRunScenario={workbench.runScenario}
-          personas={workbench.personas}
-          scenarios={workbench.scenarios}
-        />
+        <div
+          role="tabpanel"
+          aria-labelledby={`tab-${activeTab}`}
+          className="px-3 py-3"
+        >
+          {activeTab === "personas" ? (
+            <SolanaPersonaPanel
+              busy={workbench.personaBusy}
+              cluster={selectedKind}
+              clusterRunning={clusterRunning}
+              onCreate={handleCreatePersona}
+              onDelete={handleDeletePersona}
+              onFund={handleFundPersona}
+              onRefresh={refreshPersonasForCluster}
+              personas={workbench.personas}
+              roles={workbench.personaRoles}
+            />
+          ) : null}
 
-        <SolanaTxInspector
-          cluster={selectedKind}
-          clusterRunning={
-            workbench.status.running && workbench.status.kind === selectedKind
-          }
-          txBusy={workbench.txBusy}
-          lastSimulation={workbench.lastSimulation}
-          lastExplanation={workbench.lastExplanation}
-          onSimulate={handleSimulate}
-          onExplain={handleExplain}
-          onEstimateFee={handleEstimateFee}
-        />
+          {activeTab === "scenarios" ? (
+            <SolanaScenarioPanel
+              busy={workbench.scenarioBusy}
+              cluster={selectedKind}
+              clusterRunning={clusterRunning}
+              lastRun={workbench.lastScenarioRun}
+              onRunScenario={workbench.runScenario}
+              personas={workbench.personas}
+              scenarios={workbench.scenarios}
+            />
+          ) : null}
 
-        <SolanaIdlPanel
-          cluster={selectedKind}
-          idls={workbench.idls}
-          idlBusy={workbench.idlBusy}
-          lastIdlEvent={workbench.lastIdlEvent}
-          lastDriftReport={workbench.lastDriftReport}
-          lastCodamaReport={workbench.lastCodamaReport}
-          lastPublishReport={workbench.lastPublishReport}
-          lastDeployProgress={workbench.lastDeployProgress}
-          activeWatches={workbench.activeIdlWatches}
-          personaNames={workbench.personas.map((p) => p.name)}
-          onLoad={workbench.loadIdl}
-          onFetch={handleIdlFetch}
-          onDrift={handleIdlDrift}
-          onCodama={handleCodama}
-          onPublish={handlePublishIdl}
-          onStartWatch={workbench.startIdlWatch}
-          onStopWatch={workbench.stopIdlWatch}
-        />
+          {activeTab === "tx" ? (
+            <SolanaTxInspector
+              cluster={selectedKind}
+              clusterRunning={clusterRunning}
+              txBusy={workbench.txBusy}
+              lastSimulation={workbench.lastSimulation}
+              lastExplanation={workbench.lastExplanation}
+              onSimulate={handleSimulate}
+              onExplain={handleExplain}
+              onEstimateFee={handleEstimateFee}
+            />
+          ) : null}
 
-        <section className="border-b border-border/70 px-3 py-3">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              RPC endpoints
-            </div>
-            <button
-              type="button"
-              aria-label="Refresh RPC health"
-              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-              onClick={() => void workbench.refreshRpcHealth()}
-            >
-              <RefreshCw className="h-3 w-3" />
-            </button>
-          </div>
-          {workbench.rpcHealth.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground">
-              Click refresh to probe the free-tier endpoint pool.
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-1.5">
-              {workbench.rpcHealth.map((health) => (
-                <li
-                  key={`${health.cluster}-${health.id}`}
-                  className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/40 px-2 py-1.5"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[11.5px] text-foreground">
-                      {health.label ?? health.id}
-                    </div>
-                    <div className="truncate text-[10.5px] text-muted-foreground">
-                      {health.cluster} · {health.url}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1 text-[10.5px]">
-                    {health.healthy ? (
-                      <CircleCheckBig className="h-3 w-3 text-emerald-400" />
-                    ) : (
-                      <CircleSlash className="h-3 w-3 text-destructive" />
-                    )}
-                    {health.latencyMs != null ? (
-                      <span className="font-mono tabular-nums text-muted-foreground">
-                        {health.latencyMs}ms
-                      </span>
-                    ) : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+          {activeTab === "idl" ? (
+            <SolanaIdlPanel
+              cluster={selectedKind}
+              idls={workbench.idls}
+              idlBusy={workbench.idlBusy}
+              lastIdlEvent={workbench.lastIdlEvent}
+              lastDriftReport={workbench.lastDriftReport}
+              lastCodamaReport={workbench.lastCodamaReport}
+              lastPublishReport={workbench.lastPublishReport}
+              lastDeployProgress={workbench.lastDeployProgress}
+              activeWatches={workbench.activeIdlWatches}
+              personaNames={workbench.personas.map((p) => p.name)}
+              onLoad={workbench.loadIdl}
+              onFetch={handleIdlFetch}
+              onDrift={handleIdlDrift}
+              onCodama={handleCodama}
+              onPublish={handlePublishIdl}
+              onStartWatch={workbench.startIdlWatch}
+              onStopWatch={workbench.stopIdlWatch}
+            />
+          ) : null}
+
+          {activeTab === "rpc" ? (
+            <RpcEndpoints
+              onRefresh={() => void workbench.refreshRpcHealth()}
+              rpcHealth={workbench.rpcHealth}
+            />
+          ) : null}
+        </div>
       </div>
     </aside>
   )
 }
 
-function StatusDot({ status }: { status: { running: boolean } }) {
+interface TabDescriptor {
+  id: TabId
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  count?: string | number
+}
+
+function TabButton({
+  tab,
+  active,
+  onClick,
+}: {
+  tab: TabDescriptor
+  active: boolean
+  onClick: () => void
+}) {
+  const Icon = tab.icon
   return (
-    <span
-      aria-label={status.running ? "Running" : "Stopped"}
+    <button
+      id={`tab-${tab.id}`}
+      role="tab"
+      aria-selected={active}
+      type="button"
+      onClick={onClick}
       className={cn(
-        "inline-block h-2 w-2 rounded-full",
-        status.running ? "bg-emerald-400" : "bg-muted-foreground/40",
+        "relative inline-flex shrink-0 items-center gap-1.5 px-2 py-1.5 text-[11px] transition-colors",
+        active
+          ? "text-foreground"
+          : "text-muted-foreground hover:text-foreground",
       )}
-    />
+    >
+      <Icon className="h-3.5 w-3.5" />
+      <span>{tab.label}</span>
+      {tab.count != null ? (
+        <span
+          className={cn(
+            "rounded px-1 text-[9.5px] font-medium tabular-nums",
+            active
+              ? "bg-primary/15 text-primary"
+              : "bg-secondary/60 text-muted-foreground",
+          )}
+        >
+          {tab.count}
+        </span>
+      ) : null}
+      {active ? (
+        <span className="absolute inset-x-1 -bottom-px h-px bg-primary" />
+      ) : null}
+    </button>
   )
 }
 
-function KV({ label, value }: { label: string; value: string }) {
+function KV({
+  label,
+  value,
+  mono,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+}) {
   return (
-    <div className="flex items-start justify-between gap-3">
-      <span className="text-[10.5px] uppercase tracking-[0.14em] text-muted-foreground">
+    <div className="flex items-baseline gap-2">
+      <span className="w-12 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
-      <span className="min-w-0 truncate text-right font-mono text-[11px] tabular-nums text-foreground/85">
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-foreground/85",
+          mono && "font-mono text-[10.5px]",
+        )}
+      >
         {value}
       </span>
     </div>
+  )
+}
+
+function RpcEndpoints({
+  rpcHealth,
+  onRefresh,
+}: {
+  rpcHealth: ReturnType<typeof useSolanaWorkbench>["rpcHealth"]
+  onRefresh: () => void
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-end">
+        <button
+          type="button"
+          aria-label="Refresh RPC health"
+          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+          onClick={onRefresh}
+        >
+          <RefreshCw className="h-3 w-3" />
+          Probe
+        </button>
+      </div>
+      {rpcHealth.length === 0 ? (
+        <p className="text-[11.5px] text-muted-foreground">
+          Probe to check the free-tier endpoint pool.
+        </p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border/40">
+          {rpcHealth.map((health) => (
+            <li
+              key={`${health.cluster}-${health.id}`}
+              className="flex items-center justify-between gap-2 px-1 py-2"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[12px] font-medium text-foreground">
+                  {health.label ?? health.id}
+                </div>
+                <div className="truncate font-mono text-[10.5px] text-muted-foreground">
+                  {health.cluster} · {health.url}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
+                {health.healthy ? (
+                  <CircleCheckBig className="h-3.5 w-3.5 text-emerald-400" />
+                ) : (
+                  <CircleSlash className="h-3.5 w-3.5 text-destructive" />
+                )}
+                {health.latencyMs != null ? (
+                  <span className="font-mono tabular-nums text-muted-foreground">
+                    {health.latencyMs}ms
+                  </span>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function StatusDot({
+  running,
+  starting,
+}: {
+  running: boolean
+  starting: boolean
+}) {
+  return (
+    <span className="relative flex h-2 w-2 items-center justify-center">
+      {running ? (
+        <>
+          <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400/50" />
+          <span className="relative h-2 w-2 rounded-full bg-emerald-400" />
+        </>
+      ) : starting ? (
+        <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+      ) : (
+        <span className="h-2 w-2 rounded-full bg-muted-foreground/50" />
+      )}
+    </span>
   )
 }

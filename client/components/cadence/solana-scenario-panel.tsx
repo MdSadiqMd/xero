@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ChevronRight, Loader2, PlayCircle, Zap } from "lucide-react"
+import { ChevronRight, Loader2, PlayCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type {
   ClusterKind,
@@ -74,20 +74,13 @@ export function SolanaScenarioPanel({
   }, [selectedScenario, selectedPersona, onRunScenario, cluster])
 
   return (
-    <section className="border-b border-border/70 px-3 py-3">
-      <div className="mb-2 flex items-center gap-2">
-        <Zap className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-          Scenarios
-        </span>
-      </div>
-
+    <div className="flex flex-col gap-4">
       {applicableScenarios.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[11.5px] text-muted-foreground">
           No scenarios available on {cluster}. Switch clusters to see available runbooks.
         </p>
       ) : (
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col">
           {applicableScenarios.map((scenario) => {
             const selected = scenario.id === selectedId
             const kindLabel =
@@ -98,34 +91,34 @@ export function SolanaScenarioPanel({
                 type="button"
                 onClick={() => setSelectedId(scenario.id)}
                 className={cn(
-                  "group flex w-full flex-col items-start gap-0.5 rounded-md border px-2 py-1.5 text-left transition-colors",
+                  "group flex w-full flex-col items-start gap-1 rounded-md px-2 py-2 text-left transition-colors",
                   selected
-                    ? "border-primary/60 bg-primary/10"
-                    : "border-border/60 bg-background/40 hover:border-primary/40",
+                    ? "bg-primary/10 text-primary"
+                    : "hover:bg-muted/25",
                 )}
               >
                 <div className="flex w-full items-center gap-2">
                   <ChevronRight
                     className={cn(
-                      "h-3 w-3 text-muted-foreground transition-transform",
+                      "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
                       selected && "rotate-90 text-primary",
                     )}
                   />
-                  <span className="flex-1 truncate text-[11.5px] font-medium text-foreground">
+                  <span className="flex-1 truncate text-[12.5px] font-medium text-foreground">
                     {scenario.label}
                   </span>
                   <span
                     className={cn(
-                      "rounded px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]",
+                      "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
                       scenario.kind === "self_contained"
-                        ? "bg-emerald-500/20 text-emerald-400"
-                        : "bg-amber-500/20 text-amber-400",
+                        ? "bg-emerald-500/15 text-emerald-400"
+                        : "bg-amber-500/15 text-amber-400",
                     )}
                   >
                     {kindLabel}
                   </span>
                 </div>
-                <p className="pl-5 pr-1 text-[10.5px] text-muted-foreground">
+                <p className="pl-5 pr-1 text-[11px] leading-snug text-muted-foreground">
                   {scenario.description}
                 </p>
               </button>
@@ -135,14 +128,17 @@ export function SolanaScenarioPanel({
       )}
 
       {selectedScenario ? (
-        <div className="mt-2 rounded-md border border-border/60 bg-background/40 p-2">
-          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-            Launch {selectedScenario.label}
+        <div>
+          <div className="mb-2 text-[11.5px] font-medium text-foreground">
+            Launch
+            <span className="ml-1.5 font-normal text-muted-foreground">
+              {selectedScenario.label}
+            </span>
           </div>
-          <div className="mt-1.5 flex flex-col gap-1.5">
+          <div className="flex flex-col gap-1.5">
             <select
               aria-label="Persona"
-              className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[12px] outline-none focus:border-primary/60 disabled:opacity-50"
+              className="h-8 rounded-md border border-border/60 bg-background px-2 text-[12px] outline-none transition-colors focus:border-primary/60 disabled:opacity-50"
               disabled={personas.length === 0}
               onChange={(event) => setSelectedPersona(event.target.value)}
               value={selectedPersona ?? ""}
@@ -157,7 +153,7 @@ export function SolanaScenarioPanel({
               ))}
             </select>
             {selectedScenario.requiredClonePrograms.length > 0 ? (
-              <div className="text-[10.5px] text-muted-foreground">
+              <div className="text-[11px] text-muted-foreground">
                 Clone programs:{" "}
                 {selectedScenario.requiredClonePrograms
                   .map((p) => p.slice(0, 4) + "…" + p.slice(-4))
@@ -169,35 +165,31 @@ export function SolanaScenarioPanel({
               onClick={handleRun}
               disabled={!selectedPersona || busy || !clusterRunning}
               className={cn(
-                "inline-flex items-center justify-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
-                "hover:bg-primary/25 disabled:opacity-50",
+                "mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
+                "hover:bg-primary/90 disabled:opacity-50",
               )}
             >
               {busy ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <PlayCircle className="h-3 w-3" />
+                <PlayCircle className="h-3.5 w-3.5" />
               )}
               Run scenario
             </button>
-            {!clusterRunning ? (
-              <p className="text-[10.5px] text-muted-foreground">
-                Start the {cluster} cluster first — scenarios require an active RPC URL.
-              </p>
-            ) : null}
           </div>
         </div>
       ) : null}
 
       {lastRun ? (
-        <div className="mt-2 rounded-md border border-border/50 bg-background/30 p-2">
-          <div className="flex items-center justify-between">
-            <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-              Last run · {lastRun.id}
+        <div className="border-t border-border/50 pt-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 text-[11px] text-muted-foreground">
+              Last run ·{" "}
+              <span className="font-mono text-foreground/80">{lastRun.id}</span>
             </div>
             <span
               className={cn(
-                "rounded px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]",
+                "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
                 statusColor(lastRun.status),
               )}
             >
@@ -205,31 +197,31 @@ export function SolanaScenarioPanel({
             </span>
           </div>
           {lastRun.pipelineHint ? (
-            <p className="mt-1 text-[10.5px] text-amber-400/90">{lastRun.pipelineHint}</p>
+            <p className="mt-1.5 text-[11px] text-amber-400/90">{lastRun.pipelineHint}</p>
           ) : null}
-          <div className="mt-1.5 flex flex-col gap-0.5 text-[10.5px] text-foreground/80">
+          <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-foreground/80">
             {lastRun.steps.map((step, idx) => (
               <span key={idx}>· {step}</span>
             ))}
           </div>
           {lastRun.signatures.length > 0 ? (
-            <div className="mt-1 text-[10px] text-muted-foreground">
+            <div className="mt-1 text-[10.5px] text-muted-foreground">
               {lastRun.signatures.length} signature(s) collected
             </div>
           ) : null}
         </div>
       ) : null}
-    </section>
+    </div>
   )
 }
 
 function statusColor(status: ScenarioRun["status"]): string {
   switch (status) {
     case "succeeded":
-      return "bg-emerald-500/20 text-emerald-400"
+      return "bg-emerald-500/15 text-emerald-400"
     case "failed":
-      return "bg-destructive/20 text-destructive"
+      return "bg-destructive/15 text-destructive"
     case "pendingPipeline":
-      return "bg-amber-500/20 text-amber-400"
+      return "bg-amber-500/15 text-amber-400"
   }
 }

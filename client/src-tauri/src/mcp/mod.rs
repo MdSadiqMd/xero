@@ -1,0 +1,9 @@
+pub mod registry;
+
+pub use registry::{
+    apply_mcp_registry_import, default_mcp_registry, load_mcp_registry_from_path,
+    parse_mcp_registry_import_file, persist_mcp_registry, McpConnectionDiagnostic,
+    McpConnectionState, McpConnectionStatus, McpEnvironmentReference, McpRegistry,
+    McpRegistryImportDiagnostic, McpRegistryImportResult, McpServerRecord, McpTransport,
+    MCP_REGISTRY_FILE_NAME,
+};

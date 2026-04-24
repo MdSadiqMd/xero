@@ -4,9 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   Loader2,
   Plus,
+  RefreshCw,
   Sparkles,
   Trash2,
-  Users,
   Wallet,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -105,39 +105,36 @@ export function SolanaPersonaPanel({
   )
 
   return (
-    <section className="border-b border-border/70 px-3 py-3">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Users className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Personas ({personas.length})
+    <div className="flex flex-col gap-4">
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[11.5px] font-medium text-foreground">
+            New persona
+            <span className="ml-1.5 font-normal text-muted-foreground">
+              on {clusterLabel(cluster)}
+            </span>
           </span>
-        </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={busy}
-          className="rounded-md px-1.5 py-0.5 text-[10px] uppercase tracking-[0.1em] text-muted-foreground hover:bg-secondary/50 hover:text-foreground disabled:opacity-40"
-        >
-          Refresh
-        </button>
-      </div>
-
-      <div className="mb-3 rounded-md border border-border/60 bg-background/40 p-2">
-        <div className="mb-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-          New persona on {clusterLabel(cluster)}
+          <button
+            aria-label="Refresh personas"
+            type="button"
+            onClick={onRefresh}
+            disabled={busy}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+          >
+            <RefreshCw className={cn("h-3 w-3", busy && "animate-spin")} />
+          </button>
         </div>
         <div className="flex flex-col gap-1.5">
           <input
             aria-label="Persona name"
-            className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[12px] outline-none focus:border-primary/60"
+            className="h-8 rounded-md border border-border/60 bg-background px-2.5 text-[12px] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
             onChange={(event) => setNewName(event.target.value)}
             placeholder="e.g. whale-1"
             value={newName}
           />
           <select
             aria-label="Persona role"
-            className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[12px] outline-none focus:border-primary/60"
+            className="h-8 rounded-md border border-border/60 bg-background px-2 text-[12px] outline-none transition-colors focus:border-primary/60"
             onChange={(event) => setNewRole(event.target.value as PersonaRole)}
             value={newRole}
           >
@@ -149,7 +146,7 @@ export function SolanaPersonaPanel({
           </select>
           <input
             aria-label="Persona note"
-            className="rounded-md border border-border/60 bg-background/80 px-2 py-1 text-[11px] outline-none focus:border-primary/60"
+            className="h-8 rounded-md border border-border/60 bg-background px-2.5 text-[11.5px] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
             onChange={(event) => setNewNote(event.target.value)}
             placeholder="note (optional)"
             value={newNote}
@@ -159,41 +156,43 @@ export function SolanaPersonaPanel({
             onClick={handleCreate}
             disabled={busy}
             className={cn(
-              "inline-flex items-center justify-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
-              "hover:bg-primary/25 disabled:opacity-50",
+              "mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
+              "hover:bg-primary/90 disabled:opacity-50",
             )}
           >
             {busy ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Plus className="h-3 w-3" />
+              <Plus className="h-3.5 w-3.5" />
             )}
             Create + fund
           </button>
           {!clusterRunning ? (
-            <p className="text-[10.5px] text-muted-foreground">
-              Cluster is stopped — persona will be created locally without funding until you start a
-              validator.
+            <p className="text-[11px] text-muted-foreground">
+              Cluster is stopped — persona is created locally without funding until you start a validator.
             </p>
           ) : null}
           {statusMessage ? (
-            <p className="text-[10.5px] text-muted-foreground">{statusMessage}</p>
+            <p className="text-[11px] text-foreground/80">{statusMessage}</p>
           ) : null}
         </div>
       </div>
 
       {personas.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[11.5px] text-muted-foreground">
           No personas yet. Create one to seed a named wallet on {clusterLabel(cluster)}.
         </p>
       ) : (
-        <ul className="flex flex-col gap-1.5">
+        <ul className="flex flex-col">
           {personas.map((persona) => {
             const expanded = expandedName === persona.name
             return (
               <li
                 key={`${persona.cluster}-${persona.name}`}
-                className="rounded-md border border-border/60 bg-background/40"
+                className={cn(
+                  "rounded-md transition-colors",
+                  expanded ? "bg-muted/40" : "hover:bg-muted/25",
+                )}
               >
                 <button
                   type="button"
@@ -204,25 +203,25 @@ export function SolanaPersonaPanel({
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <Wallet className="h-3 w-3 text-primary" />
-                      <span className="truncate text-[12px] font-medium text-foreground">
+                      <Wallet className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      <span className="truncate text-[12.5px] font-medium text-foreground">
                         {persona.name}
                       </span>
-                      <span className="shrink-0 rounded bg-secondary/40 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-muted-foreground">
+                      <span className="shrink-0 rounded bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                         {persona.role}
                       </span>
                     </div>
-                    <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+                    <div className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground">
                       {persona.pubkey}
                     </div>
                   </div>
                 </button>
 
                 {expanded ? (
-                  <div className="border-t border-border/50 px-2 py-1.5">
-                    <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[10.5px]">
+                  <div className="px-2 pb-2 pt-1">
+                    <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
                       <span className="text-muted-foreground">Lamports</span>
-                      <span className="font-mono text-foreground/85">
+                      <span className="font-mono tabular-nums text-foreground/85">
                         {persona.seed.solLamports ?? 0}
                       </span>
                       <span className="text-muted-foreground">Tokens</span>
@@ -244,12 +243,12 @@ export function SolanaPersonaPanel({
                         </>
                       ) : null}
                     </div>
-                    <div className="mt-2 flex items-center gap-1.5">
+                    <div className="mt-2.5 flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => void handleRefund(persona)}
                         disabled={busy || !clusterRunning}
-                        className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10.5px] text-primary hover:bg-primary/20 disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
                       >
                         <Sparkles className="h-3 w-3" />
                         Re-fund
@@ -258,7 +257,7 @@ export function SolanaPersonaPanel({
                         type="button"
                         onClick={() => void onDelete(persona.name)}
                         disabled={busy}
-                        className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-background/40 px-2 py-0.5 text-[10.5px] text-muted-foreground hover:border-destructive/60 hover:text-destructive disabled:opacity-50"
+                        className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-background/40 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-destructive/60 hover:text-destructive disabled:opacity-50"
                       >
                         <Trash2 className="h-3 w-3" />
                         Delete
@@ -273,11 +272,14 @@ export function SolanaPersonaPanel({
       )}
 
       {lastReceipt ? (
-        <div className="mt-2 rounded-md border border-border/50 bg-background/30 p-2">
-          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-            Last funding receipt · {lastReceipt.persona}
+        <div className="border-t border-border/50 pt-3">
+          <div className="text-[11px] font-medium text-foreground/85">
+            Last funding receipt
+            <span className="ml-1 font-normal text-muted-foreground">
+              · {lastReceipt.persona}
+            </span>
           </div>
-          <ul className="mt-1 flex flex-col gap-0.5 text-[10.5px]">
+          <ul className="mt-1.5 flex flex-col gap-0.5 text-[11px]">
             {lastReceipt.steps.map((step, idx) => (
               <li key={idx} className={cn(step.ok ? "text-foreground/85" : "text-destructive")}>
                 {describeStep(step)}
@@ -286,7 +288,7 @@ export function SolanaPersonaPanel({
           </ul>
         </div>
       ) : null}
-    </section>
+    </div>
   )
 }
 

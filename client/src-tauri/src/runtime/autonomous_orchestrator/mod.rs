@@ -120,9 +120,7 @@ fn persist_progressed_autonomous_run(
             Ok(snapshot) => return Ok(snapshot),
             Err(error) if error.retryable && attempt < AUTONOMOUS_RUN_PERSIST_MAX_ATTEMPTS => {
                 last_retryable_error = Some(error);
-                thread::sleep(Duration::from_millis(
-                    AUTONOMOUS_RUN_PERSIST_RETRY_DELAY_MS,
-                ));
+                thread::sleep(Duration::from_millis(AUTONOMOUS_RUN_PERSIST_RETRY_DELAY_MS));
             }
             Err(error) => return Err(error),
         }

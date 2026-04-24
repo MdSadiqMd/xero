@@ -175,11 +175,10 @@ mod tests {
     #[test]
     fn fetch_decodes_and_inflates_idl_payload() {
         let transport = Arc::new(ScriptedTransport::new());
-        let idl_json = r#"{"metadata":{"name":"my_program","address":"11111111111111111111111111111111"}}"#;
-        let account_b64 = build_idl_account(
-            "11111111111111111111111111111111",
-            idl_json.as_bytes(),
-        );
+        let idl_json =
+            r#"{"metadata":{"name":"my_program","address":"11111111111111111111111111111111"}}"#;
+        let account_b64 =
+            build_idl_account("11111111111111111111111111111111", idl_json.as_bytes());
         transport.set(
             "http://rpc.test",
             "getAccountInfo",

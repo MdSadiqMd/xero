@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
-  FileJson,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -205,37 +204,25 @@ export function SolanaIdlPanel({
   const hasActiveWatch = activeWatches.length > 0
 
   return (
-    <section className="border-b border-border/70 px-3 py-3">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <FileJson aria-hidden className="h-3.5 w-3.5 text-primary" />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            IDL &amp; Clients
-          </span>
-        </div>
-        <span className="text-[10.5px] text-muted-foreground">
-          {cluster}
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1.5">
         <input
           type="text"
           value={idlPath}
           onChange={(e) => setIdlPath(e.target.value)}
           placeholder="target/idl/my_program.json"
-          className="rounded-md border border-border/60 bg-background/40 px-2 py-1 text-[11.5px] text-foreground/90 placeholder:text-muted-foreground/60"
+          className="h-8 rounded-md border border-border/60 bg-background px-2.5 text-[11.5px] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
         />
         <input
           type="text"
           value={programId}
           onChange={(e) => setProgramId(e.target.value)}
           placeholder="program id (base58)"
-          className="rounded-md border border-border/60 bg-background/40 px-2 py-1 text-[11.5px] font-mono text-foreground/90 placeholder:text-muted-foreground/60"
+          className="h-8 rounded-md border border-border/60 bg-background px-2.5 font-mono text-[11.5px] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
         />
       </div>
 
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         <IdlActionButton
           label="Load"
           icon={<RefreshCw className="h-3 w-3" />}
@@ -263,89 +250,109 @@ export function SolanaIdlPanel({
         />
       </div>
 
-      <div className="mt-3 flex flex-col gap-1.5">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      <div className="border-t border-border/50 pt-3">
+        <div className="mb-2 text-[11.5px] font-medium text-foreground">
           Codama codegen
         </div>
-        <input
-          type="text"
-          value={outputDir}
-          onChange={(e) => setOutputDir(e.target.value)}
-          placeholder="output dir (e.g. clients)"
-          className="rounded-md border border-border/60 bg-background/40 px-2 py-1 text-[11.5px] text-foreground/90"
-        />
-        <div className="flex flex-wrap gap-1">
-          {ALL_TARGETS.map((target) => {
-            const enabled = selectedTargets.includes(target)
-            return (
-              <button
-                key={target}
-                type="button"
-                onClick={() => toggleTarget(target)}
-                className={cn(
-                  "rounded-md border px-2 py-0.5 text-[11px] transition-colors",
-                  enabled
-                    ? "border-primary/50 bg-primary/10 text-primary"
-                    : "border-border/70 bg-background/40 text-foreground/80 hover:border-primary/40",
-                )}
-              >
-                {target}
-              </button>
-            )
-          })}
+        <div className="flex flex-col gap-1.5">
+          <input
+            type="text"
+            value={outputDir}
+            onChange={(e) => setOutputDir(e.target.value)}
+            placeholder="output dir (e.g. clients)"
+            className="h-8 rounded-md border border-border/60 bg-background px-2.5 text-[11.5px] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
+          />
+          <div className="flex flex-wrap gap-1">
+            {ALL_TARGETS.map((target) => {
+              const enabled = selectedTargets.includes(target)
+              return (
+                <button
+                  key={target}
+                  type="button"
+                  onClick={() => toggleTarget(target)}
+                  className={cn(
+                    "rounded-md border px-2.5 py-1 text-[11.5px] transition-colors",
+                    enabled
+                      ? "border-primary/50 bg-primary/10 text-primary"
+                      : "border-border/60 bg-background text-foreground/80 hover:border-primary/40",
+                  )}
+                >
+                  {target}
+                </button>
+              )
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={handleCodama}
+            disabled={idlBusy}
+            className="mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+          >
+            {idlBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5" />
+            )}
+            Generate
+          </button>
         </div>
-        <IdlActionButton
-          label="Generate"
-          icon={<Sparkles className="h-3 w-3" />}
-          onClick={handleCodama}
-          busy={idlBusy}
-        />
       </div>
 
-      <div className="mt-3 flex flex-col gap-1.5">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      <div className="border-t border-border/50 pt-3">
+        <div className="mb-2 text-[11.5px] font-medium text-foreground">
           Publish IDL
         </div>
-        <div className="flex flex-wrap gap-2 text-[11px]">
-          <label className="flex items-center gap-1 text-muted-foreground">
-            <input
-              type="radio"
-              checked={mode === "init"}
-              onChange={() => setMode("init")}
-            />
-            init
-          </label>
-          <label className="flex items-center gap-1 text-muted-foreground">
-            <input
-              type="radio"
-              checked={mode === "upgrade"}
-              onChange={() => setMode("upgrade")}
-            />
-            upgrade
-          </label>
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-4 text-[11.5px]">
+            <label className="flex items-center gap-1.5 text-foreground/85">
+              <input
+                type="radio"
+                checked={mode === "init"}
+                onChange={() => setMode("init")}
+                className="accent-primary"
+              />
+              init
+            </label>
+            <label className="flex items-center gap-1.5 text-foreground/85">
+              <input
+                type="radio"
+                checked={mode === "upgrade"}
+                onChange={() => setMode("upgrade")}
+                className="accent-primary"
+              />
+              upgrade
+            </label>
+          </div>
+          <select
+            value={authorityPersona}
+            onChange={(e) => setAuthorityPersona(e.target.value)}
+            className="h-8 rounded-md border border-border/60 bg-background px-2 text-[11.5px] outline-none transition-colors focus:border-primary/60"
+          >
+            <option value="">— authority persona —</option>
+            {personaNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={handlePublish}
+            disabled={idlBusy}
+            className="mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+          >
+            {idlBusy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Upload className="h-3.5 w-3.5" />
+            )}
+            Publish
+          </button>
         </div>
-        <select
-          value={authorityPersona}
-          onChange={(e) => setAuthorityPersona(e.target.value)}
-          className="rounded-md border border-border/60 bg-background/40 px-2 py-1 text-[11.5px] text-foreground/90"
-        >
-          <option value="">— authority persona —</option>
-          {personaNames.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-        <IdlActionButton
-          label="Publish"
-          icon={<Upload className="h-3 w-3" />}
-          onClick={handlePublish}
-          busy={idlBusy}
-        />
       </div>
 
       {status ? (
-        <p className="mt-2 text-[11px] text-muted-foreground">{status}</p>
+        <p className="text-[11px] text-muted-foreground">{status}</p>
       ) : null}
 
       {lastIdlEvent ? (
@@ -378,20 +385,20 @@ export function SolanaIdlPanel({
       ) : null}
 
       {idlEntries.length > 0 ? (
-        <div className="mt-3">
+        <div>
           <button
             type="button"
             onClick={() => setIdlCollapsed((v) => !v)}
-            className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground hover:text-foreground"
+            className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
           >
             {idlCollapsed ? "Show" : "Hide"} cached ({idlEntries.length})
           </button>
           {!idlCollapsed ? (
-            <ul className="mt-1 flex flex-col gap-1">
+            <ul className="mt-1.5 flex flex-col gap-1">
               {idlEntries.map(([key, idl]) => (
                 <li
                   key={key}
-                  className="rounded-md border border-border/40 bg-background/20 px-2 py-1 text-[10.5px] text-foreground/80"
+                  className="rounded-md border border-border/40 bg-background/20 px-2 py-1.5 text-[11px] text-foreground/80"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate font-mono">{key}</span>
@@ -412,7 +419,7 @@ export function SolanaIdlPanel({
           ) : null}
         </div>
       ) : null}
-    </section>
+    </div>
   )
 }
 
