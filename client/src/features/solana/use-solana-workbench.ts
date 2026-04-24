@@ -244,6 +244,233 @@ export interface ScenarioEventPayload {
   signatureCount: number
 }
 
+// Phase 3 — tx pipeline types.
+export type SamplePercentile = "low" | "median" | "high" | "very_high" | "max"
+
+export interface FeeSample {
+  slot: number
+  prioritizationFee: number
+}
+
+export interface PercentileFee {
+  percentile: SamplePercentile
+  microLamports: number
+}
+
+export interface FeeEstimate {
+  samples: FeeSample[]
+  percentiles: PercentileFee[]
+  recommendedMicroLamports: number
+  recommendedPercentile: SamplePercentile
+  programIds: string[]
+  source: string
+}
+
+export interface ComputeBudgetPlan {
+  computeUnitLimit?: number | null
+  computeUnitPriceMicroLamports?: number | null
+  rationale: string
+}
+
+export interface AccountMetaSpec {
+  pubkey: string
+  isSigner: boolean
+  isWritable: boolean
+  label?: string | null
+}
+
+export interface CpiResolution {
+  programId: string
+  programLabel: string
+  instruction: string
+  accounts: AccountMetaSpec[]
+  notes: string[]
+}
+
+export type KnownProgramLookup =
+  | { outcome: "hit"; resolution: CpiResolution }
+  | { outcome: "unknownProgram"; programId: string }
+  | {
+      outcome: "unknownInstruction"
+      programId: string
+      programLabel: string
+      knownInstructions: string[]
+    }
+
+export interface AltCandidate {
+  pubkey: string
+  contents: string[]
+}
+
+export interface AltSuggestion {
+  alt: string
+  covered: string[]
+  missing: string[]
+  score: number
+}
+
+export interface AltResolveReport {
+  addresses: string[]
+  suggestions: AltSuggestion[]
+  recommended?: string | null
+  uncovered: string[]
+}
+
+export interface AltCreateResult {
+  pubkey: string
+  signature?: string | null
+  stdout: string
+  stderrExcerpt?: string | null
+}
+
+export interface AltExtendResult {
+  alt: string
+  added: string[]
+  signature?: string | null
+  stdout: string
+  stderrExcerpt?: string | null
+}
+
+export interface CompiledComputeInstruction {
+  programId: string
+  dataBase64: string
+}
+
+export interface TxPlan {
+  feePayerPubkey: string
+  signerPubkeys: string[]
+  computeBudget: ComputeBudgetPlan
+  priorityFee?: FeeEstimate | null
+  altReport?: AltResolveReport | null
+  rpcUrl: string
+  cluster: ClusterKind
+  computeBudgetInstructions: CompiledComputeInstruction[]
+}
+
+export interface TxSpec {
+  cluster: ClusterKind
+  feePayerPersona: string
+  signerPersonas?: string[]
+  programIds?: string[]
+  addresses?: string[]
+  altCandidates?: AltCandidate[]
+  rpcUrl?: string | null
+}
+
+export type Commitment = "processed" | "confirmed" | "finalized"
+
+export interface LandingStrategy {
+  priorityPercentile?: SamplePercentile
+  useJito?: boolean
+  commitment?: Commitment
+  maxRetries?: number
+  confirmationTimeoutS?: number | null
+}
+
+export type IdlErrorMap = Record<string, Record<number, string>>
+
+export interface SimulateRequest {
+  cluster: ClusterKind
+  transactionBase64: string
+  rpcUrl?: string | null
+  skipReplaceBlockhash?: boolean
+  idlErrors?: IdlErrorMap | null
+}
+
+export type DecodedLogEntry =
+  | {
+      kind: "invoke"
+      programId: string
+      programLabel?: string | null
+      depth: number
+    }
+  | { kind: "success"; programId: string }
+  | {
+      kind: "failure"
+      programId: string
+      programLabel?: string | null
+      code?: number | null
+      idlVariant?: string | null
+      raw: string
+    }
+  | { kind: "log"; programId?: string | null; message: string }
+  | { kind: "data"; programId?: string | null; base64: string }
+  | {
+      kind: "computeUsage"
+      programId: string
+      consumed: number
+      allocated: number
+    }
+  | { kind: "unparsed"; raw: string }
+
+export interface DecodedLogs {
+  entries: DecodedLogEntry[]
+  programsInvoked: string[]
+  totalComputeUnits: number
+}
+
+export interface ErrorDetail {
+  programId: string
+  programLabel?: string | null
+  code?: number | null
+  idlVariant?: string | null
+  raw: string
+}
+
+export interface Explanation {
+  ok: boolean
+  summary: string
+  primaryError?: ErrorDetail | null
+  decodedLogs: DecodedLogs
+  affectedPrograms: string[]
+  computeUnitsTotal: number
+}
+
+export interface SimulationResult {
+  success: boolean
+  err?: unknown
+  logs: string[]
+  computeUnitsConsumed?: number | null
+  returnData?: unknown
+  affectedAccounts: string[]
+  explanation: Explanation
+}
+
+export interface SendRequest {
+  cluster: ClusterKind
+  signedTransactionBase64: string
+  strategy?: LandingStrategy
+  rpcUrl?: string | null
+  idlErrors?: IdlErrorMap | null
+}
+
+export interface ExplainRequest {
+  cluster: ClusterKind
+  signature: string
+  rpcUrl?: string | null
+  idlErrors?: IdlErrorMap | null
+  commitment?: Commitment
+}
+
+export interface TxResult {
+  signature: string
+  slot?: number | null
+  confirmation?: string | null
+  err?: unknown
+  logs: string[]
+  explanation: Explanation
+  transportAttempts: number
+  jitoBundleId?: string | null
+}
+
+export interface TxEventPayload {
+  kind: "building" | "simulated" | "sent" | "confirmed" | "failed" | "decoded"
+  cluster: string
+  signature?: string | null
+  summary?: string | null
+  tsMs: number
+}
+
 export interface StartOpts {
   clonePrograms?: string[]
   cloneAccounts?: string[]
@@ -295,11 +522,38 @@ export interface UseSolanaWorkbench {
   scenarioBusy: boolean
   refreshScenarios: () => Promise<void>
   runScenario: (spec: ScenarioSpec) => Promise<ScenarioRun | null>
+  // Phase 3 — tx pipeline
+  txBusy: boolean
+  lastTxEvent: TxEventPayload | null
+  lastTxPlan: TxPlan | null
+  lastSimulation: SimulationResult | null
+  lastSend: TxResult | null
+  lastExplanation: TxResult | null
+  buildTx: (spec: TxSpec) => Promise<TxPlan | null>
+  simulateTx: (request: SimulateRequest) => Promise<SimulationResult | null>
+  sendTx: (request: SendRequest) => Promise<TxResult | null>
+  explainTx: (request: ExplainRequest) => Promise<TxResult | null>
+  estimatePriorityFee: (
+    cluster: ClusterKind,
+    programIds: string[],
+    target?: SamplePercentile,
+    rpcUrl?: string | null,
+  ) => Promise<FeeEstimate | null>
+  resolveCpi: (
+    programId: string,
+    instruction: string,
+    args?: Record<string, string | undefined>,
+  ) => Promise<KnownProgramLookup | null>
+  resolveAlt: (
+    addresses: string[],
+    candidates?: AltCandidate[],
+  ) => Promise<AltResolveReport | null>
 }
 
 const SOLANA_VALIDATOR_STATUS_EVENT = "solana:validator:status"
 const SOLANA_PERSONA_EVENT = "solana:persona"
 const SOLANA_SCENARIO_EVENT = "solana:scenario"
+const SOLANA_TX_EVENT = "solana:tx"
 
 interface Options {
   /** When false, the hook releases listeners and doesn't probe. */
@@ -344,6 +598,13 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
   const [lastScenarioRun, setLastScenarioRun] = useState<ScenarioRun | null>(null)
   const [lastScenarioEvent, setLastScenarioEvent] = useState<ScenarioEventPayload | null>(null)
   const [scenarioBusy, setScenarioBusy] = useState(false)
+
+  const [txBusy, setTxBusy] = useState(false)
+  const [lastTxEvent, setLastTxEvent] = useState<TxEventPayload | null>(null)
+  const [lastTxPlan, setLastTxPlan] = useState<TxPlan | null>(null)
+  const [lastSimulation, setLastSimulation] = useState<SimulationResult | null>(null)
+  const [lastSend, setLastSend] = useState<TxResult | null>(null)
+  const [lastExplanation, setLastExplanation] = useState<TxResult | null>(null)
 
   const activeRef = useRef(active)
   activeRef.current = active
@@ -506,6 +767,138 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     [refreshPersonas],
   )
 
+  const buildTx = useCallback(async (spec: TxSpec): Promise<TxPlan | null> => {
+    if (!isTauri()) return null
+    setTxBusy(true)
+    setError(null)
+    try {
+      const plan = await invoke<TxPlan>("solana_tx_build", {
+        request: { spec },
+      })
+      setLastTxPlan(plan)
+      return plan
+    } catch (err) {
+      setError(errorMessage(err))
+      return null
+    } finally {
+      setTxBusy(false)
+    }
+  }, [])
+
+  const simulateTx = useCallback(
+    async (request: SimulateRequest): Promise<SimulationResult | null> => {
+      if (!isTauri()) return null
+      setTxBusy(true)
+      setError(null)
+      try {
+        const result = await invoke<SimulationResult>("solana_tx_simulate", {
+          request: { request },
+        })
+        setLastSimulation(result)
+        return result
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setTxBusy(false)
+      }
+    },
+    [],
+  )
+
+  const sendTx = useCallback(
+    async (request: SendRequest): Promise<TxResult | null> => {
+      if (!isTauri()) return null
+      setTxBusy(true)
+      setError(null)
+      try {
+        const result = await invoke<TxResult>("solana_tx_send", {
+          request: { request },
+        })
+        setLastSend(result)
+        return result
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setTxBusy(false)
+      }
+    },
+    [],
+  )
+
+  const explainTx = useCallback(
+    async (request: ExplainRequest): Promise<TxResult | null> => {
+      if (!isTauri()) return null
+      setTxBusy(true)
+      setError(null)
+      try {
+        const result = await invoke<TxResult>("solana_tx_explain", {
+          request: { request },
+        })
+        setLastExplanation(result)
+        return result
+      } catch (err) {
+        setError(errorMessage(err))
+        return null
+      } finally {
+        setTxBusy(false)
+      }
+    },
+    [],
+  )
+
+  const estimatePriorityFee = useCallback(
+    async (
+      cluster: ClusterKind,
+      programIds: string[],
+      target: SamplePercentile = "median",
+      rpcUrl?: string | null,
+    ): Promise<FeeEstimate | null> => {
+      if (!isTauri()) return null
+      return tauriInvoke<FeeEstimate>("solana_priority_fee_estimate", {
+        request: {
+          cluster,
+          programIds,
+          target,
+          rpcUrl: rpcUrl ?? null,
+        },
+      })
+    },
+    [],
+  )
+
+  const resolveCpi = useCallback(
+    async (
+      programId: string,
+      instruction: string,
+      args?: Record<string, string | undefined>,
+    ): Promise<KnownProgramLookup | null> => {
+      if (!isTauri()) return null
+      return tauriInvoke<KnownProgramLookup>("solana_cpi_resolve", {
+        request: {
+          programId,
+          instruction,
+          args: args ?? {},
+        },
+      })
+    },
+    [],
+  )
+
+  const resolveAlt = useCallback(
+    async (
+      addresses: string[],
+      candidates: AltCandidate[] = [],
+    ): Promise<AltResolveReport | null> => {
+      if (!isTauri()) return null
+      return tauriInvoke<AltResolveReport>("solana_alt_resolve", {
+        request: { addresses, candidates },
+      })
+    },
+    [],
+  )
+
   // Mount: probe toolchain + cluster catalogue + status + persona catalog.
   useEffect(() => {
     if (!active || !isTauri()) return
@@ -579,6 +972,17 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     void listen<ScenarioEventPayload>(SOLANA_SCENARIO_EVENT, (event) => {
       if (cancelled) return
       setLastScenarioEvent(event.payload)
+    }).then((unsub) => {
+      if (cancelled) {
+        unsub()
+      } else {
+        unsubs.push(unsub)
+      }
+    })
+
+    void listen<TxEventPayload>(SOLANA_TX_EVENT, (event) => {
+      if (cancelled) return
+      setLastTxEvent(event.payload)
     }).then((unsub) => {
       if (cancelled) {
         unsub()
@@ -664,5 +1068,18 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     scenarioBusy,
     refreshScenarios,
     runScenario,
+    txBusy,
+    lastTxEvent,
+    lastTxPlan,
+    lastSimulation,
+    lastSend,
+    lastExplanation,
+    buildTx,
+    simulateTx,
+    sendTx,
+    explainTx,
+    estimatePriorityFee,
+    resolveCpi,
+    resolveAlt,
   }
 }

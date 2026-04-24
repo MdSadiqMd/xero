@@ -6,11 +6,13 @@ import { cn } from "@/lib/utils"
 import { SolanaMissingToolchain } from "./solana-missing-toolchain"
 import { SolanaPersonaPanel } from "./solana-persona-panel"
 import { SolanaScenarioPanel } from "./solana-scenario-panel"
+import { SolanaTxInspector } from "./solana-tx-inspector"
 import {
   useSolanaWorkbench,
   type ClusterKind,
   type FundingDelta,
   type PersonaRole,
+  type SimulateRequest,
 } from "@/src/features/solana/use-solana-workbench"
 
 const MIN_WIDTH = 320
@@ -138,6 +140,23 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
   const handleFundPersona = useCallback(
     async (name: string, delta: FundingDelta) =>
       workbench.fundPersona(selectedKind, name, delta),
+    [workbench, selectedKind],
+  )
+
+  const handleSimulate = useCallback(
+    async (request: SimulateRequest) => workbench.simulateTx(request),
+    [workbench],
+  )
+
+  const handleExplain = useCallback(
+    async (signature: string) =>
+      workbench.explainTx({ cluster: selectedKind, signature }),
+    [workbench, selectedKind],
+  )
+
+  const handleEstimateFee = useCallback(
+    async (programIds: string[]) =>
+      workbench.estimatePriorityFee(selectedKind, programIds),
     [workbench, selectedKind],
   )
 
@@ -317,6 +336,19 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
           onRunScenario={workbench.runScenario}
           personas={workbench.personas}
           scenarios={workbench.scenarios}
+        />
+
+        <SolanaTxInspector
+          cluster={selectedKind}
+          clusterRunning={
+            workbench.status.running && workbench.status.kind === selectedKind
+          }
+          txBusy={workbench.txBusy}
+          lastSimulation={workbench.lastSimulation}
+          lastExplanation={workbench.lastExplanation}
+          onSimulate={handleSimulate}
+          onExplain={handleExplain}
+          onEstimateFee={handleEstimateFee}
         />
 
         <section className="border-b border-border/70 px-3 py-3">
