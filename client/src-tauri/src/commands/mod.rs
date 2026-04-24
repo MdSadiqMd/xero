@@ -9,7 +9,9 @@ pub mod get_repository_status;
 pub mod get_runtime_run;
 pub mod get_runtime_session;
 pub mod get_runtime_settings;
+pub mod import_mcp_servers;
 pub mod import_repository;
+pub mod list_mcp_servers;
 pub mod list_notification_dispatches;
 pub mod list_notification_routes;
 pub mod list_projects;
@@ -18,6 +20,7 @@ pub mod project_files;
 pub mod provider_model_catalog;
 pub mod provider_profiles;
 pub mod record_notification_dispatch_outcome;
+pub mod remove_mcp_server;
 pub mod remove_project;
 pub mod resolve_operator_action;
 pub mod resume_operator_run;
@@ -33,6 +36,7 @@ pub mod submit_openai_callback;
 pub mod subscribe_runtime_stream;
 pub mod sync_notification_adapters;
 pub mod update_runtime_run_controls;
+pub mod upsert_mcp_server;
 pub mod upsert_notification_route;
 pub mod upsert_notification_route_credentials;
 pub mod upsert_runtime_settings;
@@ -67,7 +71,9 @@ pub use get_repository_status::get_repository_status;
 pub use get_runtime_run::get_runtime_run;
 pub use get_runtime_session::get_runtime_session;
 pub use get_runtime_settings::get_runtime_settings;
+pub use import_mcp_servers::import_mcp_servers;
 pub use import_repository::import_repository;
+pub use list_mcp_servers::{list_mcp_servers, refresh_mcp_server_statuses};
 pub use list_notification_dispatches::list_notification_dispatches;
 pub use list_notification_routes::list_notification_routes;
 pub use list_projects::list_projects;
@@ -81,6 +87,7 @@ pub use provider_profiles::{
     list_provider_profiles, set_active_provider_profile, upsert_provider_profile,
 };
 pub use record_notification_dispatch_outcome::record_notification_dispatch_outcome;
+pub use remove_mcp_server::remove_mcp_server;
 pub use remove_project::remove_project;
 pub use resolve_operator_action::resolve_operator_action;
 pub use resume_operator_run::resume_operator_run;
@@ -93,10 +100,13 @@ pub use solana::{
     solana_pda_derive, solana_pda_predict, solana_pda_scan, solana_persona_create,
     solana_persona_delete, solana_persona_export_keypair, solana_persona_fund,
     solana_persona_import_keypair, solana_persona_list, solana_persona_roles,
-    solana_priority_fee_estimate, solana_rpc_endpoints_set, solana_rpc_health,
-    solana_scenario_list, solana_scenario_run, solana_snapshot_create, solana_snapshot_delete,
-    solana_snapshot_list, solana_snapshot_restore, solana_subscribe_ready, solana_toolchain_status,
-    solana_tx_build, solana_tx_explain, solana_tx_send, solana_tx_simulate, SolanaState,
+    solana_priority_fee_estimate, solana_program_build, solana_program_deploy,
+    solana_program_rollback, solana_program_upgrade_check, solana_rpc_endpoints_set,
+    solana_rpc_health, solana_scenario_list, solana_scenario_run, solana_snapshot_create,
+    solana_snapshot_delete, solana_snapshot_list, solana_snapshot_restore,
+    solana_squads_proposal_create, solana_subscribe_ready, solana_toolchain_status,
+    solana_tx_build, solana_tx_explain, solana_tx_send, solana_tx_simulate,
+    solana_verified_build_submit, SolanaState,
 };
 pub use start_autonomous_run::start_autonomous_run;
 pub use start_openai_login::start_openai_login;
@@ -108,6 +118,7 @@ pub use submit_openai_callback::submit_openai_callback;
 pub use subscribe_runtime_stream::subscribe_runtime_stream;
 pub use sync_notification_adapters::sync_notification_adapters;
 pub use update_runtime_run_controls::update_runtime_run_controls;
+pub use upsert_mcp_server::upsert_mcp_server;
 pub use upsert_notification_route::upsert_notification_route;
 pub use upsert_notification_route_credentials::upsert_notification_route_credentials;
 pub use upsert_runtime_settings::upsert_runtime_settings;

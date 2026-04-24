@@ -121,9 +121,15 @@ pub(crate) mod test_support {
     /// Scripted transport — returns the pre-registered response for a given
     /// `(url, method)` pair. Panics at test time if a pipeline call reaches
     /// an un-scripted endpoint, which catches forgotten mocks early.
+    ///
+    /// Also supports a per-key FIFO queue for tests that fire multiple calls
+    /// against the same `(url, method)` pair (e.g. two sequential
+    /// `getAccountInfo` calls). Queued responses take precedence over the
+    /// `set()` map; once the queue drains the map's value (if any) is reused.
     #[derive(Debug, Default)]
     pub struct ScriptedTransport {
         pub responses: Mutex<HashMap<(String, String), Value>>,
+        pub queues: Mutex<HashMap<(String, String), std::collections::VecDeque<Value>>>,
         pub requests: Mutex<Vec<(String, String, Value)>>,
     }
 
@@ -137,6 +143,18 @@ pub(crate) mod test_support {
                 .lock()
                 .unwrap()
                 .insert((url.to_string(), method.to_string()), response);
+        }
+
+        /// Append a response to the FIFO queue for `(url, method)`. Use when
+        /// the same pair is hit multiple times and each call needs a
+        /// different scripted reply.
+        pub fn queue(&self, url: &str, method: &str, response: Value) {
+            self.queues
+                .lock()
+                .unwrap()
+                .entry((url.to_string(), method.to_string()))
+                .or_default()
+                .push_back(response);
         }
 
         pub fn calls_for(&self, method: &str) -> Vec<(String, Value)> {
@@ -163,8 +181,21 @@ pub(crate) mod test_support {
                 .unwrap()
                 .push((url.to_string(), method.clone(), params));
 
+            // Queue takes precedence so tests that mix set() + queue() get
+            // deterministic ordering: queued responses pop first, then the
+            // map value is reused for any extra calls.
+            let key = (url.to_string(), method.clone());
+            if let Some(value) = self
+                .queues
+                .lock()
+                .unwrap()
+                .get_mut(&key)
+                .and_then(|q| q.pop_front())
+            {
+                return Ok(value);
+            }
             let responses = self.responses.lock().unwrap();
-            match responses.get(&(url.to_string(), method.clone())) {
+            match responses.get(&key) {
                 Some(value) => Ok(value.clone()),
                 None => Err(CommandError::system_fault(
                     "scripted_transport_unprepared",

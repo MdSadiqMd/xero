@@ -16,12 +16,17 @@ use serde_json::Value as JsonValue;
 
 use crate::commands::solana::{
     idl::{self, codama::CodamaGenerationRequest},
-    pda, AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport, BumpAnalysis,
-    ClusterHandle, ClusterKind, ClusterPda, ClusterStatus, CodamaGenerationReport, CodamaTarget,
-    DerivedAddress, DriftReport, EndpointHealth, ExplainRequest, FeeEstimate, Idl, IdlPublishMode,
-    IdlPublishReport, IdlPublishRequest, IdlRegistry, IdlSubscriptionToken, KnownProgramLookup,
-    PdaSite, ResolveArgs, SamplePercentile, SeedPart, SendRequest, SimulateRequest,
-    SimulationResult, SnapshotMeta, SolanaState, StartOpts, TxPipeline, TxPlan, TxResult, TxSpec,
+    pda, program, AltCandidate, AltCreateResult, AltExtendResult, AltResolveReport, BuildKind,
+    BuildProfile, BuildReport, BuildRequest, BumpAnalysis, ClusterHandle, ClusterKind, ClusterPda,
+    ClusterStatus, CodamaGenerationReport, CodamaTarget, DeployAuthority, DeployResult,
+    DeployServices, DeploySpec, DerivedAddress, DriftReport, EndpointHealth, ExplainRequest,
+    FeeEstimate, Idl, IdlPublishMode, IdlPublishReport, IdlPublishRequest, IdlRegistry,
+    IdlSubscriptionToken, KnownProgramLookup, PdaSite, PostDeployOptions, ResolveArgs,
+    RollbackRequest, RollbackResult, RpcRouter, RpcTransport, SamplePercentile, SeedPart,
+    SendRequest, SimulateRequest, SimulationResult, SnapshotMeta, SnapshotStore,
+    SquadsProposalDescriptor, SquadsProposalRequest, SolanaState, StartOpts, TxPipeline, TxPlan,
+    TxResult, TxSpec, UpgradeSafetyReport, UpgradeSafetyRequest, ValidatorSupervisor,
+    VerifiedBuildRequest, VerifiedBuildResult,
 };
 use crate::commands::{CommandError, CommandResult};
 
@@ -34,6 +39,11 @@ pub const AUTONOMOUS_TOOL_SOLANA_ALT: &str = "solana_alt";
 pub const AUTONOMOUS_TOOL_SOLANA_IDL: &str = "solana_idl";
 pub const AUTONOMOUS_TOOL_SOLANA_CODAMA: &str = "solana_codama";
 pub const AUTONOMOUS_TOOL_SOLANA_PDA: &str = "solana_pda";
+pub const AUTONOMOUS_TOOL_SOLANA_PROGRAM: &str = "solana_program";
+pub const AUTONOMOUS_TOOL_SOLANA_DEPLOY: &str = "solana_deploy";
+pub const AUTONOMOUS_TOOL_SOLANA_UPGRADE_CHECK: &str = "solana_upgrade_check";
+pub const AUTONOMOUS_TOOL_SOLANA_SQUADS: &str = "solana_squads";
+pub const AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD: &str = "solana_verified_build";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -258,6 +268,105 @@ pub struct AutonomousSolanaPdaRequest {
     pub action: AutonomousSolanaPdaAction,
 }
 
+// ---------- Program / deploy / upgrade / squads / verified-build (Phase 5) -
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "action")]
+pub enum AutonomousSolanaProgramAction {
+    Build {
+        manifest_path: String,
+        #[serde(default)]
+        profile: Option<BuildProfile>,
+        #[serde(default)]
+        kind: Option<BuildKind>,
+        #[serde(default)]
+        program: Option<String>,
+    },
+    Rollback {
+        program_id: String,
+        cluster: ClusterKind,
+        previous_sha256: String,
+        authority: DeployAuthority,
+        #[serde(default)]
+        program_archive_root: Option<String>,
+        #[serde(default)]
+        post: Option<PostDeployOptions>,
+        #[serde(default)]
+        rpc_url: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutonomousSolanaProgramRequest {
+    #[serde(flatten)]
+    pub action: AutonomousSolanaProgramAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSolanaDeployRequest {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub so_path: String,
+    pub authority: DeployAuthority,
+    #[serde(default)]
+    pub idl_path: Option<String>,
+    #[serde(default)]
+    pub is_first_deploy: bool,
+    #[serde(default)]
+    pub post: Option<PostDeployOptions>,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSolanaUpgradeCheckRequest {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub local_so_path: String,
+    pub expected_authority: String,
+    #[serde(default)]
+    pub local_idl_path: Option<String>,
+    #[serde(default)]
+    pub max_program_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub local_so_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSolanaSquadsRequest {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub multisig_pda: String,
+    pub buffer: String,
+    pub spill: String,
+    pub creator: String,
+    #[serde(default)]
+    pub vault_index: Option<u8>,
+    #[serde(default)]
+    pub memo: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSolanaVerifiedBuildRequest {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub manifest_path: String,
+    pub github_url: String,
+    #[serde(default)]
+    pub commit_hash: Option<String>,
+    #[serde(default)]
+    pub library_name: Option<String>,
+    #[serde(default)]
+    pub skip_remote_submit: bool,
+}
+
 pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
     fn cluster(
         &self,
@@ -288,6 +397,31 @@ pub trait SolanaExecutor: Send + Sync + std::fmt::Debug {
     ) -> CommandResult<AutonomousSolanaOutput>;
 
     fn pda(&self, request: AutonomousSolanaPdaRequest) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn program(
+        &self,
+        request: AutonomousSolanaProgramRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn deploy(
+        &self,
+        request: AutonomousSolanaDeployRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn upgrade_check(
+        &self,
+        request: AutonomousSolanaUpgradeCheckRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn squads(
+        &self,
+        request: AutonomousSolanaSquadsRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
+
+    fn verified_build(
+        &self,
+        request: AutonomousSolanaVerifiedBuildRequest,
+    ) -> CommandResult<AutonomousSolanaOutput>;
 }
 
 /// Executor that dispatches against a live `SolanaState`. Safe to clone
@@ -300,11 +434,13 @@ pub struct StateSolanaExecutor {
 
 #[derive(Debug)]
 struct StateInner {
-    supervisor: Arc<crate::commands::solana::ValidatorSupervisor>,
-    router: Arc<crate::commands::solana::RpcRouter>,
-    snapshots: Arc<crate::commands::solana::SnapshotStore>,
+    supervisor: Arc<ValidatorSupervisor>,
+    router: Arc<RpcRouter>,
+    snapshots: Arc<SnapshotStore>,
     tx_pipeline: Arc<TxPipeline>,
     idl_registry: Arc<IdlRegistry>,
+    transport: Arc<dyn RpcTransport>,
+    deploy_services: Arc<DeployServices>,
 }
 
 impl StateSolanaExecutor {
@@ -316,6 +452,8 @@ impl StateSolanaExecutor {
                 snapshots: state.snapshots(),
                 tx_pipeline: state.tx_pipeline(),
                 idl_registry: state.idl_registry(),
+                transport: state.transport(),
+                deploy_services: state.deploy_services(),
             }),
         }
     }

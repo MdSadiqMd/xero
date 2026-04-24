@@ -102,3 +102,42 @@ pub struct McpImportDiagnosticDto {
     pub code: String,
     pub message: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpsertMcpServerRequestDto {
+    pub id: String,
+    pub name: String,
+    pub transport: McpTransportDto,
+    #[serde(default)]
+    pub env: Vec<McpEnvironmentReferenceDto>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoveMcpServerRequestDto {
+    pub server_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportMcpServersRequestDto {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportMcpServersResponseDto {
+    pub registry: McpRegistryDto,
+    #[serde(default)]
+    pub diagnostics: Vec<McpImportDiagnosticDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RefreshMcpServerStatusesRequestDto {
+    #[serde(default)]
+    pub server_ids: Vec<String>,
+}

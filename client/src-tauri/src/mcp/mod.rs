@@ -1,5 +1,10 @@
+pub mod connection;
 pub mod registry;
 
+pub use connection::{
+    refresh_mcp_connection_truth, refresh_mcp_connection_truth_with_config,
+    stale_after_configuration_change, McpProbeConfig,
+};
 pub use registry::{
     apply_mcp_registry_import, default_mcp_registry, load_mcp_registry_from_path,
     parse_mcp_registry_import_file, persist_mcp_registry, McpConnectionDiagnostic,

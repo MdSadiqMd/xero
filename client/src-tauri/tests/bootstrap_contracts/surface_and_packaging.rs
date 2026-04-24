@@ -8,8 +8,8 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
 
     assert_eq!(
         REGISTERED_COMMAND_NAMES.len(),
-        42,
-        "expected forty-two desktop commands"
+        47,
+        "expected forty-seven desktop commands"
     );
 
     tauri::test::assert_ipc_response(
@@ -167,6 +167,60 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
             openrouter_api_key_configured: false,
             anthropic_api_key_configured: false,
         }),
+    );
+
+    let expected_mcp_registry = cadence_desktop_lib::commands::list_mcp_servers(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+    )
+    .expect("list mcp servers should return default registry");
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(LIST_MCP_SERVERS_COMMAND, json!({})),
+        Ok(expected_mcp_registry),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
+            UPSERT_MCP_SERVER_COMMAND,
+            json!({
+                "request": {
+                    "id": "",
+                    "name": "Bad",
+                    "transport": { "kind": "stdio", "command": "node" }
+                }
+            }),
+        ),
+        Err(CommandError::invalid_request("id")),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
+            REMOVE_MCP_SERVER_COMMAND,
+            json!({ "request": { "serverId": "" } }),
+        ),
+        Err(CommandError::invalid_request("serverId")),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
+            IMPORT_MCP_SERVERS_COMMAND,
+            json!({ "request": { "path": "" } }),
+        ),
+        Err(CommandError::invalid_request("path")),
+    );
+
+    tauri::test::assert_ipc_response(
+        &webview,
+        invoke_request(
+            REFRESH_MCP_SERVER_STATUSES_COMMAND,
+            json!({ "request": { "serverIds": [""] } }),
+        ),
+        Err(CommandError::invalid_request("serverIds")),
     );
 
     tauri::test::assert_ipc_response(

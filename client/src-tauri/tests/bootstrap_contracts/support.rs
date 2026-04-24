@@ -13,9 +13,11 @@ pub(crate) use cadence_desktop_lib::{
         BranchSummaryDto, CancelAutonomousRunRequestDto, ChangeKind, CommandError,
         CommandErrorClass, CommandToolResultSummaryDto, FileToolResultSummaryDto,
         GetAutonomousRunRequestDto, GetRuntimeRunRequestDto, GitToolResultScopeDto,
-        GitToolResultSummaryDto, ImportRepositoryRequestDto, ListNotificationDispatchesRequestDto,
+        GitToolResultSummaryDto, ImportMcpServersRequestDto, ImportMcpServersResponseDto,
+        ImportRepositoryRequestDto, ListNotificationDispatchesRequestDto,
         ListNotificationDispatchesResponseDto, ListNotificationRoutesRequestDto,
-        ListNotificationRoutesResponseDto, ListProjectsResponseDto, NotificationDispatchDto,
+        ListNotificationRoutesResponseDto, ListProjectsResponseDto, McpRegistryDto,
+        NotificationDispatchDto,
         NotificationDispatchOutcomeStatusDto, NotificationDispatchStatusDto,
         NotificationReplyClaimDto, NotificationReplyClaimStatusDto, NotificationRouteDto,
         NotificationRouteKindDto, OperatorApprovalDto, OperatorApprovalStatus,
@@ -24,6 +26,7 @@ pub(crate) use cadence_desktop_lib::{
         ProjectUpdatedPayloadDto, ProviderProfileDto, ProviderProfileReadinessDto,
         ProviderProfileReadinessStatusDto, ProviderProfilesDto, ProviderProfilesMigrationDto,
         RecordNotificationDispatchOutcomeRequestDto, RecordNotificationDispatchOutcomeResponseDto,
+        RefreshMcpServerStatusesRequestDto, RemoveMcpServerRequestDto,
         RepositoryDiffRequestDto, RepositoryDiffResponseDto, RepositoryDiffScope,
         RepositoryStatusChangedPayloadDto, RepositoryStatusEntryDto, RepositoryStatusResponseDto,
         RepositorySummaryDto, ResolveOperatorActionRequestDto, ResolveOperatorActionResponseDto,
@@ -40,8 +43,9 @@ pub(crate) use cadence_desktop_lib::{
         SyncNotificationAdaptersResponseDto, ToolResultSummaryDto,
         UpsertNotificationRouteCredentialsRequestDto,
         UpsertNotificationRouteCredentialsResponseDto, UpsertNotificationRouteRequestDto,
-        UpsertNotificationRouteResponseDto, UpsertProviderProfileRequestDto,
-        UpsertWorkflowGraphRequestDto, UpsertWorkflowGraphResponseDto, VerificationRecordDto,
+        UpsertNotificationRouteResponseDto, UpsertMcpServerRequestDto,
+        UpsertProviderProfileRequestDto, UpsertWorkflowGraphRequestDto,
+        UpsertWorkflowGraphResponseDto, VerificationRecordDto,
         VerificationRecordStatus, WebToolResultContentKindDto, WebToolResultSummaryDto,
         WorkflowAutomaticDispatchOutcomeDto, WorkflowAutomaticDispatchPackageOutcomeDto,
         WorkflowAutomaticDispatchPackageStatusDto, WorkflowAutomaticDispatchStatusDto,
@@ -53,18 +57,21 @@ pub(crate) use cadence_desktop_lib::{
         COMPLETE_OPENAI_CODEX_AUTH_COMMAND, CREATE_PROJECT_ENTRY_COMMAND,
         DELETE_PROJECT_ENTRY_COMMAND, GET_AUTONOMOUS_RUN_COMMAND, GET_PROJECT_SNAPSHOT_COMMAND,
         GET_REPOSITORY_DIFF_COMMAND, GET_REPOSITORY_STATUS_COMMAND,
-        GET_RUNTIME_AUTH_STATUS_COMMAND, GET_RUNTIME_RUN_COMMAND, IMPORT_REPOSITORY_COMMAND,
-        LIST_NOTIFICATION_DISPATCHES_COMMAND, LIST_NOTIFICATION_ROUTES_COMMAND,
-        LIST_PROJECTS_COMMAND, LIST_PROJECT_FILES_COMMAND, PROJECT_UPDATED_EVENT,
-        READ_PROJECT_FILE_COMMAND, RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND,
-        REFRESH_OPENAI_CODEX_AUTH_COMMAND, REGISTERED_COMMAND_NAMES, REMOVE_PROJECT_COMMAND,
-        RENAME_PROJECT_ENTRY_COMMAND, REPOSITORY_STATUS_CHANGED_EVENT,
+        GET_RUNTIME_AUTH_STATUS_COMMAND, GET_RUNTIME_RUN_COMMAND,
+        IMPORT_MCP_SERVERS_COMMAND, IMPORT_REPOSITORY_COMMAND,
+        LIST_MCP_SERVERS_COMMAND, LIST_NOTIFICATION_DISPATCHES_COMMAND,
+        LIST_NOTIFICATION_ROUTES_COMMAND, LIST_PROJECTS_COMMAND, LIST_PROJECT_FILES_COMMAND,
+        PROJECT_UPDATED_EVENT, READ_PROJECT_FILE_COMMAND,
+        RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND, REFRESH_MCP_SERVER_STATUSES_COMMAND,
+        REFRESH_OPENAI_CODEX_AUTH_COMMAND, REGISTERED_COMMAND_NAMES,
+        REMOVE_MCP_SERVER_COMMAND, REMOVE_PROJECT_COMMAND, RENAME_PROJECT_ENTRY_COMMAND,
         RESOLVE_OPERATOR_ACTION_COMMAND, RESUME_OPERATOR_RUN_COMMAND, RUNTIME_RUN_UPDATED_EVENT,
         RUNTIME_UPDATED_EVENT, START_AUTONOMOUS_RUN_COMMAND, START_OPENAI_CODEX_AUTH_COMMAND,
         START_RUNTIME_RUN_COMMAND, STOP_RUNTIME_RUN_COMMAND, SUBMIT_NOTIFICATION_REPLY_COMMAND,
         SUBSCRIBE_RUNTIME_STREAM_COMMAND, SYNC_NOTIFICATION_ADAPTERS_COMMAND,
-        UPSERT_NOTIFICATION_ROUTE_COMMAND, UPSERT_NOTIFICATION_ROUTE_CREDENTIALS_COMMAND,
-        UPSERT_WORKFLOW_GRAPH_COMMAND, WRITE_PROJECT_FILE_COMMAND,
+        UPSERT_MCP_SERVER_COMMAND, UPSERT_NOTIFICATION_ROUTE_COMMAND,
+        UPSERT_NOTIFICATION_ROUTE_CREDENTIALS_COMMAND, UPSERT_WORKFLOW_GRAPH_COMMAND,
+        WRITE_PROJECT_FILE_COMMAND,
     },
     configure_builder_with_state,
     state::DesktopState,
@@ -86,6 +93,7 @@ pub(crate) fn build_mock_app() -> (tauri::App<tauri::test::MockRuntime>, TempDir
         .join("app-data")
         .join("notification-credentials.json");
     let runtime_settings_path = root.path().join("app-data").join("runtime-settings.json");
+    let mcp_registry_path = root.path().join("app-data").join("mcp-registry.json");
     let openrouter_credential_path = root
         .path()
         .join("app-data")
@@ -97,6 +105,7 @@ pub(crate) fn build_mock_app() -> (tauri::App<tauri::test::MockRuntime>, TempDir
         .with_provider_profile_credential_store_file_override(provider_profile_credentials_path)
         .with_notification_credential_store_file_override(credential_store_path)
         .with_runtime_settings_file_override(runtime_settings_path)
+        .with_mcp_registry_file_override(mcp_registry_path)
         .with_openrouter_credential_file_override(openrouter_credential_path);
 
     let app = configure_builder_with_state(tauri::test::mock_builder(), state)

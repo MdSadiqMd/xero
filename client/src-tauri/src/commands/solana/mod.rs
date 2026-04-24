@@ -11,6 +11,7 @@ pub mod events;
 pub mod idl;
 pub mod pda;
 pub mod persona;
+pub mod program;
 pub mod rpc_router;
 pub mod scenario;
 pub mod snapshot;
@@ -46,6 +47,19 @@ pub use idl::{
 pub use pda::{
     analyse_bump, predict_cross_cluster, scan_project as pda_scan_project, BumpAnalysis,
     ClusterPda, DerivedAddress, PdaSite, PdaSiteSeedKind, SeedPart,
+};
+pub use program::{
+    build as program_build, deploy as program_deploy, rollback as program_rollback,
+    squads_synthesize, upgrade_safety_check, verified_build_submit, ArchiveRecord,
+    AuthorityCheck, AuthorityCheckOutcome, BufferWriteOutcome, BuildKind, BuildProfile,
+    BuildReport, BuildRequest, BuildRunner, BuiltArtifact, DeployAuthority, DeployResult,
+    DeployRunner, DeployServices, DeploySpec, DirectDeployOutcome, LayoutCheck,
+    PostDeployOptions, RollbackRequest, RollbackResult, SizeCheck, SizeCheckOutcome,
+    SquadsProposalDescriptor, SquadsProposalRequest, SystemBuildRunner, SystemDeployRunner,
+    SystemVerifiedBuildRunner, UpgradeInstruction, UpgradeInstructionAccount,
+    UpgradeSafetyReport, UpgradeSafetyRequest, UpgradeSafetyVerdict, VerifiedBuildRequest,
+    VerifiedBuildResult, VerifiedBuildRunner, BPF_UPGRADEABLE_LOADER, DEFAULT_VAULT_INDEX,
+    PROGRAM_DATA_MAX_BYTES, SQUADS_V4_PROGRAM_ID,
 };
 pub use persona::fund::{
     DefaultFundingBackend, FundingBackend, FundingDelta, FundingReceipt, FundingStep,
@@ -88,6 +102,15 @@ pub struct SolanaState {
     scenarios: Arc<ScenarioEngine>,
     tx_pipeline: Arc<TxPipeline>,
     idl_registry: Arc<IdlRegistry>,
+    /// Shared RPC transport — also fed into the IDL registry and the
+    /// upgrade-safety checker so all Phase 5 RPC reads go through the
+    /// same client (and therefore the same scripted transport in
+    /// integration tests).
+    transport: Arc<dyn RpcTransport>,
+    /// Deploy services (system runners by default). Tests can swap
+    /// these out via `with_deploy_services` to script `solana program
+    /// ...`, `anchor idl ...`, and `codama` invocations.
+    deploy_services: Arc<DeployServices>,
 }
 
 fn build_tx_pipeline(
@@ -153,7 +176,7 @@ impl Default for SolanaState {
         ));
         let rpc_router = Arc::new(RpcRouter::new_with_default_pool());
         let (tx_pipeline, transport) = build_tx_pipeline(&supervisor, &rpc_router, &personas);
-        let idl_registry = build_idl_registry(transport);
+        let idl_registry = build_idl_registry(Arc::clone(&transport));
         Self {
             supervisor,
             rpc_router,
@@ -162,6 +185,8 @@ impl Default for SolanaState {
             scenarios,
             tx_pipeline,
             idl_registry,
+            transport,
+            deploy_services: Arc::new(DeployServices::system()),
         }
     }
 }
@@ -184,7 +209,7 @@ impl SolanaState {
             Arc::clone(&supervisor),
         ));
         let (tx_pipeline, transport) = build_tx_pipeline(&supervisor, &rpc_router, &personas);
-        let idl_registry = build_idl_registry(transport);
+        let idl_registry = build_idl_registry(Arc::clone(&transport));
         Self {
             supervisor,
             rpc_router,
@@ -193,6 +218,8 @@ impl SolanaState {
             scenarios,
             tx_pipeline,
             idl_registry,
+            transport,
+            deploy_services: Arc::new(DeployServices::system()),
         }
     }
 
@@ -209,7 +236,7 @@ impl SolanaState {
             Arc::clone(&supervisor),
         ));
         let (tx_pipeline, transport) = build_tx_pipeline(&supervisor, &rpc_router, &personas);
-        let idl_registry = build_idl_registry(transport);
+        let idl_registry = build_idl_registry(Arc::clone(&transport));
         Self {
             supervisor,
             rpc_router,
@@ -218,6 +245,8 @@ impl SolanaState {
             scenarios,
             tx_pipeline,
             idl_registry,
+            transport,
+            deploy_services: Arc::new(DeployServices::system()),
         }
     }
 
@@ -238,6 +267,7 @@ impl SolanaState {
         let idl_registry = Arc::new(IdlRegistry::new(
             Arc::new(NoopIdlFetcher) as Arc<dyn IdlFetcher>
         ));
+        let transport: Arc<dyn RpcTransport> = Arc::new(HttpRpcTransport::new());
         Self {
             supervisor,
             rpc_router,
@@ -246,6 +276,38 @@ impl SolanaState {
             scenarios,
             tx_pipeline,
             idl_registry,
+            transport,
+            deploy_services: Arc::new(DeployServices::system()),
+        }
+    }
+
+    /// Test/integration constructor with everything injectable. Phase 5
+    /// integration tests use this to wire a scripted RPC transport into
+    /// the upgrade-safety checker plus a mock deploy runner.
+    pub fn with_program_pipeline(
+        supervisor: Arc<ValidatorSupervisor>,
+        rpc_router: Arc<RpcRouter>,
+        snapshots: Arc<SnapshotStore>,
+        personas: Arc<PersonaStore>,
+        tx_pipeline: Arc<TxPipeline>,
+        transport: Arc<dyn RpcTransport>,
+        deploy_services: Arc<DeployServices>,
+    ) -> Self {
+        let scenarios = Arc::new(ScenarioEngine::new(
+            Arc::clone(&personas),
+            Arc::clone(&supervisor),
+        ));
+        let idl_registry = build_idl_registry(Arc::clone(&transport));
+        Self {
+            supervisor,
+            rpc_router,
+            snapshots,
+            personas,
+            scenarios,
+            tx_pipeline,
+            idl_registry,
+            transport,
+            deploy_services,
         }
     }
 
@@ -275,6 +337,14 @@ impl SolanaState {
 
     pub fn idl_registry(&self) -> Arc<IdlRegistry> {
         Arc::clone(&self.idl_registry)
+    }
+
+    pub fn transport(&self) -> Arc<dyn RpcTransport> {
+        Arc::clone(&self.transport)
+    }
+
+    pub fn deploy_services(&self) -> Arc<DeployServices> {
+        Arc::clone(&self.deploy_services)
     }
 
     /// Resolve the RPC URL the persona / scenario commands should use when
@@ -1211,6 +1281,249 @@ pub struct PdaAnalyseBumpRequest {
 #[tauri::command]
 pub fn solana_pda_analyse_bump(request: PdaAnalyseBumpRequest) -> CommandResult<BumpAnalysis> {
     pda::analyse_bump(&request.program_id, &request.seeds, request.bump)
+}
+
+// ---------- Program build / deploy / upgrade safety (Phase 5) -------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProgramBuildArgs {
+    pub manifest_path: String,
+    #[serde(default)]
+    pub profile: BuildProfile,
+    #[serde(default)]
+    pub kind: Option<BuildKind>,
+    #[serde(default)]
+    pub program: Option<String>,
+}
+
+#[tauri::command]
+pub fn solana_program_build(
+    state: State<'_, SolanaState>,
+    request: ProgramBuildArgs,
+) -> CommandResult<BuildReport> {
+    let runner = state.deploy_services.runner.as_ref();
+    let _ = runner; // The build module uses its own runner trait; avoid type confusion.
+    let runner = program::build::SystemBuildRunner::new();
+    program::build::build(
+        &runner,
+        &BuildRequest {
+            manifest_path: request.manifest_path,
+            profile: request.profile,
+            kind: request.kind,
+            program: request.program,
+        },
+    )
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpgradeCheckArgs {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub local_so_path: String,
+    pub expected_authority: String,
+    #[serde(default)]
+    pub local_idl_path: Option<String>,
+    #[serde(default)]
+    pub max_program_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub local_so_size_bytes: Option<u64>,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[tauri::command]
+pub fn solana_program_upgrade_check(
+    state: State<'_, SolanaState>,
+    request: UpgradeCheckArgs,
+) -> CommandResult<UpgradeSafetyReport> {
+    let rpc_url = request
+        .rpc_url
+        .or_else(|| state.resolve_rpc_url(request.cluster))
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "solana_upgrade_check_no_rpc",
+                "No RPC URL available — start a cluster or provide rpcUrl explicitly.",
+            )
+        })?;
+    // Try to fetch on-chain IDL for layout diff. Best-effort — if the
+    // program has no published IDL the layout check is simply skipped.
+    let chain_idl = state
+        .idl_registry
+        .fetch_on_chain(request.cluster, &rpc_url, &request.program_id)
+        .ok()
+        .flatten();
+    let safety_request = UpgradeSafetyRequest {
+        program_id: request.program_id,
+        cluster: request.cluster,
+        rpc_url,
+        local_so_path: request.local_so_path,
+        local_idl_path: request.local_idl_path,
+        chain_idl,
+        local_idl: None,
+        expected_authority: request.expected_authority,
+        max_program_size_bytes: request.max_program_size_bytes,
+        local_so_size_bytes: request.local_so_size_bytes,
+    };
+    let transport = state.transport();
+    program::upgrade_safety::check(&transport, &safety_request)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeployArgs {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub so_path: String,
+    pub authority: DeployAuthority,
+    #[serde(default)]
+    pub idl_path: Option<String>,
+    #[serde(default)]
+    pub is_first_deploy: bool,
+    #[serde(default)]
+    pub post: Option<PostDeployOptions>,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[tauri::command]
+pub fn solana_program_deploy<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: DeployArgs,
+) -> CommandResult<DeployResult> {
+    let rpc_url = request
+        .rpc_url
+        .or_else(|| state.resolve_rpc_url(request.cluster))
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "solana_program_deploy_no_rpc",
+                "No RPC URL available — start a cluster or provide rpcUrl explicitly.",
+            )
+        })?;
+    let spec = DeploySpec {
+        program_id: request.program_id,
+        cluster: request.cluster,
+        rpc_url,
+        so_path: request.so_path,
+        idl_path: request.idl_path,
+        authority: request.authority,
+        is_first_deploy: request.is_first_deploy,
+        post: request.post.unwrap_or_default(),
+    };
+    let services = state.deploy_services();
+    let sink = TauriDeployProgressSink { app };
+    program::deploy::deploy(&services, &sink, &spec)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RollbackArgs {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub previous_sha256: String,
+    pub authority: DeployAuthority,
+    #[serde(default)]
+    pub program_archive_root: Option<String>,
+    #[serde(default)]
+    pub post: Option<PostDeployOptions>,
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+}
+
+#[tauri::command]
+pub fn solana_program_rollback<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SolanaState>,
+    request: RollbackArgs,
+) -> CommandResult<RollbackResult> {
+    let rpc_url = request
+        .rpc_url
+        .or_else(|| state.resolve_rpc_url(request.cluster))
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "solana_program_rollback_no_rpc",
+                "No RPC URL available — start a cluster or provide rpcUrl explicitly.",
+            )
+        })?;
+    let req = RollbackRequest {
+        program_id: request.program_id,
+        cluster: request.cluster,
+        rpc_url,
+        previous_sha256: request.previous_sha256,
+        authority: request.authority,
+        program_archive_root: request.program_archive_root,
+        post: request.post.unwrap_or_default(),
+    };
+    let services = state.deploy_services();
+    let sink = TauriDeployProgressSink { app };
+    program::deploy::rollback(&services, &sink, &req)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SquadsProposalCreateArgs {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub multisig_pda: String,
+    pub buffer: String,
+    pub spill: String,
+    pub creator: String,
+    #[serde(default)]
+    pub vault_index: Option<u8>,
+    #[serde(default)]
+    pub memo: Option<String>,
+}
+
+#[tauri::command]
+pub fn solana_squads_proposal_create(
+    request: SquadsProposalCreateArgs,
+) -> CommandResult<SquadsProposalDescriptor> {
+    program::squads::synthesize(&SquadsProposalRequest {
+        program_id: request.program_id,
+        cluster: request.cluster,
+        multisig_pda: request.multisig_pda,
+        buffer: request.buffer,
+        spill: request.spill,
+        creator: request.creator,
+        vault_index: request.vault_index,
+        memo: request.memo,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VerifiedBuildArgs {
+    pub program_id: String,
+    pub cluster: ClusterKind,
+    pub manifest_path: String,
+    pub github_url: String,
+    #[serde(default)]
+    pub commit_hash: Option<String>,
+    #[serde(default)]
+    pub library_name: Option<String>,
+    #[serde(default)]
+    pub skip_remote_submit: bool,
+}
+
+#[tauri::command]
+pub fn solana_verified_build_submit(
+    request: VerifiedBuildArgs,
+) -> CommandResult<VerifiedBuildResult> {
+    let runner = program::verified_build::SystemVerifiedBuildRunner::new();
+    program::verified_build::submit(
+        &runner,
+        &VerifiedBuildRequest {
+            program_id: request.program_id,
+            cluster: request.cluster,
+            manifest_path: request.manifest_path,
+            github_url: request.github_url,
+            commit_hash: request.commit_hash,
+            library_name: request.library_name,
+            skip_remote_submit: request.skip_remote_submit,
+        },
+    )
 }
 
 /// Lightweight acknowledgement that the frontend can call when it opens

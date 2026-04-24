@@ -65,6 +65,36 @@ pub(crate) fn malformed_inputs_fail_fast_before_runtime_logic() {
         serde_json::from_value::<ProjectIdRequestDto>(json!({ "projectID": "project-1" })).is_err()
     );
     assert!(
+        serde_json::from_value::<UpsertMcpServerRequestDto>(json!({
+            "id": "memory",
+            "name": "Memory",
+            "transport": { "kind": "stdio", "command": "npx" },
+            "unexpected": true
+        }))
+        .is_err(),
+        "upsert MCP server request should reject unknown fields"
+    );
+    assert!(
+        serde_json::from_value::<RemoveMcpServerRequestDto>(json!({ "serverID": "memory" }))
+            .is_err(),
+        "remove MCP server request should require camelCase serverId"
+    );
+    assert!(
+        serde_json::from_value::<ImportMcpServersRequestDto>(json!({
+            "path": "/tmp/mcp.json",
+            "unexpected": true
+        }))
+        .is_err(),
+        "import MCP servers request should reject unknown fields"
+    );
+    assert!(
+        serde_json::from_value::<RefreshMcpServerStatusesRequestDto>(json!({
+            "serverIds": "memory"
+        }))
+        .is_err(),
+        "refresh MCP statuses request should require serverIds arrays"
+    );
+    assert!(
         serde_json::from_value::<GetRuntimeRunRequestDto>(json!({
             "projectId": "project-1",
             "unexpected": true
