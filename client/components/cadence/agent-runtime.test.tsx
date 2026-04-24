@@ -1604,7 +1604,7 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('code: autonomous_skill_invoke_failed · terminal')).toBeVisible()
   })
 
-  it('renders MCP capability context in the tool lane without regressing standard tool details', () => {
+  it('renders browser/computer-use and MCP summary context in the tool lane without regressing standard tool details', () => {
     const toolCalls: RuntimeStreamView['toolCalls'] = [
       {
         id: 'tool-read',
@@ -1627,11 +1627,49 @@ describe('AgentRuntime current UI', () => {
         },
       },
       {
-        id: 'tool-mcp',
+        id: 'tool-browser',
         kind: 'tool',
         runId: 'run-1',
         sequence: 6,
         createdAt: '2026-04-18T14:10:01Z',
+        toolCallId: 'browser-click-1',
+        toolName: 'browser.click',
+        toolState: 'succeeded',
+        detail: 'Browser click action reached the confirmation banner.',
+        toolSummary: {
+          kind: 'browser_computer_use',
+          surface: 'browser',
+          action: 'click',
+          status: 'succeeded',
+          target: 'button[type=submit]',
+          outcome: 'Clicked submit and advanced to confirmation.',
+        },
+      },
+      {
+        id: 'tool-computer-use',
+        kind: 'tool',
+        runId: 'run-1',
+        sequence: 7,
+        createdAt: '2026-04-18T14:10:02Z',
+        toolCallId: 'computer-key-1',
+        toolName: 'computer_use.key_press',
+        toolState: 'failed',
+        detail: 'Computer-use key press is waiting for operator retry.',
+        toolSummary: {
+          kind: 'browser_computer_use',
+          surface: 'computer_use',
+          action: 'press_key',
+          status: 'blocked',
+          target: null,
+          outcome: null,
+        },
+      },
+      {
+        id: 'tool-mcp',
+        kind: 'tool',
+        runId: 'run-1',
+        sequence: 8,
+        createdAt: '2026-04-18T14:10:03Z',
         toolCallId: 'mcp-invoke-1',
         toolName: 'mcp.invoke',
         toolState: 'failed',
@@ -1655,7 +1693,7 @@ describe('AgentRuntime current UI', () => {
             status: 'live',
             items: toolCalls,
             toolCalls,
-            lastSequence: 6,
+            lastSequence: 8,
           }),
           runtimeStreamStatus: 'live',
           runtimeStreamStatusLabel: 'Streaming live activity',
@@ -1665,9 +1703,23 @@ describe('AgentRuntime current UI', () => {
 
     expect(screen.getByRole('heading', { name: 'Tool lane' })).toBeVisible()
     expect(screen.getByText('read')).toBeVisible()
+    expect(screen.getByText('browser.click')).toBeVisible()
+    expect(screen.getByText('computer_use.key_press')).toBeVisible()
     expect(screen.getByText('mcp.invoke')).toBeVisible()
     expect(screen.getByText('Read README.md from the repository root.')).toBeVisible()
+    expect(screen.getByText('Browser click action reached the confirmation banner.')).toBeVisible()
+    expect(screen.getByText('Computer-use key press is waiting for operator retry.')).toBeVisible()
     expect(screen.getByText('MCP prompt invocation failed with upstream timeout.')).toBeVisible()
+    expect(
+      screen.getByText(
+        'Browser action click · status Succeeded · target button[type=submit] · outcome Clicked submit and advanced to confirmation.',
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByText(
+        'Computer use action press_key · status Blocked · target Target unavailable · outcome Outcome unavailable',
+      ),
+    ).toBeVisible()
     expect(screen.getByText('MCP Prompt · Summarize Context · server linear · outcome Failed')).toBeVisible()
   })
 

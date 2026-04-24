@@ -1191,6 +1191,7 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
   const firstToolCall = state.agentView?.runtimeStream?.toolCalls?.[0] ?? null
   const firstToolSummary = firstToolCall?.toolSummary ?? null
   const firstToolMcpSummary = firstToolSummary?.kind === 'mcp_capability' ? firstToolSummary : null
+  const firstToolBrowserComputerUseSummary = firstToolSummary?.kind === 'browser_computer_use' ? firstToolSummary : null
   const firstApprovalResumeState =
     !firstApproval
       ? 'none'
@@ -1296,6 +1297,11 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="stream-tool-first-mcp-capability-kind">{firstToolMcpSummary?.capabilityKind ?? 'none'}</div>
       <div data-testid="stream-tool-first-mcp-capability-id">{firstToolMcpSummary?.capabilityId ?? 'none'}</div>
       <div data-testid="stream-tool-first-mcp-capability-name">{firstToolMcpSummary?.capabilityName ?? 'none'}</div>
+      <div data-testid="stream-tool-first-browser-surface">{firstToolBrowserComputerUseSummary?.surface ?? 'none'}</div>
+      <div data-testid="stream-tool-first-browser-action">{firstToolBrowserComputerUseSummary?.action ?? 'none'}</div>
+      <div data-testid="stream-tool-first-browser-status">{firstToolBrowserComputerUseSummary?.status ?? 'none'}</div>
+      <div data-testid="stream-tool-first-browser-target">{firstToolBrowserComputerUseSummary?.target ?? 'none'}</div>
+      <div data-testid="stream-tool-first-browser-outcome">{firstToolBrowserComputerUseSummary?.outcome ?? 'none'}</div>
       <div data-testid="stream-skill-count">{String(state.agentView?.skillItems?.length ?? 0)}</div>
       <div data-testid="stream-skill-first-id">{state.agentView?.skillItems?.[0]?.skillId ?? 'none'}</div>
       <div data-testid="stream-skill-first-stage">{state.agentView?.skillItems?.[0]?.stage ?? 'none'}</div>
@@ -2839,6 +2845,209 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('stream-tool-first-mcp-capability-kind')).toHaveTextContent('prompt')
     expect(screen.getByTestId('stream-tool-first-mcp-capability-id')).toHaveTextContent('summarize_context')
     expect(screen.getByTestId('stream-tool-first-mcp-capability-name')).toHaveTextContent('Summarize Context')
+  })
+
+  it('projects browser/computer-use tool summaries into the agent tool lane projection', async () => {
+    const setup = createMockAdapter({
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
+
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'tool',
+          runId: 'run-project-1',
+          sequence: 1,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'browser-click-1',
+          toolName: 'browser.click',
+          toolState: 'succeeded',
+          toolSummary: {
+            kind: 'browser_computer_use',
+            surface: 'browser',
+            action: 'click',
+            status: 'succeeded',
+            target: 'button[type=submit]',
+            outcome: 'Clicked submit and advanced to confirmation.',
+          },
+          skillId: null,
+          skillStage: null,
+          skillResult: null,
+          skillSource: null,
+          skillCacheStatus: null,
+          skillDiagnostic: null,
+          actionId: null,
+          boundaryId: null,
+          actionType: null,
+          title: null,
+          detail: 'Browser click action reached the confirmation banner.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T13:30:00Z',
+        },
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('live'))
+    expect(screen.getByTestId('stream-tool-count')).toHaveTextContent('1')
+    expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('browser-click-1')
+    expect(screen.getByTestId('stream-tool-first-state')).toHaveTextContent('succeeded')
+    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('browser_computer_use')
+    expect(screen.getByTestId('stream-tool-first-browser-surface')).toHaveTextContent('browser')
+    expect(screen.getByTestId('stream-tool-first-browser-action')).toHaveTextContent('click')
+    expect(screen.getByTestId('stream-tool-first-browser-status')).toHaveTextContent('succeeded')
+    expect(screen.getByTestId('stream-tool-first-browser-target')).toHaveTextContent('button[type=submit]')
+    expect(screen.getByTestId('stream-tool-first-browser-outcome')).toHaveTextContent(
+      'Clicked submit and advanced to confirmation.',
+    )
+  })
+
+  it('fails closed on malformed browser/computer-use tool summaries and preserves the last truthful tool lane', async () => {
+    const setup = createMockAdapter({
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
+
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'tool',
+          runId: 'run-project-1',
+          sequence: 1,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'browser-click-1',
+          toolName: 'browser.click',
+          toolState: 'succeeded',
+          toolSummary: {
+            kind: 'browser_computer_use',
+            surface: 'browser',
+            action: 'click',
+            status: 'succeeded',
+            target: 'button[type=submit]',
+            outcome: 'Clicked submit and advanced to confirmation.',
+          },
+          skillId: null,
+          skillStage: null,
+          skillResult: null,
+          skillSource: null,
+          skillCacheStatus: null,
+          skillDiagnostic: null,
+          actionId: null,
+          boundaryId: null,
+          actionType: null,
+          title: null,
+          detail: 'Browser click action reached the confirmation banner.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T13:30:00Z',
+        },
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-tool-count')).toHaveTextContent('1'))
+    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('browser_computer_use')
+    expect(screen.getByTestId('stream-tool-first-browser-status')).toHaveTextContent('succeeded')
+
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'tool',
+          runId: 'run-project-1',
+          sequence: 2,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'browser-click-2',
+          toolName: 'browser.click',
+          toolState: 'failed',
+          toolSummary: {
+            kind: 'browser_computer_use',
+            surface: 'browser',
+            action: 'click',
+            status: 'done',
+            target: 'button[type=submit]',
+            outcome: 'Malformed browser summary.',
+          },
+          skillId: null,
+          skillStage: null,
+          skillResult: null,
+          skillSource: null,
+          skillCacheStatus: null,
+          skillDiagnostic: null,
+          actionId: null,
+          boundaryId: null,
+          actionType: null,
+          title: null,
+          detail: 'Malformed browser summary.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T13:30:01Z',
+        },
+      } as unknown as RuntimeStreamEventDto)
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('error'))
+    expect(screen.getByTestId('stream-tool-count')).toHaveTextContent('1')
+    expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('browser-click-1')
+    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('browser_computer_use')
+    expect(screen.getByTestId('stream-tool-first-browser-status')).toHaveTextContent('succeeded')
+    expect(screen.getByTestId('messages-reason')).toHaveTextContent('malformed toolSummary payload')
   })
 
   it('fails closed on malformed MCP tool summaries and preserves the last truthful tool lane', async () => {

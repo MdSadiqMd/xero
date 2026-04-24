@@ -116,14 +116,49 @@ function getMcpCapabilityKindLabel(kind: 'tool' | 'resource' | 'prompt' | 'comma
   }
 }
 
+function getBrowserComputerUseSurfaceLabel(surface: 'browser' | 'computer_use'): string {
+  switch (surface) {
+    case 'browser':
+      return 'Browser'
+    case 'computer_use':
+      return 'Computer use'
+  }
+}
+
+function getBrowserComputerUseStatusLabel(status: 'pending' | 'running' | 'succeeded' | 'failed' | 'blocked'): string {
+  switch (status) {
+    case 'pending':
+      return 'Pending'
+    case 'running':
+      return 'Running'
+    case 'succeeded':
+      return 'Succeeded'
+    case 'failed':
+      return 'Failed'
+    case 'blocked':
+      return 'Blocked'
+  }
+}
+
 export function getToolSummaryContext(item: RuntimeStreamToolItemView): string | null {
   const summary = item.toolSummary
-  if (!summary || summary.kind !== 'mcp_capability') {
+  if (!summary) {
     return null
   }
 
-  const capabilityLabel = displayValue(summary.capabilityName, summary.capabilityId)
-  return `MCP ${getMcpCapabilityKindLabel(summary.capabilityKind)} · ${capabilityLabel} · server ${summary.serverId} · outcome ${getToolStateLabel(item.toolState)}`
+  switch (summary.kind) {
+    case 'mcp_capability': {
+      const capabilityLabel = displayValue(summary.capabilityName, summary.capabilityId)
+      return `MCP ${getMcpCapabilityKindLabel(summary.capabilityKind)} · ${capabilityLabel} · server ${summary.serverId} · outcome ${getToolStateLabel(item.toolState)}`
+    }
+    case 'browser_computer_use': {
+      const targetLabel = displayValue(summary.target, 'Target unavailable')
+      const outcomeLabel = displayValue(summary.outcome, 'Outcome unavailable')
+      return `${getBrowserComputerUseSurfaceLabel(summary.surface)} action ${summary.action} · status ${getBrowserComputerUseStatusLabel(summary.status)} · target ${targetLabel} · outcome ${outcomeLabel}`
+    }
+    default:
+      return null
+  }
 }
 
 export function getSkillStageLabel(stage: RuntimeStreamSkillItemView['stage']): string {

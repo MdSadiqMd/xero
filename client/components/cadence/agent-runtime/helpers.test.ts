@@ -7,10 +7,10 @@ import {
   getPerActionResumeStateMeta,
 } from '@/components/cadence/agent-runtime/checkpoint-control-loop-helpers'
 import { getComposerPlaceholder } from '@/components/cadence/agent-runtime/composer-helpers'
-import { getStreamStatusMeta } from '@/components/cadence/agent-runtime/runtime-stream-helpers'
+import { getStreamStatusMeta, getToolSummaryContext } from '@/components/cadence/agent-runtime/runtime-stream-helpers'
 import { displayValue, formatSequence } from '@/components/cadence/agent-runtime/shared-helpers'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
-import type { RuntimeSessionView } from '@/src/lib/cadence-model'
+import type { RuntimeSessionView, RuntimeStreamToolItemView } from '@/src/lib/cadence-model'
 import { createEmptyPlanningLifecycle } from '@/src/lib/cadence-model/workflow'
 
 function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
@@ -185,6 +185,53 @@ describe('agent-runtime helpers', () => {
   it('keeps blank labels and missing sequences on the existing fallback copy', () => {
     expect(displayValue('   ', 'Unavailable')).toBe('Unavailable')
     expect(formatSequence(null)).toBe('Not observed')
+  })
+
+  it('formats browser/computer-use tool summaries with safe fallback labels for optional metadata', () => {
+    const browserItem: RuntimeStreamToolItemView = {
+      id: 'tool:run-1:1',
+      kind: 'tool',
+      runId: 'run-1',
+      sequence: 1,
+      createdAt: '2026-04-24T17:30:00Z',
+      toolCallId: 'browser-click-1',
+      toolName: 'browser.click',
+      toolState: 'succeeded',
+      detail: 'Clicked submit in browser context.',
+      toolSummary: {
+        kind: 'browser_computer_use',
+        surface: 'browser',
+        action: 'click',
+        status: 'succeeded',
+        target: 'button[type=submit]',
+        outcome: 'Clicked submit and advanced to confirmation.',
+      },
+    }
+
+    const computerItem: RuntimeStreamToolItemView = {
+      ...browserItem,
+      id: 'tool:run-1:2',
+      sequence: 2,
+      toolCallId: 'computer-key-1',
+      toolName: 'computer_use.key_press',
+      toolState: 'failed',
+      toolSummary: {
+        kind: 'browser_computer_use',
+        surface: 'computer_use',
+        action: 'press_key',
+        status: 'blocked',
+        target: null,
+        outcome: null,
+      },
+    }
+
+    expect(getToolSummaryContext(browserItem)).toBe(
+      'Browser action click · status Succeeded · target button[type=submit] · outcome Clicked submit and advanced to confirmation.',
+    )
+    expect(getToolSummaryContext(computerItem)).toBe(
+      'Computer use action press_key · status Blocked · target Target unavailable · outcome Outcome unavailable',
+    )
+    expect(getToolSummaryContext({ ...browserItem, toolSummary: null })).toBeNull()
   })
 
   it('keeps the bounded checkpoint empty state and coverage copy stable', () => {

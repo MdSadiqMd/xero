@@ -2350,6 +2350,82 @@ describe('cadence-model', () => {
     expect(getRuntimeStreamStatusLabel(completed.status)).toBe('Stream complete')
   })
 
+  it('projects browser/computer-use summaries through runtime tool rows and rejects malformed follow-up payloads', () => {
+    const subscribed = createRuntimeStreamFromSubscription(streamSubscription)
+    const withBrowserTool = mergeRuntimeStreamEvent(
+      subscribed,
+      makeStreamEvent({
+        kind: 'tool',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        text: null,
+        toolCallId: 'browser-click-1',
+        toolName: 'browser.click',
+        toolState: 'succeeded',
+        toolSummary: {
+          kind: 'browser_computer_use',
+          surface: 'browser',
+          action: 'click',
+          status: 'succeeded',
+          target: 'button[type=submit]',
+          outcome: 'Clicked submit and advanced to confirmation.',
+        },
+        actionType: null,
+        title: null,
+        detail: 'Browser click action reached the confirmation banner.',
+        code: null,
+        message: null,
+        retryable: null,
+        createdAt: '2026-04-13T20:01:01Z',
+      }),
+    )
+
+    expect(withBrowserTool.toolCalls).toHaveLength(1)
+    expect(withBrowserTool.toolCalls[0]).toMatchObject({
+      toolCallId: 'browser-click-1',
+      toolName: 'browser.click',
+      toolState: 'succeeded',
+      toolSummary: {
+        kind: 'browser_computer_use',
+        surface: 'browser',
+        action: 'click',
+        status: 'succeeded',
+        target: 'button[type=submit]',
+        outcome: 'Clicked submit and advanced to confirmation.',
+      },
+    })
+
+    expect(() =>
+      mergeRuntimeStreamEvent(
+        withBrowserTool,
+        makeStreamEvent({
+          kind: 'tool',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'browser-click-2',
+          toolName: 'browser.click',
+          toolState: 'failed',
+          toolSummary: {
+            kind: 'browser_computer_use',
+            surface: 'browser',
+            action: 'click',
+            status: 'done',
+            target: 'button[type=submit]',
+            outcome: 'Malformed browser summary.',
+          },
+          actionType: null,
+          title: null,
+          detail: 'Malformed browser summary.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-13T20:01:02Z',
+        } as unknown as RuntimeStreamItemDto),
+      ),
+    ).toThrow(/Invalid enum value/)
+  })
+
   it('projects additive tool summaries through autonomous artifacts while rejecting malformed nested summary drift', () => {
     const fileSummary = toolResultSummarySchema.parse({
       kind: 'file',

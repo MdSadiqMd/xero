@@ -27,6 +27,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
+import { Badge } from "@/components/ui/badge"
 import { SolanaLogoIcon } from "./brand-icons"
 import { SolanaAuditPanel } from "./solana-audit-panel"
 import { SolanaDeployPanel } from "./solana-deploy-panel"
@@ -44,8 +45,10 @@ import {
   useSolanaWorkbench,
   type ClusterKind,
   type CodamaTarget,
+  type DeployResult,
   type DeployAuthority,
   type FundingDelta,
+  type LogEntry,
   type PersonaRole,
   type SimulateRequest,
 } from "@/src/features/solana/use-solana-workbench"
@@ -358,91 +361,198 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
     [workbench],
   )
 
-  const scenariosForCluster = useMemo(
-    () =>
-      workbench.scenarios.filter((s) =>
-        s.supportedClusters.includes(selectedKind),
+  const notifications = useMemo(() => {
+    const logErrorCount = countErroredLogs(workbench.logEntries)
+    const indexerErrorCount = countErroredLogs(
+      workbench.lastIndexerRun?.entries ?? [],
+    )
+    const idlIssueCount =
+      (workbench.lastDriftReport?.breakingCount ?? 0) +
+      (workbench.lastDriftReport?.riskyCount ?? 0) +
+      (workbench.lastIdlEvent?.phase === "invalid" ? 1 : 0)
+    const deployIssueCount =
+      (workbench.lastBuildReport && !workbench.lastBuildReport.success ? 1 : 0) +
+      (workbench.lastUpgradeSafety?.verdict &&
+      workbench.lastUpgradeSafety.verdict !== "ok"
+        ? 1
+        : 0) +
+      (deployResultHasIssue(workbench.lastDeployResult) ? 1 : 0) +
+      (workbench.lastVerifiedBuild && !workbench.lastVerifiedBuild.success
+        ? 1
+        : 0) +
+      (workbench.lastRollback && deployResultHasIssue(workbench.lastRollback.deploy)
+        ? 1
+        : 0) +
+      (workbench.lastDeployProgress?.phase === "failed" ? 1 : 0)
+    const txIssueCount =
+      (workbench.lastSimulation && !workbench.lastSimulation.success ? 1 : 0) +
+      (workbench.lastSend &&
+      (workbench.lastSend.err != null || !workbench.lastSend.explanation.ok)
+        ? 1
+        : 0) +
+      (workbench.lastExplanation &&
+      (workbench.lastExplanation.err != null ||
+        !workbench.lastExplanation.explanation.ok)
+        ? 1
+        : 0)
+    const tokenIssueCount =
+      (workbench.lastTokenCreate && !workbench.lastTokenCreate.success ? 1 : 0) +
+      (workbench.lastTokenCreate?.incompatibilities.length ?? 0) +
+      (workbench.lastMetaplexMint && !workbench.lastMetaplexMint.success ? 1 : 0)
+    const safetyIssueCount =
+      (workbench.lastSecretScan?.findings.length ?? 0) +
+      (workbench.lastScopeCheck?.warnings.length ?? 0) +
+      (workbench.lastClusterDrift?.entries.filter((e) => e.status === "drift")
+        .length ?? 0) +
+      (workbench.lastCostSnapshot?.providers.filter(
+        (provider) => provider.health === "degraded" || Boolean(provider.warning),
+      ).length ?? 0)
+    const rpcUnhealthyCount = workbench.rpcHealth.filter((h) => !h.healthy).length
+
+    return {
+      personas: activityNotification(
+        workbench.personaBusy,
+        "Persona action in progress",
       ),
-    [workbench.scenarios, selectedKind],
-  )
+      scenarios:
+        activityNotification(
+          workbench.scenarioBusy,
+          "Scenario run in progress",
+        ) ??
+        issueNotification(
+          workbench.lastScenarioRun?.status === "failed" ? 1 : 0,
+          "failed scenario run",
+          "failed scenario runs",
+          "danger",
+        ) ??
+        issueNotification(
+          workbench.lastScenarioRun?.status === "pendingPipeline" ? 1 : 0,
+          "scenario waiting for pipeline setup",
+          "scenarios waiting for pipeline setup",
+        ),
+      tx:
+        activityNotification(workbench.txBusy, "Transaction action in progress") ??
+        issueNotification(txIssueCount, "transaction issue", "transaction issues", "danger"),
+      logs:
+        activityNotification(workbench.logBusy, "Log request in progress") ??
+        issueNotification(logErrorCount, "errored log entry", "errored log entries", "danger"),
+      indexer:
+        activityNotification(workbench.indexerBusy, "Indexer action in progress") ??
+        issueNotification(
+          indexerErrorCount,
+          "indexer transaction issue",
+          "indexer transaction issues",
+          "danger",
+        ),
+      idl:
+        activityNotification(workbench.idlBusy, "IDL action in progress") ??
+        issueNotification(idlIssueCount, "IDL issue", "IDL issues", "danger"),
+      deploy:
+        activityNotification(workbench.programBusy, "Deploy action in progress") ??
+        issueNotification(deployIssueCount, "deploy issue", "deploy issues", "danger"),
+      audit:
+        activityNotification(workbench.auditBusy, "Audit run in progress") ??
+        issueNotification(
+          workbench.auditFindings.filter((finding) => finding.severity !== "informational")
+            .length,
+          "audit finding",
+          "audit findings",
+          "danger",
+        ),
+      token:
+        activityNotification(workbench.tokenBusy, "Token action in progress") ??
+        issueNotification(tokenIssueCount, "token issue", "token issues", "danger"),
+      wallet:
+        activityNotification(workbench.walletBusy, "Wallet scaffold in progress") ??
+        issueNotification(
+          workbench.lastWalletScaffold?.apiKeyEnv ? 1 : 0,
+          "wallet scaffold needs an API key",
+          "wallet scaffolds need API keys",
+        ),
+      safety:
+        activityNotification(workbench.safetyBusy, "Safety check in progress") ??
+        issueNotification(safetyIssueCount, "safety issue", "safety issues", "danger"),
+      rpc: issueNotification(
+        rpcUnhealthyCount,
+        "unhealthy RPC endpoint",
+        "unhealthy RPC endpoints",
+        "danger",
+      ),
+    } satisfies Record<TabId, TabNotification | undefined>
+  }, [workbench])
 
   const tabs: TabDescriptor[] = [
     {
       id: "personas",
       icon: Users,
       label: "Personas",
-      count: workbench.personas.length || undefined,
+      notification: notifications.personas,
     },
     {
       id: "scenarios",
       icon: Zap,
       label: "Scenarios",
-      count: scenariosForCluster.length || undefined,
+      notification: notifications.scenarios,
     },
     {
       id: "tx",
       icon: Search,
       label: "Tx",
+      notification: notifications.tx,
     },
     {
       id: "logs",
       icon: RadioTower,
       label: "Logs",
-      count: workbench.logEntries.length || undefined,
+      notification: notifications.logs,
     },
     {
       id: "indexer",
       icon: FileJson,
       label: "Indexer",
-      count: workbench.lastIndexerRun ? workbench.lastIndexerRun.entries.length : undefined,
+      notification: notifications.indexer,
     },
     {
       id: "idl",
       icon: FileJson,
       label: "IDL",
-      count: Object.keys(workbench.idls).length || undefined,
+      notification: notifications.idl,
     },
     {
       id: "deploy",
       icon: Rocket,
       label: "Deploy",
+      notification: notifications.deploy,
     },
     {
       id: "audit",
       icon: ShieldCheck,
       label: "Audit",
-      count: workbench.auditFindings.length || undefined,
+      notification: notifications.audit,
     },
     {
       id: "token",
       icon: Coins,
       label: "Token",
-      count: workbench.lastTokenCreate?.incompatibilities.length || undefined,
+      notification: notifications.token,
     },
     {
       id: "wallet",
       icon: Wallet,
       label: "Wallet",
-      count: workbench.walletDescriptors.length || undefined,
+      notification: notifications.wallet,
     },
     {
       id: "safety",
       icon: ShieldCheck,
       label: "Safety",
-      count:
-        (workbench.lastSecretScan?.findings.length ?? 0) +
-          (workbench.lastScopeCheck?.warnings.length ?? 0) +
-          (workbench.lastClusterDrift?.entries.filter((e) => e.status === "drift").length ?? 0) ||
-        undefined,
+      notification: notifications.safety,
     },
     {
       id: "rpc",
       icon: Server,
       label: "RPC",
-      count:
-        workbench.rpcHealth.length > 0
-          ? `${workbench.rpcHealth.filter((h) => h.healthy).length}/${workbench.rpcHealth.length}`
-          : undefined,
+      notification: notifications.rpc,
     },
   ]
   const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label ?? "Personas"
@@ -845,7 +955,15 @@ interface TabDescriptor {
   id: TabId
   icon: React.ComponentType<{ className?: string }>
   label: string
-  count?: string | number
+  notification?: TabNotification
+}
+
+type TabNotificationTone = "activity" | "attention" | "danger"
+
+interface TabNotification {
+  label: string
+  tone: TabNotificationTone
+  value?: string | number
 }
 
 function TabButton({
@@ -858,13 +976,15 @@ function TabButton({
   onClick: () => void
 }) {
   const Icon = tab.icon
-  const tooltip = tab.count != null ? `${tab.label} (${tab.count})` : tab.label
+  const tooltip = tab.notification
+    ? `${tab.label} — ${tab.notification.label}`
+    : tab.label
   return (
     <button
       id={`tab-${tab.id}`}
       role="tab"
       aria-selected={active}
-      aria-label={tab.label}
+      aria-label={tab.notification ? `${tab.label}, ${tab.notification.label}` : tab.label}
       title={tooltip}
       type="button"
       onClick={onClick}
@@ -876,20 +996,67 @@ function TabButton({
       )}
     >
       <Icon className="h-4 w-4" />
-      {tab.count != null ? (
-        <span
+      {tab.notification ? (
+        <Badge
+          aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute right-0 top-0 flex h-3.5 min-w-[14px] items-center justify-center rounded-full px-[3px] text-[8.5px] font-semibold leading-none tabular-nums ring-1 ring-sidebar",
-            active
-              ? "bg-primary text-primary-foreground"
-              : "bg-primary/70 text-primary-foreground",
+            "pointer-events-none absolute right-0 top-0 flex h-3.5 min-w-[14px] rounded-full border-0 px-[3px] py-0 text-[8.5px] font-semibold leading-none tabular-nums ring-1 ring-sidebar",
+            tab.notification.tone === "activity" &&
+              "bg-primary text-primary-foreground",
+            tab.notification.tone === "attention" &&
+              "bg-amber-400 text-amber-950",
+            tab.notification.tone === "danger" &&
+              "bg-destructive text-destructive-foreground",
           )}
         >
-          {tab.count}
-        </span>
+          {tab.notification.tone === "activity" ? (
+            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          ) : (
+            tab.notification.value
+          )}
+        </Badge>
       ) : null}
     </button>
   )
+}
+
+function activityNotification(
+  active: boolean,
+  label: string,
+): TabNotification | undefined {
+  return active ? { label, tone: "activity" } : undefined
+}
+
+function issueNotification(
+  count: number,
+  singular: string,
+  plural: string,
+  tone: Exclude<TabNotificationTone, "activity"> = "attention",
+): TabNotification | undefined {
+  if (count <= 0) return undefined
+  return {
+    label: `${count} ${count === 1 ? singular : plural}`,
+    tone,
+    value: count > 99 ? "99+" : count,
+  }
+}
+
+function countErroredLogs(entries: LogEntry[]): number {
+  return entries.filter(
+    (entry) => entry.err != null || !entry.explanation.ok,
+  ).length
+}
+
+function deployResultHasIssue(result: DeployResult | null): boolean {
+  if (!result) return false
+  if (result.kind === "direct") {
+    return (
+      !result.outcome.success ||
+      result.idlPublish?.success === false ||
+      result.codama?.allSucceeded === false
+    )
+  }
+  return !result.bufferWrite.success
 }
 
 function KV({
