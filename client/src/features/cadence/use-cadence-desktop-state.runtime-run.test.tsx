@@ -2961,6 +2961,321 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('messages-reason')).toHaveTextContent('malformed toolSummary payload')
   })
 
+  it('keeps MCP, gate pause, worker linkage, and runtime_run refresh truth continuous under malformed follow-up events', async () => {
+    const gateActionId = 'scope:auto-dispatch:workflow-research:requires_user_input'
+    const pendingState = makeRecoveredAutonomousRunState('project-1')
+    pendingState.history = [
+      makeAutonomousHistoryEntry({
+        projectId: 'project-1',
+        unitId: 'unit-history-1',
+        sequence: 1,
+        workflowNodeId: 'workflow-discussion',
+        handoffTransitionId: 'handoff-history-1',
+        handoffPackageHash: 'hash-history-1',
+        unitUpdatedAt: '2026-04-16T20:04:00Z',
+        artifactSummary: 'Recovered previous worker linkage.',
+      }),
+    ]
+
+    const advancedState = makeRecoveredAutonomousRunState('project-1')
+    advancedState.history = [
+      makeAutonomousHistoryEntry({
+        projectId: 'project-1',
+        unitId: 'unit-history-2',
+        sequence: 2,
+        workflowNodeId: 'workflow-research',
+        handoffTransitionId: 'handoff-history-2',
+        handoffPackageHash: 'hash-history-2',
+        unitUpdatedAt: '2026-04-16T20:06:00Z',
+        artifactSummary: 'Recovered newer worker linkage after gate progression.',
+      }),
+      makeAutonomousHistoryEntry({
+        projectId: 'project-1',
+        unitId: 'unit-history-malformed',
+        sequence: 1,
+        workflowNodeId: 'workflow-research',
+        handoffTransitionId: '   ',
+        handoffPackageHash: '   ',
+        unitUpdatedAt: '2026-04-16T20:03:00Z',
+      }),
+    ]
+
+    const setup = createMockAdapter({
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', {
+          runId: 'run-project-1',
+          lastCheckpointSequence: 2,
+          updatedAt: '2026-04-16T20:05:00Z',
+        }),
+      },
+      autonomousStates: {
+        'project-1': pendingState,
+      },
+      snapshots: {
+        'project-1': {
+          ...makeSnapshot('project-1', 'Cadence'),
+          approvalRequests: [],
+          handoffPackages: [makeHandoffPackage('project-1', 'auto:txn-001')],
+        },
+      },
+    })
+
+    let snapshotMode: 'base' | 'gate_pending' | 'advanced' = 'base'
+    vi.mocked(setup.getProjectSnapshot).mockImplementation(async (projectId: string) => {
+      const baseSnapshot = {
+        ...makeSnapshot(projectId, projectId === 'project-1' ? 'Cadence' : 'orchestra'),
+        handoffPackages: [
+          makeHandoffPackage('project-1', snapshotMode === 'advanced' ? 'auto:txn-002' : 'auto:txn-001'),
+          makeHandoffPackage('project-2', 'auto:txn-ghost'),
+        ],
+      }
+
+      if (projectId !== 'project-1') {
+        return baseSnapshot
+      }
+
+      if (snapshotMode === 'gate_pending') {
+        return {
+          ...baseSnapshot,
+          approvalRequests: [makeGateLinkedPendingApproval(gateActionId)],
+        }
+      }
+
+      if (snapshotMode === 'advanced') {
+        return {
+          ...baseSnapshot,
+          approvalRequests: [],
+        }
+      }
+
+      return {
+        ...baseSnapshot,
+        approvalRequests: [],
+      }
+    })
+
+    vi.mocked(setup.getRuntimeRun).mockImplementation(async (projectId: string) => {
+      if (projectId !== 'project-1') {
+        return makeRuntimeRun(projectId, { runId: `run-${projectId}` })
+      }
+
+      if (snapshotMode === 'advanced') {
+        return makeRuntimeRun('project-1', {
+          runId: 'run-project-1',
+          lastCheckpointSequence: 3,
+          updatedAt: '2026-04-16T20:06:00Z',
+        })
+      }
+
+      return makeRuntimeRun('project-1', {
+        runId: 'run-project-1',
+        lastCheckpointSequence: 2,
+        updatedAt: '2026-04-16T20:05:00Z',
+      })
+    })
+
+    vi.mocked(setup.getAutonomousRun).mockImplementation(async (projectId: string) => {
+      if (projectId !== 'project-1') {
+        return makeRecoveredAutonomousRunState(projectId)
+      }
+
+      return snapshotMode === 'advanced' ? advancedState : pendingState
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
+    await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0'))
+    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-1')
+
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'tool',
+          runId: 'run-project-1',
+          sequence: 1,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'mcp-invoke-1',
+          toolName: 'mcp.invoke',
+          toolState: 'succeeded',
+          toolSummary: {
+            kind: 'mcp_capability',
+            serverId: 'linear',
+            capabilityKind: 'prompt',
+            capabilityId: 'summarize_context',
+            capabilityName: 'Summarize Context',
+          },
+          skillId: null,
+          skillStage: null,
+          skillResult: null,
+          skillSource: null,
+          skillCacheStatus: null,
+          skillDiagnostic: null,
+          actionId: null,
+          boundaryId: null,
+          actionType: null,
+          title: null,
+          detail: 'MCP capability invocation succeeded.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T20:05:10Z',
+        },
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('mcp-invoke-1'))
+    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('mcp_capability')
+
+    snapshotMode = 'gate_pending'
+    act(() => {
+      setup.emitRuntimeStream(0, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'action_required',
+          runId: 'run-project-1',
+          sequence: 2,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: null,
+          toolName: null,
+          toolState: null,
+          actionId: gateActionId,
+          boundaryId: null,
+          actionType: 'review_worktree',
+          title: 'Review worktree changes',
+          detail: 'Cadence is paused at a workflow gate pending operator input.',
+          code: 'workflow_transition_gate_unmet',
+          message: 'The workflow transition is blocked until the operator resolves the gate.',
+          retryable: true,
+          createdAt: '2026-04-16T20:05:20Z',
+        },
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_stream:action_required'))
+    await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('1'))
+    expect(screen.getByTestId('stream-action-required-count')).toHaveTextContent('1')
+
+    snapshotMode = 'advanced'
+    act(() => {
+      setup.emitRuntimeRunUpdated({
+        projectId: 'project-1',
+        run: makeRuntimeRun('project-1', {
+          runId: 'run-project-1',
+          lastCheckpointSequence: 3,
+          updatedAt: '2026-04-16T20:06:00Z',
+        }),
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_run:updated'))
+    await waitFor(() => expect(screen.getByTestId('runtime-run-checkpoint-count')).toHaveTextContent('2'))
+    await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0'))
+    await waitFor(() => expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2'))
+    expect(screen.getByTestId('recent-unit-first-workflow-handoff-transition-id')).toHaveTextContent('handoff-history-2')
+    expect(screen.getByTestId('recent-unit-first-workflow-handoff-hash')).toHaveTextContent('hash-history-2')
+    expect(screen.getByTestId('latest-handoff-transition-id')).toHaveTextContent('auto:txn-002')
+
+    act(() => {
+      setup.emitRuntimeRunUpdatedError(
+        new CadenceDesktopError({
+          code: 'adapter_contract_mismatch',
+          errorClass: 'adapter_contract_mismatch',
+          message: 'Event runtime_run:updated returned an unexpected payload shape.',
+          retryable: false,
+        }),
+      )
+    })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('error')).toHaveTextContent(
+        'Event runtime_run:updated returned an unexpected payload shape.',
+      ),
+    )
+    expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1')
+    expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('mcp-invoke-1')
+    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
+
+    const latestStreamSubscriptionIndex = Math.max(0, setup.streamSubscriptions.length - 1)
+
+    act(() => {
+      setup.emitRuntimeStream(latestStreamSubscriptionIndex, {
+        projectId: 'project-1',
+        runtimeKind: 'openai_codex',
+        runId: 'run-project-1',
+        sessionId: 'session-1',
+        flowId: 'flow-1',
+        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+        item: {
+          kind: 'tool',
+          runId: 'run-project-1',
+          sequence: 3,
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: 'mcp-invoke-2',
+          toolName: 'mcp.invoke',
+          toolState: 'failed',
+          toolSummary: {
+            kind: 'mcp_capability',
+            serverId: 'linear',
+            capabilityKind: 'unsupported_kind',
+            capabilityId: 'summarize_context',
+            capabilityName: 'Summarize Context',
+          },
+          skillId: null,
+          skillStage: null,
+          skillResult: null,
+          skillSource: null,
+          skillCacheStatus: null,
+          skillDiagnostic: null,
+          actionId: null,
+          boundaryId: null,
+          actionType: null,
+          title: null,
+          detail: 'Malformed MCP summary after refresh.',
+          code: null,
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-16T20:06:10Z',
+        },
+      } as unknown as RuntimeStreamEventDto)
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('error'))
+    expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('mcp-invoke-1')
+    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('mcp_capability')
+    expect(screen.getByTestId('messages-reason')).toHaveTextContent('malformed toolSummary payload')
+    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
+    expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_run:updated')
+  })
+
   it('fails closed on malformed skill events and preserves the last truthful skill lane', async () => {
     const setup = createMockAdapter({
       runtimeSessions: {

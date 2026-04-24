@@ -1055,4 +1055,277 @@ describe('projectCheckpointControlLoops', () => {
     expect(projection.items).toHaveLength(0)
     expect(projection.recoveredCount).toBe(0)
   })
+
+  it('keeps recent-unit and checkpoint-loop projections deterministic under mixed success/failure bursts', () => {
+    const actionId = 'flow:flow-1:run:run-1:boundary:boundary-burst:terminal_input_required'
+    const lifecycle = makeLifecycle({
+      stages: [
+        makeStage({
+          stage: 'research',
+          stageLabel: 'Research',
+          nodeId: 'workflow-research',
+          nodeLabel: 'Research',
+        }),
+      ],
+      activeStage: makeStage({
+        stage: 'research',
+        stageLabel: 'Research',
+        nodeId: 'workflow-research',
+        nodeLabel: 'Research',
+      }),
+    })
+
+    const autonomousHistory: AutonomousUnitHistoryEntryView[] = [
+      makeHistoryEntry({
+        unit: makeUnit({
+          unitId: 'unit-truthful-new',
+          sequence: 3,
+          status: 'completed',
+          statusLabel: 'Completed',
+          updatedAt: '2026-04-16T12:08:00Z',
+        }),
+        latestAttempt: makeAttempt({
+          unitId: 'unit-truthful-new',
+          attemptId: 'unit-truthful-new:attempt-1',
+          attemptNumber: 1,
+          status: 'completed',
+          statusLabel: 'Completed',
+          childSessionId: 'child-truthful',
+          updatedAt: '2026-04-16T12:08:00Z',
+          workflowLinkage: {
+            workflowNodeId: 'workflow-research',
+            transitionId: 'transition-burst',
+            causalTransitionId: 'causal-burst',
+            handoffTransitionId: 'handoff-burst',
+            handoffPackageHash: 'hash-burst',
+          },
+        }),
+        artifacts: [
+          makeArtifact({
+            artifactId: 'artifact-burst-valid',
+            unitId: 'unit-truthful-new',
+            attemptId: 'unit-truthful-new:attempt-1',
+            actionId,
+            boundaryId: 'boundary-burst',
+            summary: 'Captured durable boundary evidence after gate pause.',
+            updatedAt: '2026-04-16T12:08:10Z',
+          }),
+        ],
+      }),
+      makeHistoryEntry({
+        unit: makeUnit({
+          unitId: 'unit-malformed-linkage',
+          sequence: 2,
+          updatedAt: '2026-04-16T12:07:00Z',
+        }),
+        latestAttempt: makeAttempt({
+          unitId: 'unit-malformed-linkage',
+          attemptId: 'unit-malformed-linkage:attempt-1',
+          childSessionId: '   ',
+          updatedAt: '2026-04-16T12:07:00Z',
+          workflowLinkage: {
+            workflowNodeId: 'workflow-research',
+            transitionId: 'transition-malformed',
+            causalTransitionId: 'causal-malformed',
+            handoffTransitionId: '   ',
+            handoffPackageHash: '   ',
+          },
+        }),
+      }),
+    ]
+
+    const autonomousRecentArtifacts: AutonomousUnitArtifactView[] = [
+      makeArtifact({
+        artifactId: 'artifact-burst-valid',
+        unitId: 'unit-truthful-new',
+        attemptId: 'unit-truthful-new:attempt-1',
+        actionId,
+        boundaryId: 'boundary-burst',
+        summary: 'Duplicate evidence row should be deduped deterministically.',
+        updatedAt: '2026-04-16T12:08:05Z',
+      }),
+      makeArtifact({
+        artifactId: 'artifact-orphan-burst',
+        unitId: 'ghost-unit',
+        attemptId: 'ghost-unit:attempt-1',
+        actionId: null,
+        boundaryId: 'boundary-burst',
+        summary: 'Orphan evidence row should not leak into projections.',
+        updatedAt: '2026-04-16T12:08:30Z',
+      }),
+    ]
+
+    const actionRequiredItems: RuntimeStreamActionRequiredItemView[] = [
+      makeActionRequired({
+        id: 'live-burst-1',
+        actionId,
+        boundaryId: 'boundary-burst',
+        createdAt: '2026-04-16T12:08:20Z',
+      }),
+      makeActionRequired({
+        id: 'live-burst-malformed',
+        actionId: '   ',
+        boundaryId: 'boundary-burst',
+        createdAt: '2026-04-16T12:08:21Z',
+      }),
+    ]
+
+    const approvalRequests: OperatorApprovalView[] = [
+      makeApproval({
+        actionId,
+        actionType: 'terminal_input_required',
+        title: 'Terminal input required',
+        detail: 'Provide terminal input before this boundary can continue.',
+        gateNodeId: null,
+        gateKey: null,
+        transitionFromNodeId: null,
+        transitionToNodeId: null,
+        transitionKind: null,
+        answerRequirementReason: 'runtime_resumable',
+        answerRequirementLabel: 'Required for runtime-resumable approvals',
+        answerShapeKind: 'terminal_input',
+        answerShapeLabel: 'Terminal input text',
+        answerShapeHint: 'Provide terminal input to continue this boundary.',
+        answerPlaceholder: 'Provide terminal input.',
+      }),
+      makeApproval({
+        actionId: '   ',
+        actionType: 'terminal_input_required',
+      }),
+    ]
+
+    const resumeHistory: ResumeHistoryEntryView[] = [
+      makeResumeEntry({
+        sourceActionId: actionId,
+        status: 'failed',
+        statusLabel: 'Resume failed',
+        summary: 'Resume attempt failed while waiting for refreshed runtime metadata.',
+        createdAt: '2026-04-16T12:08:40Z',
+      }),
+      makeResumeEntry({
+        sourceActionId: '   ',
+      }),
+    ]
+
+    const notificationBroker = makeBrokerView({
+      actions: [
+        makeBrokerAction({
+          actionId,
+          dispatches: [
+            makeDispatch({
+              actionId,
+              routeId: 'telegram-primary',
+              status: 'failed',
+              statusLabel: 'Failed',
+              attemptCount: 2,
+              lastErrorCode: 'notification_dispatch_http_500',
+              lastErrorMessage: 'Telegram returned HTTP 500.',
+              updatedAt: '2026-04-16T12:08:30Z',
+            }),
+          ],
+        }),
+        makeBrokerAction({
+          actionId: 'ghost-action',
+          dispatches: [
+            makeDispatch({
+              actionId: 'ghost-action',
+              routeId: 'ghost-route',
+              status: 'sent',
+              statusLabel: 'Sent',
+              attemptCount: 1,
+              lastErrorCode: null,
+              lastErrorMessage: null,
+              updatedAt: '2026-04-16T12:08:25Z',
+              isPending: false,
+              isSent: true,
+              isFailed: false,
+              isClaimed: false,
+              hasFailureDiagnostics: false,
+            }),
+          ],
+        }),
+      ],
+    })
+
+    const projectRecentA = projectRecentAutonomousUnits({
+      autonomousHistory,
+      autonomousRecentArtifacts,
+      lifecycle,
+      handoffPackages: [makeHandoff({ handoffTransitionId: 'handoff-burst', packageHash: 'hash-burst' })],
+      approvalRequests,
+    })
+    const projectRecentB = projectRecentAutonomousUnits({
+      autonomousHistory: [...autonomousHistory].reverse(),
+      autonomousRecentArtifacts: [...autonomousRecentArtifacts].reverse(),
+      lifecycle,
+      handoffPackages: [makeHandoff({ handoffTransitionId: 'handoff-burst', packageHash: 'hash-burst' })],
+      approvalRequests: [...approvalRequests].reverse(),
+    })
+
+    const checkpointA = projectCheckpointControlLoops({
+      actionRequiredItems,
+      approvalRequests,
+      resumeHistory,
+      notificationBroker,
+      autonomousHistory,
+      autonomousRecentArtifacts,
+    })
+    const checkpointB = projectCheckpointControlLoops({
+      actionRequiredItems: [...actionRequiredItems].reverse(),
+      approvalRequests: [...approvalRequests].reverse(),
+      resumeHistory: [...resumeHistory].reverse(),
+      notificationBroker: makeBrokerView({
+        actions: [...notificationBroker.actions].reverse(),
+      }),
+      autonomousHistory: [...autonomousHistory].reverse(),
+      autonomousRecentArtifacts: [...autonomousRecentArtifacts].reverse(),
+    })
+
+    const summarizeRecent = (projection: typeof projectRecentA) =>
+      projection.items.map((item) => ({
+        unitId: item.unitId,
+        workflowStateLabel: item.workflowStateLabel,
+        workflowLinkageSource: item.workflowLinkageSource,
+        workflowTransitionId: item.workflowTransitionId,
+        workflowHandoffTransitionId: item.workflowHandoffTransitionId,
+        workflowHandoffPackageHash: item.workflowHandoffPackageHash,
+        evidenceCount: item.evidenceCount,
+      }))
+
+    const summarizeCheckpoint = (projection: typeof checkpointA) =>
+      projection.items.map((item) => ({
+        actionId: item.actionId,
+        truthSource: item.truthSource,
+        liveStateLabel: item.liveStateLabel,
+        durableStateLabel: item.durableStateLabel,
+        resumeStateLabel: item.resumeStateLabel,
+        brokerStateLabel: item.brokerStateLabel,
+        evidenceCount: item.evidenceCount,
+      }))
+
+    expect(summarizeRecent(projectRecentA)).toEqual(summarizeRecent(projectRecentB))
+    expect(summarizeCheckpoint(checkpointA)).toEqual(summarizeCheckpoint(checkpointB))
+
+    expect(projectRecentA.items[0]).toMatchObject({
+      unitId: 'unit-truthful-new',
+      workflowStateLabel: 'In sync',
+      workflowHandoffTransitionId: 'handoff-burst',
+      workflowHandoffPackageHash: 'hash-burst',
+      evidenceCount: 1,
+    })
+    expect(projectRecentA.items[1]).toMatchObject({
+      unitId: 'unit-malformed-linkage',
+      workflowStateLabel: 'Handoff pending',
+      workflowHandoffTransitionId: null,
+      workflowHandoffPackageHash: null,
+    })
+
+    expect(checkpointA.items).toHaveLength(1)
+    expect(checkpointA.items[0]).toMatchObject({
+      actionId,
+      truthSource: 'live_and_durable',
+      brokerStateLabel: '1 broker failure',
+      evidenceCount: 1,
+    })
+  })
 })
