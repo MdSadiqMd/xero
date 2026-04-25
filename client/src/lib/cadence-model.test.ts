@@ -1891,6 +1891,10 @@ describe('cadence-model', () => {
       mcpSummary.kind,
     ]).toEqual(['file', 'git', 'web', 'browser_computer_use', 'mcp_capability'])
 
+    expect(gitSummary.kind).toBe('git')
+    if (gitSummary.kind !== 'git') {
+      throw new Error('Expected a git summary kind.')
+    }
     expect(gitSummary.baseRevision).toBe('main~1')
 
     expect(mcpSummary.kind).toBe('mcp_capability')

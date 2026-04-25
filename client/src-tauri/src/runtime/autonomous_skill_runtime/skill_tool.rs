@@ -298,7 +298,7 @@ pub fn validate_skill_tool_input(
         } => {
             let skill_id = normalize_skill_id(&skill_id)?;
             let markdown = validate_non_empty_text(markdown, "markdown")?;
-            if markdown.as_bytes().len() > CADENCE_SKILL_TOOL_MAX_CONTEXT_MARKDOWN_BYTES {
+            if markdown.len() > CADENCE_SKILL_TOOL_MAX_CONTEXT_MARKDOWN_BYTES {
                 return Err(CommandError::user_fixable(
                     "skill_tool_context_too_large",
                     format!(
@@ -321,7 +321,7 @@ pub fn validate_skill_tool_input(
                 validate_context_asset(CadenceSkillToolContextAsset {
                     relative_path: relative_path.clone(),
                     sha256: "0".repeat(64),
-                    bytes: asset.content.as_bytes().len(),
+                    bytes: asset.content.len(),
                     content: asset.content.clone(),
                 })?;
                 normalized_assets.push(CadenceSkillToolDynamicAssetInput {
@@ -718,7 +718,7 @@ fn validate_context_file_shape(
     max_bytes: usize,
 ) -> CommandResult<()> {
     validate_sha256(sha256, "sha256")?;
-    let actual_bytes = content.as_bytes().len();
+    let actual_bytes = content.len();
     if actual_bytes == 0 {
         return Err(CommandError::user_fixable(
             "skill_tool_context_invalid",

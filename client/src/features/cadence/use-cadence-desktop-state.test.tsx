@@ -92,24 +92,6 @@ function makeSnapshot(id: string, name: string): ProjectSnapshotResponseDto {
         summary: id === 'project-1' ? 'Done' : null,
       },
     ],
-    lifecycle: {
-      stages: [
-        {
-          stage: 'discussion',
-          nodeId: 'workflow-discussion',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-15T17:59:00Z',
-        },
-        {
-          stage: 'research',
-          nodeId: 'workflow-research',
-          status: id === 'project-1' ? 'active' : 'pending',
-          actionRequired: id === 'project-1',
-          lastTransitionAt: '2026-04-15T18:00:00Z',
-        },
-      ],
-    },
     approvalRequests: [],
     verificationRecords: [],
     resumeHistory: [],
@@ -492,7 +474,6 @@ function makeAutonomousRunState(projectId: string, runId = `auto-${projectId}`):
       supervisorKind: 'detached_pty',
       status: 'running',
       recoveryState: 'healthy',
-      activeUnitId: `${runId}:checkpoint:1`,
       duplicateStartDetected: false,
       duplicateStartRunId: null,
       duplicateStartReason: null,
@@ -510,21 +491,6 @@ function makeAutonomousRunState(projectId: string, runId = `auto-${projectId}`):
       lastErrorCode: null,
       lastError: null,
       updatedAt: '2026-04-16T20:00:06Z',
-    },
-    unit: {
-      projectId,
-      runId,
-      unitId: `${runId}:checkpoint:1`,
-      sequence: 1,
-      kind: 'executor',
-      status: 'active',
-      summary: 'Recovered the current autonomous unit boundary.',
-      boundaryId: 'checkpoint:1',
-      startedAt: '2026-04-16T20:00:01Z',
-      finishedAt: null,
-      updatedAt: '2026-04-16T20:00:06Z',
-      lastErrorCode: null,
-      lastError: null,
     },
   }
 }
@@ -767,7 +733,7 @@ function createMockAdapter(options?: {
   })
   const getRuntimeRun = vi.fn(async (projectId: string): Promise<RuntimeRunDto | null> => runtimeRuns[projectId] ?? null)
   const getAutonomousRun = vi.fn(async (projectId: string): Promise<AutonomousRunStateDto> =>
-    autonomousStates[projectId] ?? { run: null, unit: null },
+    autonomousStates[projectId] ?? { run: null },
   )
   const getRuntimeSession = vi.fn(async (projectId: string) => runtimeSessions[projectId])
   const getRuntimeSettings = vi.fn(async () => currentRuntimeSettings.value)
@@ -1235,12 +1201,6 @@ function createMockAdapter(options?: {
       },
       updatedAt: '2026-04-16T20:10:00Z',
     }
-    nextState.unit = {
-      ...nextState.unit!,
-      status: 'cancelled',
-      finishedAt: '2026-04-16T20:10:00Z',
-      updatedAt: '2026-04-16T20:10:00Z',
-    }
     autonomousStates[projectId] = nextState
     return nextState
   })
@@ -1530,12 +1490,6 @@ function createMockAdapter(options?: {
       },
       syncedAt: '2026-04-17T03:00:00Z',
     })),
-    upsertWorkflowGraph: vi.fn(async () => {
-      throw new Error('not used in use-cadence-desktop-state tests')
-    }) as never,
-    applyWorkflowTransition: vi.fn(async () => {
-      throw new Error('not used in use-cadence-desktop-state tests')
-    }) as never,
     browserEval: vi.fn(async () => undefined),
     browserCurrentUrl: vi.fn(async () => null),
     browserScreenshot: vi.fn(async () => ''),
@@ -1775,10 +1729,6 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="workflow-has-phases">{String(state.workflowView?.hasPhases ?? false)}</div>
       <div data-testid="workflow-overall-percent">{String(state.workflowView?.overallPercent ?? 0)}</div>
       <div data-testid="workflow-active-phase">{state.workflowView?.activePhase?.name ?? 'none'}</div>
-      <div data-testid="workflow-has-lifecycle">{String(state.workflowView?.hasLifecycle ?? false)}</div>
-      <div data-testid="workflow-lifecycle-percent">{String(state.workflowView?.lifecyclePercent ?? 0)}</div>
-      <div data-testid="workflow-active-lifecycle-stage">{state.workflowView?.activeLifecycleStage?.stage ?? 'none'}</div>
-      <div data-testid="workflow-lifecycle-action-required">{String(state.workflowView?.actionRequiredLifecycleCount ?? 0)}</div>
       <div data-testid="execution-status-count">{String(state.executionView?.statusCount ?? 0)}</div>
       <div data-testid="execution-branch">{state.executionView?.branchLabel ?? 'none'}</div>
       <div data-testid="active-diff-scope">{state.activeDiffScope}</div>
@@ -2331,10 +2281,6 @@ describe('useCadenceDesktopState', () => {
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
 
     expect(screen.getByTestId('workflow-has-phases')).toHaveTextContent('true')
-    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('false')
-    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
-    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('0')
     expect(screen.getByTestId('workflow-overall-percent')).toHaveTextContent('33')
     expect(screen.getByTestId('workflow-active-phase')).toHaveTextContent('Live projection')
     expect(screen.getByTestId('execution-status-count')).toHaveTextContent('1')
@@ -2383,9 +2329,6 @@ describe('useCadenceDesktopState', () => {
             isGitRepo: true,
           },
           phases: [],
-          lifecycle: {
-            stages: [],
-          },
           approvalRequests: [],
           verificationRecords: [],
           resumeHistory: [],
@@ -2433,9 +2376,6 @@ describe('useCadenceDesktopState', () => {
 
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
     expect(screen.getByTestId('workflow-has-phases')).toHaveTextContent('false')
-    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('false')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
-    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('0')
     expect(screen.getByTestId('branch')).toHaveTextContent('No branch')
     expect(screen.getByTestId('status-count')).toHaveTextContent('0')
     expect(screen.getByTestId('runtime-label')).toHaveTextContent('Runtime unavailable')
@@ -2517,10 +2457,6 @@ describe('useCadenceDesktopState', () => {
 
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
     expect(screen.getByTestId('workflow-has-phases')).toHaveTextContent('false')
-    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('false')
-    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
-    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('0')
   })
 
   it('supports cancelled imports and successful imports without duplicating project rows', async () => {
@@ -2824,7 +2760,7 @@ describe('useCadenceDesktopState', () => {
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
     expect(screen.getByTestId('error')).toHaveTextContent('none')
     expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
+    expect(screen.getByTestId('workflow-active-phase')).toHaveTextContent('Import')
   })
 
   it('keeps the current selection intact when repository status loading fails', async () => {

@@ -1,5 +1,9 @@
 use super::*;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The provider loop is the orchestration boundary for run identity, tool state, and cancellation."
+)]
 pub(crate) fn drive_provider_loop(
     provider: &dyn ProviderAdapter,
     mut messages: Vec<ProviderMessage>,

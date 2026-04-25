@@ -23,7 +23,6 @@ import type {
 } from '@/src/features/cadence/use-cadence-desktop-state'
 import type { AgentProviderModelCatalogView } from '@/src/features/cadence/use-cadence-desktop-state/types'
 import type {
-  PlanningLifecycleView,
   ProjectDetailView,
   ProviderModelThinkingEffortDto,
   RuntimeRunView,
@@ -32,25 +31,6 @@ import type {
 } from '@/src/lib/cadence-model'
 
 type CheckpointControlLoopCard = NonNullable<AgentPaneView['checkpointControlLoop']>['items'][number]
-
-function makeLifecycle(overrides: Partial<PlanningLifecycleView> = {}): PlanningLifecycleView {
-  return {
-    stages: [],
-    byStage: {
-      discussion: null,
-      research: null,
-      requirements: null,
-      roadmap: null,
-    },
-    hasStages: false,
-    activeStage: null,
-    actionRequiredCount: 0,
-    blockedCount: 0,
-    completedCount: 0,
-    percentComplete: 0,
-    ...overrides,
-  }
-}
 
 function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailView {
   return {
@@ -67,7 +47,6 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     branchLabel: 'No branch',
     runtimeLabel: 'Runtime unavailable',
     phaseProgressPercent: 0,
-    lifecycle: makeLifecycle(),
     repository: {
       id: 'repo-1',
       projectId: 'project-1',
@@ -85,7 +64,6 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     latestDecisionOutcome: null,
     verificationRecords: [],
     resumeHistory: [],
-    handoffPackages: [],
     agentSessions: [],
     selectedAgentSession: null,
     selectedAgentSessionId: 'agent-session-main',
@@ -108,25 +86,14 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     runtimeSession: null,
     runtimeRun: null,
     autonomousRun: null,
-    autonomousUnit: null,
-    autonomousAttempt: null,
-    autonomousHistory: [],
-    autonomousRecentArtifacts: [],
     ...overrides,
   }
 }
 
 function makeWorkflow(project = makeProject(), overrides: Partial<WorkflowPaneView> = {}): WorkflowPaneView {
-  const lifecycle = project.lifecycle ?? makeLifecycle()
-
   return {
     project,
     activePhase: project.phases.find((phase) => phase.status === 'active') ?? null,
-    lifecycle,
-    activeLifecycleStage: lifecycle.activeStage,
-    lifecyclePercent: lifecycle.percentComplete,
-    hasLifecycle: lifecycle.hasStages,
-    actionRequiredLifecycleCount: lifecycle.actionRequiredCount,
     overallPercent: project.phaseProgressPercent,
     hasPhases: project.phases.length > 0,
     runtimeSession: overrides.runtimeSession ?? project.runtimeSession ?? null,
@@ -289,13 +256,10 @@ function makeAutonomousRun(
     providerId: 'openai_codex',
     runtimeLabel: 'Openai Codex · Autonomous run active',
     supervisorKind: 'detached_pty',
-    supervisorLabel: 'Detached Pty',
     status: 'running' as const,
     statusLabel: 'Autonomous run active',
     recoveryState: 'recovery_required' as const,
     recoveryLabel: 'Recovery required',
-    activeUnitId: 'auto-run-1:checkpoint:2',
-    activeAttemptId: 'auto-run-1:checkpoint:2:attempt:1',
     duplicateStartDetected: false,
     duplicateStartRunId: null,
     duplicateStartReason: null,
@@ -320,36 +284,8 @@ function makeAutonomousRun(
     },
     updatedAt: '2026-04-16T20:03:00Z',
     isActive: true,
-    needsRecovery: true,
     isTerminal: false,
-    isFailed: true,
-    ...overrides,
-  }
-}
-
-function makeAutonomousUnit(
-  overrides: Partial<NonNullable<ProjectDetailView['autonomousUnit']>> = {},
-): NonNullable<ProjectDetailView['autonomousUnit']> {
-  return {
-    projectId: 'project-1',
-    runId: 'auto-run-1',
-    unitId: 'auto-run-1:checkpoint:2',
-    sequence: 2,
-    kind: 'executor' as const,
-    kindLabel: 'Executor',
-    status: 'active' as const,
-    statusLabel: 'Active',
-    summary: 'Recovered the current autonomous unit boundary after reload without launching a duplicate continuation.',
-    boundaryId: 'checkpoint:2',
-    workflowLinkage: null,
-    startedAt: '2026-04-16T20:00:01Z',
-    finishedAt: null,
-    updatedAt: '2026-04-16T20:03:00Z',
-    lastErrorCode: null,
-    lastError: null,
-    isActive: true,
-    isTerminal: false,
-    isFailed: false,
+    isStale: false,
     ...overrides,
   }
 }
@@ -615,10 +551,6 @@ function makeAgent(project = makeProject(), overrides: Partial<AgentPaneView> = 
     runtimeRunErrorMessage: null,
     autonomousRunErrorMessage: null,
     autonomousRun: overrides.autonomousRun ?? project.autonomousRun ?? null,
-    autonomousUnit: overrides.autonomousUnit ?? project.autonomousUnit ?? null,
-    autonomousAttempt: overrides.autonomousAttempt ?? project.autonomousAttempt ?? null,
-    autonomousHistory: overrides.autonomousHistory ?? project.autonomousHistory,
-    autonomousRecentArtifacts: overrides.autonomousRecentArtifacts ?? project.autonomousRecentArtifacts,
     authPhase: runtimeSession?.phase ?? null,
     authPhaseLabel: runtimeSession?.phaseLabel ?? 'Signed out',
     runtimeStream,
@@ -812,14 +744,12 @@ describe('live views', () => {
       duplicateStartReason:
         'Cadence reused the already-active autonomous run for this project instead of launching a duplicate supervisor.',
     })
-    const autonomousUnit = makeAutonomousUnit()
 
     render(
       <AgentRuntime
         agent={makeAgent(
           makeProject({
             autonomousRun,
-            autonomousUnit,
             runtimeRun: makeRuntimeRun({
               status: 'stale',
               statusLabel: 'Supervisor stale',
@@ -856,7 +786,6 @@ describe('live views', () => {
               isFailed: false,
             }),
             autonomousRun,
-            autonomousUnit,
             runtimeRun: makeRuntimeRun({
               status: 'stale',
               statusLabel: 'Supervisor stale',

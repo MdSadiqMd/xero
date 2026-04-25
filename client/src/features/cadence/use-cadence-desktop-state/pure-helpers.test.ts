@@ -164,10 +164,6 @@ describe('notification-health helpers', () => {
 
     const target = getBlockedNotificationSyncPollTarget({
       project,
-      autonomousUnit: {
-        status: 'blocked',
-        boundaryId: 'boundary-1',
-      } as ProjectDetailView['autonomousUnit'],
       runtimeStream: makeRuntimeStream({
         actionRequired: [
           {

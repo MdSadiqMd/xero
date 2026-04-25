@@ -132,9 +132,9 @@ mod tests {
 
     #[test]
     fn default_decoder_without_feature_reports_unavailable() {
-        let mut decoder = new_default_decoder();
         #[cfg(not(feature = "emulator-live"))]
         {
+            let mut decoder = new_default_decoder();
             assert_eq!(decoder.name(), "unavailable");
             match decoder.decode(&[0, 0, 0, 1, 0x67]) {
                 Err(DecodeError::Unavailable) => {}
@@ -143,6 +143,7 @@ mod tests {
         }
         #[cfg(feature = "emulator-live")]
         {
+            let decoder = new_default_decoder();
             assert_eq!(decoder.name(), "openh264");
         }
     }

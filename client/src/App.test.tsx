@@ -47,11 +47,7 @@ import {
   upsertProviderProfileRequestSchema,
 } from '@/src/lib/cadence-model'
 import type {
-  ApplyWorkflowTransitionResponseDto,
   AutonomousRunStateDto,
-  AutonomousUnitArtifactDto,
-  AutonomousUnitAttemptDto,
-  AutonomousUnitHistoryEntryDto,
   ImportMcpServersResponseDto,
   ImportRepositoryResponseDto,
   ListNotificationDispatchesResponseDto,
@@ -79,12 +75,12 @@ import type {
   RuntimeStreamEventDto,
   RuntimeUpdatedPayloadDto,
   SubscribeRuntimeStreamResponseDto,
+  SkillRegistryDto,
   SyncNotificationAdaptersResponseDto,
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
   UpsertProviderProfileRequestDto,
   UpsertRuntimeSettingsRequestDto,
-  UpsertWorkflowGraphResponseDto,
 } from '@/src/lib/cadence-model'
 import {
   getCloudProviderPreset,
@@ -135,11 +131,9 @@ function makeSnapshot(projectId = 'project-1', name = 'Cadence'): ProjectSnapsho
       isGitRepo: true,
     },
     phases: [],
-    lifecycle: { stages: [] },
     approvalRequests: [],
     verificationRecords: [],
     resumeHistory: [],
-    handoffPackages: [],
     agentSessions: [makeAgentSession(projectId)],
     notificationDispatches: [],
     notificationReplyClaims: [],
@@ -274,6 +268,28 @@ function makeMcpRegistry(overrides: Partial<McpRegistryDto> = {}): McpRegistryDt
         updatedAt: '2026-04-24T04:00:00Z',
       },
     ],
+    ...overrides,
+  }
+}
+
+function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegistryDto {
+  return {
+    projectId: 'project-1',
+    entries: [],
+    sources: {
+      localRoots: [],
+      github: {
+        repo: 'owner/skills',
+        reference: 'main',
+        root: 'skills',
+        enabled: true,
+        updatedAt: '2026-04-24T04:00:00Z',
+      },
+      projects: [],
+      updatedAt: '2026-04-24T04:00:00Z',
+    },
+    diagnostics: [],
+    reloadedAt: '2026-04-24T04:00:00Z',
     ...overrides,
   }
 }
@@ -690,134 +706,6 @@ function makeResumeHistoryEntry(actionId: string, overrides: Partial<ResumeHisto
   }
 }
 
-function makeRecoveredPolicyDeniedAutonomousState(
-  projectId = 'project-1',
-  options: {
-    actionId: string
-    boundaryId: string
-    runtimeRunId?: string
-    diagnosticCode?: string
-  },
-): AutonomousRunStateDto {
-  const runtimeRunId = options.runtimeRunId ?? 'run-1'
-  const autonomousRunId = `auto-${projectId}`
-  const unitId = `${autonomousRunId}:${options.boundaryId}`
-  const attemptId = `${unitId}:attempt-1`
-  const baseState = makeAutonomousRunState(projectId, autonomousRunId)
-  const attempt: AutonomousUnitAttemptDto = {
-    projectId,
-    runId: autonomousRunId,
-    unitId,
-    attemptId,
-    attemptNumber: 1,
-    childSessionId: `${runtimeRunId}:child-session-1`,
-    status: 'failed',
-    boundaryId: options.boundaryId,
-    workflowLinkage: null,
-    startedAt: '2026-04-22T12:08:00Z',
-    finishedAt: '2026-04-22T12:08:10Z',
-    updatedAt: '2026-04-22T12:08:10Z',
-    lastErrorCode: options.diagnosticCode ?? 'policy_denied_command_cwd_outside_repo',
-    lastError: {
-      code: options.diagnosticCode ?? 'policy_denied_command_cwd_outside_repo',
-      message: 'Cadence denied the autonomous shell command because its cwd escapes the imported repository root.',
-    },
-  }
-  const deniedArtifactId = `${attemptId}:policy-denied`
-  const verificationArtifactId = `${attemptId}:verification`
-  const deniedArtifact: AutonomousUnitArtifactDto = {
-    projectId,
-    runId: autonomousRunId,
-    unitId,
-    attemptId,
-    artifactId: deniedArtifactId,
-    artifactKind: 'policy_denied',
-    status: 'recorded',
-    summary: 'Cadence denied the autonomous shell command because its cwd escapes the imported repository root.',
-    contentHash: 'policy-denied-hash',
-    payload: {
-      kind: 'policy_denied',
-      projectId,
-      runId: autonomousRunId,
-      unitId,
-      attemptId,
-      artifactId: deniedArtifactId,
-      diagnosticCode: options.diagnosticCode ?? 'policy_denied_command_cwd_outside_repo',
-      message: 'Cadence denied the autonomous shell command because its cwd escapes the imported repository root.',
-      toolName: 'bash',
-      actionId: options.actionId,
-      boundaryId: options.boundaryId,
-    },
-    createdAt: '2026-04-22T12:08:10Z',
-    updatedAt: '2026-04-22T12:08:10Z',
-  }
-  const verificationArtifact: AutonomousUnitArtifactDto = {
-    projectId,
-    runId: autonomousRunId,
-    unitId,
-    attemptId,
-    artifactId: verificationArtifactId,
-    artifactKind: 'verification_evidence',
-    status: 'recorded',
-    summary:
-      'Autonomous attempt recorded stable policy denial `policy_denied_command_cwd_outside_repo` for the denied shell command.',
-    contentHash: 'verification-hash',
-    payload: {
-      kind: 'verification_evidence',
-      projectId,
-      runId: autonomousRunId,
-      unitId,
-      attemptId,
-      artifactId: verificationArtifactId,
-      evidenceKind: 'policy_denial',
-      label: 'Policy denial retained in durable history',
-      outcome: 'failed',
-      commandResult: {
-        exitCode: 1,
-        timedOut: false,
-        summary: 'Cadence denied the shell command before execution.',
-      },
-      actionId: options.actionId,
-      boundaryId: options.boundaryId,
-    },
-    createdAt: '2026-04-22T12:08:11Z',
-    updatedAt: '2026-04-22T12:08:11Z',
-  }
-  const historyEntry: AutonomousUnitHistoryEntryDto = {
-    unit: {
-      ...baseState.unit!,
-      runId: autonomousRunId,
-      unitId,
-      sequence: 2,
-      kind: 'executor',
-      status: 'failed',
-      summary: 'Cadence recorded a terminal shell-policy denial for this checkpoint boundary.',
-      boundaryId: options.boundaryId,
-      finishedAt: '2026-04-22T12:08:10Z',
-      updatedAt: '2026-04-22T12:08:10Z',
-      lastErrorCode: options.diagnosticCode ?? 'policy_denied_command_cwd_outside_repo',
-      lastError: {
-        code: options.diagnosticCode ?? 'policy_denied_command_cwd_outside_repo',
-        message: 'Cadence denied the autonomous shell command because its cwd escapes the imported repository root.',
-      },
-    },
-    latestAttempt: attempt,
-    artifacts: [deniedArtifact, verificationArtifact],
-  }
-
-  return {
-    run: {
-      ...baseState.run!,
-      runId: autonomousRunId,
-      activeUnitId: unitId,
-      updatedAt: '2026-04-22T12:08:10Z',
-    },
-    unit: historyEntry.unit,
-    attempt,
-    history: [historyEntry],
-  }
-}
-
 function makeRuntimeStreamActionRequiredEvent(options: {
   actionId: string
   boundaryId: string
@@ -967,7 +855,6 @@ function makeAutonomousRunState(projectId = 'project-1', runId = 'auto-run-1'): 
       supervisorKind: 'detached_pty',
       status: 'running',
       recoveryState: 'healthy',
-      activeUnitId: `${runId}:checkpoint:1`,
       duplicateStartDetected: false,
       duplicateStartRunId: null,
       duplicateStartReason: null,
@@ -985,22 +872,6 @@ function makeAutonomousRunState(projectId = 'project-1', runId = 'auto-run-1'): 
       lastErrorCode: null,
       lastError: null,
       updatedAt: '2026-04-16T20:00:06Z',
-    },
-    unit: {
-      projectId,
-      runId,
-      unitId: `${runId}:checkpoint:1`,
-      sequence: 1,
-      kind: 'executor',
-      status: 'active',
-      summary: 'Recovered the current autonomous unit boundary.',
-      boundaryId: 'checkpoint:1',
-      workflowLinkage: null,
-      startedAt: '2026-04-16T20:00:01Z',
-      finishedAt: null,
-      updatedAt: '2026-04-16T20:00:06Z',
-      lastErrorCode: null,
-      lastError: null,
     },
   }
 }
@@ -1062,6 +933,7 @@ function createAdapter(options?: {
   runtimeSettings?: RuntimeSettingsDto
   providerProfiles?: ProviderProfilesDto
   mcpRegistry?: McpRegistryDto
+  skillRegistry?: SkillRegistryDto
   runtimeRun?: RuntimeRunDto | null
   autonomousState?: AutonomousRunStateDto | null
   notificationRoutes?: ListNotificationRoutesResponseDto['routes']
@@ -1081,6 +953,7 @@ function createAdapter(options?: {
     currentProviderProfiles.profiles.map((profile) => [profile.profileId, buildProviderModelCatalog(profile)]),
   )
   let currentMcpRegistry = options?.mcpRegistry ?? makeMcpRegistry()
+  let currentSkillRegistry = options?.skillRegistry ?? makeSkillRegistry()
   let currentMcpImportDiagnostics: McpImportDiagnosticDto[] = []
   let currentRuntimeRun = options?.runtimeRun ?? null
   let currentAutonomousState = options?.autonomousState ?? null
@@ -1278,9 +1151,6 @@ function createAdapter(options?: {
     }
     if (currentAutonomousState?.run) {
       projectIds.add(currentAutonomousState.run.projectId)
-    }
-    if (currentAutonomousState?.unit) {
-      projectIds.add(currentAutonomousState.unit.projectId)
     }
     return Array.from(projectIds)
   }
@@ -1776,7 +1646,7 @@ function createAdapter(options?: {
       )
       return archivedSession
     },
-    getAutonomousRun: async () => currentAutonomousState ?? { run: null, unit: null },
+    getAutonomousRun: async () => currentAutonomousState ?? { run: null },
     getRuntimeRun: async () => currentRuntimeRun,
     getRuntimeSettings: async () => currentRuntimeSettings,
     listMcpServers,
@@ -1784,6 +1654,20 @@ function createAdapter(options?: {
     removeMcpServer,
     importMcpServers,
     refreshMcpServerStatuses,
+    listSkillRegistry: async () => currentSkillRegistry,
+    reloadSkillRegistry: async () => {
+      currentSkillRegistry = {
+        ...currentSkillRegistry,
+        reloadedAt: '2026-04-24T05:04:00Z',
+      }
+      return currentSkillRegistry
+    },
+    setSkillEnabled: async () => currentSkillRegistry,
+    removeSkill: async () => currentSkillRegistry,
+    upsertSkillLocalRoot: async () => currentSkillRegistry,
+    removeSkillLocalRoot: async () => currentSkillRegistry,
+    updateProjectSkillSource: async () => currentSkillRegistry,
+    updateGithubSkillSource: async () => currentSkillRegistry,
     getProviderModelCatalog: async (profileId, options) => {
       const currentProfile = currentProviderProfiles.profiles.find((profile) => profile.profileId === profileId)
       if (!currentProfile) {
@@ -1841,12 +1725,6 @@ function createAdapter(options?: {
             code: 'operator_cancelled',
             message: 'Operator cancelled the autonomous run from the desktop shell.',
           },
-          updatedAt: '2026-04-16T20:10:00Z',
-        },
-        unit: {
-          ...makeAutonomousRunState('project-1', runId).unit!,
-          status: 'cancelled',
-          finishedAt: '2026-04-16T20:10:00Z',
           updatedAt: '2026-04-16T20:10:00Z',
         },
       }
@@ -1960,27 +1838,6 @@ function createAdapter(options?: {
         errorCodeCounts: [],
       },
       syncedAt: '2026-04-16T13:00:00Z',
-    }),
-    upsertWorkflowGraph: async (request): Promise<UpsertWorkflowGraphResponseDto> => ({
-      nodes: request.nodes,
-      edges: request.edges,
-      gates: request.gates,
-      phases: [],
-    }),
-    applyWorkflowTransition: async (request): Promise<ApplyWorkflowTransitionResponseDto> => ({
-      transitionEvent: {
-        id: 1,
-        transitionId: request.transitionId,
-        causalTransitionId: request.causalTransitionId ?? null,
-        fromNodeId: request.fromNodeId,
-        toNodeId: request.toNodeId,
-        transitionKind: request.transitionKind,
-        gateDecision: request.gateDecision,
-        gateDecisionContext: request.gateDecisionContext ?? null,
-        createdAt: request.occurredAt,
-      },
-      automaticDispatch: undefined,
-      phases: [],
     }),
     browserEval: async () => undefined,
     browserCurrentUrl: async () => null,
@@ -2742,7 +2599,6 @@ describe('CadenceApp current UI', () => {
     recoveredAutonomousState.run = {
       ...recoveredAutonomousState.run!,
       recoveryState: 'recovery_required',
-      activeUnitId: 'auto-run-1:checkpoint:2',
       duplicateStartDetected: true,
       duplicateStartRunId: 'auto-run-1',
       duplicateStartReason:
@@ -2759,20 +2615,11 @@ describe('CadenceApp current UI', () => {
       },
       updatedAt: '2026-04-16T20:03:00Z',
     }
-    recoveredAutonomousState.unit = {
-      ...recoveredAutonomousState.unit!,
-      unitId: 'auto-run-1:checkpoint:2',
-      sequence: 2,
-      summary: 'Recovered the current autonomous unit boundary after reload without launching a duplicate continuation.',
-      boundaryId: 'checkpoint:2',
-      updatedAt: '2026-04-16T20:03:00Z',
-    }
 
     const { adapter } = createAdapter({
       snapshot: {
         ...makeSnapshot(),
         autonomousRun: recoveredAutonomousState.run,
-        autonomousUnit: recoveredAutonomousState.unit,
       },
       runtimeRun: makeRuntimeRun('project-1', {
         status: 'stale',
@@ -3109,24 +2956,10 @@ describe('CadenceApp current UI', () => {
     )
   })
 
-  it('proves one shipped-path continuity flow across MCP manage/import, gate pause visibility, worker linkage, and recovery retention', async () => {
+  it('proves one shipped-path continuity flow across MCP manage/import, gate pause visibility, and recovery retention', async () => {
     const gateActionId = 'flow:flow-1:run:run-1:boundary:boundary-plan-1:review_command'
     const snapshot = {
       ...makeSnapshot(),
-      lifecycle: {
-        stages: [
-          {
-            stage: 'research',
-            nodeId: 'workflow-research',
-            status: 'active',
-            actionRequired: true,
-            unblockReason: 'workflow_transition_gate_unmet',
-            unblockGateKey: 'plan_mode_required',
-            unblockActionId: gateActionId,
-            lastTransitionAt: '2026-04-22T12:07:00Z',
-          },
-        ],
-      },
       approvalRequests: [
         makeRuntimeApproval(gateActionId, {
           status: 'pending',
@@ -3152,168 +2985,8 @@ describe('CadenceApp current UI', () => {
           createdAt: '2026-04-22T12:07:20Z',
         }),
       ],
-      handoffPackages: [
-        {
-          id: 1,
-          projectId: 'project-1',
-          handoffTransitionId: 'handoff-transition-1',
-          causalTransitionId: 'causal-transition-1',
-          fromNodeId: 'workflow-discussion',
-          toNodeId: 'workflow-research',
-          transitionKind: 'advance',
-          packagePayload: '{"schemaVersion":1}',
-          packageHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          createdAt: '2026-04-22T12:06:30Z',
-        },
-      ],
     } satisfies ProjectSnapshotResponseDto
-
-    const unitId = 'auto-project-1:unit-2'
-    const attemptId = `${unitId}:attempt-1`
-    const autonomousState: AutonomousRunStateDto = {
-      run: {
-        ...makeAutonomousRunState('project-1', 'auto-project-1').run!,
-        activeUnitId: unitId,
-        updatedAt: '2026-04-22T12:07:30Z',
-      },
-      unit: {
-        projectId: 'project-1',
-        runId: 'auto-project-1',
-        unitId,
-        sequence: 2,
-        kind: 'planner',
-        status: 'blocked',
-        summary: 'Planner worker is blocked until handoff linkage catches up.',
-        boundaryId: 'boundary-plan-1',
-        workflowLinkage: {
-          workflowNodeId: 'workflow-research',
-          transitionId: 'transition-1',
-          causalTransitionId: 'causal-transition-1',
-          handoffTransitionId: 'handoff-transition-1',
-          handoffPackageHash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        },
-        startedAt: '2026-04-22T12:06:50Z',
-        finishedAt: null,
-        updatedAt: '2026-04-22T12:07:30Z',
-        lastErrorCode: 'autonomous_linkage_mismatch',
-        lastError: {
-          code: 'autonomous_linkage_mismatch',
-          message: 'Cadence detected handoff hash drift while preserving the last truthful linkage snapshot.',
-        },
-      },
-      attempt: {
-        projectId: 'project-1',
-        runId: 'auto-project-1',
-        unitId,
-        attemptId,
-        attemptNumber: 1,
-        childSessionId: 'run-1:worker-planner-1',
-        status: 'blocked',
-        boundaryId: 'boundary-plan-1',
-        workflowLinkage: {
-          workflowNodeId: 'workflow-research',
-          transitionId: 'transition-1',
-          causalTransitionId: 'causal-transition-1',
-          handoffTransitionId: 'handoff-transition-1',
-          handoffPackageHash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        },
-        startedAt: '2026-04-22T12:06:55Z',
-        finishedAt: null,
-        updatedAt: '2026-04-22T12:07:30Z',
-        lastErrorCode: 'autonomous_linkage_mismatch',
-        lastError: {
-          code: 'autonomous_linkage_mismatch',
-          message: 'Cadence detected handoff hash drift while preserving the last truthful linkage snapshot.',
-        },
-      },
-      history: [
-        {
-          unit: {
-            projectId: 'project-1',
-            runId: 'auto-project-1',
-            unitId,
-            sequence: 2,
-            kind: 'planner',
-            status: 'blocked',
-            summary: 'Planner worker is blocked until handoff linkage catches up.',
-            boundaryId: 'boundary-plan-1',
-            workflowLinkage: {
-              workflowNodeId: 'workflow-research',
-              transitionId: 'transition-1',
-              causalTransitionId: 'causal-transition-1',
-              handoffTransitionId: 'handoff-transition-1',
-              handoffPackageHash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-            },
-            startedAt: '2026-04-22T12:06:50Z',
-            finishedAt: null,
-            updatedAt: '2026-04-22T12:07:30Z',
-            lastErrorCode: 'autonomous_linkage_mismatch',
-            lastError: {
-              code: 'autonomous_linkage_mismatch',
-              message: 'Cadence detected handoff hash drift while preserving the last truthful linkage snapshot.',
-            },
-          },
-          latestAttempt: {
-            projectId: 'project-1',
-            runId: 'auto-project-1',
-            unitId,
-            attemptId,
-            attemptNumber: 1,
-            childSessionId: 'run-1:worker-planner-1',
-            status: 'blocked',
-            boundaryId: 'boundary-plan-1',
-            workflowLinkage: {
-              workflowNodeId: 'workflow-research',
-              transitionId: 'transition-1',
-              causalTransitionId: 'causal-transition-1',
-              handoffTransitionId: 'handoff-transition-1',
-              handoffPackageHash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-            },
-            startedAt: '2026-04-22T12:06:55Z',
-            finishedAt: null,
-            updatedAt: '2026-04-22T12:07:30Z',
-            lastErrorCode: 'autonomous_linkage_mismatch',
-            lastError: {
-              code: 'autonomous_linkage_mismatch',
-              message: 'Cadence detected handoff hash drift while preserving the last truthful linkage snapshot.',
-            },
-          },
-          artifacts: [
-            {
-              projectId: 'project-1',
-              runId: 'auto-project-1',
-              unitId,
-              attemptId,
-              artifactId: `${attemptId}:linkage`,
-              artifactKind: 'verification_evidence',
-              status: 'recorded',
-              summary: 'autonomous_linkage_mismatch remained visible while the worker card kept its last truthful linkage state.',
-              contentHash: 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-              payload: {
-                kind: 'verification_evidence',
-                projectId: 'project-1',
-                runId: 'auto-project-1',
-                unitId,
-                attemptId,
-                artifactId: `${attemptId}:linkage`,
-                evidenceKind: 'policy_denial',
-                label: 'Linkage mismatch guardrail evidence',
-                outcome: 'failed',
-                commandResult: {
-                  exitCode: 1,
-                  timedOut: false,
-                  summary: 'autonomous_linkage_mismatch preserved without mutating durable handoff rows.',
-                },
-                actionId: gateActionId,
-                boundaryId: 'boundary-plan-1',
-              },
-              createdAt: '2026-04-22T12:07:35Z',
-              updatedAt: '2026-04-22T12:07:35Z',
-            },
-          ],
-        },
-      ],
-    }
+    const autonomousState = makeAutonomousRunState('project-1', 'auto-project-1')
 
     const setup = createAdapter({
       snapshot,

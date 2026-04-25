@@ -105,7 +105,7 @@ impl AutonomousToolRuntime {
             )
         })?;
         let mut changed_item = None;
-        let action = request.action.clone();
+        let action = request.action;
 
         match request.action {
             AutonomousTodoAction::List => {}
@@ -1504,16 +1504,11 @@ fn invoke_lsp_server(
             ),
         )
     })?;
-    let relative_path = path_to_forward_slash(
-        &file_path
-            .strip_prefix(repo_root)
-            .map_err(|_| {
-                CommandError::policy_denied(
-                    "Cadence denied LSP access outside the imported repository root.",
-                )
-            })?
-            .to_path_buf(),
-    );
+    let relative_path = path_to_forward_slash(file_path.strip_prefix(repo_root).map_err(|_| {
+        CommandError::policy_denied(
+            "Cadence denied LSP access outside the imported repository root.",
+        )
+    })?);
     let target_uri = file_uri(file_path)?;
     let root_uri = file_uri(repo_root)?;
     let text = fs::read_to_string(file_path).map_err(|error| {
@@ -2072,7 +2067,7 @@ fn file_uri(path: &Path) -> CommandResult<String> {
 fn repo_relative_path_from_file_uri(repo_root: &Path, uri: &str) -> Option<String> {
     let path = url::Url::parse(uri).ok()?.to_file_path().ok()?;
     let relative = path.strip_prefix(repo_root).ok()?;
-    Some(path_to_forward_slash(&relative.to_path_buf()))
+    Some(path_to_forward_slash(relative))
 }
 
 fn terminate_child(child: &mut Child) {

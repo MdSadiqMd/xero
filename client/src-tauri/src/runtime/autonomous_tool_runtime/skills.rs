@@ -654,7 +654,7 @@ impl AutonomousToolRuntime {
             operation,
         )?;
         self.cache_skill_candidates(&discovered.entries)?;
-        Ok(discovered
+        discovered
             .entries
             .into_iter()
             .find(|entry| candidate_source_id(entry) == source_id)
@@ -664,7 +664,7 @@ impl AutonomousToolRuntime {
                     entry,
                 })
             })
-            .transpose()?)
+            .transpose()
     }
 
     fn find_skill_by_skill_id(

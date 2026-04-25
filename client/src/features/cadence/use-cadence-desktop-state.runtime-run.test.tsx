@@ -15,7 +15,6 @@ import type {
   RepositoryStatusResponseDto,
   ResumeOperatorRunResponseDto,
   AutonomousRunStateDto,
-  AutonomousUnitHistoryEntryDto,
   RuntimeRunControlInputDto,
   RuntimeRunDto,
   RuntimeRunUpdatedPayloadDto,
@@ -412,7 +411,6 @@ function makeAutonomousRunState(
       supervisorKind: 'detached_pty',
       status: 'running',
       recoveryState: 'healthy',
-      activeUnitId: `${runId}:checkpoint:2`,
       duplicateStartDetected: false,
       duplicateStartRunId: null,
       duplicateStartReason: null,
@@ -432,21 +430,6 @@ function makeAutonomousRunState(
       updatedAt: '2026-04-16T20:00:06Z',
       ...overrides,
     },
-    unit: {
-      projectId,
-      runId,
-      unitId: `${runId}:checkpoint:2`,
-      sequence: 2,
-      kind: 'executor',
-      status: 'active',
-      summary: 'Recovered the current autonomous unit boundary.',
-      boundaryId: 'checkpoint:2',
-      startedAt: '2026-04-16T20:00:01Z',
-      finishedAt: null,
-      updatedAt: '2026-04-16T20:00:06Z',
-      lastErrorCode: null,
-      lastError: null,
-    },
   }
 }
 
@@ -463,14 +446,6 @@ function makeBlockedAutonomousRunState(projectId: string, boundaryId: string): A
     updatedAt: '2026-04-16T20:03:00Z',
   })
 
-  state.unit = {
-    ...state.unit!,
-    status: 'blocked',
-    summary: 'Blocked on operator boundary `Terminal input required`.',
-    boundaryId,
-    updatedAt: '2026-04-16T20:03:00Z',
-  }
-
   return state
 }
 
@@ -484,115 +459,7 @@ function makeRecoveredAutonomousRunState(projectId: string): AutonomousRunStateD
     updatedAt: '2026-04-16T20:04:00Z',
   })
 
-  state.unit = {
-    ...state.unit!,
-    status: 'active',
-    summary: 'Recovered the current autonomous unit boundary.',
-    boundaryId: null,
-    updatedAt: '2026-04-16T20:04:00Z',
-  }
-
   return state
-}
-
-function makeAutonomousHistoryEntry(options: {
-  projectId: string
-  unitId: string
-  sequence: number
-  unitUpdatedAt: string
-  latestAttempt?: boolean
-  workflowNodeId?: string
-  handoffTransitionId?: string
-  handoffPackageHash?: string
-  artifactSummary?: string
-}): AutonomousUnitHistoryEntryDto {
-  const runId = `auto-${options.projectId}`
-  const attemptId = `${options.unitId}:attempt:1`
-  const artifactId = `${attemptId}:artifact:1`
-  const workflowLinkage = options.workflowNodeId
-    ? {
-        workflowNodeId: options.workflowNodeId,
-        transitionId: `${options.unitId}:transition:1`,
-        causalTransitionId: `${options.unitId}:causal:1`,
-        handoffTransitionId: options.handoffTransitionId ?? `${options.unitId}:handoff:1`,
-        handoffPackageHash:
-          options.handoffPackageHash ?? '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-      }
-    : null
-
-  return {
-    unit: {
-      projectId: options.projectId,
-      runId,
-      unitId: options.unitId,
-      sequence: options.sequence,
-      kind: 'executor',
-      status: 'completed',
-      summary: `Recovered durable unit ${options.sequence}.`,
-      boundaryId: `boundary:${options.sequence}`,
-      workflowLinkage,
-      startedAt: '2026-04-16T20:00:00Z',
-      finishedAt: options.unitUpdatedAt,
-      updatedAt: options.unitUpdatedAt,
-      lastErrorCode: null,
-      lastError: null,
-    },
-    latestAttempt:
-      options.latestAttempt === false
-        ? null
-        : {
-            projectId: options.projectId,
-            runId,
-            unitId: options.unitId,
-            attemptId,
-            attemptNumber: 1,
-            childSessionId: `child-${options.sequence}`,
-            status: 'completed',
-            boundaryId: `boundary:${options.sequence}`,
-            workflowLinkage,
-            startedAt: '2026-04-16T20:00:01Z',
-            finishedAt: options.unitUpdatedAt,
-            updatedAt: options.unitUpdatedAt,
-            lastErrorCode: null,
-            lastError: null,
-          },
-    artifacts: options.artifactSummary
-      ? [
-          {
-            projectId: options.projectId,
-            runId,
-            unitId: options.unitId,
-            attemptId,
-            artifactId,
-            artifactKind: 'tool_result',
-            status: 'recorded',
-            summary: options.artifactSummary,
-            contentHash: 'hash',
-            payload: {
-              kind: 'tool_result',
-              projectId: options.projectId,
-              runId,
-              unitId: options.unitId,
-              attemptId,
-              artifactId,
-              toolCallId: `${attemptId}:tool:1`,
-              toolName: 'read',
-              toolState: 'succeeded',
-              commandResult: {
-                exitCode: 0,
-                timedOut: false,
-                summary: 'read completed',
-              },
-              toolSummary: null,
-              actionId: null,
-              boundaryId: null,
-            },
-            createdAt: options.unitUpdatedAt,
-            updatedAt: options.unitUpdatedAt,
-          },
-        ]
-      : [],
-  }
 }
 
 function makeStreamResponse(
@@ -738,7 +605,7 @@ function createMockAdapter(options?: {
     return runtimeRuns[projectId] ?? null
   })
 
-  const getAutonomousRun = vi.fn(async (projectId: string) => autonomousStates[projectId] ?? { run: null, unit: null })
+  const getAutonomousRun = vi.fn(async (projectId: string) => autonomousStates[projectId] ?? { run: null })
 
   const listNotificationDispatches = vi.fn(async (projectId: string) => {
     const error = notificationDispatchErrors[projectId]
@@ -1080,12 +947,6 @@ function createMockAdapter(options?: {
         },
         updatedAt: '2026-04-16T20:10:00Z',
       })
-      nextState.unit = {
-        ...nextState.unit!,
-        status: 'cancelled',
-        finishedAt: '2026-04-16T20:10:00Z',
-        updatedAt: '2026-04-16T20:10:00Z',
-      }
       autonomousStates[projectId] = nextState
       return nextState
     }),
@@ -1104,12 +965,6 @@ function createMockAdapter(options?: {
       throw new Error('not used in runtime-run tests')
     }) as never,
     syncNotificationAdapters,
-    upsertWorkflowGraph: vi.fn(async () => {
-      throw new Error('not used in runtime-run tests')
-    }) as never,
-    applyWorkflowTransition: vi.fn(async () => {
-      throw new Error('not used in runtime-run tests')
-    }) as never,
     subscribeRuntimeStream: vi.fn(
       async (
         projectId: string,
@@ -1247,10 +1102,6 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       : state.agentView?.operatorActionStatus === 'running' && state.agentView?.pendingOperatorActionId === firstApproval.actionId
         ? 'running'
         : latestResumeForFirstApproval?.status ?? 'waiting'
-  const handoffPackages =
-    (state.activeProject as (typeof state.activeProject & { handoffPackages?: { handoffTransitionId: string }[] }) | null)
-      ?.handoffPackages ?? []
-
   return (
     <div>
       <div data-testid="active-project-id">{state.activeProjectId ?? 'none'}</div>
@@ -1291,42 +1142,6 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="autonomous-run-recovery">{state.agentView?.autonomousRun?.recoveryState ?? 'none'}</div>
       <div data-testid="autonomous-run-duplicate-start">{String(state.agentView?.autonomousRun?.duplicateStartDetected ?? false)}</div>
       <div data-testid="autonomous-run-error">{state.agentView?.autonomousRunErrorMessage ?? 'none'}</div>
-      <div data-testid="autonomous-unit-id">{state.agentView?.autonomousUnit?.unitId ?? 'none'}</div>
-      <div data-testid="autonomous-unit-status">{state.agentView?.autonomousUnit?.status ?? 'none'}</div>
-      <div data-testid="autonomous-unit-summary">{state.agentView?.autonomousUnit?.summary ?? 'none'}</div>
-      <div data-testid="recent-unit-count">{String(state.agentView?.recentAutonomousUnits?.items.length ?? 0)}</div>
-      <div data-testid="recent-unit-window-label">{state.agentView?.recentAutonomousUnits?.windowLabel ?? 'none'}</div>
-      <div data-testid="recent-unit-first-id">{state.agentView?.recentAutonomousUnits?.items[0]?.unitId ?? 'none'}</div>
-      <div data-testid="recent-unit-first-workflow-state">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.workflowStateLabel ?? 'none'}
-      </div>
-      <div data-testid="recent-unit-first-evidence-state">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.evidenceStateLabel ?? 'none'}
-      </div>
-      <div data-testid="recent-unit-first-linkage-source">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.workflowLinkageSource ?? 'none'}
-      </div>
-      <div data-testid="recent-unit-first-attempt-id">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.latestAttemptId ?? 'none'}
-      </div>
-      <div data-testid="recent-unit-first-attempt-number">
-        {String(state.agentView?.recentAutonomousUnits?.items[0]?.latestAttemptNumber ?? 'none')}
-      </div>
-      <div data-testid="recent-unit-first-child-session-id">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.latestAttemptChildSessionId ?? 'none'}
-      </div>
-      <div data-testid="recent-unit-first-workflow-node-id">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.workflowNodeId ?? 'none'}
-      </div>
-      <div data-testid="recent-unit-first-workflow-transition-id">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.workflowTransitionId ?? 'none'}
-      </div>
-      <div data-testid="recent-unit-first-workflow-handoff-transition-id">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.workflowHandoffTransitionId ?? 'none'}
-      </div>
-      <div data-testid="recent-unit-first-workflow-handoff-hash">
-        {state.agentView?.recentAutonomousUnits?.items[0]?.workflowHandoffPackageHash ?? 'none'}
-      </div>
       <div data-testid="checkpoint-loop-count">{String(checkpointControlLoop?.items.length ?? 0)}</div>
       <div data-testid="checkpoint-loop-window-label">{checkpointControlLoop?.windowLabel ?? 'none'}</div>
       <div data-testid="checkpoint-loop-first-action-id">{firstCheckpointCard?.actionId ?? 'none'}</div>
@@ -1432,14 +1247,6 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="operator-action-status">{state.agentView?.operatorActionStatus ?? 'idle'}</div>
       <div data-testid="pending-operator-action-id">{state.agentView?.pendingOperatorActionId ?? 'none'}</div>
       <div data-testid="operator-action-error">{state.agentView?.operatorActionError?.message ?? 'none'}</div>
-      <div data-testid="handoff-package-count">{String(handoffPackages.length)}</div>
-      <div data-testid="latest-handoff-transition-id">
-        {handoffPackages[handoffPackages.length - 1]?.handoffTransitionId ?? 'none'}
-      </div>
-      <div data-testid="workflow-has-lifecycle">{String(state.workflowView?.hasLifecycle ?? false)}</div>
-      <div data-testid="workflow-lifecycle-percent">{String(state.workflowView?.lifecyclePercent ?? 0)}</div>
-      <div data-testid="workflow-active-lifecycle-stage">{state.workflowView?.activeLifecycleStage?.stage ?? 'none'}</div>
-      <div data-testid="workflow-lifecycle-action-required">{String(state.workflowView?.actionRequiredLifecycleCount ?? 0)}</div>
       <button onClick={() => void state.retry()} type="button">
         Retry state
       </button>
@@ -1840,7 +1647,11 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     const initialRuntimeRunCalls = setup.getRuntimeRun.mock.calls.length
     fireEvent.click(screen.getByRole('button', { name: 'Queue runtime controls' }))
 
-    await waitFor(() => expect(screen.getByTestId('runtime-run-action-error')).toHaveTextContent('runtime controls queue failed'))
+    await waitFor(() => expect(setup.updateRuntimeRunControls).toHaveBeenCalledTimes(1), { timeout: 3000 })
+    await waitFor(
+      () => expect(screen.getByTestId('runtime-run-action-error')).toHaveTextContent('runtime controls queue failed'),
+      { timeout: 3000 },
+    )
     expect(screen.getByTestId('selected-model-id')).toHaveTextContent('openai_codex')
     expect(screen.getByTestId('selected-thinking-effort')).toHaveTextContent('medium')
     expect(screen.getByTestId('selected-approval-mode')).toHaveTextContent('suggest')
@@ -1872,8 +1683,6 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('autonomous-run-provider-id')).toHaveTextContent('azure_openai')
     expect(screen.getByTestId('autonomous-run-status')).toHaveTextContent('running')
     expect(screen.getByTestId('autonomous-run-recovery')).toHaveTextContent('recovery_required')
-    expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('none')
-    expect(screen.getByTestId('recent-unit-count')).toHaveTextContent('0')
   })
 
   it('preserves the last truthful autonomous run state when later autonomous refreshes fail', async () => {
@@ -1893,7 +1702,6 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('autonomous refresh failed'))
     expect(screen.getByTestId('autonomous-run-id')).toHaveTextContent('auto-project-1')
     expect(screen.getByTestId('autonomous-run-provider-id')).toHaveTextContent('azure_openai')
-    expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('none')
   })
 
   it('starts, inspects, and cancels the autonomous run through the hook actions', async () => {
@@ -1928,7 +1736,6 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel autonomous run' }))
     await waitFor(() => expect(screen.getByTestId('autonomous-run-status')).toHaveTextContent('cancelled'))
     expect(screen.getByTestId('autonomous-run-recovery')).toHaveTextContent('terminal')
-    expect(screen.getByTestId('autonomous-unit-status')).toHaveTextContent('none')
   })
 
   it('keeps recovered checkpoints visible while the live runtime stream is still reconnecting', async () => {
@@ -1984,45 +1791,10 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
       }
 
       if (!autoDispatched) {
-        return {
-          ...snapshot,
-          lifecycle: {
-            stages: [
-              {
-                stage: 'discussion',
-                nodeId: 'workflow-discussion',
-                status: 'active',
-                actionRequired: false,
-                lastTransitionAt: '2026-04-16T14:00:00Z',
-              },
-            ],
-          },
-          handoffPackages: [makeHandoffPackage('project-1', 'auto:txn-001'), makeHandoffPackage('project-2', 'auto:txn-ghost')],
-        }
+        return snapshot
       }
 
-      return {
-        ...snapshot,
-        lifecycle: {
-          stages: [
-            {
-              stage: 'discussion',
-              nodeId: 'workflow-discussion',
-              status: 'complete',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-16T14:00:00Z',
-            },
-            {
-              stage: 'research',
-              nodeId: 'workflow-research',
-              status: 'active',
-              actionRequired: true,
-              lastTransitionAt: '2026-04-16T14:01:00Z',
-            },
-          ],
-        },
-        handoffPackages: [makeHandoffPackage('project-1', 'auto:txn-002'), makeHandoffPackage('project-2', 'auto:txn-ghost')],
-      }
+      return snapshot
     })
 
     vi.mocked(setup.getRuntimeRun).mockImplementation(async (projectId: string) => {
@@ -2036,10 +1808,6 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     render(<Harness adapter={setup.adapter} />)
 
     await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
-    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('false')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
-    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
-    expect(screen.getByTestId('handoff-package-count')).toHaveTextContent('0')
     expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(1)
 
     vi.mocked(setup.subscribeRuntimeStream).mockResolvedValueOnce({
@@ -2065,14 +1833,11 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
 
     await waitFor(() => expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1b'))
-    await waitFor(() => expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none'))
+    await waitFor(() => expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1b'))
 
     expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1b')
     expect(screen.getByTestId('stream-item-count')).toHaveTextContent('0')
     expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_run:updated')
-    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
-    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('0')
-    expect(screen.getByTestId('handoff-package-count')).toHaveTextContent('0')
     expect(vi.mocked(setup.getProjectSnapshot).mock.calls.length).toBe(snapshotCallsBeforeEvent)
     expect(vi.mocked(setup.listNotificationRoutes).mock.calls.length).toBe(routeRefreshesBeforeEvent)
     expect(vi.mocked(setup.syncNotificationAdapters).mock.calls.length).toBe(syncRefreshesBeforeEvent)

@@ -252,13 +252,13 @@ fn skill_tool_context_payload_allows_markdown_and_text_assets_without_raw_paths(
         markdown: CadenceSkillToolContextDocument {
             relative_path: "SKILL.md".into(),
             sha256: SHA256_A.into(),
-            bytes: markdown_content.as_bytes().len(),
+            bytes: markdown_content.len(),
             content: markdown_content.into(),
         },
         supporting_assets: vec![CadenceSkillToolContextAsset {
             relative_path: "guide.md".into(),
             sha256: SHA256_B.into(),
-            bytes: asset_content.as_bytes().len(),
+            bytes: asset_content.len(),
             content: asset_content.into(),
         }],
     };
@@ -275,14 +275,14 @@ fn skill_tool_context_payload_allows_markdown_and_text_assets_without_raw_paths(
         "markdown": {
             "relativePath": "SKILL.md",
             "sha256": SHA256_A,
-            "bytes": markdown_content.as_bytes().len(),
+            "bytes": markdown_content.len(),
             "content": markdown_content
         },
         "supportingAssets": [{
             "relativePath": "guide.md",
             "absolutePath": "/Users/sn0w/.cadence/skills/find-skills/guide.md",
             "sha256": SHA256_B,
-            "bytes": asset_content.as_bytes().len(),
+            "bytes": asset_content.len(),
             "content": asset_content
         }]
     }));
@@ -295,7 +295,7 @@ fn skill_tool_context_payload_allows_markdown_and_text_assets_without_raw_paths(
         markdown: CadenceSkillToolContextDocument {
             relative_path: "/Users/sn0w/.cadence/skills/find-skills/SKILL.md".into(),
             sha256: SHA256_A.into(),
-            bytes: markdown_content.as_bytes().len(),
+            bytes: markdown_content.len(),
             content: markdown_content.into(),
         },
         supporting_assets: Vec::new(),

@@ -28,7 +28,6 @@ if (!HTMLElement.prototype.releasePointerCapture) {
 import { AgentRuntime } from '@/components/cadence/agent-runtime'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
-  PlanningLifecycleView,
   ProjectDetailView,
   RuntimeRunView,
   RuntimeSessionView,
@@ -36,25 +35,6 @@ import type {
 } from '@/src/lib/cadence-model'
 
 type CheckpointControlLoopCard = NonNullable<AgentPaneView['checkpointControlLoop']>['items'][number]
-
-function makeLifecycle(overrides: Partial<PlanningLifecycleView> = {}): PlanningLifecycleView {
-  return {
-    stages: [],
-    byStage: {
-      discussion: null,
-      research: null,
-      requirements: null,
-      roadmap: null,
-    },
-    hasStages: false,
-    activeStage: null,
-    actionRequiredCount: 0,
-    blockedCount: 0,
-    completedCount: 0,
-    percentComplete: 0,
-    ...overrides,
-  }
-}
 
 function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailView {
   return {
@@ -71,7 +51,6 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     branchLabel: 'No branch',
     runtimeLabel: 'Runtime unavailable',
     phaseProgressPercent: 0,
-    lifecycle: makeLifecycle(),
     repository: {
       id: 'repo-1',
       projectId: 'project-1',
@@ -89,7 +68,6 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     latestDecisionOutcome: null,
     verificationRecords: [],
     resumeHistory: [],
-    handoffPackages: [],
     agentSessions: [],
     selectedAgentSession: null,
     selectedAgentSessionId: 'agent-session-main',
@@ -112,10 +90,6 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
     runtimeSession: null,
     runtimeRun: null,
     autonomousRun: null,
-    autonomousUnit: null,
-    autonomousAttempt: null,
-    autonomousHistory: [],
-    autonomousRecentArtifacts: [],
     ...overrides,
   }
 }
@@ -241,13 +215,10 @@ function makeAutonomousRun(
     providerId: 'openai_codex',
     runtimeLabel: 'Openai Codex · Autonomous run active',
     supervisorKind: 'detached_pty',
-    supervisorLabel: 'Detached Pty',
     status: 'running' as const,
     statusLabel: 'Autonomous run active',
     recoveryState: 'recovery_required' as const,
     recoveryLabel: 'Recovery required',
-    activeUnitId: 'auto-run-1:checkpoint:2',
-    activeAttemptId: 'auto-run-1:checkpoint:2:attempt:1',
     duplicateStartDetected: false,
     duplicateStartRunId: null,
     duplicateStartReason: null,
@@ -269,100 +240,8 @@ function makeAutonomousRun(
     lastError: null,
     updatedAt: '2026-04-16T20:03:00Z',
     isActive: true,
-    needsRecovery: true,
     isTerminal: false,
-    isFailed: false,
-    ...overrides,
-  }
-}
-
-function makeAutonomousUnit(overrides: Partial<NonNullable<ProjectDetailView['autonomousUnit']>> = {}) {
-  return {
-    projectId: 'project-1',
-    runId: 'auto-run-1',
-    unitId: 'auto-run-1:checkpoint:2',
-    sequence: 2,
-    kind: 'executor' as const,
-    kindLabel: 'Executor worker',
-    status: 'active' as const,
-    statusLabel: 'Active',
-    summary: 'Recovered the current autonomous unit boundary.',
-    boundaryId: 'checkpoint:2',
-    workflowLinkage: null,
-    startedAt: '2026-04-16T20:00:01Z',
-    finishedAt: null,
-    updatedAt: '2026-04-16T20:03:00Z',
-    lastErrorCode: null,
-    lastError: null,
-    isActive: true,
-    isTerminal: false,
-    isFailed: false,
-    ...overrides,
-  }
-}
-
-function makeAutonomousAttempt(
-  overrides: Partial<NonNullable<ProjectDetailView['autonomousAttempt']>> = {},
-): NonNullable<ProjectDetailView['autonomousAttempt']> {
-  return {
-    projectId: 'project-1',
-    runId: 'auto-run-1',
-    unitId: 'auto-run-1:checkpoint:2',
-    attemptId: 'auto-run-1:checkpoint:2:attempt:1',
-    attemptNumber: 1,
-    childSessionId: 'child-session-1',
-    status: 'active' as const,
-    statusLabel: 'Active',
-    boundaryId: 'checkpoint:2',
-    workflowLinkage: null,
-    startedAt: '2026-04-16T20:00:02Z',
-    finishedAt: null,
-    updatedAt: '2026-04-16T20:03:00Z',
-    lastErrorCode: null,
-    lastError: null,
-    isActive: true,
-    isTerminal: false,
-    isFailed: false,
-    ...overrides,
-  }
-}
-
-function makeAutonomousArtifact(
-  overrides: Partial<NonNullable<ProjectDetailView['autonomousRecentArtifacts']>[number]> = {},
-) {
-  return {
-    projectId: 'project-1',
-    runId: 'auto-run-1',
-    unitId: 'auto-run-1:checkpoint:2',
-    attemptId: 'auto-run-1:checkpoint:2:attempt:1',
-    artifactId: 'auto-run-1:checkpoint:2:attempt:1:tool:readme',
-    artifactKind: 'tool_result',
-    artifactKindLabel: 'Tool result',
-    status: 'recorded' as const,
-    statusLabel: 'Recorded',
-    summary: 'Read README.md from the imported repository root.',
-    contentHash: 'abc123',
-    payload: null,
-    createdAt: '2026-04-16T20:01:00Z',
-    updatedAt: '2026-04-16T20:03:00Z',
-    detail: 'Tool `read` succeeded for `README.md`.',
-    commandResult: {
-      exitCode: 0,
-      timedOut: false,
-      summary: 'read completed',
-    },
-    toolName: 'read',
-    toolState: 'succeeded' as const,
-    toolStateLabel: 'Succeeded',
-    evidenceKind: null,
-    verificationOutcome: null,
-    verificationOutcomeLabel: null,
-    diagnosticCode: null,
-    actionId: null,
-    boundaryId: null,
-    isToolResult: true,
-    isVerificationEvidence: false,
-    isPolicyDenied: false,
+    isStale: false,
     ...overrides,
   }
 }
@@ -428,68 +307,6 @@ function makeProviderModelCatalog(
     lastSuccessAt: null,
     lastRefreshError: null,
     models: [makeAgentModel()],
-    ...overrides,
-  }
-}
-
-function makeRecentAutonomousUnits(
-  overrides: Partial<NonNullable<AgentPaneView['recentAutonomousUnits']>> = {},
-): NonNullable<AgentPaneView['recentAutonomousUnits']> {
-  return {
-    items: [
-      {
-        unitId: 'unit-history-2',
-        sequence: 2,
-        sequenceLabel: '#2',
-        kindLabel: 'Executor worker',
-        status: 'blocked',
-        statusLabel: 'Blocked',
-        summary: 'Blocked on operator boundary while durable history remains available.',
-        boundaryId: 'boundary-2',
-        updatedAt: '2026-04-16T20:05:00Z',
-        latestAttemptOnlyLabel: 'Only the latest attempt is shown for this unit.',
-        latestAttemptLabel: 'Attempt #2',
-        latestAttemptStatusLabel: 'Blocked',
-        latestAttemptUpdatedAt: '2026-04-16T20:05:00Z',
-        latestAttemptSummary: 'Latest durable attempt is blocked for child session child-2.',
-        latestAttemptId: 'unit-history-2:attempt-2',
-        latestAttemptNumber: 2,
-        latestAttemptChildSessionId: 'child-2',
-        workflowState: 'awaiting_snapshot',
-        workflowStateLabel: 'Snapshot lag',
-        workflowNodeLabel: 'Research',
-        workflowLinkageLabel: 'Attempt linkage',
-        workflowLinkageSource: 'attempt',
-        workflowNodeId: 'workflow-research',
-        workflowTransitionId: 'transition-2',
-        workflowCausalTransitionId: 'transition-1',
-        workflowHandoffTransitionId: 'handoff-2',
-        workflowHandoffPackageHash: 'd41d8cd98f00b204e9800998ecf8427e',
-        workflowDetail:
-          'Cadence is keeping lifecycle progression anchored to snapshot truth while the linked node `Research` waits for the active lifecycle stage to catch up.',
-        evidenceCount: 1,
-        evidenceStateLabel: '1 recent evidence row',
-        evidenceSummary: 'Showing the latest durable evidence row linked to this unit.',
-        latestEvidenceAt: '2026-04-16T20:05:00Z',
-        evidencePreviews: [
-          {
-            artifactId: 'artifact-1',
-            artifactKindLabel: 'Tool result',
-            statusLabel: 'Recorded',
-            summary: 'Read README.md from the imported repository root.',
-            updatedAt: '2026-04-16T20:05:00Z',
-          },
-        ],
-      },
-    ],
-    totalCount: 1,
-    visibleCount: 1,
-    hiddenCount: 0,
-    isTruncated: false,
-    windowLabel: 'Showing 1 durable unit from the recent-history window.',
-    latestAttemptOnlyCopy: 'Only the latest durable attempt per unit is shown here.',
-    emptyTitle: 'No recent autonomous units recorded',
-    emptyBody: 'Cadence has not persisted a bounded autonomous unit history for this project yet.',
     ...overrides,
   }
 }
@@ -695,10 +512,6 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     providerMismatch: overrides.providerMismatch ?? false,
     runtimeRun,
     autonomousRun: overrides.autonomousRun ?? project.autonomousRun ?? null,
-    autonomousUnit: overrides.autonomousUnit ?? project.autonomousUnit ?? null,
-    autonomousAttempt: overrides.autonomousAttempt ?? project.autonomousAttempt ?? null,
-    autonomousHistory: overrides.autonomousHistory ?? project.autonomousHistory,
-    autonomousRecentArtifacts: overrides.autonomousRecentArtifacts ?? project.autonomousRecentArtifacts,
     runtimeErrorMessage: null,
     runtimeRunErrorMessage: null,
     autonomousRunErrorMessage: null,
@@ -790,7 +603,6 @@ describe('AgentRuntime current UI', () => {
         agent={makeAgent({
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
           autonomousRun: makeAutonomousRun({ duplicateStartDetected: true, duplicateStartRunId: 'auto-run-1' }),
-          autonomousUnit: makeAutonomousUnit(),
           runtimeRun: makeRuntimeRun(),
           runtimeStream: makeRuntimeStream({ status: 'idle' }),
           runtimeRunUnavailableReason: 'Cadence recovered a supervised harness run and its durable checkpoints before the live runtime feed resumed.',
@@ -903,60 +715,11 @@ describe('AgentRuntime current UI', () => {
   })
 
   it('does not render worker lifecycle cards on the Agent tab', () => {
-    const recentAutonomousUnits = makeRecentAutonomousUnits({
-      items: [
-        makeRecentAutonomousUnits().items[0],
-        {
-          unitId: 'unit-history-3',
-          sequence: 3,
-          sequenceLabel: '#3',
-          kindLabel: 'Planner worker',
-          status: 'active',
-          statusLabel: 'Active',
-          summary: 'Planner worker is staging the next transition while handoff linkage catches up.',
-          boundaryId: 'boundary-3',
-          updatedAt: '2026-04-16T20:06:00Z',
-          latestAttemptOnlyLabel: 'Only the latest attempt is shown for this unit.',
-          latestAttemptLabel: 'Latest attempt unavailable',
-          latestAttemptStatusLabel: 'Not recorded',
-          latestAttemptUpdatedAt: null,
-          latestAttemptSummary: 'Cadence has not persisted a latest-attempt row for this unit yet.',
-          latestAttemptId: null,
-          latestAttemptNumber: null,
-          latestAttemptChildSessionId: null,
-          workflowState: 'awaiting_handoff',
-          workflowStateLabel: 'Handoff pending',
-          workflowNodeLabel: 'Research',
-          workflowLinkageLabel: 'Unit linkage',
-          workflowLinkageSource: 'unit',
-          workflowNodeId: 'workflow-research',
-          workflowTransitionId: 'unit-history-3:transition:1',
-          workflowCausalTransitionId: 'unit-history-3:causal:1',
-          workflowHandoffTransitionId: null,
-          workflowHandoffPackageHash: null,
-          workflowDetail:
-            'Cadence persisted workflow linkage for this unit, but the linked handoff package is not visible in the selected project snapshot yet.',
-          evidenceCount: 0,
-          evidenceStateLabel: 'No durable evidence in bounded window',
-          evidenceSummary:
-            'Cadence has not retained a matching artifact for this unit inside the bounded evidence window.',
-          latestEvidenceAt: null,
-          evidencePreviews: [],
-        },
-      ],
-      totalCount: 4,
-      visibleCount: 2,
-      hiddenCount: 2,
-      isTruncated: true,
-      windowLabel: 'Showing 2 of 4 durable units in the bounded recent-history window.',
-    })
-
     render(
       <AgentRuntime
         agent={makeAgent({
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
           runtimeRun: makeRuntimeRun(),
-          recentAutonomousUnits,
         })}
       />,
     )
@@ -975,14 +738,6 @@ describe('AgentRuntime current UI', () => {
         agent={makeAgent({
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
           runtimeRun: makeRuntimeRun(),
-          recentAutonomousUnits: makeRecentAutonomousUnits({
-            items: [],
-            totalCount: 0,
-            visibleCount: 0,
-            hiddenCount: 0,
-            isTruncated: false,
-            windowLabel: 'No durable recent units are available yet.',
-          }),
         })}
       />,
     )
