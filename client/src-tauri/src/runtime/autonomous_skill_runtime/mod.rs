@@ -2,6 +2,7 @@ mod cache;
 mod contract;
 mod discovery;
 mod inspection;
+mod plugin;
 mod runtime;
 mod settings;
 mod skill_tool;
@@ -19,9 +20,18 @@ pub use contract::{
 };
 pub use discovery::{
     discover_bundled_skill_directory, discover_local_skill_directory,
-    discover_project_skill_directory, load_discovered_skill_context,
-    load_skill_context_from_directory, CadenceDiscoveredSkill, CadenceSkillDirectoryDiscovery,
-    CadenceSkillDiscoveryDiagnostic, PROJECT_SKILL_DIRECTORY,
+    discover_plugin_skill_contribution, discover_project_skill_directory,
+    load_discovered_skill_context, load_skill_context_from_directory, CadenceDiscoveredSkill,
+    CadenceSkillDirectoryDiscovery, CadenceSkillDiscoveryDiagnostic, PROJECT_SKILL_DIRECTORY,
+};
+pub use plugin::{
+    discover_plugin_roots, normalize_plugin_contribution_id, normalize_plugin_id,
+    parse_plugin_manifest, plugin_command_stable_id, plugin_trust_declaration_to_skill_trust,
+    CadenceDiscoveredPlugin, CadencePluginCommandAvailability, CadencePluginCommandContribution,
+    CadencePluginDiscovery, CadencePluginDiscoveryDiagnostic, CadencePluginEntryKind,
+    CadencePluginEntryLocation, CadencePluginManifest, CadencePluginRoot,
+    CadencePluginSkillContribution, CadencePluginTrustDeclaration, CADENCE_PLUGIN_MANIFEST_FILE,
+    CADENCE_PLUGIN_MANIFEST_SCHEMA_VERSION, CADENCE_PLUGIN_NESTED_MANIFEST_FILE,
 };
 pub use runtime::{
     AutonomousSkillDiscoverOutput, AutonomousSkillDiscoverRequest,
@@ -34,7 +44,7 @@ pub use runtime::{
 };
 pub use settings::{
     load_skill_source_settings_from_path, persist_skill_source_settings, SkillGithubSourceSetting,
-    SkillLocalRootSetting, SkillProjectSourceSetting, SkillSourceSettings,
+    SkillLocalRootSetting, SkillPluginRootSetting, SkillProjectSourceSetting, SkillSourceSettings,
     SKILL_SOURCE_SETTINGS_SCHEMA_VERSION,
 };
 pub use skill_tool::{

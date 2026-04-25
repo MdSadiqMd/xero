@@ -34,6 +34,18 @@ pub const UPSERT_MCP_SERVER_COMMAND: &str = "upsert_mcp_server";
 pub const REMOVE_MCP_SERVER_COMMAND: &str = "remove_mcp_server";
 pub const IMPORT_MCP_SERVERS_COMMAND: &str = "import_mcp_servers";
 pub const REFRESH_MCP_SERVER_STATUSES_COMMAND: &str = "refresh_mcp_server_statuses";
+pub const LIST_SKILL_REGISTRY_COMMAND: &str = "list_skill_registry";
+pub const RELOAD_SKILL_REGISTRY_COMMAND: &str = "reload_skill_registry";
+pub const SET_SKILL_ENABLED_COMMAND: &str = "set_skill_enabled";
+pub const REMOVE_SKILL_COMMAND: &str = "remove_skill";
+pub const UPSERT_SKILL_LOCAL_ROOT_COMMAND: &str = "upsert_skill_local_root";
+pub const REMOVE_SKILL_LOCAL_ROOT_COMMAND: &str = "remove_skill_local_root";
+pub const UPDATE_PROJECT_SKILL_SOURCE_COMMAND: &str = "update_project_skill_source";
+pub const UPDATE_GITHUB_SKILL_SOURCE_COMMAND: &str = "update_github_skill_source";
+pub const UPSERT_PLUGIN_ROOT_COMMAND: &str = "upsert_plugin_root";
+pub const REMOVE_PLUGIN_ROOT_COMMAND: &str = "remove_plugin_root";
+pub const SET_PLUGIN_ENABLED_COMMAND: &str = "set_plugin_enabled";
+pub const REMOVE_PLUGIN_COMMAND: &str = "remove_plugin";
 pub const GET_PROVIDER_MODEL_CATALOG_COMMAND: &str = "get_provider_model_catalog";
 pub const LIST_PROVIDER_PROFILES_COMMAND: &str = "list_provider_profiles";
 pub const UPSERT_PROVIDER_PROFILE_COMMAND: &str = "upsert_provider_profile";
@@ -87,6 +99,18 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     REMOVE_MCP_SERVER_COMMAND,
     IMPORT_MCP_SERVERS_COMMAND,
     REFRESH_MCP_SERVER_STATUSES_COMMAND,
+    LIST_SKILL_REGISTRY_COMMAND,
+    RELOAD_SKILL_REGISTRY_COMMAND,
+    SET_SKILL_ENABLED_COMMAND,
+    REMOVE_SKILL_COMMAND,
+    UPSERT_SKILL_LOCAL_ROOT_COMMAND,
+    REMOVE_SKILL_LOCAL_ROOT_COMMAND,
+    UPDATE_PROJECT_SKILL_SOURCE_COMMAND,
+    UPDATE_GITHUB_SKILL_SOURCE_COMMAND,
+    UPSERT_PLUGIN_ROOT_COMMAND,
+    REMOVE_PLUGIN_ROOT_COMMAND,
+    SET_PLUGIN_ENABLED_COMMAND,
+    REMOVE_PLUGIN_COMMAND,
     GET_PROVIDER_MODEL_CATALOG_COMMAND,
     LIST_PROVIDER_PROFILES_COMMAND,
     UPSERT_PROVIDER_PROFILE_COMMAND,
@@ -310,6 +334,10 @@ pub struct RepositoryStatusResponseDto {
     pub has_staged_changes: bool,
     pub has_unstaged_changes: bool,
     pub has_untracked_changes: bool,
+    #[serde(default)]
+    pub additions: u32,
+    #[serde(default)]
+    pub deletions: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -320,6 +348,79 @@ pub struct RepositoryDiffResponseDto {
     pub patch: String,
     pub truncated: bool,
     pub base_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitPathsRequestDto {
+    pub project_id: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitCommitRequestDto {
+    pub project_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitRemoteRequestDto {
+    pub project_id: String,
+    #[serde(default)]
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitSignatureDto {
+    pub name: String,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitCommitResponseDto {
+    pub sha: String,
+    pub summary: String,
+    pub signature: GitSignatureDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitFetchResponseDto {
+    pub remote: String,
+    pub refspecs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitPullResponseDto {
+    pub remote: String,
+    pub branch: String,
+    pub updated: bool,
+    pub summary: String,
+    #[serde(default)]
+    pub new_head_sha: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitRemoteRefUpdateDto {
+    pub ref_name: String,
+    pub ok: bool,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitPushResponseDto {
+    pub remote: String,
+    pub branch: String,
+    pub updates: Vec<GitRemoteRefUpdateDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

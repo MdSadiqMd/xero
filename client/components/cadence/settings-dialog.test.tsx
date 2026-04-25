@@ -29,6 +29,10 @@ type UpsertSkillLocalRootRequest = Parameters<NonNullable<SettingsDialogProps['o
 type RemoveSkillLocalRootRequest = Parameters<NonNullable<SettingsDialogProps['onRemoveSkillLocalRoot']>>[0]
 type UpdateProjectSkillSourceRequest = Parameters<NonNullable<SettingsDialogProps['onUpdateProjectSkillSource']>>[0]
 type UpdateGithubSkillSourceRequest = Parameters<NonNullable<SettingsDialogProps['onUpdateGithubSkillSource']>>[0]
+type UpsertPluginRootRequest = Parameters<NonNullable<SettingsDialogProps['onUpsertPluginRoot']>>[0]
+type RemovePluginRootRequest = Parameters<NonNullable<SettingsDialogProps['onRemovePluginRoot']>>[0]
+type SetPluginEnabledRequest = Parameters<NonNullable<SettingsDialogProps['onSetPluginEnabled']>>[0]
+type RemovePluginRequest = Parameters<NonNullable<SettingsDialogProps['onRemovePlugin']>>[0]
 
 function makeOpenAiProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
   return {
@@ -399,6 +403,7 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
           updatedAt: '2026-04-24T05:00:00Z',
         },
       ],
+      pluginRoots: [],
       github: {
         repo: 'vercel-labs/skills',
         reference: 'main',
@@ -416,6 +421,8 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
       updatedAt: '2026-04-24T05:00:00Z',
     },
     diagnostics: [],
+    plugins: [],
+    pluginCommands: [],
     entries: [
       {
         sourceId: 'project:project-1:reviewer',
@@ -483,6 +490,65 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
     ],
     ...overrides,
   }
+}
+
+function makePluginSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegistryDto {
+  const base = makeSkillRegistry()
+  const pluginCommand: SkillRegistryDto['pluginCommands'][number] = {
+    commandId: 'plugin:com.acme.tools:command:open-panel',
+    pluginId: 'com.acme.tools',
+    contributionId: 'open-panel',
+    label: 'Open Panel',
+    description: 'Opens the Acme plugin panel.',
+    entry: 'commands/open-panel.js',
+    availability: 'project_open',
+    state: 'enabled',
+    trust: 'trusted',
+  }
+  return makeSkillRegistry({
+    sources: {
+      ...base.sources,
+      pluginRoots: [
+        {
+          rootId: 'team-plugins',
+          path: '/tmp/cadence-plugins',
+          enabled: true,
+          updatedAt: '2026-04-24T05:00:00Z',
+        },
+      ],
+    },
+    plugins: [
+      {
+        pluginId: 'com.acme.tools',
+        name: 'Acme Tools',
+        version: '1.2.3',
+        description: 'Project automation helpers.',
+        rootId: 'team-plugins',
+        rootPath: '/tmp/cadence-plugins',
+        pluginRootPath: '/tmp/cadence-plugins/acme-tools',
+        manifestPath: '/tmp/cadence-plugins/acme-tools/cadence-plugin.json',
+        manifestHash: 'abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        state: 'enabled',
+        trust: 'trusted',
+        enabled: true,
+        skillCount: 1,
+        commandCount: 1,
+        skills: [
+          {
+            contributionId: 'review-kit',
+            skillId: 'review-kit',
+            path: 'skills/review-kit',
+            sourceId: 'plugin:project-1:com.acme.tools:review-kit',
+          },
+        ],
+        commands: [pluginCommand],
+        lastReloadedAt: '2026-04-24T05:00:00Z',
+        lastDiagnostic: null,
+      },
+    ],
+    pluginCommands: [pluginCommand],
+    ...overrides,
+  })
 }
 
 function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
@@ -635,6 +701,10 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): 
     onRemoveSkillLocalRoot: vi.fn(async (_request: RemoveSkillLocalRootRequest) => makeSkillRegistry()),
     onUpdateProjectSkillSource: vi.fn(async (_request: UpdateProjectSkillSourceRequest) => makeSkillRegistry()),
     onUpdateGithubSkillSource: vi.fn(async (_request: UpdateGithubSkillSourceRequest) => makeSkillRegistry()),
+    onUpsertPluginRoot: vi.fn(async (_request: UpsertPluginRootRequest) => makeSkillRegistry()),
+    onRemovePluginRoot: vi.fn(async (_request: RemovePluginRootRequest) => makeSkillRegistry()),
+    onSetPluginEnabled: vi.fn(async (_request: SetPluginEnabledRequest) => makeSkillRegistry()),
+    onRemovePlugin: vi.fn(async (_request: RemovePluginRequest) => makeSkillRegistry()),
     ...overrides,
   }
 }
@@ -1588,6 +1658,177 @@ describe('SettingsDialog', () => {
         reference: 'stable',
         root: 'catalog',
         enabled: true,
+        projectId: 'project-1',
+      }),
+    )
+  })
+
+  it('renders plugin registry metadata, commands, search, enable toggles, and remove actions', async () => {
+    const pluginRegistry = makePluginSkillRegistry()
+    const onRefreshSkillRegistry = vi.fn(async () => pluginRegistry)
+    const onSetPluginEnabled = vi.fn(async (_request: SetPluginEnabledRequest) => pluginRegistry)
+    const onRemovePlugin = vi.fn(async (_request: RemovePluginRequest) => pluginRegistry)
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          skillRegistry: pluginRegistry,
+          onRefreshSkillRegistry,
+          onSetPluginEnabled,
+          onRemovePlugin,
+        })}
+      />,
+    )
+
+    await waitFor(() => expect(onRefreshSkillRegistry).toHaveBeenCalledWith({ force: true }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plugins' }))
+
+    expect(screen.getByText('Acme Tools')).toBeVisible()
+    expect(screen.getAllByText('Open Panel').length).toBeGreaterThan(0)
+    expect(screen.getByText('Project automation helpers.')).toBeVisible()
+    expect(screen.getByText('1 plugins')).toBeVisible()
+    expect(screen.getByText('1 commands')).toBeVisible()
+
+    fireEvent.click(screen.getByText('Plugin metadata'))
+    expect(screen.getAllByText('/tmp/cadence-plugins/acme-tools').length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByText('Contributions'))
+    expect(screen.getByText('skills/review-kit')).toBeVisible()
+    expect(screen.getAllByText('commands/open-panel.js').length).toBeGreaterThan(0)
+
+    fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'missing' } })
+    expect(screen.queryByText('Acme Tools')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Search plugins'), { target: { value: 'acme' } })
+    expect(screen.getByText('Acme Tools')).toBeVisible()
+
+    fireEvent.click(screen.getByLabelText('Disable plugin Acme Tools'))
+
+    await waitFor(() =>
+      expect(onSetPluginEnabled).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        pluginId: 'com.acme.tools',
+        enabled: false,
+      }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove plugin Acme Tools' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+
+    await waitFor(() =>
+      expect(onRemovePlugin).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        pluginId: 'com.acme.tools',
+      }),
+    )
+  })
+
+  it('shows blocked plugin diagnostics and reloads plugin sources explicitly', async () => {
+    const pluginRegistry = makePluginSkillRegistry()
+    const blockedRegistry = makePluginSkillRegistry({
+      plugins: pluginRegistry.plugins.map((plugin) => ({
+        ...plugin,
+        state: 'blocked',
+        trust: 'blocked',
+        enabled: false,
+        lastDiagnostic: {
+          code: 'cadence_plugin_manifest_invalid',
+          message: 'Cadence rejected this plugin because its manifest declared unsupported fields.',
+          retryable: false,
+          recordedAt: '2026-04-24T05:12:00Z',
+        },
+      })),
+      pluginCommands: pluginRegistry.pluginCommands.map((command) => ({
+        ...command,
+        state: 'blocked',
+        trust: 'blocked',
+      })),
+    })
+    const onReloadSkillRegistry = vi.fn(async () => blockedRegistry)
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          skillRegistry: blockedRegistry,
+          onReloadSkillRegistry,
+        })}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plugins' }))
+
+    expect(screen.getByText('Cadence rejected this plugin because its manifest declared unsupported fields.')).toBeVisible()
+    expect(screen.getByLabelText('Enable plugin Acme Tools')).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+
+    await waitFor(() =>
+      expect(onReloadSkillRegistry).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        includeUnavailable: true,
+      }),
+    )
+  })
+
+  it('validates and saves plugin source roots', async () => {
+    const pluginRegistry = makePluginSkillRegistry()
+    const onUpsertPluginRoot = vi.fn(async (_request: UpsertPluginRootRequest) => pluginRegistry)
+    const onRemovePluginRoot = vi.fn(async (_request: RemovePluginRootRequest) => pluginRegistry)
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          skillRegistry: pluginRegistry,
+          onUpsertPluginRoot,
+          onRemovePluginRoot,
+        })}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plugins' }))
+
+    fireEvent.change(screen.getByLabelText('Plugin root path'), {
+      target: { value: 'relative/plugins' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    expect(screen.getByText('Use an absolute directory path.')).toBeVisible()
+    expect(onUpsertPluginRoot).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('Plugin root id'), {
+      target: { value: 'extra-plugins' },
+    })
+    fireEvent.change(screen.getByLabelText('Plugin root path'), {
+      target: { value: '/tmp/extra-plugins' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() =>
+      expect(onUpsertPluginRoot).toHaveBeenCalledWith({
+        rootId: 'extra-plugins',
+        path: '/tmp/extra-plugins',
+        enabled: true,
+        projectId: 'project-1',
+      }),
+    )
+
+    fireEvent.click(screen.getByLabelText('Disable plugin root team-plugins'))
+
+    await waitFor(() =>
+      expect(onUpsertPluginRoot).toHaveBeenCalledWith({
+        rootId: 'team-plugins',
+        path: '/tmp/cadence-plugins',
+        enabled: false,
+        projectId: 'project-1',
+      }),
+    )
+
+    fireEvent.click(screen.getByLabelText('Remove plugin root team-plugins'))
+
+    await waitFor(() =>
+      expect(onRemovePluginRoot).toHaveBeenCalledWith({
+        rootId: 'team-plugins',
         projectId: 'project-1',
       }),
     )

@@ -276,8 +276,11 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
   return {
     projectId: 'project-1',
     entries: [],
+    plugins: [],
+    pluginCommands: [],
     sources: {
       localRoots: [],
+      pluginRoots: [],
       github: {
         repo: 'owner/skills',
         reference: 'main',
@@ -1528,6 +1531,13 @@ function createAdapter(options?: {
     getProjectSnapshot: async () => currentSnapshot,
     getRepositoryStatus: async () => currentStatus,
     getRepositoryDiff: async (_projectId, scope) => ({ ...currentDiff, scope }),
+    gitStagePaths: async () => undefined,
+    gitUnstagePaths: async () => undefined,
+    gitDiscardChanges: async () => undefined,
+    gitCommit: async () => ({ sha: 'abc1234', summary: 'mock commit', signature: { name: 'Mock', email: 'mock@example.com' } }),
+    gitFetch: async () => ({ remote: 'origin', refspecs: [] }),
+    gitPull: async () => ({ remote: 'origin', branch: 'main', updated: false, summary: 'already up to date', newHeadSha: null }),
+    gitPush: async () => ({ remote: 'origin', branch: 'main', updates: [] }),
     listProjectFiles: async () => currentProjectFiles,
     readProjectFile: async (projectId, path) => ({
       projectId,
@@ -1668,6 +1678,10 @@ function createAdapter(options?: {
     removeSkillLocalRoot: async () => currentSkillRegistry,
     updateProjectSkillSource: async () => currentSkillRegistry,
     updateGithubSkillSource: async () => currentSkillRegistry,
+    upsertPluginRoot: async () => currentSkillRegistry,
+    removePluginRoot: async () => currentSkillRegistry,
+    setPluginEnabled: async () => currentSkillRegistry,
+    removePlugin: async () => currentSkillRegistry,
     getProviderModelCatalog: async (profileId, options) => {
       const currentProfile = currentProviderProfiles.profiles.find((profile) => profile.profileId === profileId)
       if (!currentProfile) {

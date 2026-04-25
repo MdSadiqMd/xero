@@ -148,8 +148,17 @@ fn render_patch(
     let mut bytes_written = 0usize;
 
     let print_result = diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        let prefix = match line.origin() {
+            ' ' | '+' | '-' | '\\' => Some(line.origin()),
+            _ => None,
+        };
         let content = String::from_utf8_lossy(line.content());
-        let content_bytes = content.len();
+        let mut rendered_line = String::new();
+        if let Some(prefix) = prefix {
+            rendered_line.push(prefix);
+        }
+        rendered_line.push_str(&content);
+        let content_bytes = rendered_line.len();
 
         if bytes_written >= MAX_PATCH_BYTES {
             truncated = true;
@@ -159,16 +168,16 @@ fn render_patch(
         let remaining = MAX_PATCH_BYTES - bytes_written;
         if content_bytes > remaining {
             let mut end = remaining;
-            while end > 0 && !content.is_char_boundary(end) {
+            while end > 0 && !rendered_line.is_char_boundary(end) {
                 end -= 1;
             }
-            patch.push_str(&content[..end]);
+            patch.push_str(&rendered_line[..end]);
             bytes_written += end;
             truncated = true;
             return false;
         }
 
-        patch.push_str(&content);
+        patch.push_str(&rendered_line);
         bytes_written += content_bytes;
         true
     });

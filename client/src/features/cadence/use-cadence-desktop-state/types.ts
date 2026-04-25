@@ -48,12 +48,16 @@ import type {
   RuntimeStreamViewItem,
   SyncNotificationAdaptersResponseDto,
   ListSkillRegistryRequestDto,
+  RemovePluginRequestDto,
+  RemovePluginRootRequestDto,
   RemoveSkillLocalRootRequestDto,
   RemoveSkillRequestDto,
+  SetPluginEnabledRequestDto,
   SetSkillEnabledRequestDto,
   SkillRegistryDto,
   UpdateGithubSkillSourceRequestDto,
   UpdateProjectSkillSourceRequestDto,
+  UpsertPluginRootRequestDto,
   UpsertSkillLocalRootRequestDto,
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
@@ -480,6 +484,10 @@ export interface UseCadenceDesktopStateResult {
   removeSkillLocalRoot: (request: RemoveSkillLocalRootRequestDto) => Promise<SkillRegistryDto>
   updateProjectSkillSource: (request: UpdateProjectSkillSourceRequestDto) => Promise<SkillRegistryDto>
   updateGithubSkillSource: (request: UpdateGithubSkillSourceRequestDto) => Promise<SkillRegistryDto>
+  upsertPluginRoot: (request: UpsertPluginRootRequestDto) => Promise<SkillRegistryDto>
+  removePluginRoot: (request: RemovePluginRootRequestDto) => Promise<SkillRegistryDto>
+  setPluginEnabled: (request: SetPluginEnabledRequestDto) => Promise<SkillRegistryDto>
+  removePlugin: (request: RemovePluginRequestDto) => Promise<SkillRegistryDto>
   refreshNotificationRoutes: (options?: { force?: boolean }) => Promise<NotificationRouteDto[]>
   upsertNotificationRoute: (
     request: Omit<UpsertNotificationRouteRequestDto, 'projectId'>,

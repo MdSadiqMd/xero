@@ -367,34 +367,39 @@ Outcome: users can inspect and control skills/plugins from Cadence settings with
   - Acceptance: successful skill use is visible without overwhelming the transcript, and failed skill use exposes the actionable diagnostic already stored in the runtime state.
   - Verification: React tests cover successful and failed lifecycle rows, replayed events after reconnect, and malformed event handling.
 
-##### Phase 4: Add Plugin Sources Without Making Plugins A Second Runtime
+##### Phase 4: Add Plugin Sources Without Making Plugins A Second Runtime - Completed
 
 Outcome: plugins can contribute skills and commands through Cadence-controlled manifests, trust checks, and reload mechanics.
 
-- Slice 2.4.1: Define and validate a plugin manifest.
+- [x] Slice 2.4.1: Define and validate a plugin manifest.
   - Scope: define the minimal plugin manifest for id, name, version, description, trust declaration, contributed skills, contributed commands, and entry locations.
   - Acceptance: manifests are schema-validated, plugin ids are stable, unsupported fields fail closed, and contributed paths must stay inside the plugin root.
   - Verification: parser tests cover valid manifests, missing required fields, duplicate ids, bad versions, unknown capability types, and path traversal.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test plugin_sources` passed manifest validation coverage for valid manifests, missing required fields, duplicate ids, bad versions, unknown fields, and path traversal.
 
-- Slice 2.4.2: Add plugin discovery and installed-plugin registry state.
+- [x] Slice 2.4.2: Add plugin discovery and installed-plugin registry state.
   - Scope: scan configured plugin roots, persist installed plugin metadata, and track enabled/disabled/trusted/blocked state independently from contributed skills.
   - Acceptance: disabling a plugin disables its contributed skills and commands without deleting their records; removing a plugin marks contributions unavailable instead of leaving dangling invocations.
   - Verification: registry tests cover plugin install, disable, enable, remove, contribution projection, and stale contribution cleanup.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test plugin_sources` passed registry coverage for install, disable, enable, remove, command projection, and stale contribution cleanup; `cargo test --manifest-path client/src-tauri/Cargo.toml --test skill_source_settings` passed plugin root persistence and validation.
 
-- Slice 2.4.3: Project plugin-contributed skills into SkillTool.
+- [x] Slice 2.4.3: Project plugin-contributed skills into SkillTool.
   - Scope: expose plugin skills through the same SkillTool discovery/resolve/invoke path as other skills, while preserving plugin provenance and trust state.
   - Acceptance: plugin skills cannot bypass skill validation, approval, asset limits, or disabled-plugin state.
   - Verification: SkillTool tests cover trusted plugin skills, untrusted plugin approval, disabled plugin behavior, and invalid plugin skill assets.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test plugin_sources` passed plugin SkillTool coverage for trusted invocation, untrusted approval, disabled plugin behavior, and invalid asset diagnostics; `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed adjacent SkillTool regression coverage.
 
-- Slice 2.4.4: Add plugin command loading and reload.
+- [x] Slice 2.4.4: Add plugin command loading and reload.
   - Scope: load plugin-contributed commands into the Cadence command/action registry without duplicating slash-command UI from OpenClaude; add explicit reload behavior and diagnostics.
   - Acceptance: commands have stable ids, labels, descriptions, availability rules, and trust provenance; reload updates added/removed commands without restarting the app.
   - Verification: command-registry tests cover load, conflict resolution, disabled plugins, reload success, reload failure, and stale command removal.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test plugin_sources` passed stable command id, duplicate plugin conflict, disabled plugin, remove, and stale command projection coverage; `npm test -- settings-dialog.test.tsx use-cadence-desktop-state.test.tsx` passed explicit plugin reload and state mutation coverage.
 
-- Slice 2.4.5: Add a Plugins settings tab.
+- [x] Slice 2.4.5: Add a Plugins settings tab.
   - Scope: build a ShadCN-based settings surface for installed plugins, source roots, trust state, enabled state, contributed skills/commands, reload, and diagnostics.
   - Acceptance: users can enable/disable plugins, reload plugins, inspect contributions, and see why a plugin is blocked.
   - Verification: React tests cover list rendering, details view, enable/disable, reload, blocked state, and contribution counts.
+  - Completed: 2026-04-25. Verification evidence: `npm test -- settings-dialog.test.tsx use-cadence-desktop-state.test.tsx` passed 59 tests covering plugin list rendering, metadata/details, contribution counts, enable/disable, remove, source root validation, reload, and blocked diagnostics; `npm run build` passed with the existing Vite large-chunk warning.
 
 ##### Phase 5: Add MCP-Provided Skills
 

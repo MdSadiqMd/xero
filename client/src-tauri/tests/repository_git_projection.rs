@@ -229,11 +229,7 @@ fn repository_status_and_diffs_surface_real_staged_unstaged_and_untracked_truth(
 
     let imported = import_with_app(&app, repository_root.path()).expect("import succeeds");
 
-    fs::write(
-        repository_root.path().join("README.md"),
-        "Cadence\nupdated\n",
-    )
-    .expect("modify tracked file");
+    fs::write(repository_root.path().join("README.md"), "updated\n").expect("modify tracked file");
     fs::write(repository_root.path().join("staged.txt"), "staged change\n")
         .expect("write staged file");
     stage_path(&repository, "staged.txt");
@@ -265,18 +261,24 @@ fn repository_status_and_diffs_surface_real_staged_unstaged_and_untracked_truth(
         .expect("staged diff succeeds");
     assert!(!staged_diff.patch.is_empty());
     assert!(staged_diff.patch.contains("staged.txt"));
+    assert!(staged_diff.patch.contains("+staged change"));
 
     let unstaged_diff =
         get_diff_with_app(&app, &imported.project.id, RepositoryDiffScope::Unstaged)
             .expect("unstaged diff succeeds");
     assert!(!unstaged_diff.patch.is_empty());
     assert!(unstaged_diff.patch.contains("README.md"));
+    assert!(unstaged_diff.patch.contains("-Cadence"));
+    assert!(unstaged_diff.patch.contains("+updated"));
 
     let worktree_diff =
         get_diff_with_app(&app, &imported.project.id, RepositoryDiffScope::Worktree)
             .expect("worktree diff succeeds");
     assert!(worktree_diff.patch.contains("README.md"));
     assert!(worktree_diff.patch.contains("staged.txt"));
+    assert!(worktree_diff.patch.contains("-Cadence"));
+    assert!(worktree_diff.patch.contains("+updated"));
+    assert!(worktree_diff.patch.contains("+staged change"));
     assert_diff_matches_root(
         repository_root.path(),
         &staged_diff,

@@ -74,20 +74,28 @@ import {
 } from '@/src/lib/cadence-model/mcp'
 import {
   listSkillRegistryRequestSchema,
+  removePluginRequestSchema,
+  removePluginRootRequestSchema,
   removeSkillLocalRootRequestSchema,
   removeSkillRequestSchema,
+  setPluginEnabledRequestSchema,
   setSkillEnabledRequestSchema,
   skillRegistrySchema,
   updateGithubSkillSourceRequestSchema,
   updateProjectSkillSourceRequestSchema,
+  upsertPluginRootRequestSchema,
   upsertSkillLocalRootRequestSchema,
   type ListSkillRegistryRequestDto,
+  type RemovePluginRequestDto,
+  type RemovePluginRootRequestDto,
   type RemoveSkillLocalRootRequestDto,
   type RemoveSkillRequestDto,
+  type SetPluginEnabledRequestDto,
   type SetSkillEnabledRequestDto,
   type SkillRegistryDto,
   type UpdateGithubSkillSourceRequestDto,
   type UpdateProjectSkillSourceRequestDto,
+  type UpsertPluginRootRequestDto,
   type UpsertSkillLocalRootRequestDto,
 } from '@/src/lib/cadence-model/skills'
 import {
@@ -119,9 +127,20 @@ import {
   searchProjectResponseSchema,
   writeProjectFileRequestSchema,
   writeProjectFileResponseSchema,
+  gitCommitRequestSchema,
+  gitCommitResponseSchema,
+  gitFetchResponseSchema,
+  gitPathsRequestSchema,
+  gitPullResponseSchema,
+  gitPushResponseSchema,
+  gitRemoteRequestSchema,
   type CreateProjectEntryRequestDto,
   type CreateProjectEntryResponseDto,
   type DeleteProjectEntryResponseDto,
+  type GitCommitResponseDto,
+  type GitFetchResponseDto,
+  type GitPullResponseDto,
+  type GitPushResponseDto,
   type ImportRepositoryResponseDto,
   type ListProjectFilesResponseDto,
   type ListProjectsResponseDto,
@@ -207,6 +226,13 @@ const COMMANDS = {
   getProjectSnapshot: 'get_project_snapshot',
   getRepositoryStatus: 'get_repository_status',
   getRepositoryDiff: 'get_repository_diff',
+  gitStagePaths: 'git_stage_paths',
+  gitUnstagePaths: 'git_unstage_paths',
+  gitDiscardChanges: 'git_discard_changes',
+  gitCommit: 'git_commit',
+  gitFetch: 'git_fetch',
+  gitPull: 'git_pull',
+  gitPush: 'git_push',
   listProjectFiles: 'list_project_files',
   readProjectFile: 'read_project_file',
   writeProjectFile: 'write_project_file',
@@ -244,6 +270,10 @@ const COMMANDS = {
   removeSkillLocalRoot: 'remove_skill_local_root',
   updateProjectSkillSource: 'update_project_skill_source',
   updateGithubSkillSource: 'update_github_skill_source',
+  upsertPluginRoot: 'upsert_plugin_root',
+  removePluginRoot: 'remove_plugin_root',
+  setPluginEnabled: 'set_plugin_enabled',
+  removePlugin: 'remove_plugin',
   getProviderModelCatalog: 'get_provider_model_catalog',
   listProviderProfiles: 'list_provider_profiles',
   upsertProviderProfile: 'upsert_provider_profile',
@@ -449,6 +479,13 @@ export interface CadenceDesktopAdapter {
   getProjectSnapshot(projectId: string): Promise<ProjectSnapshotResponseDto>
   getRepositoryStatus(projectId: string): Promise<RepositoryStatusResponseDto>
   getRepositoryDiff(projectId: string, scope: RepositoryDiffScope): Promise<RepositoryDiffResponseDto>
+  gitStagePaths(projectId: string, paths: string[]): Promise<void>
+  gitUnstagePaths(projectId: string, paths: string[]): Promise<void>
+  gitDiscardChanges(projectId: string, paths: string[]): Promise<void>
+  gitCommit(projectId: string, message: string): Promise<GitCommitResponseDto>
+  gitFetch(projectId: string, remote?: string | null): Promise<GitFetchResponseDto>
+  gitPull(projectId: string, remote?: string | null): Promise<GitPullResponseDto>
+  gitPush(projectId: string, remote?: string | null): Promise<GitPushResponseDto>
   listProjectFiles(projectId: string): Promise<ListProjectFilesResponseDto>
   readProjectFile(projectId: string, path: string): Promise<ReadProjectFileResponseDto>
   writeProjectFile(projectId: string, path: string, content: string): Promise<WriteProjectFileResponseDto>
@@ -490,6 +527,10 @@ export interface CadenceDesktopAdapter {
   removeSkillLocalRoot(request: RemoveSkillLocalRootRequestDto): Promise<SkillRegistryDto>
   updateProjectSkillSource(request: UpdateProjectSkillSourceRequestDto): Promise<SkillRegistryDto>
   updateGithubSkillSource(request: UpdateGithubSkillSourceRequestDto): Promise<SkillRegistryDto>
+  upsertPluginRoot(request: UpsertPluginRootRequestDto): Promise<SkillRegistryDto>
+  removePluginRoot(request: RemovePluginRootRequestDto): Promise<SkillRegistryDto>
+  setPluginEnabled(request: SetPluginEnabledRequestDto): Promise<SkillRegistryDto>
+  removePlugin(request: RemovePluginRequestDto): Promise<SkillRegistryDto>
   getProviderModelCatalog(
     profileId: string,
     options?: { forceRefresh?: boolean },
@@ -693,6 +734,16 @@ async function invokeTyped<TResponse>(
   try {
     const response = await invoke(command, args)
     return schema.parse(response)
+  } catch (error) {
+    throw normalizeError(error, `Command ${command}`)
+  }
+}
+
+async function invokeRaw(command: string, args?: Record<string, unknown>): Promise<void> {
+  ensureDesktopRuntime(`Command ${command}`)
+
+  try {
+    await invoke(command, args)
   } catch (error) {
     throw normalizeError(error, `Command ${command}`)
   }
@@ -972,6 +1023,41 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     return invokeTyped(COMMANDS.getRepositoryDiff, repositoryDiffResponseSchema, {
       request: { projectId, scope },
     })
+  },
+
+  async gitStagePaths(projectId, paths) {
+    const request = gitPathsRequestSchema.parse({ projectId, paths })
+    await invokeRaw(COMMANDS.gitStagePaths, { request })
+  },
+
+  async gitUnstagePaths(projectId, paths) {
+    const request = gitPathsRequestSchema.parse({ projectId, paths })
+    await invokeRaw(COMMANDS.gitUnstagePaths, { request })
+  },
+
+  async gitDiscardChanges(projectId, paths) {
+    const request = gitPathsRequestSchema.parse({ projectId, paths })
+    await invokeRaw(COMMANDS.gitDiscardChanges, { request })
+  },
+
+  gitCommit(projectId, message) {
+    const request = gitCommitRequestSchema.parse({ projectId, message })
+    return invokeTyped(COMMANDS.gitCommit, gitCommitResponseSchema, { request })
+  },
+
+  gitFetch(projectId, remote) {
+    const request = gitRemoteRequestSchema.parse({ projectId, remote: remote ?? null })
+    return invokeTyped(COMMANDS.gitFetch, gitFetchResponseSchema, { request })
+  },
+
+  gitPull(projectId, remote) {
+    const request = gitRemoteRequestSchema.parse({ projectId, remote: remote ?? null })
+    return invokeTyped(COMMANDS.gitPull, gitPullResponseSchema, { request })
+  },
+
+  gitPush(projectId, remote) {
+    const request = gitRemoteRequestSchema.parse({ projectId, remote: remote ?? null })
+    return invokeTyped(COMMANDS.gitPush, gitPushResponseSchema, { request })
   },
 
   listProjectFiles(projectId) {
@@ -1257,6 +1343,34 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
   updateGithubSkillSource(request) {
     const parsedRequest = updateGithubSkillSourceRequestSchema.parse(request)
     return invokeTyped(COMMANDS.updateGithubSkillSource, skillRegistrySchema, {
+      request: parsedRequest,
+    })
+  },
+
+  upsertPluginRoot(request) {
+    const parsedRequest = upsertPluginRootRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.upsertPluginRoot, skillRegistrySchema, {
+      request: parsedRequest,
+    })
+  },
+
+  removePluginRoot(request) {
+    const parsedRequest = removePluginRootRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.removePluginRoot, skillRegistrySchema, {
+      request: parsedRequest,
+    })
+  },
+
+  setPluginEnabled(request) {
+    const parsedRequest = setPluginEnabledRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.setPluginEnabled, skillRegistrySchema, {
+      request: parsedRequest,
+    })
+  },
+
+  removePlugin(request) {
+    const parsedRequest = removePluginRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.removePlugin, skillRegistrySchema, {
       request: parsedRequest,
     })
   },

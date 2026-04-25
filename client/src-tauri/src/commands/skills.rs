@@ -6,22 +6,29 @@ use crate::{
     auth::now_timestamp,
     commands::{
         CommandError, CommandResult, InstalledSkillDiagnosticDto, ListSkillRegistryRequestDto,
-        RemoveSkillLocalRootRequestDto, RemoveSkillRequestDto, SetSkillEnabledRequestDto,
-        SkillDiscoveryDiagnosticDto, SkillGithubSourceDto, SkillLocalRootDto,
-        SkillProjectSourceDto, SkillRegistryDto, SkillRegistryEntryDto, SkillSourceKindDto,
-        SkillSourceMetadataDto, SkillSourceScopeDto, SkillSourceSettingsDto, SkillSourceStateDto,
-        SkillTrustStateDto, UpdateGithubSkillSourceRequestDto, UpdateProjectSkillSourceRequestDto,
-        UpsertSkillLocalRootRequestDto,
+        PluginCommandAvailabilityDto, PluginCommandContributionDto, PluginDiagnosticDto,
+        PluginRegistryEntryDto, PluginRootDto, PluginSkillContributionDto, RemovePluginRequestDto,
+        RemovePluginRootRequestDto, RemoveSkillLocalRootRequestDto, RemoveSkillRequestDto,
+        SetPluginEnabledRequestDto, SetSkillEnabledRequestDto, SkillDiscoveryDiagnosticDto,
+        SkillGithubSourceDto, SkillLocalRootDto, SkillProjectSourceDto, SkillRegistryDto,
+        SkillRegistryEntryDto, SkillSourceKindDto, SkillSourceMetadataDto, SkillSourceScopeDto,
+        SkillSourceSettingsDto, SkillSourceStateDto, SkillTrustStateDto,
+        UpdateGithubSkillSourceRequestDto, UpdateProjectSkillSourceRequestDto,
+        UpsertPluginRootRequestDto, UpsertSkillLocalRootRequestDto,
     },
     db::project_store::{
-        self, InstalledSkillDiagnosticRecord, InstalledSkillRecord, InstalledSkillScopeFilter,
+        self, InstalledPluginDiagnosticRecord, InstalledPluginRecord,
+        InstalledSkillDiagnosticRecord, InstalledSkillRecord, InstalledSkillScopeFilter,
+        PluginCommandRegistryRecord,
     },
     runtime::{
-        discover_bundled_skill_directory, discover_local_skill_directory,
-        discover_project_skill_directory, resolve_imported_repo_root, CadenceDiscoveredSkill,
-        CadenceSkillDirectoryDiscovery, CadenceSkillDiscoveryDiagnostic, CadenceSkillSourceKind,
-        CadenceSkillSourceLocator, CadenceSkillSourceRecord, CadenceSkillSourceScope,
-        CadenceSkillSourceState, CadenceSkillTrustState, SkillSourceSettings,
+        discover_bundled_skill_directory, discover_local_skill_directory, discover_plugin_roots,
+        discover_plugin_skill_contribution, discover_project_skill_directory,
+        resolve_imported_repo_root, CadenceDiscoveredSkill, CadencePluginDiscoveryDiagnostic,
+        CadencePluginRoot, CadenceSkillDirectoryDiscovery, CadenceSkillDiscoveryDiagnostic,
+        CadenceSkillSourceKind, CadenceSkillSourceLocator, CadenceSkillSourceRecord,
+        CadenceSkillSourceScope, CadenceSkillSourceState, CadenceSkillTrustState,
+        SkillSourceSettings,
     },
     state::DesktopState,
 };
@@ -32,7 +39,7 @@ pub fn list_skill_registry<R: Runtime>(
     state: State<'_, DesktopState>,
     request: ListSkillRegistryRequestDto,
 ) -> CommandResult<SkillRegistryDto> {
-    load_skill_registry(&app, state.inner(), request)
+    load_skill_registry(&app, state.inner(), request, false)
 }
 
 #[tauri::command]
@@ -41,7 +48,7 @@ pub fn reload_skill_registry<R: Runtime>(
     state: State<'_, DesktopState>,
     request: ListSkillRegistryRequestDto,
 ) -> CommandResult<SkillRegistryDto> {
-    load_skill_registry(&app, state.inner(), request)
+    load_skill_registry(&app, state.inner(), request, true)
 }
 
 #[tauri::command]
@@ -98,6 +105,7 @@ pub fn set_skill_enabled<R: Runtime>(
             query: None,
             include_unavailable: true,
         },
+        false,
     )
 }
 
@@ -125,6 +133,7 @@ pub fn remove_skill<R: Runtime>(
             query: None,
             include_unavailable: true,
         },
+        false,
     )
 }
 
@@ -149,6 +158,7 @@ pub fn upsert_skill_local_root<R: Runtime>(
             query: None,
             include_unavailable: true,
         },
+        false,
     )
 }
 
@@ -169,6 +179,7 @@ pub fn remove_skill_local_root<R: Runtime>(
             query: None,
             include_unavailable: true,
         },
+        false,
     )
 }
 
@@ -191,6 +202,7 @@ pub fn update_project_skill_source<R: Runtime>(
             query: None,
             include_unavailable: true,
         },
+        false,
     )
 }
 
@@ -216,6 +228,97 @@ pub fn update_github_skill_source<R: Runtime>(
             query: None,
             include_unavailable: true,
         },
+        false,
+    )
+}
+
+#[tauri::command]
+pub fn upsert_plugin_root<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: UpsertPluginRootRequestDto,
+) -> CommandResult<SkillRegistryDto> {
+    let path = state.skill_source_settings_file(&app)?;
+    let settings = load_settings(&app, state.inner())?.upsert_plugin_root(
+        request.root_id,
+        request.path,
+        request.enabled,
+    )?;
+    persist_settings(&path, settings)?;
+    load_skill_registry(
+        &app,
+        state.inner(),
+        ListSkillRegistryRequestDto {
+            project_id: request.project_id,
+            query: None,
+            include_unavailable: true,
+        },
+        true,
+    )
+}
+
+#[tauri::command]
+pub fn remove_plugin_root<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: RemovePluginRootRequestDto,
+) -> CommandResult<SkillRegistryDto> {
+    let path = state.skill_source_settings_file(&app)?;
+    let settings = load_settings(&app, state.inner())?.remove_plugin_root(&request.root_id)?;
+    persist_settings(&path, settings)?;
+    load_skill_registry(
+        &app,
+        state.inner(),
+        ListSkillRegistryRequestDto {
+            project_id: request.project_id,
+            query: None,
+            include_unavailable: true,
+        },
+        true,
+    )
+}
+
+#[tauri::command]
+pub fn set_plugin_enabled<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: SetPluginEnabledRequestDto,
+) -> CommandResult<SkillRegistryDto> {
+    let project_id = validate_required(request.project_id, "projectId")?;
+    let plugin_id = validate_required(request.plugin_id, "pluginId")?;
+    let repo_root = resolve_imported_repo_root(&app, state.inner(), &project_id)?;
+    project_store::set_installed_plugin_enabled(&repo_root, &plugin_id, request.enabled)?;
+    load_skill_registry(
+        &app,
+        state.inner(),
+        ListSkillRegistryRequestDto {
+            project_id: Some(project_id),
+            query: None,
+            include_unavailable: true,
+        },
+        false,
+    )
+}
+
+#[tauri::command]
+pub fn remove_plugin<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: RemovePluginRequestDto,
+) -> CommandResult<SkillRegistryDto> {
+    let project_id = validate_required(request.project_id, "projectId")?;
+    let plugin_id = validate_required(request.plugin_id, "pluginId")?;
+    let repo_root = resolve_imported_repo_root(&app, state.inner(), &project_id)?;
+    project_store::mark_installed_plugin_removed(&repo_root, &plugin_id)?;
+    load_skill_registry(
+        &app,
+        state.inner(),
+        ListSkillRegistryRequestDto {
+            project_id: Some(project_id),
+            query: None,
+            include_unavailable: true,
+        },
+        false,
     )
 }
 
@@ -223,6 +326,7 @@ fn load_skill_registry<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
     request: ListSkillRegistryRequestDto,
+    reload_plugins: bool,
 ) -> CommandResult<SkillRegistryDto> {
     let project_id = request
         .project_id
@@ -237,14 +341,34 @@ fn load_skill_registry<R: Runtime>(
 
     let mut entries = BTreeMap::<String, SkillRegistryEntryDto>::new();
     let mut diagnostics = Vec::new();
+    let mut plugin_records = Vec::new();
+    let mut plugin_commands = Vec::new();
 
     if let Some(project_id) = project_id.as_deref() {
         let repo_root = resolve_imported_repo_root(app, state, project_id)?;
+        let plugin_snapshot = collect_plugin_registry(app, state, project_id, reload_plugins)?;
+        diagnostics.extend(
+            plugin_snapshot
+                .diagnostics
+                .into_iter()
+                .map(plugin_discovery_diagnostic_dto),
+        );
+        plugin_commands = project_store::plugin_command_descriptors(
+            &plugin_snapshot.records,
+            request.include_unavailable,
+        )?;
+        plugin_records = plugin_snapshot.records;
         for record in project_store::list_installed_skills(
             &repo_root,
             InstalledSkillScopeFilter::project(project_id.to_owned(), true)?,
         )? {
-            insert_entry(&mut entries, skill_entry_from_installed(&record)?);
+            insert_entry(
+                &mut entries,
+                skill_entry_from_installed(&apply_plugin_state_to_installed_skill(
+                    record,
+                    &plugin_records,
+                ))?,
+            );
         }
     }
 
@@ -282,10 +406,23 @@ fn load_skill_registry<R: Runtime>(
     Ok(SkillRegistryDto {
         project_id,
         entries,
+        plugins: plugin_records
+            .iter()
+            .map(plugin_registry_entry_dto)
+            .collect::<CommandResult<Vec<_>>>()?,
+        plugin_commands: plugin_commands
+            .iter()
+            .map(plugin_command_dto)
+            .collect::<CommandResult<Vec<_>>>()?,
         sources: skill_source_settings_dto(&settings),
         diagnostics,
         reloaded_at: now_timestamp(),
     })
+}
+
+struct PluginRegistrySnapshot {
+    records: Vec<InstalledPluginRecord>,
+    diagnostics: Vec<CadencePluginDiscoveryDiagnostic>,
 }
 
 struct DiscoveredSkillSnapshot {
@@ -329,10 +466,78 @@ fn collect_discoverable_skills<R: Runtime>(
         );
     }
 
+    if let Some(project_id) = project_id {
+        let plugin_snapshot = collect_plugin_registry(app, state, project_id, false)?;
+        for plugin in plugin_snapshot.records {
+            for skill in &plugin.manifest.skills {
+                let state = if plugin.state == CadenceSkillSourceState::Enabled {
+                    CadenceSkillSourceState::Discoverable
+                } else {
+                    plugin.state
+                };
+                let discovered = discover_plugin_skill_contribution(
+                    project_id.to_owned(),
+                    plugin.plugin_id.clone(),
+                    skill.id.clone(),
+                    &plugin.plugin_root_path,
+                    skill.path.clone(),
+                    state,
+                    plugin.trust,
+                )?;
+                for candidate in discovered.candidates {
+                    if candidate.skill_id == skill.id {
+                        candidates.push(candidate);
+                    } else {
+                        diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+                            code: "cadence_plugin_skill_id_mismatch".into(),
+                            message: format!(
+                                "Cadence skipped plugin `{}` skill contribution `{}` because SKILL.md declared `{}`.",
+                                plugin.plugin_id, skill.id, candidate.skill_id
+                            ),
+                            relative_path: Some(skill.path.clone()),
+                        });
+                    }
+                }
+                diagnostics.extend(discovered.diagnostics);
+            }
+        }
+        diagnostics.extend(plugin_snapshot.diagnostics.into_iter().map(|diagnostic| {
+            CadenceSkillDiscoveryDiagnostic {
+                code: diagnostic.code,
+                message: diagnostic.message,
+                relative_path: diagnostic.relative_path,
+            }
+        }));
+    }
+
     candidates.sort_by(|left, right| left.source.source_id.cmp(&right.source.source_id));
     Ok(DiscoveredSkillSnapshot {
         candidates,
         diagnostics,
+    })
+}
+
+fn collect_plugin_registry<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    project_id: &str,
+    reload_plugins: bool,
+) -> CommandResult<PluginRegistrySnapshot> {
+    let settings = load_settings(app, state)?;
+    let repo_root = resolve_imported_repo_root(app, state, project_id)?;
+    let roots = settings
+        .enabled_plugin_roots()
+        .into_iter()
+        .map(|root| CadencePluginRoot {
+            root_id: root.root_id,
+            root_path: PathBuf::from(root.path),
+        });
+    let discovery = discover_plugin_roots(roots)?;
+    let records =
+        project_store::sync_discovered_plugins(&repo_root, &discovery.plugins, reload_plugins)?;
+    Ok(PluginRegistrySnapshot {
+        records,
+        diagnostics: discovery.diagnostics,
     })
 }
 
@@ -393,6 +598,36 @@ fn insert_entry(
         .or_insert(entry);
 }
 
+fn apply_plugin_state_to_installed_skill(
+    mut record: InstalledSkillRecord,
+    plugins: &[InstalledPluginRecord],
+) -> InstalledSkillRecord {
+    let CadenceSkillSourceLocator::Plugin { plugin_id, .. } = &record.source.locator else {
+        return record;
+    };
+    let Some(plugin) = plugins.iter().find(|plugin| plugin.plugin_id == *plugin_id) else {
+        record.source.state = CadenceSkillSourceState::Stale;
+        return record;
+    };
+    if plugin.state != CadenceSkillSourceState::Enabled
+        || plugin.trust == CadenceSkillTrustState::Blocked
+    {
+        record.source.state = plugin.state;
+        record.source.trust = plugin.trust;
+        record.last_diagnostic =
+            plugin
+                .last_diagnostic
+                .as_ref()
+                .map(|diagnostic| InstalledSkillDiagnosticRecord {
+                    code: diagnostic.code.clone(),
+                    message: diagnostic.message.clone(),
+                    retryable: diagnostic.retryable,
+                    recorded_at: diagnostic.recorded_at.clone(),
+                });
+    }
+    record
+}
+
 fn skill_entry_from_installed(
     record: &InstalledSkillRecord,
 ) -> CommandResult<SkillRegistryEntryDto> {
@@ -418,6 +653,80 @@ fn skill_entry_from_installed(
             .map(installed_diagnostic_dto),
         source: source_metadata_dto(&source),
     })
+}
+
+fn plugin_registry_entry_dto(
+    record: &InstalledPluginRecord,
+) -> CommandResult<PluginRegistryEntryDto> {
+    let commands = project_store::plugin_command_descriptors(std::slice::from_ref(record), true)?
+        .iter()
+        .map(plugin_command_dto)
+        .collect::<CommandResult<Vec<_>>>()?;
+    let skills = record
+        .manifest
+        .skills
+        .iter()
+        .map(|skill| {
+            Ok::<_, CommandError>(PluginSkillContributionDto {
+                contribution_id: skill.id.clone(),
+                skill_id: skill.id.clone(),
+                path: skill.path.clone(),
+                source_id: None,
+            })
+        })
+        .collect::<CommandResult<Vec<_>>>()?;
+    Ok(PluginRegistryEntryDto {
+        plugin_id: record.plugin_id.clone(),
+        name: record.name.clone(),
+        version: record.version.clone(),
+        description: record.description.clone(),
+        root_id: record.root_id.clone(),
+        root_path: record.root_path.clone(),
+        plugin_root_path: record.plugin_root_path.clone(),
+        manifest_path: record.manifest_path.clone(),
+        manifest_hash: record.manifest_hash.clone(),
+        state: source_state_dto(record.state),
+        trust: trust_state_dto(record.trust),
+        enabled: record.state == CadenceSkillSourceState::Enabled,
+        skill_count: record.manifest.skills.len(),
+        command_count: record.manifest.commands.len(),
+        skills,
+        commands,
+        last_reloaded_at: record.last_reloaded_at.clone(),
+        last_diagnostic: record.last_diagnostic.as_ref().map(plugin_diagnostic_dto),
+    })
+}
+
+fn plugin_command_dto(
+    command: &PluginCommandRegistryRecord,
+) -> CommandResult<PluginCommandContributionDto> {
+    Ok(PluginCommandContributionDto {
+        command_id: command.command_id.clone(),
+        plugin_id: command.plugin_id.clone(),
+        contribution_id: command.contribution_id.clone(),
+        label: command.label.clone(),
+        description: command.description.clone(),
+        entry: command.entry.clone(),
+        availability: match &command.availability {
+            crate::runtime::CadencePluginCommandAvailability::Always => {
+                PluginCommandAvailabilityDto::Always
+            }
+            crate::runtime::CadencePluginCommandAvailability::ProjectOpen => {
+                PluginCommandAvailabilityDto::ProjectOpen
+            }
+        },
+        state: source_state_dto(command.state),
+        trust: trust_state_dto(command.trust),
+    })
+}
+
+fn plugin_diagnostic_dto(diagnostic: &InstalledPluginDiagnosticRecord) -> PluginDiagnosticDto {
+    PluginDiagnosticDto {
+        code: diagnostic.code.clone(),
+        message: diagnostic.message.clone(),
+        retryable: diagnostic.retryable,
+        recorded_at: diagnostic.recorded_at.clone(),
+    }
 }
 
 fn skill_entry_from_discovered(
@@ -572,6 +881,16 @@ fn skill_source_settings_dto(settings: &SkillSourceSettings) -> SkillSourceSetti
                 updated_at: root.updated_at.clone(),
             })
             .collect(),
+        plugin_roots: settings
+            .plugin_roots
+            .iter()
+            .map(|root| PluginRootDto {
+                root_id: root.root_id.clone(),
+                path: root.path.clone(),
+                enabled: root.enabled,
+                updated_at: root.updated_at.clone(),
+            })
+            .collect(),
         github: SkillGithubSourceDto {
             repo: settings.github.repo.clone(),
             reference: settings.github.reference.clone(),
@@ -605,6 +924,16 @@ fn installed_diagnostic_dto(
 
 fn discovery_diagnostic_dto(
     diagnostic: CadenceSkillDiscoveryDiagnostic,
+) -> SkillDiscoveryDiagnosticDto {
+    SkillDiscoveryDiagnosticDto {
+        code: diagnostic.code,
+        message: diagnostic.message,
+        relative_path: diagnostic.relative_path,
+    }
+}
+
+fn plugin_discovery_diagnostic_dto(
+    diagnostic: CadencePluginDiscoveryDiagnostic,
 ) -> SkillDiscoveryDiagnosticDto {
     SkillDiscoveryDiagnosticDto {
         code: diagnostic.code,

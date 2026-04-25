@@ -6,6 +6,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
+  GitCompareArrows,
   Gamepad2,
   Globe,
   Maximize2,
@@ -54,6 +55,14 @@ interface CadenceShellProps {
   androidOpen?: boolean
   onToggleSolana?: () => void
   solanaOpen?: boolean
+  onToggleVcs?: () => void
+  vcsOpen?: boolean
+  /** Number of changed files in the working tree — surfaced as a badge on the diff button. */
+  vcsChangeCount?: number
+  /** Lines added across the working tree (for the +/- badge). */
+  vcsAdditions?: number
+  /** Lines deleted across the working tree (for the +/- badge). */
+  vcsDeletions?: number
   sidebarCollapsed?: boolean
   onToggleSidebar?: () => void
   /** Dev override — null means auto-detect */
@@ -86,6 +95,13 @@ interface EmulatorSdkSignal {
 /** App Store listing for Xcode — the CTA target when the button is in
  * "Install Xcode" mode. */
 const XCODE_STORE_URL = "https://apps.apple.com/app/xcode/id497799835"
+
+function formatVcsCount(value: number): string {
+  if (value >= 100_000) return `${Math.round(value / 1000)}k`
+  if (value >= 10_000) return `${(value / 1000).toFixed(0)}k`
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`
+  return value.toString()
+}
 
 /** Poll `emulator_sdk_status` and keep it in sync with the backend
  * `emulator:sdk_status_changed` event so the titlebar reacts to a fresh
@@ -168,6 +184,11 @@ export function CadenceShell({
   androidOpen = false,
   onToggleSolana,
   solanaOpen = false,
+  onToggleVcs,
+  vcsOpen = false,
+  vcsChangeCount = 0,
+  vcsAdditions = 0,
+  vcsDeletions = 0,
   sidebarCollapsed = false,
   onToggleSidebar,
   platformOverride,
@@ -385,6 +406,45 @@ export function CadenceShell({
     </button>
   )
 
+  const hasVcsLineChanges = vcsAdditions > 0 || vcsDeletions > 0
+  const VcsBtn = (
+    <button
+      aria-label={vcsOpen ? "Close source control" : "Open source control"}
+      aria-pressed={vcsOpen}
+      className={cn(
+        "flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors",
+        vcsOpen
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+      )}
+      onClick={onToggleVcs}
+      title={
+        vcsChangeCount > 0
+          ? `${vcsChangeCount} file${vcsChangeCount === 1 ? "" : "s"} changed · +${vcsAdditions} −${vcsDeletions}`
+          : "Source control"
+      }
+      type="button"
+    >
+      <GitCompareArrows className="h-4 w-4" />
+      {hasVcsLineChanges ? (
+        <span
+          aria-hidden="true"
+          className="flex items-center gap-1 font-mono text-[10.5px] font-semibold leading-none tabular-nums"
+        >
+          <span className="text-emerald-400">+{formatVcsCount(vcsAdditions)}</span>
+          <span className="text-rose-400">−{formatVcsCount(vcsDeletions)}</span>
+        </span>
+      ) : vcsChangeCount > 0 ? (
+        <span
+          aria-hidden="true"
+          className="rounded-full bg-amber-500/90 px-1 py-px font-mono text-[9px] font-semibold leading-none tabular-nums text-black"
+        >
+          {vcsChangeCount > 99 ? "99+" : vcsChangeCount}
+        </span>
+      ) : null}
+    </button>
+  )
+
   const SidebarToggleBtn = (
     <button
       aria-label={sidebarCollapsed ? "Expand project sidebar" : "Collapse project sidebar"}
@@ -528,6 +588,7 @@ export function CadenceShell({
           >
             {NavButtons}
             <div className="mx-1.5 h-4 w-px bg-border" />
+            {VcsBtn}
             {IosBtn}
             {AndroidBtn}
             {BrowserBtn}
@@ -567,6 +628,7 @@ export function CadenceShell({
         >
           {!chromeOnly ? (
             <>
+              {VcsBtn}
               {IosBtn}
               {AndroidBtn}
               {BrowserBtn}

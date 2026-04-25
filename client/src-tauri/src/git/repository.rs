@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use git2::{Repository, Status, StatusOptions};
+use git2::{DiffOptions, Repository, Status, StatusOptions};
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -33,6 +33,8 @@ pub struct CanonicalRepository {
     pub has_staged_changes: bool,
     pub has_unstaged_changes: bool,
     pub has_untracked_changes: bool,
+    pub additions: u32,
+    pub deletions: u32,
 }
 
 impl CanonicalRepository {
@@ -57,6 +59,8 @@ impl CanonicalRepository {
             has_staged_changes: self.has_staged_changes,
             has_unstaged_changes: self.has_unstaged_changes,
             has_untracked_changes: self.has_untracked_changes,
+            additions: self.additions,
+            deletions: self.deletions,
         }
     }
 }
@@ -99,6 +103,7 @@ impl RepositoryHandle {
         let has_staged_changes = status_entries.iter().any(|entry| entry.staged.is_some());
         let has_unstaged_changes = status_entries.iter().any(|entry| entry.unstaged.is_some());
         let has_untracked_changes = status_entries.iter().any(|entry| entry.untracked);
+        let (additions, deletions) = read_diff_line_counts(&self.repository);
 
         Ok(CanonicalRepository {
             project_id: self.project_id(),
@@ -115,6 +120,8 @@ impl RepositoryHandle {
             has_staged_changes,
             has_unstaged_changes,
             has_untracked_changes,
+            additions,
+            deletions,
         })
     }
 }
@@ -325,6 +332,40 @@ fn git_timestamp_to_rfc3339(unix_timestamp: i64) -> Option<String> {
     OffsetDateTime::from_unix_timestamp(unix_timestamp)
         .ok()
         .and_then(|value| value.format(&Rfc3339).ok())
+}
+
+/// Best-effort additions/deletions across staged + unstaged + untracked.
+/// Returns (0, 0) on any error so the badge degrades gracefully instead of
+/// failing the whole status read.
+fn read_diff_line_counts(repository: &Repository) -> (u32, u32) {
+    let mut diff_options = DiffOptions::new();
+    diff_options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show_untracked_content(true)
+        .include_typechange(true)
+        .ignore_submodules(true);
+
+    let head_tree = repository
+        .head()
+        .ok()
+        .and_then(|head| head.peel_to_tree().ok());
+
+    let diff = match repository
+        .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut diff_options))
+    {
+        Ok(diff) => diff,
+        Err(_) => return (0, 0),
+    };
+
+    let stats = match diff.stats() {
+        Ok(stats) => stats,
+        Err(_) => return (0, 0),
+    };
+
+    let insertions = u32::try_from(stats.insertions()).unwrap_or(u32::MAX);
+    let deletions = u32::try_from(stats.deletions()).unwrap_or(u32::MAX);
+    (insertions, deletions)
 }
 
 fn read_status_entries(

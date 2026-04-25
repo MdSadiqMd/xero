@@ -140,6 +140,8 @@ export const repositoryStatusResponseSchema = z.object({
   hasStagedChanges: z.boolean(),
   hasUnstagedChanges: z.boolean(),
   hasUntrackedChanges: z.boolean(),
+  additions: z.number().int().nonnegative().optional(),
+  deletions: z.number().int().nonnegative().optional(),
 })
 
 export const repositoryDiffResponseSchema = z.object({
@@ -148,6 +150,63 @@ export const repositoryDiffResponseSchema = z.object({
   patch: z.string(),
   truncated: z.boolean(),
   baseRevision: nullableTextSchema,
+})
+
+export const gitPathsRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    paths: z.array(z.string().trim().min(1)).default([]),
+  })
+  .strict()
+
+export const gitCommitRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    message: z.string().min(1),
+  })
+  .strict()
+
+export const gitRemoteRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    remote: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+
+export const gitSignatureSchema = z.object({
+  name: z.string(),
+  email: z.string(),
+})
+
+export const gitCommitResponseSchema = z.object({
+  sha: z.string(),
+  summary: z.string(),
+  signature: gitSignatureSchema,
+})
+
+export const gitFetchResponseSchema = z.object({
+  remote: z.string(),
+  refspecs: z.array(z.string()),
+})
+
+export const gitPullResponseSchema = z.object({
+  remote: z.string(),
+  branch: z.string(),
+  updated: z.boolean(),
+  summary: z.string(),
+  newHeadSha: nullableTextSchema,
+})
+
+export const gitRemoteRefUpdateSchema = z.object({
+  refName: z.string(),
+  ok: z.boolean(),
+  message: nullableTextSchema,
+})
+
+export const gitPushResponseSchema = z.object({
+  remote: z.string(),
+  branch: z.string(),
+  updates: z.array(gitRemoteRefUpdateSchema),
 })
 
 export const listProjectFilesResponseSchema = z
@@ -293,6 +352,15 @@ export type SearchFileResultDto = z.infer<typeof searchFileResultSchema>
 export type SearchProjectResponseDto = z.infer<typeof searchProjectResponseSchema>
 export type ReplaceInProjectRequestDto = z.infer<typeof replaceInProjectRequestSchema>
 export type ReplaceInProjectResponseDto = z.infer<typeof replaceInProjectResponseSchema>
+export type GitPathsRequestDto = z.infer<typeof gitPathsRequestSchema>
+export type GitCommitRequestDto = z.infer<typeof gitCommitRequestSchema>
+export type GitRemoteRequestDto = z.infer<typeof gitRemoteRequestSchema>
+export type GitSignatureDto = z.infer<typeof gitSignatureSchema>
+export type GitCommitResponseDto = z.infer<typeof gitCommitResponseSchema>
+export type GitFetchResponseDto = z.infer<typeof gitFetchResponseSchema>
+export type GitPullResponseDto = z.infer<typeof gitPullResponseSchema>
+export type GitRemoteRefUpdateDto = z.infer<typeof gitRemoteRefUpdateSchema>
+export type GitPushResponseDto = z.infer<typeof gitPushResponseSchema>
 
 export interface ProjectListItem {
   id: string
@@ -345,6 +413,8 @@ export interface RepositoryStatusView {
   unstagedCount: number
   untrackedCount: number
   statusCount: number
+  additions: number
+  deletions: number
   hasChanges: boolean
   entries: RepositoryStatusEntryView[]
 }
@@ -448,6 +518,8 @@ export function mapRepositoryStatus(status: RepositoryStatusResponseDto): Reposi
     unstagedCount,
     untrackedCount,
     statusCount: uniquePaths.size,
+    additions: status.additions ?? 0,
+    deletions: status.deletions ?? 0,
     hasChanges:
       status.hasStagedChanges || status.hasUnstagedChanges || status.hasUntrackedChanges || uniquePaths.size > 0,
     entries,

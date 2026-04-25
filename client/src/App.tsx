@@ -17,7 +17,9 @@ import { IosEmulatorSidebar } from '@/components/cadence/ios-emulator-sidebar'
 import { AndroidEmulatorSidebar } from '@/components/cadence/android-emulator-sidebar'
 import { SolanaWorkbenchSidebar } from '@/components/cadence/solana-workbench-sidebar'
 import { SettingsDialog } from '@/components/cadence/settings-dialog'
-import { type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
+import { VcsSidebar } from '@/components/cadence/vcs-sidebar'
+import { CadenceDesktopAdapter as DefaultCadenceDesktopAdapter, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
+import { type RepositoryDiffScope } from '@/src/lib/cadence-model/project'
 import { useCadenceDesktopState } from '@/src/features/cadence/use-cadence-desktop-state'
 import { cn } from '@/lib/utils'
 
@@ -41,6 +43,7 @@ function resolveFooterRuntimeState(status: {
 }
 
 export function CadenceApp({ adapter }: CadenceAppProps) {
+  const resolvedAdapter = adapter ?? DefaultCadenceDesktopAdapter
   const [activeView, setActiveView] = useState<View>('phases')
   const {
     projects,
@@ -119,6 +122,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     removeSkillLocalRoot,
     updateProjectSkillSource,
     updateGithubSkillSource,
+    upsertPluginRoot,
+    removePluginRoot,
+    setPluginEnabled,
+    removePlugin,
     refreshNotificationRoutes,
     upsertNotificationRoute,
     createAgentSession,
@@ -134,6 +141,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [iosOpen, setIosOpen] = useState(false)
   const [androidOpen, setAndroidOpen] = useState(false)
   const [solanaOpen, setSolanaOpen] = useState(false)
+  const [vcsOpen, setVcsOpen] = useState(false)
 
   const toggleGames = () => {
     setGamesOpen((current) => {
@@ -143,6 +151,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setIosOpen(false)
         setAndroidOpen(false)
         setSolanaOpen(false)
+        setVcsOpen(false)
       }
       return next
     })
@@ -156,6 +165,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setIosOpen(false)
         setAndroidOpen(false)
         setSolanaOpen(false)
+        setVcsOpen(false)
       }
       return next
     })
@@ -169,6 +179,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setBrowserOpen(false)
         setAndroidOpen(false)
         setSolanaOpen(false)
+        setVcsOpen(false)
       }
       return next
     })
@@ -182,6 +193,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setBrowserOpen(false)
         setIosOpen(false)
         setSolanaOpen(false)
+        setVcsOpen(false)
       }
       return next
     })
@@ -195,6 +207,21 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         setBrowserOpen(false)
         setIosOpen(false)
         setAndroidOpen(false)
+        setVcsOpen(false)
+      }
+      return next
+    })
+  }
+
+  const toggleVcs = () => {
+    setVcsOpen((current) => {
+      const next = !current
+      if (next) {
+        setGamesOpen(false)
+        setBrowserOpen(false)
+        setIosOpen(false)
+        setAndroidOpen(false)
+        setSolanaOpen(false)
       }
       return next
     })
@@ -437,6 +464,11 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         androidOpen={androidOpen}
         onToggleSolana={toggleSolana}
         solanaOpen={solanaOpen}
+        onToggleVcs={toggleVcs}
+        vcsOpen={vcsOpen}
+        vcsChangeCount={repositoryStatus?.statusCount ?? 0}
+        vcsAdditions={repositoryStatus?.additions ?? 0}
+        vcsDeletions={repositoryStatus?.deletions ?? 0}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
         platformOverride={platformOverride}
@@ -500,6 +532,11 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       androidOpen={androidOpen}
       onToggleSolana={toggleSolana}
       solanaOpen={solanaOpen}
+      onToggleVcs={toggleVcs}
+      vcsOpen={vcsOpen}
+      vcsChangeCount={repositoryStatus?.statusCount ?? 0}
+      vcsAdditions={repositoryStatus?.additions ?? 0}
+      vcsDeletions={repositoryStatus?.deletions ?? 0}
       sidebarCollapsed={sidebarCollapsed}
       onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
       platformOverride={platformOverride}
@@ -524,6 +561,29 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       <IosEmulatorSidebar open={iosOpen} />
       <AndroidEmulatorSidebar open={androidOpen} />
       <SolanaWorkbenchSidebar open={solanaOpen} />
+      <VcsSidebar
+        open={vcsOpen}
+        projectId={activeProjectId}
+        status={repositoryStatus}
+        branchLabel={repositoryStatus?.branchLabel ?? activeProject?.branchLabel ?? null}
+        onClose={() => setVcsOpen(false)}
+        onRefreshStatus={() => {
+          if (activeProjectId) {
+            return retry()
+          }
+          return undefined
+        }}
+        onLoadDiff={(projectId, scope: RepositoryDiffScope) =>
+          resolvedAdapter.getRepositoryDiff(projectId, scope)
+        }
+        onStage={(projectId, paths) => resolvedAdapter.gitStagePaths(projectId, paths)}
+        onUnstage={(projectId, paths) => resolvedAdapter.gitUnstagePaths(projectId, paths)}
+        onDiscard={(projectId, paths) => resolvedAdapter.gitDiscardChanges(projectId, paths)}
+        onCommit={(projectId, message) => resolvedAdapter.gitCommit(projectId, message)}
+        onFetch={(projectId) => resolvedAdapter.gitFetch(projectId)}
+        onPull={(projectId) => resolvedAdapter.gitPull(projectId)}
+        onPush={(projectId) => resolvedAdapter.gitPush(projectId)}
+      />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -573,6 +633,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         onRemoveSkillLocalRoot={(request) => removeSkillLocalRoot(request)}
         onUpdateProjectSkillSource={(request) => updateProjectSkillSource(request)}
         onUpdateGithubSkillSource={(request) => updateGithubSkillSource(request)}
+        onUpsertPluginRoot={(request) => upsertPluginRoot(request)}
+        onRemovePluginRoot={(request) => removePluginRoot(request)}
+        onSetPluginEnabled={(request) => setPluginEnabled(request)}
+        onRemovePlugin={(request) => removePlugin(request)}
         platformOverride={platformOverride}
         onPlatformOverrideChange={setPlatformOverride}
         onStartOnboarding={() => {

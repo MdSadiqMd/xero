@@ -7,9 +7,9 @@ use std::{
 use sha2::{Digest, Sha256};
 
 use super::{
-    AutonomousBundledSkillRoot, AutonomousLocalSkillRoot, AutonomousSkillToolCandidate,
-    AutonomousSkillToolOutput, AutonomousSkillToolStatus, AutonomousToolOutput,
-    AutonomousToolResult, AutonomousToolRuntime, AUTONOMOUS_TOOL_SKILL,
+    AutonomousBundledSkillRoot, AutonomousLocalSkillRoot, AutonomousPluginRoot,
+    AutonomousSkillToolCandidate, AutonomousSkillToolOutput, AutonomousSkillToolStatus,
+    AutonomousToolOutput, AutonomousToolResult, AutonomousToolRuntime, AUTONOMOUS_TOOL_SKILL,
 };
 use crate::{
     auth::now_timestamp,
@@ -19,17 +19,19 @@ use crate::{
     },
     runtime::autonomous_skill_runtime::{
         decide_skill_tool_access, discover_bundled_skill_directory, discover_local_skill_directory,
+        discover_plugin_roots, discover_plugin_skill_contribution,
         discover_project_skill_directory, load_discovered_skill_context,
         load_skill_context_from_directory, skill_tool_diagnostic_from_command_error,
         validate_skill_tool_context_payload, AutonomousSkillInstallRequest,
         AutonomousSkillInvokeRequest, AutonomousSkillResolveOutput, AutonomousSkillResolveRequest,
-        AutonomousSkillSourceMetadata, CadenceDiscoveredSkill, CadenceSkillDirectoryDiscovery,
-        CadenceSkillSourceLocator, CadenceSkillSourceRecord, CadenceSkillSourceScope,
-        CadenceSkillSourceState, CadenceSkillToolAccessStatus, CadenceSkillToolContextAsset,
-        CadenceSkillToolContextDocument, CadenceSkillToolContextPayload,
-        CadenceSkillToolDiagnostic, CadenceSkillToolDynamicAssetInput, CadenceSkillToolInput,
-        CadenceSkillToolLifecycleEvent, CadenceSkillToolLifecycleResult, CadenceSkillToolOperation,
-        CadenceSkillTrustState, CADENCE_SKILL_TOOL_CONTRACT_VERSION,
+        AutonomousSkillSourceMetadata, CadenceDiscoveredSkill, CadencePluginRoot,
+        CadenceSkillDirectoryDiscovery, CadenceSkillSourceLocator, CadenceSkillSourceRecord,
+        CadenceSkillSourceScope, CadenceSkillSourceState, CadenceSkillToolAccessStatus,
+        CadenceSkillToolContextAsset, CadenceSkillToolContextDocument,
+        CadenceSkillToolContextPayload, CadenceSkillToolDiagnostic,
+        CadenceSkillToolDynamicAssetInput, CadenceSkillToolInput, CadenceSkillToolLifecycleEvent,
+        CadenceSkillToolLifecycleResult, CadenceSkillToolOperation, CadenceSkillTrustState,
+        CADENCE_SKILL_TOOL_CONTRACT_VERSION,
     },
 };
 
@@ -466,12 +468,18 @@ impl AutonomousToolRuntime {
             &self.repo_root,
             InstalledSkillScopeFilter::project(skill_tool.project_id.clone(), true)?,
         )? {
-            insert_candidate(&mut entries, CachedSkillToolCandidate::Installed(record));
+            insert_candidate(
+                &mut entries,
+                CachedSkillToolCandidate::Installed(
+                    self.apply_plugin_state_to_installed_skill(record),
+                ),
+            );
         }
 
         self.collect_project_skills(skill_tool, &mut entries, &mut diagnostics)?;
         self.collect_local_skills(skill_tool, &mut entries, &mut diagnostics)?;
         self.collect_bundled_skills(skill_tool, &mut entries, &mut diagnostics)?;
+        self.collect_plugin_skills(skill_tool, &mut entries, &mut diagnostics)?;
         if let Some(query) = query.filter(|value| !value.trim().is_empty()) {
             self.collect_github_skills(skill_tool, query, &mut entries, &mut diagnostics)?;
         }
@@ -555,6 +563,78 @@ impl AutonomousToolRuntime {
         Ok(())
     }
 
+    fn collect_plugin_skills(
+        &self,
+        skill_tool: &super::AutonomousSkillToolRuntime,
+        entries: &mut BTreeMap<String, CachedSkillToolCandidate>,
+        diagnostics: &mut Vec<CadenceSkillToolDiagnostic>,
+    ) -> CommandResult<()> {
+        if skill_tool.plugin_roots.is_empty() {
+            return Ok(());
+        }
+
+        let roots =
+            skill_tool
+                .plugin_roots
+                .iter()
+                .map(
+                    |AutonomousPluginRoot { root_id, root_path }| CadencePluginRoot {
+                        root_id: root_id.clone(),
+                        root_path: root_path.clone(),
+                    },
+                );
+        let discovery = discover_plugin_roots(roots)?;
+        diagnostics.extend(
+            discovery
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| plugin_diagnostic(diagnostic.code, diagnostic.message)),
+        );
+        let plugin_records =
+            project_store::sync_discovered_plugins(&self.repo_root, &discovery.plugins, false)?;
+        for plugin in plugin_records {
+            for skill in &plugin.manifest.skills {
+                let state = if plugin.state == CadenceSkillSourceState::Enabled {
+                    CadenceSkillSourceState::Discoverable
+                } else {
+                    plugin.state
+                };
+                let discovered = discover_plugin_skill_contribution(
+                    skill_tool.project_id.clone(),
+                    plugin.plugin_id.clone(),
+                    skill.id.clone(),
+                    Path::new(&plugin.plugin_root_path),
+                    skill.path.clone(),
+                    state,
+                    plugin.trust,
+                )?;
+                for candidate in &discovered.candidates {
+                    if candidate.skill_id != skill.id {
+                        diagnostics.push(plugin_diagnostic(
+                            "cadence_plugin_skill_id_mismatch",
+                            format!(
+                                "Cadence skipped plugin `{}` skill contribution `{}` because SKILL.md declared `{}`.",
+                                plugin.plugin_id, skill.id, candidate.skill_id
+                            ),
+                        ));
+                        continue;
+                    }
+                    insert_candidate(
+                        entries,
+                        CachedSkillToolCandidate::Discovered(candidate.clone()),
+                    );
+                }
+                diagnostics.extend(
+                    discovered
+                        .diagnostics
+                        .into_iter()
+                        .map(|diagnostic| plugin_diagnostic(diagnostic.code, diagnostic.message)),
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn collect_github_skills(
         &self,
         skill_tool: &super::AutonomousSkillToolRuntime,
@@ -615,6 +695,47 @@ impl AutonomousToolRuntime {
             cache.insert(candidate_source_id(entry), entry.clone());
         }
         Ok(())
+    }
+
+    fn apply_plugin_state_to_installed_skill(
+        &self,
+        mut record: InstalledSkillRecord,
+    ) -> InstalledSkillRecord {
+        let CadenceSkillSourceLocator::Plugin { plugin_id, .. } = &record.source.locator else {
+            return record;
+        };
+        match project_store::load_installed_plugin_by_id(&self.repo_root, plugin_id) {
+            Ok(Some(plugin)) => {
+                if plugin.state != CadenceSkillSourceState::Enabled
+                    || plugin.trust == CadenceSkillTrustState::Blocked
+                {
+                    record.source.state = plugin.state;
+                    record.source.trust = plugin.trust;
+                    record.last_diagnostic =
+                        plugin
+                            .last_diagnostic
+                            .map(|diagnostic| InstalledSkillDiagnosticRecord {
+                                code: diagnostic.code,
+                                message: diagnostic.message,
+                                retryable: diagnostic.retryable,
+                                recorded_at: diagnostic.recorded_at,
+                            });
+                }
+                record
+            }
+            Ok(None) | Err(_) => {
+                record.source.state = CadenceSkillSourceState::Stale;
+                record.last_diagnostic = Some(InstalledSkillDiagnosticRecord {
+                    code: "cadence_plugin_source_missing".into(),
+                    message:
+                        "Cadence could not find the plugin that contributed this installed skill."
+                            .into(),
+                    retryable: false,
+                    recorded_at: now_timestamp(),
+                });
+                record
+            }
+        }
     }
 
     fn cached_skill_candidate(
@@ -1534,6 +1655,13 @@ fn diagnostic(
         retryable,
         redacted: false,
     }
+}
+
+fn plugin_diagnostic(
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> CadenceSkillToolDiagnostic {
+    diagnostic(code, message, false)
 }
 
 fn persist_skill_failure(

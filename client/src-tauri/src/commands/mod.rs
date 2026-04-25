@@ -10,6 +10,7 @@ pub mod get_repository_status;
 pub mod get_runtime_run;
 pub mod get_runtime_session;
 pub mod get_runtime_settings;
+pub mod git_operations;
 pub mod import_mcp_servers;
 pub mod import_repository;
 pub mod list_mcp_servers;
@@ -79,6 +80,10 @@ pub use get_repository_status::get_repository_status;
 pub use get_runtime_run::get_runtime_run;
 pub use get_runtime_session::get_runtime_session;
 pub use get_runtime_settings::get_runtime_settings;
+pub use git_operations::{
+    git_commit, git_discard_changes, git_fetch, git_pull, git_push, git_stage_paths,
+    git_unstage_paths,
+};
 pub use import_mcp_servers::import_mcp_servers;
 pub use import_repository::import_repository;
 pub use list_mcp_servers::{list_mcp_servers, refresh_mcp_server_statuses};
@@ -101,9 +106,9 @@ pub use resolve_operator_action::resolve_operator_action;
 pub use resume_operator_run::resume_operator_run;
 pub use search_project::{replace_in_project, search_project};
 pub use skills::{
-    list_skill_registry, reload_skill_registry, remove_skill, remove_skill_local_root,
-    set_skill_enabled, update_github_skill_source, update_project_skill_source,
-    upsert_skill_local_root,
+    list_skill_registry, reload_skill_registry, remove_plugin, remove_plugin_root, remove_skill,
+    remove_skill_local_root, set_plugin_enabled, set_skill_enabled, update_github_skill_source,
+    update_project_skill_source, upsert_plugin_root, upsert_skill_local_root,
 };
 pub use solana::{
     solana_alt_create, solana_alt_extend, solana_alt_resolve, solana_cluster_drift_check,

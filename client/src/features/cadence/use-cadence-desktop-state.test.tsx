@@ -36,6 +36,10 @@ type UpsertSkillLocalRootRequest = Parameters<CadenceDesktopAdapter['upsertSkill
 type RemoveSkillLocalRootRequest = Parameters<CadenceDesktopAdapter['removeSkillLocalRoot']>[0]
 type UpdateProjectSkillSourceRequest = Parameters<CadenceDesktopAdapter['updateProjectSkillSource']>[0]
 type UpdateGithubSkillSourceRequest = Parameters<CadenceDesktopAdapter['updateGithubSkillSource']>[0]
+type UpsertPluginRootRequest = Parameters<CadenceDesktopAdapter['upsertPluginRoot']>[0]
+type RemovePluginRootRequest = Parameters<CadenceDesktopAdapter['removePluginRoot']>[0]
+type SetPluginEnabledRequest = Parameters<CadenceDesktopAdapter['setPluginEnabled']>[0]
+type RemovePluginRequest = Parameters<CadenceDesktopAdapter['removePlugin']>[0]
 
 function makeProjectSummary(id: string, name: string) {
   return {
@@ -397,6 +401,7 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
     ],
     sources: {
       localRoots: [],
+      pluginRoots: [],
       github: {
         repo: 'vercel-labs/skills',
         reference: 'main',
@@ -414,8 +419,69 @@ function makeSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegi
       updatedAt: '2026-04-24T05:00:00Z',
     },
     diagnostics: [],
+    plugins: [],
+    pluginCommands: [],
     ...overrides,
   }
+}
+
+function makePluginSkillRegistry(overrides: Partial<SkillRegistryDto> = {}): SkillRegistryDto {
+  const base = makeSkillRegistry()
+  const pluginCommand: SkillRegistryDto['pluginCommands'][number] = {
+    commandId: 'plugin:com.acme.tools:command:open-panel',
+    pluginId: 'com.acme.tools',
+    contributionId: 'open-panel',
+    label: 'Open Panel',
+    description: 'Opens the Acme plugin panel.',
+    entry: 'commands/open-panel.js',
+    availability: 'project_open',
+    state: 'enabled',
+    trust: 'trusted',
+  }
+  return makeSkillRegistry({
+    sources: {
+      ...base.sources,
+      pluginRoots: [
+        {
+          rootId: 'team-plugins',
+          path: '/tmp/cadence-plugins',
+          enabled: true,
+          updatedAt: '2026-04-24T05:00:00Z',
+        },
+      ],
+    },
+    plugins: [
+      {
+        pluginId: 'com.acme.tools',
+        name: 'Acme Tools',
+        version: '1.2.3',
+        description: 'Project automation helpers.',
+        rootId: 'team-plugins',
+        rootPath: '/tmp/cadence-plugins',
+        pluginRootPath: '/tmp/cadence-plugins/acme-tools',
+        manifestPath: '/tmp/cadence-plugins/acme-tools/cadence-plugin.json',
+        manifestHash: 'abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        state: 'enabled',
+        trust: 'trusted',
+        enabled: true,
+        skillCount: 1,
+        commandCount: 1,
+        skills: [
+          {
+            contributionId: 'review-kit',
+            skillId: 'review-kit',
+            path: 'skills/review-kit',
+            sourceId: 'plugin:project-1:com.acme.tools:review-kit',
+          },
+        ],
+        commands: [pluginCommand],
+        lastReloadedAt: '2026-04-24T05:00:00Z',
+        lastDiagnostic: null,
+      },
+    ],
+    pluginCommands: [pluginCommand],
+    ...overrides,
+  })
 }
 
 function makeRuntimeRun(projectId: string, overrides: Partial<RuntimeRunDto> = {}): RuntimeRunDto {
@@ -901,6 +967,78 @@ function createMockAdapter(options?: {
         },
       },
       reloadedAt: '2026-04-24T05:08:00Z',
+    }
+    return currentSkillRegistry.value
+  })
+  const upsertPluginRoot = vi.fn(async (request: UpsertPluginRootRequest) => {
+    const rootId = request.rootId ?? 'plugin-test'
+    currentSkillRegistry.value = {
+      ...currentSkillRegistry.value,
+      sources: {
+        ...currentSkillRegistry.value.sources,
+        pluginRoots: [
+          ...currentSkillRegistry.value.sources.pluginRoots.filter((root) => root.rootId !== rootId),
+          {
+            rootId,
+            path: request.path,
+            enabled: request.enabled,
+            updatedAt: '2026-04-24T05:09:00Z',
+          },
+        ],
+      },
+      reloadedAt: '2026-04-24T05:09:00Z',
+    }
+    return currentSkillRegistry.value
+  })
+  const removePluginRoot = vi.fn(async (request: RemovePluginRootRequest) => {
+    currentSkillRegistry.value = {
+      ...currentSkillRegistry.value,
+      sources: {
+        ...currentSkillRegistry.value.sources,
+        pluginRoots: currentSkillRegistry.value.sources.pluginRoots.filter((root) => root.rootId !== request.rootId),
+      },
+      reloadedAt: '2026-04-24T05:10:00Z',
+    }
+    return currentSkillRegistry.value
+  })
+  const setPluginEnabled = vi.fn(async (request: SetPluginEnabledRequest) => {
+    currentSkillRegistry.value = {
+      ...currentSkillRegistry.value,
+      plugins: currentSkillRegistry.value.plugins.map((plugin) =>
+        plugin.pluginId === request.pluginId
+          ? {
+              ...plugin,
+              enabled: request.enabled,
+              state: request.enabled ? 'enabled' : 'disabled',
+            }
+          : plugin,
+      ),
+      pluginCommands: currentSkillRegistry.value.pluginCommands.map((command) =>
+        command.pluginId === request.pluginId
+          ? {
+              ...command,
+              state: request.enabled ? 'enabled' : 'disabled',
+            }
+          : command,
+      ),
+      reloadedAt: '2026-04-24T05:11:00Z',
+    }
+    return currentSkillRegistry.value
+  })
+  const removePlugin = vi.fn(async (request: RemovePluginRequest) => {
+    currentSkillRegistry.value = {
+      ...currentSkillRegistry.value,
+      plugins: currentSkillRegistry.value.plugins.map((plugin) =>
+        plugin.pluginId === request.pluginId
+          ? {
+              ...plugin,
+              enabled: false,
+              state: 'stale',
+            }
+          : plugin,
+      ),
+      pluginCommands: currentSkillRegistry.value.pluginCommands.filter((command) => command.pluginId !== request.pluginId),
+      reloadedAt: '2026-04-24T05:12:00Z',
     }
     return currentSkillRegistry.value
   })
@@ -1405,6 +1543,13 @@ function createMockAdapter(options?: {
     getProjectSnapshot,
     getRepositoryStatus,
     getRepositoryDiff,
+    gitStagePaths: async () => undefined,
+    gitUnstagePaths: async () => undefined,
+    gitDiscardChanges: async () => undefined,
+    gitCommit: async () => ({ sha: 'abc1234', summary: 'mock commit', signature: { name: 'Mock', email: 'mock@example.com' } }),
+    gitFetch: async () => ({ remote: 'origin', refspecs: [] }),
+    gitPull: async () => ({ remote: 'origin', branch: 'main', updated: false, summary: 'already up to date', newHeadSha: null }),
+    gitPush: async () => ({ remote: 'origin', branch: 'main', updates: [] }),
     listProjectFiles,
     readProjectFile,
     writeProjectFile,
@@ -1435,6 +1580,10 @@ function createMockAdapter(options?: {
     removeSkillLocalRoot,
     updateProjectSkillSource,
     updateGithubSkillSource,
+    upsertPluginRoot,
+    removePluginRoot,
+    setPluginEnabled,
+    removePlugin,
     getProviderModelCatalog,
     getProviderProfiles,
     startOpenAiLogin,
@@ -1560,6 +1709,10 @@ function createMockAdapter(options?: {
     removeSkillLocalRoot,
     updateProjectSkillSource,
     updateGithubSkillSource,
+    upsertPluginRoot,
+    removePluginRoot,
+    setPluginEnabled,
+    removePlugin,
     getProviderModelCatalog,
     getProviderProfiles,
     listProjectFiles,
@@ -1724,6 +1877,11 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="mcp-registry-mutation-error-message">{state.mcpRegistryMutationError?.message ?? 'none'}</div>
       <div data-testid="mcp-pending-server-id">{state.pendingMcpServerId ?? 'none'}</div>
       <div data-testid="mcp-import-diagnostics-count">{String(state.mcpImportDiagnostics.length)}</div>
+      <div data-testid="skill-registry-plugin-count">{String(state.skillRegistry?.plugins.length ?? 0)}</div>
+      <div data-testid="skill-registry-plugin-command-count">{String(state.skillRegistry?.pluginCommands.length ?? 0)}</div>
+      <div data-testid="skill-registry-plugin-root-count">{String(state.skillRegistry?.sources.pluginRoots.length ?? 0)}</div>
+      <div data-testid="skill-registry-mutation-status">{state.skillRegistryMutationStatus}</div>
+      <div data-testid="skill-pending-source-id">{state.pendingSkillSourceId ?? 'none'}</div>
       <div data-testid="refresh-source">{state.refreshSource ?? 'none'}</div>
       <div data-testid="project-count">{String(state.projects.length)}</div>
       <div data-testid="workflow-has-phases">{String(state.workflowView?.hasPhases ?? false)}</div>
@@ -1940,6 +2098,56 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       </button>
       <button
         onClick={() => {
+          void state.refreshSkillRegistry({ force: true }).catch(() => undefined)
+        }}
+        type="button"
+      >
+        Load skill registry
+      </button>
+      <button
+        onClick={() => {
+          void state
+            .upsertPluginRoot({
+              rootId: 'team-plugins',
+              path: '/tmp/cadence-plugins',
+              enabled: true,
+              projectId: 'project-1',
+            })
+            .catch(() => undefined)
+        }}
+        type="button"
+      >
+        Save plugin root
+      </button>
+      <button
+        onClick={() => {
+          void state
+            .setPluginEnabled({
+              projectId: 'project-1',
+              pluginId: 'com.acme.tools',
+              enabled: false,
+            })
+            .catch(() => undefined)
+        }}
+        type="button"
+      >
+        Disable Acme plugin
+      </button>
+      <button
+        onClick={() => {
+          void state
+            .removePlugin({
+              projectId: 'project-1',
+              pluginId: 'com.acme.tools',
+            })
+            .catch(() => undefined)
+        }}
+        type="button"
+      >
+        Remove Acme plugin
+      </button>
+      <button
+        onClick={() => {
           void state.refreshProviderProfiles({ force: true }).catch(() => undefined)
         }}
         type="button"
@@ -2053,6 +2261,52 @@ describe('useCadenceDesktopState', () => {
     expect(setup.getRuntimeSession).toHaveBeenCalledWith('project-1')
     expect(setup.listNotificationRoutes).toHaveBeenCalledWith('project-1')
     expect(setup.syncNotificationAdapters).toHaveBeenCalledWith('project-1')
+  })
+
+  it('projects plugin registry mutations through the skill registry state', async () => {
+    const setup = createMockAdapter({
+      skillRegistry: makePluginSkillRegistry(),
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load skill registry' }))
+
+    await waitFor(() => expect(screen.getByTestId('skill-registry-plugin-count')).toHaveTextContent('1'))
+    expect(screen.getByTestId('skill-registry-plugin-root-count')).toHaveTextContent('1')
+    expect(screen.getByTestId('skill-registry-plugin-command-count')).toHaveTextContent('1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable Acme plugin' }))
+
+    await waitFor(() =>
+      expect(setup.setPluginEnabled).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        pluginId: 'com.acme.tools',
+        enabled: false,
+      }),
+    )
+    await waitFor(() => expect(screen.getByTestId('skill-registry-mutation-status')).toHaveTextContent('idle'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Acme plugin' }))
+
+    await waitFor(() =>
+      expect(setup.removePlugin).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        pluginId: 'com.acme.tools',
+      }),
+    )
+    await waitFor(() => expect(screen.getByTestId('skill-registry-plugin-command-count')).toHaveTextContent('0'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save plugin root' }))
+
+    await waitFor(() =>
+      expect(setup.upsertPluginRoot).toHaveBeenCalledWith({
+        rootId: 'team-plugins',
+        path: '/tmp/cadence-plugins',
+        enabled: true,
+        projectId: 'project-1',
+      }),
+    )
   })
 
   it('reloads the full active snapshot after project:updated so durable operator-loop state stays fresh', async () => {

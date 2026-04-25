@@ -2,7 +2,7 @@ use std::fs;
 
 use cadence_desktop_lib::runtime::{
     load_skill_source_settings_from_path, persist_skill_source_settings, SkillLocalRootSetting,
-    SkillSourceSettings,
+    SkillPluginRootSetting, SkillSourceSettings,
 };
 
 fn settings_path(root: &tempfile::TempDir) -> std::path::PathBuf {
@@ -17,6 +17,7 @@ fn skill_source_settings_persist_global_project_and_github_sources() {
 
     let settings = SkillSourceSettings {
         local_roots: Vec::new(),
+        plugin_roots: Vec::new(),
         projects: Vec::new(),
         ..SkillSourceSettings::default()
     }
@@ -78,6 +79,7 @@ fn skill_source_settings_reject_unsafe_and_duplicate_local_roots() {
 
     let unsafe_path_error = SkillSourceSettings {
         local_roots: Vec::new(),
+        plugin_roots: Vec::new(),
         ..SkillSourceSettings::default()
     }
     .upsert_local_root(None, "relative/skills".into(), true)
@@ -104,10 +106,93 @@ fn skill_source_settings_reject_unsafe_and_duplicate_local_roots() {
                 updated_at: "2026-04-24T05:00:00Z".into(),
             },
         ],
+        plugin_roots: Vec::new(),
         ..SkillSourceSettings::default()
     }
     .validate()
     .expect_err("duplicate canonical roots are rejected");
 
     assert_eq!(duplicate_error.code, "skill_source_settings_duplicate_root");
+}
+
+#[test]
+fn skill_source_settings_persist_and_validate_plugin_roots() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let plugin_root = root.path().join("team-plugins");
+    fs::create_dir_all(&plugin_root).expect("plugin root");
+    let canonical = fs::canonicalize(&plugin_root)
+        .expect("canonical root")
+        .to_string_lossy()
+        .into_owned();
+
+    let settings = SkillSourceSettings {
+        local_roots: Vec::new(),
+        plugin_roots: Vec::new(),
+        projects: Vec::new(),
+        ..SkillSourceSettings::default()
+    }
+    .upsert_plugin_root(
+        Some("team-plugins".into()),
+        plugin_root.to_string_lossy().into_owned(),
+        true,
+    )
+    .expect("plugin root setting");
+
+    let saved =
+        persist_skill_source_settings(&settings_path(&root), settings).expect("persist settings");
+    assert_eq!(saved.plugin_roots.len(), 1);
+    assert_eq!(saved.plugin_roots[0].root_id, "team-plugins");
+    assert_eq!(saved.plugin_roots[0].path, canonical);
+    assert_eq!(saved.enabled_plugin_roots().len(), 1);
+
+    let removed = saved
+        .remove_plugin_root("team-plugins")
+        .expect("remove plugin root");
+    assert!(removed.plugin_roots.is_empty());
+}
+
+#[test]
+fn skill_source_settings_reject_unsafe_and_duplicate_plugin_roots() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let plugin_root = root.path().join("team-plugins");
+    fs::create_dir_all(&plugin_root).expect("plugin root");
+    let canonical = fs::canonicalize(&plugin_root)
+        .expect("canonical root")
+        .to_string_lossy()
+        .into_owned();
+
+    let unsafe_path_error = SkillSourceSettings {
+        local_roots: Vec::new(),
+        plugin_roots: Vec::new(),
+        ..SkillSourceSettings::default()
+    }
+    .upsert_plugin_root(None, "relative/plugins".into(), true)
+    .expect_err("relative roots are rejected");
+    assert_eq!(unsafe_path_error.code, "plugin_source_path_unsafe");
+
+    let duplicate_error = SkillSourceSettings {
+        local_roots: Vec::new(),
+        plugin_roots: vec![
+            SkillPluginRootSetting {
+                root_id: "team-a".into(),
+                path: canonical.clone(),
+                enabled: true,
+                updated_at: "2026-04-24T05:00:00Z".into(),
+            },
+            SkillPluginRootSetting {
+                root_id: "team-b".into(),
+                path: canonical,
+                enabled: true,
+                updated_at: "2026-04-24T05:00:00Z".into(),
+            },
+        ],
+        ..SkillSourceSettings::default()
+    }
+    .validate()
+    .expect_err("duplicate canonical plugin roots are rejected");
+
+    assert_eq!(
+        duplicate_error.code,
+        "plugin_source_settings_duplicate_root"
+    );
 }

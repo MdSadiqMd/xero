@@ -31,6 +31,8 @@ export const skillTrustStateSchema = z.enum([
   'blocked',
 ])
 
+export const pluginCommandAvailabilitySchema = z.enum(['always', 'project_open'])
+
 export const skillSourceMetadataSchema = z
   .object({
     label: z.string().trim().min(1),
@@ -93,6 +95,70 @@ export const skillLocalRootSchema = z
   })
   .strict()
 
+export const pluginRootSchema = z
+  .object({
+    rootId: z.string().trim().min(1),
+    path: z.string().trim().min(1),
+    enabled: z.boolean(),
+    updatedAt: isoTimestampSchema,
+  })
+  .strict()
+
+export const pluginDiagnosticSchema = z
+  .object({
+    code: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+    retryable: z.boolean(),
+    recordedAt: isoTimestampSchema,
+  })
+  .strict()
+
+export const pluginSkillContributionSchema = z
+  .object({
+    contributionId: z.string().trim().min(1),
+    skillId: z.string().trim().min(1),
+    path: z.string().trim().min(1),
+    sourceId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
+export const pluginCommandContributionSchema = z
+  .object({
+    commandId: z.string().trim().min(1),
+    pluginId: z.string().trim().min(1),
+    contributionId: z.string().trim().min(1),
+    label: z.string().trim().min(1),
+    description: z.string().trim().min(1),
+    entry: z.string().trim().min(1),
+    availability: pluginCommandAvailabilitySchema,
+    state: skillSourceStateSchema,
+    trust: skillTrustStateSchema,
+  })
+  .strict()
+
+export const pluginRegistryEntrySchema = z
+  .object({
+    pluginId: z.string().trim().min(1),
+    name: z.string().trim().min(1),
+    version: z.string().trim().min(1),
+    description: z.string().trim().min(1),
+    rootId: z.string().trim().min(1),
+    rootPath: z.string().trim().min(1),
+    pluginRootPath: z.string().trim().min(1),
+    manifestPath: z.string().trim().min(1),
+    manifestHash: z.string().trim().min(1),
+    state: skillSourceStateSchema,
+    trust: skillTrustStateSchema,
+    enabled: z.boolean(),
+    skillCount: z.number().int().nonnegative(),
+    commandCount: z.number().int().nonnegative(),
+    skills: z.array(pluginSkillContributionSchema).default([]),
+    commands: z.array(pluginCommandContributionSchema).default([]),
+    lastReloadedAt: optionalIsoTimestampSchema,
+    lastDiagnostic: pluginDiagnosticSchema.nullable().optional(),
+  })
+  .strict()
+
 export const skillGithubSourceSchema = z
   .object({
     repo: z.string().trim().min(1),
@@ -114,6 +180,7 @@ export const skillProjectSourceSchema = z
 export const skillSourceSettingsSchema = z
   .object({
     localRoots: z.array(skillLocalRootSchema).default([]),
+    pluginRoots: z.array(pluginRootSchema).default([]),
     github: skillGithubSourceSchema,
     projects: z.array(skillProjectSourceSchema).default([]),
     updatedAt: isoTimestampSchema,
@@ -124,6 +191,8 @@ export const skillRegistrySchema = z
   .object({
     projectId: nonEmptyOptionalTextSchema,
     entries: z.array(skillRegistryEntrySchema).default([]),
+    plugins: z.array(pluginRegistryEntrySchema).default([]),
+    pluginCommands: z.array(pluginCommandContributionSchema).default([]),
     sources: skillSourceSettingsSchema,
     diagnostics: z.array(skillDiscoveryDiagnosticSchema).default([]),
     reloadedAt: isoTimestampSchema,
@@ -199,6 +268,37 @@ export const updateGithubSkillSourceRequestSchema = z
   })
   .strict()
 
+export const upsertPluginRootRequestSchema = z
+  .object({
+    rootId: nonEmptyOptionalTextSchema,
+    path: z.string().trim().min(1),
+    enabled: z.boolean().default(true),
+    projectId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
+export const removePluginRootRequestSchema = z
+  .object({
+    rootId: z.string().trim().min(1),
+    projectId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
+export const setPluginEnabledRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    pluginId: z.string().trim().min(1),
+    enabled: z.boolean(),
+  })
+  .strict()
+
+export const removePluginRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    pluginId: z.string().trim().min(1),
+  })
+  .strict()
+
 export type SkillSourceKindDto = z.infer<typeof skillSourceKindSchema>
 export type SkillSourceScopeDto = z.infer<typeof skillSourceScopeSchema>
 export type SkillSourceStateDto = z.infer<typeof skillSourceStateSchema>
@@ -208,6 +308,12 @@ export type InstalledSkillDiagnosticDto = z.infer<typeof installedSkillDiagnosti
 export type SkillRegistryEntryDto = z.infer<typeof skillRegistryEntrySchema>
 export type SkillDiscoveryDiagnosticDto = z.infer<typeof skillDiscoveryDiagnosticSchema>
 export type SkillLocalRootDto = z.infer<typeof skillLocalRootSchema>
+export type PluginCommandAvailabilityDto = z.infer<typeof pluginCommandAvailabilitySchema>
+export type PluginRootDto = z.infer<typeof pluginRootSchema>
+export type PluginDiagnosticDto = z.infer<typeof pluginDiagnosticSchema>
+export type PluginSkillContributionDto = z.infer<typeof pluginSkillContributionSchema>
+export type PluginCommandContributionDto = z.infer<typeof pluginCommandContributionSchema>
+export type PluginRegistryEntryDto = z.infer<typeof pluginRegistryEntrySchema>
 export type SkillGithubSourceDto = z.infer<typeof skillGithubSourceSchema>
 export type SkillProjectSourceDto = z.infer<typeof skillProjectSourceSchema>
 export type SkillSourceSettingsDto = z.infer<typeof skillSourceSettingsSchema>
@@ -219,6 +325,10 @@ export type UpsertSkillLocalRootRequestDto = z.infer<typeof upsertSkillLocalRoot
 export type RemoveSkillLocalRootRequestDto = z.infer<typeof removeSkillLocalRootRequestSchema>
 export type UpdateProjectSkillSourceRequestDto = z.infer<typeof updateProjectSkillSourceRequestSchema>
 export type UpdateGithubSkillSourceRequestDto = z.infer<typeof updateGithubSkillSourceRequestSchema>
+export type UpsertPluginRootRequestDto = z.infer<typeof upsertPluginRootRequestSchema>
+export type RemovePluginRootRequestDto = z.infer<typeof removePluginRootRequestSchema>
+export type SetPluginEnabledRequestDto = z.infer<typeof setPluginEnabledRequestSchema>
+export type RemovePluginRequestDto = z.infer<typeof removePluginRequestSchema>
 
 export function getSkillSourceKindLabel(kind: SkillSourceKindDto): string {
   switch (kind) {
@@ -270,5 +380,14 @@ export function getSkillTrustStateLabel(state: SkillTrustStateDto): string {
       return 'Untrusted'
     case 'blocked':
       return 'Blocked'
+  }
+}
+
+export function getPluginCommandAvailabilityLabel(state: PluginCommandAvailabilityDto): string {
+  switch (state) {
+    case 'always':
+      return 'Always'
+    case 'project_open':
+      return 'Project open'
   }
 }

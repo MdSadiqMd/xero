@@ -1,0 +1,611 @@
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use serde::{Deserialize, Serialize};
+
+use crate::commands::{CommandError, CommandResult};
+
+use super::{
+    cache::sha256_hex,
+    contract::CadenceSkillTrustState,
+    inspection::{normalize_relative_source_path, normalize_skill_id},
+};
+
+pub const CADENCE_PLUGIN_MANIFEST_FILE: &str = "cadence-plugin.json";
+pub const CADENCE_PLUGIN_NESTED_MANIFEST_FILE: &str = ".cadence-plugin/plugin.json";
+pub const CADENCE_PLUGIN_MANIFEST_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CadencePluginTrustDeclaration {
+    Trusted,
+    ApprovalRequired,
+    Untrusted,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CadencePluginEntryKind {
+    Skill,
+    Command,
+    Asset,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CadencePluginCommandAvailability {
+    Always,
+    ProjectOpen,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CadencePluginSkillContribution {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CadencePluginCommandContribution {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub entry: String,
+    pub availability: CadencePluginCommandAvailability,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CadencePluginEntryLocation {
+    pub kind: CadencePluginEntryKind,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CadencePluginManifest {
+    #[serde(default = "plugin_manifest_schema_version")]
+    pub schema_version: u32,
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub trust_declaration: CadencePluginTrustDeclaration,
+    #[serde(default)]
+    pub skills: Vec<CadencePluginSkillContribution>,
+    #[serde(default)]
+    pub commands: Vec<CadencePluginCommandContribution>,
+    #[serde(default)]
+    pub entry_locations: Vec<CadencePluginEntryLocation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadencePluginRoot {
+    pub root_id: String,
+    pub root_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadenceDiscoveredPlugin {
+    pub plugin_id: String,
+    pub root_id: String,
+    pub root_path: String,
+    pub plugin_root_path: PathBuf,
+    pub manifest_path: String,
+    pub manifest_hash: String,
+    pub manifest: CadencePluginManifest,
+    pub trust: CadenceSkillTrustState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadencePluginDiscoveryDiagnostic {
+    pub code: String,
+    pub message: String,
+    pub root_id: Option<String>,
+    pub relative_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadencePluginDiscovery {
+    pub plugins: Vec<CadenceDiscoveredPlugin>,
+    pub diagnostics: Vec<CadencePluginDiscoveryDiagnostic>,
+}
+
+impl CadencePluginManifest {
+    pub fn validate_for_root(
+        self,
+        plugin_root: impl AsRef<Path>,
+    ) -> CommandResult<CadencePluginManifest> {
+        if self.schema_version != CADENCE_PLUGIN_MANIFEST_SCHEMA_VERSION {
+            return Err(CommandError::user_fixable(
+                "cadence_plugin_manifest_version_unsupported",
+                format!(
+                    "Cadence rejected plugin manifest schema version `{}` because only version `{CADENCE_PLUGIN_MANIFEST_SCHEMA_VERSION}` is supported.",
+                    self.schema_version
+                ),
+            ));
+        }
+
+        let plugin_root = canonicalize_plugin_root(plugin_root.as_ref())?;
+        let id = normalize_plugin_id(&self.id)?;
+        let name = normalize_required(self.name, "name")?;
+        let version = normalize_plugin_version(&self.version)?;
+        let description = normalize_required(self.description, "description")?;
+
+        let mut skill_ids = BTreeSet::new();
+        let mut skills = Vec::with_capacity(self.skills.len());
+        for skill in self.skills {
+            let id = normalize_skill_id(&skill.id)?;
+            if !skill_ids.insert(id.clone()) {
+                return Err(CommandError::user_fixable(
+                    "cadence_plugin_manifest_duplicate_id",
+                    format!("Cadence rejected plugin `{}` because skill contribution `{id}` was duplicated.", self.id),
+                ));
+            }
+            let path = normalize_plugin_relative_path(&skill.path)?;
+            ensure_plugin_path_stays_inside(&plugin_root, &path, true)?;
+            skills.push(CadencePluginSkillContribution { id, path });
+        }
+
+        let mut command_ids = BTreeSet::new();
+        let mut commands = Vec::with_capacity(self.commands.len());
+        for command in self.commands {
+            let id = normalize_plugin_contribution_id(&command.id)?;
+            if !command_ids.insert(id.clone()) {
+                return Err(CommandError::user_fixable(
+                    "cadence_plugin_manifest_duplicate_id",
+                    format!("Cadence rejected plugin `{}` because command contribution `{id}` was duplicated.", self.id),
+                ));
+            }
+            let label = normalize_required(command.label, "command.label")?;
+            let description = normalize_required(command.description, "command.description")?;
+            let entry = normalize_plugin_relative_path(&command.entry)?;
+            ensure_plugin_path_stays_inside(&plugin_root, &entry, false)?;
+            commands.push(CadencePluginCommandContribution {
+                id,
+                label,
+                description,
+                entry,
+                availability: command.availability,
+            });
+        }
+
+        let mut entry_locations = Vec::with_capacity(self.entry_locations.len());
+        let mut seen_locations = BTreeSet::new();
+        for location in self.entry_locations {
+            let path = normalize_plugin_relative_path(&location.path)?;
+            if !seen_locations.insert((format!("{:?}", location.kind), path.clone())) {
+                return Err(CommandError::user_fixable(
+                    "cadence_plugin_manifest_duplicate_id",
+                    format!("Cadence rejected plugin `{id}` because entry location `{path}` was duplicated."),
+                ));
+            }
+            ensure_plugin_path_stays_inside(
+                &plugin_root,
+                &path,
+                matches!(location.kind, CadencePluginEntryKind::Skill),
+            )?;
+            entry_locations.push(CadencePluginEntryLocation {
+                kind: location.kind,
+                path,
+            });
+        }
+
+        Ok(CadencePluginManifest {
+            schema_version: CADENCE_PLUGIN_MANIFEST_SCHEMA_VERSION,
+            id,
+            name,
+            version,
+            description,
+            trust_declaration: self.trust_declaration,
+            skills,
+            commands,
+            entry_locations,
+        })
+    }
+}
+
+pub fn parse_plugin_manifest(
+    bytes: &[u8],
+    plugin_root: impl AsRef<Path>,
+) -> CommandResult<CadencePluginManifest> {
+    let manifest = serde_json::from_slice::<CadencePluginManifest>(bytes).map_err(|error| {
+        CommandError::user_fixable(
+            "cadence_plugin_manifest_invalid",
+            format!("Cadence could not decode plugin manifest: {error}"),
+        )
+    })?;
+    manifest.validate_for_root(plugin_root)
+}
+
+pub fn discover_plugin_roots(
+    roots: impl IntoIterator<Item = CadencePluginRoot>,
+) -> CommandResult<CadencePluginDiscovery> {
+    let mut plugins = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut seen_plugin_ids = BTreeSet::new();
+
+    for root in roots {
+        let root_id = normalize_plugin_contribution_id(&root.root_id)?;
+        let root_path = root.root_path;
+        if !root_path.is_dir() {
+            diagnostics.push(CadencePluginDiscoveryDiagnostic {
+                code: "cadence_plugin_root_unavailable".into(),
+                message: format!(
+                    "Cadence could not scan plugin root {} because it is not available.",
+                    root_path.display()
+                ),
+                root_id: Some(root_id),
+                relative_path: None,
+            });
+            continue;
+        }
+        let root_canonical = match fs::canonicalize(&root_path) {
+            Ok(path) => path,
+            Err(error) => {
+                diagnostics.push(CadencePluginDiscoveryDiagnostic {
+                    code: "cadence_plugin_root_unavailable".into(),
+                    message: format!(
+                        "Cadence could not resolve plugin root {}: {error}",
+                        root_path.display()
+                    ),
+                    root_id: Some(root_id),
+                    relative_path: None,
+                });
+                continue;
+            }
+        };
+
+        let manifest_paths =
+            collect_plugin_manifest_paths(&root_id, &root_canonical, &mut diagnostics)?;
+        for manifest_path in manifest_paths {
+            match inspect_plugin_manifest(&root_id, &root_canonical, &manifest_path) {
+                Ok(plugin) => {
+                    if !seen_plugin_ids.insert(plugin.plugin_id.clone()) {
+                        diagnostics.push(CadencePluginDiscoveryDiagnostic {
+                            code: "cadence_plugin_duplicate_id".into(),
+                            message: format!(
+                                "Cadence skipped duplicate plugin id `{}` from {}.",
+                                plugin.plugin_id,
+                                manifest_path.display()
+                            ),
+                            root_id: Some(root_id.clone()),
+                            relative_path: relative_path(&root_canonical, &manifest_path).ok(),
+                        });
+                        continue;
+                    }
+                    plugins.push(plugin);
+                }
+                Err(error) => diagnostics.push(CadencePluginDiscoveryDiagnostic {
+                    code: error.code,
+                    message: error.message,
+                    root_id: Some(root_id.clone()),
+                    relative_path: relative_path(&root_canonical, &manifest_path).ok(),
+                }),
+            }
+        }
+    }
+
+    plugins.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    Ok(CadencePluginDiscovery {
+        plugins,
+        diagnostics,
+    })
+}
+
+pub fn normalize_plugin_id(value: &str) -> CommandResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::invalid_request("pluginId"));
+    }
+    if trimmed.starts_with('.') || trimmed.ends_with('.') || trimmed.contains("..") {
+        return Err(CommandError::user_fixable(
+            "cadence_plugin_id_invalid",
+            "Cadence requires plugin ids to use stable lowercase segments separated by dots.",
+        ));
+    }
+    if !trimmed.chars().all(|character| {
+        character.is_ascii_lowercase()
+            || character.is_ascii_digit()
+            || matches!(character, '.' | '-' | '_')
+    }) {
+        return Err(CommandError::user_fixable(
+            "cadence_plugin_id_invalid",
+            "Cadence requires plugin ids to be lowercase ASCII values.",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+pub fn normalize_plugin_contribution_id(value: &str) -> CommandResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::invalid_request("contributionId"));
+    }
+    if !trimmed.chars().all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    }) {
+        return Err(CommandError::user_fixable(
+            "cadence_plugin_contribution_id_invalid",
+            "Cadence requires plugin contribution ids to be lowercase kebab-case values.",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+pub fn plugin_trust_declaration_to_skill_trust(
+    trust: &CadencePluginTrustDeclaration,
+) -> CadenceSkillTrustState {
+    match trust {
+        CadencePluginTrustDeclaration::Trusted => CadenceSkillTrustState::Trusted,
+        CadencePluginTrustDeclaration::ApprovalRequired => CadenceSkillTrustState::ApprovalRequired,
+        CadencePluginTrustDeclaration::Untrusted => CadenceSkillTrustState::Untrusted,
+        CadencePluginTrustDeclaration::Blocked => CadenceSkillTrustState::Blocked,
+    }
+}
+
+pub fn plugin_command_stable_id(plugin_id: &str, contribution_id: &str) -> CommandResult<String> {
+    Ok(format!(
+        "plugin:{}:command:{}",
+        normalize_plugin_id(plugin_id)?,
+        normalize_plugin_contribution_id(contribution_id)?
+    ))
+}
+
+fn inspect_plugin_manifest(
+    root_id: &str,
+    root_canonical: &Path,
+    manifest_path: &Path,
+) -> CommandResult<CadenceDiscoveredPlugin> {
+    let plugin_root_path = manifest_path
+        .parent()
+        .and_then(|parent| {
+            if parent.file_name().and_then(|name| name.to_str()) == Some(".cadence-plugin") {
+                parent.parent()
+            } else {
+                Some(parent)
+            }
+        })
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "cadence_plugin_manifest_invalid",
+                "Cadence could not resolve the plugin root for a discovered manifest.",
+            )
+        })?;
+    let plugin_root_path = fs::canonicalize(plugin_root_path).map_err(|error| {
+        CommandError::retryable(
+            "cadence_plugin_root_unavailable",
+            format!("Cadence could not resolve plugin root: {error}"),
+        )
+    })?;
+    if !plugin_root_path.starts_with(root_canonical) {
+        return Err(CommandError::user_fixable(
+            "cadence_plugin_path_outside_root",
+            "Cadence rejected a plugin manifest because it resolves outside the configured plugin root.",
+        ));
+    }
+    let manifest_bytes = fs::read(manifest_path).map_err(|error| {
+        CommandError::retryable(
+            "cadence_plugin_manifest_read_failed",
+            format!(
+                "Cadence could not read plugin manifest {}: {error}",
+                manifest_path.display()
+            ),
+        )
+    })?;
+    let manifest = parse_plugin_manifest(&manifest_bytes, &plugin_root_path)?;
+    let plugin_id = manifest.id.clone();
+    Ok(CadenceDiscoveredPlugin {
+        plugin_id,
+        root_id: root_id.to_owned(),
+        root_path: root_canonical.display().to_string(),
+        plugin_root_path,
+        manifest_path: manifest_path.display().to_string(),
+        manifest_hash: sha256_hex(&manifest_bytes),
+        trust: plugin_trust_declaration_to_skill_trust(&manifest.trust_declaration),
+        manifest,
+    })
+}
+
+fn collect_plugin_manifest_paths(
+    root_id: &str,
+    root_canonical: &Path,
+    diagnostics: &mut Vec<CadencePluginDiscoveryDiagnostic>,
+) -> CommandResult<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    push_manifest_if_present(root_canonical, &mut paths);
+
+    let mut entries = fs::read_dir(root_canonical)
+        .map_err(|error| {
+            CommandError::retryable(
+                "cadence_plugin_root_read_failed",
+                format!(
+                    "Cadence could not enumerate plugin root {}: {error}",
+                    root_canonical.display()
+                ),
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            CommandError::retryable(
+                "cadence_plugin_root_read_failed",
+                format!(
+                    "Cadence could not inspect an entry under plugin root {}: {error}",
+                    root_canonical.display()
+                ),
+            )
+        })?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            CommandError::retryable(
+                "cadence_plugin_root_read_failed",
+                format!(
+                    "Cadence could not inspect plugin path {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            diagnostics.push(CadencePluginDiscoveryDiagnostic {
+                code: "cadence_plugin_path_outside_root".into(),
+                message: format!(
+                    "Cadence skipped {} because plugin scanning does not follow symlinks.",
+                    path.display()
+                ),
+                root_id: Some(root_id.to_owned()),
+                relative_path: relative_path(root_canonical, &path).ok(),
+            });
+            continue;
+        }
+        if metadata.is_dir() {
+            let canonical = fs::canonicalize(&path).map_err(|error| {
+                CommandError::retryable(
+                    "cadence_plugin_root_unavailable",
+                    format!(
+                        "Cadence could not resolve plugin path {}: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            if !canonical.starts_with(root_canonical) {
+                diagnostics.push(CadencePluginDiscoveryDiagnostic {
+                    code: "cadence_plugin_path_outside_root".into(),
+                    message: format!(
+                        "Cadence skipped {} because it resolves outside the configured plugin root.",
+                        path.display()
+                    ),
+                    root_id: Some(root_id.to_owned()),
+                    relative_path: relative_path(root_canonical, &path).ok(),
+                });
+                continue;
+            }
+            push_manifest_if_present(&canonical, &mut paths);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn push_manifest_if_present(plugin_root: &Path, paths: &mut Vec<PathBuf>) {
+    let primary = plugin_root.join(CADENCE_PLUGIN_MANIFEST_FILE);
+    if primary.is_file() {
+        paths.push(primary);
+        return;
+    }
+    let nested = plugin_root.join(CADENCE_PLUGIN_NESTED_MANIFEST_FILE);
+    if nested.is_file() {
+        paths.push(nested);
+    }
+}
+
+fn canonicalize_plugin_root(root: &Path) -> CommandResult<PathBuf> {
+    fs::canonicalize(root).map_err(|error| {
+        CommandError::retryable(
+            "cadence_plugin_root_unavailable",
+            format!(
+                "Cadence could not resolve plugin root {}: {error}",
+                root.display()
+            ),
+        )
+    })
+}
+
+fn ensure_plugin_path_stays_inside(
+    plugin_root: &Path,
+    relative: &str,
+    expected_directory: bool,
+) -> CommandResult<PathBuf> {
+    let path = plugin_root.join(relative);
+    let canonical = fs::canonicalize(&path).map_err(|error| {
+        CommandError::user_fixable(
+            "cadence_plugin_entry_unavailable",
+            format!("Cadence could not resolve plugin entry `{relative}`: {error}"),
+        )
+    })?;
+    if !canonical.starts_with(plugin_root) {
+        return Err(CommandError::user_fixable(
+            "cadence_plugin_path_outside_root",
+            format!("Cadence rejected plugin entry `{relative}` because it resolves outside the plugin root."),
+        ));
+    }
+    if expected_directory && !canonical.is_dir() {
+        return Err(CommandError::user_fixable(
+            "cadence_plugin_entry_unavailable",
+            format!("Cadence expected plugin entry `{relative}` to be a directory."),
+        ));
+    }
+    if !expected_directory && !canonical.is_file() {
+        return Err(CommandError::user_fixable(
+            "cadence_plugin_entry_unavailable",
+            format!("Cadence expected plugin entry `{relative}` to be a file."),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn normalize_plugin_relative_path(value: &str) -> CommandResult<String> {
+    normalize_relative_source_path(value).map_err(|error| {
+        if error.code == "autonomous_skill_source_metadata_invalid" {
+            CommandError::user_fixable(
+                "cadence_plugin_path_outside_root",
+                "Cadence requires plugin contribution paths to remain relative to the plugin root.",
+            )
+        } else {
+            error
+        }
+    })
+}
+
+fn normalize_plugin_version(value: &str) -> CommandResult<String> {
+    let trimmed = normalize_required(value.to_owned(), "version")?;
+    let without_prerelease = trimmed
+        .split_once('-')
+        .map(|(core, _)| core)
+        .unwrap_or(trimmed.as_str());
+    let core = without_prerelease
+        .split_once('+')
+        .map(|(core, _)| core)
+        .unwrap_or(without_prerelease);
+    let parts = core.split('.').collect::<Vec<_>>();
+    if parts.len() != 3
+        || parts.iter().any(|part| {
+            part.is_empty() || !part.chars().all(|character| character.is_ascii_digit())
+        })
+    {
+        return Err(CommandError::user_fixable(
+            "cadence_plugin_version_invalid",
+            "Cadence requires plugin versions to use semantic `major.minor.patch` format.",
+        ));
+    }
+    Ok(trimmed)
+}
+
+fn relative_path(root: &Path, path: &Path) -> CommandResult<String> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        CommandError::user_fixable(
+            "cadence_plugin_path_outside_root",
+            "Cadence rejected a plugin path outside the configured plugin root.",
+        )
+    })?;
+    normalize_relative_source_path(&relative.to_string_lossy().replace('\\', "/"))
+}
+
+fn normalize_required(value: String, field: &'static str) -> CommandResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::invalid_request(field));
+    }
+    Ok(trimmed.to_owned())
+}
+
+const fn plugin_manifest_schema_version() -> u32 {
+    CADENCE_PLUGIN_MANIFEST_SCHEMA_VERSION
+}

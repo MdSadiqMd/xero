@@ -57,6 +57,10 @@ export function useRuntimeSettingsNotificationMutations({
   | 'removeSkillLocalRoot'
   | 'updateProjectSkillSource'
   | 'updateGithubSkillSource'
+  | 'upsertPluginRoot'
+  | 'removePluginRoot'
+  | 'setPluginEnabled'
+  | 'removePlugin'
   | 'refreshNotificationRoutes'
   | 'upsertNotificationRoute'
 > {
@@ -882,6 +886,166 @@ export function useRuntimeSettingsNotificationMutations({
     ],
   )
 
+  const upsertPluginRoot = useCallback(
+    async (request: Parameters<CadenceDesktopMutationActions['upsertPluginRoot']>[0]) => {
+      setSkillRegistryMutationStatus('running')
+      setPendingSkillSourceId(request.rootId ?? request.path)
+      setSkillRegistryMutationError(null)
+
+      try {
+        const response = await adapter.upsertPluginRoot({
+          ...request,
+          projectId: request.projectId ?? activeProjectIdRef.current ?? null,
+        })
+        const snapshot = applySkillRegistrySnapshot(response)
+        setSkillRegistryMutationError(null)
+        return snapshot
+      } catch (error) {
+        setSkillRegistryMutationError(
+          getOperatorActionError(error, 'Cadence could not save the plugin root.'),
+        )
+
+        try {
+          await refreshSkillRegistry({ force: true })
+        } catch {
+          // Preserve the last truthful plugin registry snapshot when refresh-after-failure also fails.
+        }
+
+        throw error
+      } finally {
+        setSkillRegistryMutationStatus('idle')
+        setPendingSkillSourceId(null)
+      }
+    },
+    [
+      activeProjectIdRef,
+      adapter,
+      applySkillRegistrySnapshot,
+      refreshSkillRegistry,
+      setPendingSkillSourceId,
+      setSkillRegistryMutationError,
+      setSkillRegistryMutationStatus,
+    ],
+  )
+
+  const removePluginRoot = useCallback(
+    async (request: Parameters<CadenceDesktopMutationActions['removePluginRoot']>[0]) => {
+      setSkillRegistryMutationStatus('running')
+      setPendingSkillSourceId(request.rootId)
+      setSkillRegistryMutationError(null)
+
+      try {
+        const response = await adapter.removePluginRoot({
+          ...request,
+          projectId: request.projectId ?? activeProjectIdRef.current ?? null,
+        })
+        const snapshot = applySkillRegistrySnapshot(response)
+        setSkillRegistryMutationError(null)
+        return snapshot
+      } catch (error) {
+        setSkillRegistryMutationError(
+          getOperatorActionError(error, 'Cadence could not remove the plugin root.'),
+        )
+
+        try {
+          await refreshSkillRegistry({ force: true })
+        } catch {
+          // Preserve the last truthful plugin registry snapshot when refresh-after-failure also fails.
+        }
+
+        throw error
+      } finally {
+        setSkillRegistryMutationStatus('idle')
+        setPendingSkillSourceId(null)
+      }
+    },
+    [
+      activeProjectIdRef,
+      adapter,
+      applySkillRegistrySnapshot,
+      refreshSkillRegistry,
+      setPendingSkillSourceId,
+      setSkillRegistryMutationError,
+      setSkillRegistryMutationStatus,
+    ],
+  )
+
+  const setPluginEnabled = useCallback(
+    async (request: Parameters<CadenceDesktopMutationActions['setPluginEnabled']>[0]) => {
+      setSkillRegistryMutationStatus('running')
+      setPendingSkillSourceId(`plugin:${request.pluginId}`)
+      setSkillRegistryMutationError(null)
+
+      try {
+        const response = await adapter.setPluginEnabled(request)
+        const snapshot = applySkillRegistrySnapshot(response)
+        setSkillRegistryMutationError(null)
+        return snapshot
+      } catch (error) {
+        setSkillRegistryMutationError(
+          getOperatorActionError(error, 'Cadence could not update the plugin state.'),
+        )
+
+        try {
+          await refreshSkillRegistry({ force: true })
+        } catch {
+          // Preserve the last truthful plugin registry snapshot when refresh-after-failure also fails.
+        }
+
+        throw error
+      } finally {
+        setSkillRegistryMutationStatus('idle')
+        setPendingSkillSourceId(null)
+      }
+    },
+    [
+      adapter,
+      applySkillRegistrySnapshot,
+      refreshSkillRegistry,
+      setPendingSkillSourceId,
+      setSkillRegistryMutationError,
+      setSkillRegistryMutationStatus,
+    ],
+  )
+
+  const removePlugin = useCallback(
+    async (request: Parameters<CadenceDesktopMutationActions['removePlugin']>[0]) => {
+      setSkillRegistryMutationStatus('running')
+      setPendingSkillSourceId(`plugin:${request.pluginId}`)
+      setSkillRegistryMutationError(null)
+
+      try {
+        const response = await adapter.removePlugin(request)
+        const snapshot = applySkillRegistrySnapshot(response)
+        setSkillRegistryMutationError(null)
+        return snapshot
+      } catch (error) {
+        setSkillRegistryMutationError(
+          getOperatorActionError(error, 'Cadence could not remove the plugin.'),
+        )
+
+        try {
+          await refreshSkillRegistry({ force: true })
+        } catch {
+          // Preserve the last truthful plugin registry snapshot when refresh-after-failure also fails.
+        }
+
+        throw error
+      } finally {
+        setSkillRegistryMutationStatus('idle')
+        setPendingSkillSourceId(null)
+      }
+    },
+    [
+      adapter,
+      applySkillRegistrySnapshot,
+      refreshSkillRegistry,
+      setPendingSkillSourceId,
+      setSkillRegistryMutationError,
+      setSkillRegistryMutationStatus,
+    ],
+  )
+
   const refreshNotificationRoutes = useCallback(
     async (options: { force?: boolean } = {}) => {
       const projectId = getActiveProjectId(
@@ -1004,6 +1168,10 @@ export function useRuntimeSettingsNotificationMutations({
     removeSkillLocalRoot,
     updateProjectSkillSource,
     updateGithubSkillSource,
+    upsertPluginRoot,
+    removePluginRoot,
+    setPluginEnabled,
+    removePlugin,
     refreshNotificationRoutes,
     upsertNotificationRoute,
   }

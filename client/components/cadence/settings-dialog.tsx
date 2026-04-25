@@ -20,19 +20,23 @@ import type {
   ProviderProfilesDto,
   RuntimeSessionView,
   ListSkillRegistryRequestDto,
+  RemovePluginRequestDto,
+  RemovePluginRootRequestDto,
   RemoveSkillLocalRootRequestDto,
   RemoveSkillRequestDto,
+  SetPluginEnabledRequestDto,
   SetSkillEnabledRequestDto,
   SkillRegistryDto,
   UpdateGithubSkillSourceRequestDto,
   UpdateProjectSkillSourceRequestDto,
+  UpsertPluginRootRequestDto,
   UpsertSkillLocalRootRequestDto,
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
   UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import type { PlatformVariant } from "@/components/cadence/shell"
-import { Bell, Code2, Globe, KeyRound, Palette, PlugZap, WandSparkles } from "lucide-react"
+import { Bell, Code2, Globe, KeyRound, Palette, Plug, PlugZap, WandSparkles } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -45,10 +49,11 @@ import { DevelopmentSection } from "@/components/cadence/settings-dialog/develop
 import { McpSection } from "@/components/cadence/settings-dialog/mcp-section"
 import { NotificationsSection } from "@/components/cadence/settings-dialog/notifications-section"
 import { ProvidersSection } from "@/components/cadence/settings-dialog/providers-section"
+import { PluginsSection } from "@/components/cadence/settings-dialog/plugins-section"
 import { SkillsSection } from "@/components/cadence/settings-dialog/skills-section"
 import { ThemesSection } from "@/components/cadence/settings-dialog/themes-section"
 
-type SettingsSection = "providers" | "notifications" | "mcp" | "skills" | "browser" | "themes" | "development"
+type SettingsSection = "providers" | "notifications" | "mcp" | "skills" | "plugins" | "browser" | "themes" | "development"
 
 interface NavItem {
   id: SettingsSection
@@ -70,6 +75,7 @@ const WORKSPACE_GROUP: NavGroup = {
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "mcp", label: "MCP", icon: PlugZap },
     { id: "skills", label: "Skills", icon: WandSparkles },
+    { id: "plugins", label: "Plugins", icon: Plug },
     { id: "browser", label: "Browser", icon: Globe },
   ],
 }
@@ -138,6 +144,10 @@ export interface SettingsDialogProps {
   onRemoveSkillLocalRoot?: (request: RemoveSkillLocalRootRequestDto) => Promise<SkillRegistryDto>
   onUpdateProjectSkillSource?: (request: UpdateProjectSkillSourceRequestDto) => Promise<SkillRegistryDto>
   onUpdateGithubSkillSource?: (request: UpdateGithubSkillSourceRequestDto) => Promise<SkillRegistryDto>
+  onUpsertPluginRoot?: (request: UpsertPluginRootRequestDto) => Promise<SkillRegistryDto>
+  onRemovePluginRoot?: (request: RemovePluginRootRequestDto) => Promise<SkillRegistryDto>
+  onSetPluginEnabled?: (request: SetPluginEnabledRequestDto) => Promise<SkillRegistryDto>
+  onRemovePlugin?: (request: RemovePluginRequestDto) => Promise<SkillRegistryDto>
   platformOverride?: PlatformVariant | null
   onPlatformOverrideChange?: (value: PlatformVariant | null) => void
   onStartOnboarding?: () => void
@@ -188,6 +198,10 @@ export function SettingsDialog({
   onRemoveSkillLocalRoot,
   onUpdateProjectSkillSource,
   onUpdateGithubSkillSource,
+  onUpsertPluginRoot,
+  onRemovePluginRoot,
+  onSetPluginEnabled,
+  onRemovePlugin,
   platformOverride,
   onPlatformOverrideChange,
   onStartOnboarding,
@@ -346,6 +360,22 @@ export function SettingsDialog({
                   onRemoveSkillLocalRoot={onRemoveSkillLocalRoot}
                   onUpdateProjectSkillSource={onUpdateProjectSkillSource}
                   onUpdateGithubSkillSource={onUpdateGithubSkillSource}
+                />
+              ) : section === "plugins" ? (
+                <PluginsSection
+                  agent={agent}
+                  skillRegistry={skillRegistry}
+                  skillRegistryLoadStatus={skillRegistryLoadStatus}
+                  skillRegistryLoadError={skillRegistryLoadError}
+                  skillRegistryMutationStatus={skillRegistryMutationStatus}
+                  pendingSkillSourceId={pendingSkillSourceId}
+                  skillRegistryMutationError={skillRegistryMutationError}
+                  onRefreshSkillRegistry={onRefreshSkillRegistry}
+                  onReloadSkillRegistry={onReloadSkillRegistry}
+                  onUpsertPluginRoot={onUpsertPluginRoot}
+                  onRemovePluginRoot={onRemovePluginRoot}
+                  onSetPluginEnabled={onSetPluginEnabled}
+                  onRemovePlugin={onRemovePlugin}
                 />
               ) : section === "browser" ? (
                 <BrowserSection />

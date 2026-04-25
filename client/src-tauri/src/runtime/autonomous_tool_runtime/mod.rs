@@ -433,6 +433,14 @@ impl AutonomousToolRuntime {
                 root_path: PathBuf::from(root.path),
             })
             .collect::<Vec<_>>();
+        let plugin_roots = skill_settings
+            .enabled_plugin_roots()
+            .into_iter()
+            .map(|root| AutonomousPluginRoot {
+                root_id: root.root_id,
+                root_path: PathBuf::from(root.path),
+            })
+            .collect::<Vec<_>>();
         let runtime = Self::with_limits_and_web_config(
             repo_root,
             AutonomousToolRuntimeLimits::default(),
@@ -448,6 +456,7 @@ impl AutonomousToolRuntime {
             local_skill_roots,
             skill_settings.project_discovery_enabled(project_id),
             skill_settings.github.enabled,
+            plugin_roots,
         );
 
         let runtime = match app.try_state::<crate::commands::SolanaState>() {
@@ -516,6 +525,7 @@ impl AutonomousToolRuntime {
             local_roots,
             true,
             true,
+            Vec::new(),
         );
         self
     }
@@ -528,6 +538,7 @@ impl AutonomousToolRuntime {
         local_roots: Vec<AutonomousLocalSkillRoot>,
         project_skills_enabled: bool,
         github_enabled: bool,
+        plugin_roots: Vec<AutonomousPluginRoot>,
     ) -> Self {
         self.skill_tool = Some(AutonomousSkillToolRuntime::new(
             project_id.into(),
@@ -536,6 +547,7 @@ impl AutonomousToolRuntime {
             local_roots,
             project_skills_enabled,
             github_enabled,
+            plugin_roots,
         ));
         self
     }
@@ -1749,6 +1761,12 @@ pub struct AutonomousBundledSkillRoot {
     pub root_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousPluginRoot {
+    pub root_id: String,
+    pub root_path: PathBuf,
+}
+
 #[derive(Clone)]
 pub(super) struct AutonomousSkillToolRuntime {
     project_id: String,
@@ -1757,6 +1775,7 @@ pub(super) struct AutonomousSkillToolRuntime {
     local_roots: Vec<AutonomousLocalSkillRoot>,
     project_skills_enabled: bool,
     github_enabled: bool,
+    plugin_roots: Vec<AutonomousPluginRoot>,
     discovery_cache: Arc<Mutex<BTreeMap<String, skills::CachedSkillToolCandidate>>>,
 }
 
@@ -1768,6 +1787,7 @@ impl AutonomousSkillToolRuntime {
         local_roots: Vec<AutonomousLocalSkillRoot>,
         project_skills_enabled: bool,
         github_enabled: bool,
+        plugin_roots: Vec<AutonomousPluginRoot>,
     ) -> Self {
         Self {
             project_id,
@@ -1776,6 +1796,7 @@ impl AutonomousSkillToolRuntime {
             local_roots,
             project_skills_enabled,
             github_enabled,
+            plugin_roots,
             discovery_cache: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
@@ -1804,6 +1825,7 @@ impl std::fmt::Debug for AutonomousSkillToolRuntime {
             .field("project_id", &self.project_id)
             .field("bundled_roots", &self.bundled_roots)
             .field("local_roots", &self.local_roots)
+            .field("plugin_roots", &self.plugin_roots)
             .finish_non_exhaustive()
     }
 }

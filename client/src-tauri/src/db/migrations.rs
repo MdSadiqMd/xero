@@ -1578,6 +1578,48 @@ pub fn migrations() -> &'static Migrations<'static> {
                 DROP TABLE IF EXISTS autonomous_units;
                 "#,
             ),
+            M::up(
+                r#"
+                CREATE TABLE IF NOT EXISTS installed_plugin_records (
+                    plugin_id TEXT PRIMARY KEY,
+                    root_id TEXT NOT NULL,
+                    root_path TEXT NOT NULL,
+                    plugin_root_path TEXT NOT NULL,
+                    manifest_path TEXT NOT NULL,
+                    manifest_hash TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    plugin_state TEXT NOT NULL,
+                    trust_state TEXT NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    installed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    last_reloaded_at TEXT,
+                    last_diagnostic_json TEXT,
+                    CHECK (plugin_id <> ''),
+                    CHECK (root_id <> ''),
+                    CHECK (root_path <> ''),
+                    CHECK (plugin_root_path <> ''),
+                    CHECK (manifest_path <> ''),
+                    CHECK (length(manifest_hash) = 64),
+                    CHECK (manifest_hash NOT GLOB '*[^0-9a-f]*'),
+                    CHECK (name <> ''),
+                    CHECK (version <> ''),
+                    CHECK (description <> ''),
+                    CHECK (plugin_state IN ('installed', 'enabled', 'disabled', 'stale', 'failed', 'blocked')),
+                    CHECK (trust_state IN ('trusted', 'user_approved', 'approval_required', 'untrusted', 'blocked')),
+                    CHECK (manifest_json <> '' AND json_valid(manifest_json)),
+                    CHECK (last_reloaded_at IS NULL OR last_reloaded_at <> ''),
+                    CHECK (last_diagnostic_json IS NULL OR (last_diagnostic_json <> '' AND json_valid(last_diagnostic_json)))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_installed_plugin_records_state_updated
+                    ON installed_plugin_records(plugin_state, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_installed_plugin_records_root
+                    ON installed_plugin_records(root_id, plugin_id);
+                "#,
+            ),
         ])
     });
 

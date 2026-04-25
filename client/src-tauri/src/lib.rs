@@ -12,6 +12,7 @@ pub mod window_state;
 
 pub mod git {
     pub mod diff;
+    pub mod operations;
     pub mod repository;
     pub mod status;
 }
@@ -82,6 +83,13 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::get_project_snapshot::get_project_snapshot,
             commands::get_repository_status::get_repository_status,
             commands::get_repository_diff::get_repository_diff,
+            commands::git_operations::git_stage_paths,
+            commands::git_operations::git_unstage_paths,
+            commands::git_operations::git_discard_changes,
+            commands::git_operations::git_commit,
+            commands::git_operations::git_fetch,
+            commands::git_operations::git_pull,
+            commands::git_operations::git_push,
             commands::project_files::list_project_files,
             commands::project_files::read_project_file,
             commands::project_files::write_project_file,
@@ -107,6 +115,10 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::skills::remove_skill_local_root,
             commands::skills::update_project_skill_source,
             commands::skills::update_github_skill_source,
+            commands::skills::upsert_plugin_root,
+            commands::skills::remove_plugin_root,
+            commands::skills::set_plugin_enabled,
+            commands::skills::remove_plugin,
             commands::provider_model_catalog::get_provider_model_catalog,
             commands::provider_profiles::list_provider_profiles,
             commands::provider_profiles::upsert_provider_profile,

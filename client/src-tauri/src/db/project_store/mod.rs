@@ -4,6 +4,7 @@ mod autonomous;
 mod connection;
 mod notifications;
 mod operator;
+mod plugins;
 mod project_snapshot;
 mod runtime;
 mod runtime_boundary;
@@ -26,6 +27,7 @@ pub(crate) use operator::{
     read_operator_approvals, read_resume_history, read_resume_history_entry_by_id,
     read_verification_records, require_non_empty_owned, sqlite_path_suffix, ProjectSummaryRow,
 };
+pub use plugins::*;
 pub use project_snapshot::{load_project_snapshot, load_project_summary, ProjectSnapshotRecord};
 pub use runtime::*;
 pub(crate) use runtime::{

@@ -66,12 +66,23 @@ enum SkillDiscoveryRoot {
         version: String,
         root_path: PathBuf,
     },
+    Plugin {
+        project_id: String,
+        plugin_id: String,
+        contribution_id: String,
+        skill_path: String,
+        root_path: PathBuf,
+        source_state: CadenceSkillSourceState,
+        trust: CadenceSkillTrustState,
+    },
 }
 
 impl SkillDiscoveryRoot {
     fn scan_root(&self) -> PathBuf {
         match self {
-            Self::Local { root_path, .. } | Self::Bundled { root_path, .. } => root_path.clone(),
+            Self::Local { root_path, .. }
+            | Self::Bundled { root_path, .. }
+            | Self::Plugin { root_path, .. } => root_path.clone(),
             Self::Project { project_root, .. } => project_root.join(PROJECT_SKILL_DIRECTORY),
         }
     }
@@ -119,6 +130,25 @@ impl SkillDiscoveryRoot {
                 CadenceSkillSourceState::Discoverable,
                 CadenceSkillTrustState::Trusted,
             ),
+            Self::Plugin {
+                project_id,
+                plugin_id,
+                contribution_id,
+                skill_path,
+                source_state,
+                trust,
+                ..
+            } => CadenceSkillSourceRecord::new(
+                CadenceSkillSourceScope::project(project_id.clone())?,
+                CadenceSkillSourceLocator::Plugin {
+                    plugin_id: plugin_id.clone(),
+                    contribution_id: contribution_id.clone(),
+                    skill_path: skill_path.clone(),
+                    skill_id: skill_id.to_owned(),
+                },
+                *source_state,
+                *trust,
+            ),
         }
     }
 }
@@ -157,6 +187,88 @@ pub fn discover_bundled_skill_directory(
         version,
         root_path: root_path.as_ref().to_path_buf(),
     })
+}
+
+pub fn discover_plugin_skill_contribution(
+    project_id: impl Into<String>,
+    plugin_id: impl Into<String>,
+    contribution_id: impl Into<String>,
+    plugin_root: impl AsRef<Path>,
+    skill_path: impl Into<String>,
+    source_state: CadenceSkillSourceState,
+    trust: CadenceSkillTrustState,
+) -> CommandResult<CadenceSkillDirectoryDiscovery> {
+    let project_id = normalize_required(project_id.into(), "projectId")?;
+    let plugin_id = normalize_required(plugin_id.into(), "pluginId")?;
+    let contribution_id = normalize_required(contribution_id.into(), "contributionId")?;
+    let skill_path = normalize_relative_source_path(&skill_path.into())?;
+    let plugin_root = plugin_root.as_ref().to_path_buf();
+    let root = SkillDiscoveryRoot::Plugin {
+        project_id,
+        plugin_id,
+        contribution_id,
+        skill_path: skill_path.clone(),
+        root_path: plugin_root.clone(),
+        source_state,
+        trust,
+    };
+    let mut diagnostics = Vec::new();
+    if !plugin_root.is_dir() {
+        diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+            code: "cadence_plugin_root_unavailable".into(),
+            message: format!(
+                "Cadence could not scan plugin skill root {} because it is not available.",
+                plugin_root.display()
+            ),
+            relative_path: None,
+        });
+        return Ok(CadenceSkillDirectoryDiscovery {
+            candidates: Vec::new(),
+            diagnostics,
+        });
+    }
+    let root_canonical = fs::canonicalize(&plugin_root).map_err(|error| {
+        CommandError::retryable(
+            "cadence_plugin_root_unavailable",
+            format!(
+                "Cadence could not resolve plugin skill root {}: {error}",
+                plugin_root.display()
+            ),
+        )
+    })?;
+    let skill_directory = plugin_root.join(&skill_path);
+    if !skill_directory.is_dir() {
+        diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+            code: "cadence_plugin_skill_unavailable".into(),
+            message: format!(
+                "Cadence could not find plugin skill contribution `{skill_path}` under {}.",
+                plugin_root.display()
+            ),
+            relative_path: Some(skill_path),
+        });
+        return Ok(CadenceSkillDirectoryDiscovery {
+            candidates: Vec::new(),
+            diagnostics,
+        });
+    }
+
+    match inspect_filesystem_skill(&root, &plugin_root, &root_canonical, &skill_directory) {
+        Ok(candidate) => Ok(CadenceSkillDirectoryDiscovery {
+            candidates: vec![candidate],
+            diagnostics,
+        }),
+        Err(error) => {
+            diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+                code: error.code,
+                message: error.message,
+                relative_path: path_to_relative_source_path(&plugin_root, &skill_directory).ok(),
+            });
+            Ok(CadenceSkillDirectoryDiscovery {
+                candidates: Vec::new(),
+                diagnostics,
+            })
+        }
+    }
 }
 
 pub fn load_discovered_skill_context(
