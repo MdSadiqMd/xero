@@ -55,7 +55,6 @@ import {
   upsertProviderProfileRequestSchema,
 } from "@/src/lib/cadence-model"
 import {
-  formatProviderConnectionLabel,
   isApiKeyCloudProvider,
   isLocalCloudProvider,
   listCloudProviderPresets,
@@ -287,15 +286,6 @@ function getMissingConnectionFieldLabels(card: ProviderProfileCard, draft: Provi
   }
 
   return missing
-}
-
-function getConnectionLabel(card: ProviderProfileCard): string {
-  return formatProviderConnectionLabel({
-    providerId: card.preset.providerId,
-    baseUrl: card.profile?.baseUrl ?? null,
-    region: card.profile?.region ?? null,
-    projectId: card.profile?.projectId ?? null,
-  })
 }
 
 function isCardSelected(providerProfiles: ProviderProfilesDto | null, card: ProviderProfileCard): boolean {
@@ -940,90 +930,64 @@ export function ProviderProfileForm({
           const modelChoiceGroups = groupProviderModelChoices(cardCatalogState.choices)
           const isCatalogRefreshing = cardCatalogState.loadStatus === "loading"
           const canRefreshCatalog = Boolean(onRefreshProviderModelCatalog && card.profile && card.preset.supportsCatalogRefresh)
-          const connectionLabel = getConnectionLabel(card)
+
+          const statusBadge = isOpenAi && isOpenAiConnected
+            ? { label: "Connected", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" }
+            : readinessBadge
 
           return (
             <div
               key={card.key}
               className={cn(
-                "rounded-lg border bg-card px-5 py-4 transition-colors",
-                isSelected ? "border-primary/30 bg-primary/[0.03]" : "border-border",
+                "rounded-lg border bg-card px-3.5 py-3 transition-colors",
+                isSelected ? "border-primary/40 bg-primary/[0.03]" : "border-border/70",
               )}
             >
-              <div className="flex items-start gap-3.5">
+              <div className="flex items-center gap-3">
                 <div
                   className={cn(
-                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-secondary/60",
-                    isSelected ? "border-primary/40 text-primary" : "border-border",
+                    "flex h-7 w-7 shrink-0 items-center justify-center rounded-md border",
+                    isSelected ? "border-primary/40 bg-primary/[0.08] text-primary" : "border-border/70 bg-secondary/40 text-foreground/70",
                   )}
                 >
-                  <Icon className="h-4 w-4 text-foreground/70" />
+                  <Icon className="h-3.5 w-3.5" />
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-[14px] font-medium text-foreground">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-[13px] font-medium text-foreground">
                       {card.profile?.label ?? card.preset.label}
                     </p>
                     {isSelected ? (
-                      <Badge variant="secondary" className="px-2 py-0 text-[11px]">
+                      <span className="rounded-sm border border-primary/30 bg-primary/[0.08] px-1.5 py-px text-[10px] font-medium uppercase tracking-[0.06em] text-primary">
                         Active
-                      </Badge>
-                    ) : null}
-                    {readinessBadge ? (
-                      <Badge className={cn("px-2 py-0 text-[11px] font-medium", readinessBadge.className)}>
-                        {readinessBadge.label}
-                      </Badge>
-                    ) : null}
-                    {isOpenAi && isOpenAiConnected ? (
-                      <Badge
-                        variant="secondary"
-                        className="gap-1.5 border border-emerald-500/30 bg-emerald-500/10 px-2 py-0 text-[11px] font-medium text-emerald-500 dark:text-emerald-400"
-                      >
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
-                        Connected
-                      </Badge>
+                      </span>
                     ) : null}
                   </div>
-
-                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-                    {card.preset.description}
-                  </p>
-
-                  <p className="mt-1.5 text-[11.5px] text-muted-foreground">
-                    Model:{" "}
-                    <span className="font-medium text-foreground/80">
-                      {card.profile?.modelId ?? card.preset.defaultModelId ?? "Not configured"}
-                    </span>
-                  </p>
-
-                  <p className="mt-1 text-[11.5px] text-muted-foreground">Connection: {connectionLabel}</p>
-
-                  {inlineStatus ? (
-                    <Alert
-                      variant={inlineStatus.tone === "error" ? "destructive" : "default"}
-                      className={cn(
-                        "mt-2.5 py-3",
-                        inlineStatus.tone === "warning"
-                          ? "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-200"
-                          : "border-destructive/30 bg-destructive/5",
-                      )}
-                    >
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertDescription className="text-[13px] leading-relaxed">
-                        <span>{inlineStatus.message}</span>
-                        {inlineStatus.recovery ? <span className="mt-1 block">{inlineStatus.recovery}</span> : null}
-                      </AlertDescription>
-                    </Alert>
+                  {card.profile?.modelId ? (
+                    <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/80">
+                      {card.profile.modelId}
+                    </p>
                   ) : null}
                 </div>
 
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {statusBadge ? (
+                    <span
+                      className={cn(
+                        "rounded-sm border px-1.5 py-px text-[10px] font-medium",
+                        statusBadge.className,
+                      )}
+                    >
+                      {statusBadge.label}
+                    </span>
+                  ) : null}
+
                   {isSelected ? null : (
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-8 text-[12px]"
+                      className="h-7 px-2.5 text-[11.5px]"
                       disabled={isMutationDisabled}
                       onClick={() => void handleActivate(card)}
                     >
@@ -1034,18 +998,21 @@ export function ProviderProfileForm({
                   {isEditing ? null : isOpenAi ? (
                     <Button
                       size="sm"
-                      variant="secondary"
-                      className="h-8 text-[12px]"
+                      variant="ghost"
+                      className="h-7 px-2.5 text-[11.5px] text-muted-foreground hover:text-foreground"
                       disabled={isSaving}
                       onClick={() => openEditor(card)}
                     >
-                      Edit label
+                      Rename
                     </Button>
                   ) : (
                     <Button
                       size="sm"
-                      variant={hasSavedApiKey ? "secondary" : "outline"}
-                      className="h-8 text-[12px]"
+                      variant={hasSavedApiKey ? "ghost" : "default"}
+                      className={cn(
+                        "h-7 px-2.5 text-[11.5px]",
+                        hasSavedApiKey ? "text-muted-foreground hover:text-foreground" : "",
+                      )}
                       disabled={isSaving}
                       onClick={() => openEditor(card)}
                     >
@@ -1058,37 +1025,37 @@ export function ProviderProfileForm({
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 gap-1.5 text-[12px]"
+                        className="h-7 gap-1.5 px-2.5 text-[11.5px]"
                         disabled={pendingAuth !== null || isSaving}
                         onClick={() => void handleOpenAiDisconnect()}
                       >
                         {pendingAuth === "logout" ? (
-                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                          <LoaderCircle className="h-3 w-3 animate-spin" />
                         ) : (
-                          <LogOut className="h-3.5 w-3.5" />
+                          <LogOut className="h-3 w-3" />
                         )}
                         Sign out
                       </Button>
                     ) : isOpenAiInProgress ? (
-                      <Badge variant="secondary" className="gap-1.5 text-[11px]">
+                      <span className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-secondary/60 px-1.5 py-px text-[10.5px] text-muted-foreground">
                         <LoaderCircle className="h-3 w-3 animate-spin" />
-                        Connecting…
-                      </Badge>
+                        Connecting
+                      </span>
                     ) : !hasSelectedProject ? (
-                      <Badge variant="outline" className="text-[11px]">
+                      <span className="rounded-sm border border-border bg-secondary/60 px-1.5 py-px text-[10.5px] text-muted-foreground">
                         {openAiMissingProjectLabel}
-                      </Badge>
+                      </span>
                     ) : (
                       <Button
                         size="sm"
-                        className="h-8 gap-1.5 text-[12px]"
+                        className="h-7 gap-1.5 px-2.5 text-[11.5px]"
                         disabled={pendingAuth !== null || isSaving}
                         onClick={() => void handleOpenAiConnect()}
                       >
                         {pendingAuth === "login" ? (
-                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                          <LoaderCircle className="h-3 w-3 animate-spin" />
                         ) : (
-                          <LogIn className="h-3.5 w-3.5" />
+                          <LogIn className="h-3 w-3" />
                         )}
                         Sign in
                       </Button>
@@ -1096,6 +1063,24 @@ export function ProviderProfileForm({
                   ) : null}
                 </div>
               </div>
+
+              {inlineStatus ? (
+                <Alert
+                  variant={inlineStatus.tone === "error" ? "destructive" : "default"}
+                  className={cn(
+                    "mt-2.5 py-2.5",
+                    inlineStatus.tone === "warning"
+                      ? "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-200"
+                      : "border-destructive/30 bg-destructive/5",
+                  )}
+                >
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  <AlertDescription className="text-[12px] leading-relaxed">
+                    <span>{inlineStatus.message}</span>
+                    {inlineStatus.recovery ? <span className="mt-1 block">{inlineStatus.recovery}</span> : null}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
 
               {isEditing ? (
                 <div className="mt-3.5 grid gap-3.5 rounded-md border border-dashed border-border/80 bg-background/80 p-3.5">
@@ -1195,14 +1180,11 @@ export function ProviderProfileForm({
                       </div>
                     )}
 
-                    <p
-                      className={cn(
-                        "text-[11px]",
-                        cardCatalogState.tone === "warning" ? "text-amber-700 dark:text-amber-200" : "text-muted-foreground",
-                      )}
-                    >
-                      <span className="font-medium">{cardCatalogState.stateLabel}.</span> {cardCatalogState.detail}
-                    </p>
+                    {cardCatalogState.tone === "warning" && cardCatalogState.refreshError?.message ? (
+                      <p className="text-[11px] text-amber-700 dark:text-amber-200">
+                        {cardCatalogState.refreshError.message}
+                      </p>
+                    ) : null}
                   </div>
 
                   {card.preset.baseUrlMode !== "none" ||

@@ -1,0 +1,605 @@
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use crate::commands::{CommandError, CommandResult};
+
+use super::{
+    cache::sha256_hex,
+    contract::{
+        CadenceSkillSourceLocator, CadenceSkillSourceRecord, CadenceSkillSourceScope,
+        CadenceSkillSourceState, CadenceSkillTrustState,
+    },
+    inspection::{
+        normalize_relative_source_path, parse_skill_frontmatter, validate_skill_asset_path,
+    },
+    runtime::{MAX_SKILL_FILES, MAX_SKILL_FILE_BYTES, MAX_TOTAL_SKILL_BYTES},
+    skill_tool::{
+        validate_skill_tool_context_payload, CadenceSkillToolContextAsset,
+        CadenceSkillToolContextDocument, CadenceSkillToolContextPayload,
+        CADENCE_SKILL_TOOL_CONTRACT_VERSION,
+    },
+};
+
+pub const PROJECT_SKILL_DIRECTORY: &str = ".cadence/skills";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadenceSkillDirectoryDiscovery {
+    pub candidates: Vec<CadenceDiscoveredSkill>,
+    pub diagnostics: Vec<CadenceSkillDiscoveryDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadenceDiscoveredSkill {
+    pub source: CadenceSkillSourceRecord,
+    pub skill_id: String,
+    pub name: String,
+    pub description: String,
+    pub user_invocable: Option<bool>,
+    pub local_location: String,
+    pub version_hash: String,
+    pub asset_paths: Vec<String>,
+    pub total_bytes: usize,
+    skill_directory: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CadenceSkillDiscoveryDiagnostic {
+    pub code: String,
+    pub message: String,
+    pub relative_path: Option<String>,
+}
+
+enum SkillDiscoveryRoot {
+    Local {
+        root_id: String,
+        root_path: PathBuf,
+    },
+    Project {
+        project_id: String,
+        project_root: PathBuf,
+    },
+    Bundled {
+        bundle_id: String,
+        version: String,
+        root_path: PathBuf,
+    },
+}
+
+impl SkillDiscoveryRoot {
+    fn scan_root(&self) -> PathBuf {
+        match self {
+            Self::Local { root_path, .. } | Self::Bundled { root_path, .. } => root_path.clone(),
+            Self::Project { project_root, .. } => project_root.join(PROJECT_SKILL_DIRECTORY),
+        }
+    }
+
+    fn source_record(
+        &self,
+        scan_root: &Path,
+        root_canonical: &Path,
+        skill_directory: &Path,
+        skill_id: &str,
+    ) -> CommandResult<CadenceSkillSourceRecord> {
+        let source_relative_path = path_to_relative_source_path(scan_root, skill_directory)?;
+        match self {
+            Self::Local { root_id, .. } => CadenceSkillSourceRecord::new(
+                CadenceSkillSourceScope::global(),
+                CadenceSkillSourceLocator::Local {
+                    root_id: root_id.clone(),
+                    root_path: root_canonical.display().to_string(),
+                    relative_path: source_relative_path,
+                    skill_id: skill_id.to_owned(),
+                },
+                CadenceSkillSourceState::Discoverable,
+                CadenceSkillTrustState::ApprovalRequired,
+            ),
+            Self::Project { project_id, .. } => CadenceSkillSourceRecord::new(
+                CadenceSkillSourceScope::project(project_id.clone())?,
+                CadenceSkillSourceLocator::Project {
+                    relative_path: normalize_relative_source_path(&format!(
+                        "{PROJECT_SKILL_DIRECTORY}/{source_relative_path}"
+                    ))?,
+                    skill_id: skill_id.to_owned(),
+                },
+                CadenceSkillSourceState::Discoverable,
+                CadenceSkillTrustState::ApprovalRequired,
+            ),
+            Self::Bundled {
+                bundle_id, version, ..
+            } => CadenceSkillSourceRecord::new(
+                CadenceSkillSourceScope::global(),
+                CadenceSkillSourceLocator::Bundled {
+                    bundle_id: bundle_id.clone(),
+                    skill_id: skill_id.to_owned(),
+                    version: version.clone(),
+                },
+                CadenceSkillSourceState::Discoverable,
+                CadenceSkillTrustState::Trusted,
+            ),
+        }
+    }
+}
+
+pub fn discover_local_skill_directory(
+    root_id: impl Into<String>,
+    root_path: impl AsRef<Path>,
+) -> CommandResult<CadenceSkillDirectoryDiscovery> {
+    let root_id = normalize_required(root_id.into(), "rootId")?;
+    discover_skill_directory(SkillDiscoveryRoot::Local {
+        root_id,
+        root_path: root_path.as_ref().to_path_buf(),
+    })
+}
+
+pub fn discover_project_skill_directory(
+    project_id: impl Into<String>,
+    project_root: impl AsRef<Path>,
+) -> CommandResult<CadenceSkillDirectoryDiscovery> {
+    let project_id = normalize_required(project_id.into(), "projectId")?;
+    discover_skill_directory(SkillDiscoveryRoot::Project {
+        project_id,
+        project_root: project_root.as_ref().to_path_buf(),
+    })
+}
+
+pub fn discover_bundled_skill_directory(
+    bundle_id: impl Into<String>,
+    version: impl Into<String>,
+    root_path: impl AsRef<Path>,
+) -> CommandResult<CadenceSkillDirectoryDiscovery> {
+    let bundle_id = normalize_required(bundle_id.into(), "bundleId")?;
+    let version = normalize_required(version.into(), "version")?;
+    discover_skill_directory(SkillDiscoveryRoot::Bundled {
+        bundle_id,
+        version,
+        root_path: root_path.as_ref().to_path_buf(),
+    })
+}
+
+pub fn load_discovered_skill_context(
+    candidate: &CadenceDiscoveredSkill,
+    include_supporting_assets: bool,
+) -> CommandResult<CadenceSkillToolContextPayload> {
+    let markdown_path = candidate.skill_directory.join("SKILL.md");
+    let markdown_bytes = fs::read(&markdown_path).map_err(|error| {
+        CommandError::retryable(
+            "autonomous_skill_document_read_failed",
+            format!(
+                "Cadence could not read discovered skill document {}: {error}",
+                markdown_path.display()
+            ),
+        )
+    })?;
+    let markdown_content = String::from_utf8(markdown_bytes.clone()).map_err(|error| {
+        CommandError::user_fixable(
+            "autonomous_skill_document_invalid",
+            format!(
+                "Cadence rejected discovered skill `{}` because SKILL.md was not valid UTF-8 text: {error}",
+                candidate.skill_id
+            ),
+        )
+    })?;
+    parse_skill_frontmatter(&markdown_content)?;
+
+    let mut supporting_assets = Vec::new();
+    if include_supporting_assets {
+        for relative_path in candidate
+            .asset_paths
+            .iter()
+            .filter(|path| path.as_str() != "SKILL.md")
+        {
+            validate_skill_asset_path(relative_path)?;
+            let path = candidate.skill_directory.join(relative_path);
+            let bytes = fs::read(&path).map_err(|error| {
+                CommandError::retryable(
+                    "autonomous_skill_asset_read_failed",
+                    format!(
+                        "Cadence could not read discovered skill asset {}: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            let content = String::from_utf8(bytes.clone()).map_err(|error| {
+                CommandError::user_fixable(
+                    "autonomous_skill_layout_unsupported",
+                    format!(
+                        "Cadence rejected discovered skill asset `{relative_path}` because it was not valid UTF-8 text: {error}"
+                    ),
+                )
+            })?;
+            supporting_assets.push(CadenceSkillToolContextAsset {
+                relative_path: relative_path.clone(),
+                sha256: sha256_hex(&bytes),
+                bytes: bytes.len(),
+                content,
+            });
+        }
+    }
+
+    validate_skill_tool_context_payload(CadenceSkillToolContextPayload {
+        contract_version: CADENCE_SKILL_TOOL_CONTRACT_VERSION,
+        source_id: candidate.source.source_id.clone(),
+        skill_id: candidate.skill_id.clone(),
+        markdown: CadenceSkillToolContextDocument {
+            relative_path: "SKILL.md".into(),
+            sha256: sha256_hex(&markdown_bytes),
+            bytes: markdown_bytes.len(),
+            content: markdown_content,
+        },
+        supporting_assets,
+    })
+}
+
+fn discover_skill_directory(
+    root: SkillDiscoveryRoot,
+) -> CommandResult<CadenceSkillDirectoryDiscovery> {
+    let scan_root = root.scan_root();
+    let mut diagnostics = Vec::new();
+    if !scan_root.is_dir() {
+        diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+            code: "autonomous_skill_directory_unavailable".into(),
+            message: format!(
+                "Cadence could not scan skill directory {} because it is not available.",
+                scan_root.display()
+            ),
+            relative_path: None,
+        });
+        return Ok(CadenceSkillDirectoryDiscovery {
+            candidates: Vec::new(),
+            diagnostics,
+        });
+    }
+
+    let root_canonical = fs::canonicalize(&scan_root).map_err(|error| {
+        CommandError::retryable(
+            "autonomous_skill_directory_unavailable",
+            format!(
+                "Cadence could not resolve skill directory {}: {error}",
+                scan_root.display()
+            ),
+        )
+    })?;
+
+    let mut skill_directories = Vec::new();
+    collect_skill_directories(
+        &scan_root,
+        &root_canonical,
+        &scan_root,
+        &mut skill_directories,
+        &mut diagnostics,
+    )?;
+
+    skill_directories.sort();
+    let mut seen_skill_ids = BTreeSet::new();
+    let mut candidates = Vec::new();
+    for skill_directory in skill_directories {
+        match inspect_filesystem_skill(&root, &scan_root, &root_canonical, &skill_directory) {
+            Ok(candidate) => {
+                if !seen_skill_ids.insert(candidate.skill_id.clone()) {
+                    diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+                        code: "autonomous_skill_duplicate_id".into(),
+                        message: format!(
+                            "Cadence skipped duplicate discovered skill id `{}` under {}.",
+                            candidate.skill_id,
+                            scan_root.display()
+                        ),
+                        relative_path: path_to_relative_source_path(&scan_root, &skill_directory)
+                            .ok(),
+                    });
+                    continue;
+                }
+                candidates.push(candidate);
+            }
+            Err(error) => diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+                code: error.code,
+                message: error.message,
+                relative_path: path_to_relative_source_path(&scan_root, &skill_directory).ok(),
+            }),
+        }
+    }
+
+    candidates.sort_by(|left, right| left.source.source_id.cmp(&right.source.source_id));
+    Ok(CadenceSkillDirectoryDiscovery {
+        candidates,
+        diagnostics,
+    })
+}
+
+fn inspect_filesystem_skill(
+    root: &SkillDiscoveryRoot,
+    scan_root: &Path,
+    root_canonical: &Path,
+    skill_directory: &Path,
+) -> CommandResult<CadenceDiscoveredSkill> {
+    let skill_canonical = fs::canonicalize(skill_directory).map_err(|error| {
+        CommandError::retryable(
+            "autonomous_skill_directory_unavailable",
+            format!(
+                "Cadence could not resolve discovered skill directory {}: {error}",
+                skill_directory.display()
+            ),
+        )
+    })?;
+    if !skill_canonical.starts_with(root_canonical) {
+        return Err(CommandError::user_fixable(
+            "autonomous_skill_path_outside_root",
+            format!(
+                "Cadence rejected discovered skill directory {} because it resolves outside the declared skill root.",
+                skill_directory.display()
+            ),
+        ));
+    }
+
+    let mut files = Vec::new();
+    collect_skill_files(skill_directory, skill_directory, &mut files)?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    if files.is_empty() {
+        return Err(CommandError::user_fixable(
+            "autonomous_skill_document_missing",
+            "Cadence rejected discovered skill because the skill directory contained no files.",
+        ));
+    }
+    if files.len() > MAX_SKILL_FILES {
+        return Err(CommandError::user_fixable(
+            "autonomous_skill_layout_unsupported",
+            format!(
+                "Cadence rejected discovered skill because it exceeded the {MAX_SKILL_FILES} file limit."
+            ),
+        ));
+    }
+
+    let mut asset_paths = Vec::new();
+    let mut total_bytes = 0usize;
+    let mut has_skill_markdown = false;
+    let mut skill_markdown = None;
+    let mut hash_input = Vec::new();
+
+    for (relative_path, path) in &files {
+        validate_skill_asset_path(relative_path)?;
+        let bytes = fs::read(path).map_err(|error| {
+            CommandError::retryable(
+                "autonomous_skill_asset_read_failed",
+                format!(
+                    "Cadence could not read skill asset {}: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        if bytes.is_empty() || bytes.len() > MAX_SKILL_FILE_BYTES {
+            return Err(CommandError::user_fixable(
+                "autonomous_skill_layout_unsupported",
+                format!(
+                    "Cadence rejected discovered skill asset `{relative_path}` because assets must be between 1 and {MAX_SKILL_FILE_BYTES} bytes."
+                ),
+            ));
+        }
+        total_bytes = total_bytes.saturating_add(bytes.len());
+        if total_bytes > MAX_TOTAL_SKILL_BYTES {
+            return Err(CommandError::user_fixable(
+                "autonomous_skill_layout_unsupported",
+                format!(
+                    "Cadence rejected discovered skill because it exceeded the {MAX_TOTAL_SKILL_BYTES} byte total skill budget."
+                ),
+            ));
+        }
+        if relative_path == "SKILL.md" {
+            has_skill_markdown = true;
+            skill_markdown = Some(String::from_utf8(bytes.clone()).map_err(|error| {
+                CommandError::user_fixable(
+                    "autonomous_skill_document_invalid",
+                    format!(
+                        "Cadence rejected discovered skill because SKILL.md was not valid UTF-8 text: {error}"
+                    ),
+                )
+            })?);
+        } else {
+            String::from_utf8(bytes.clone()).map_err(|error| {
+                CommandError::user_fixable(
+                    "autonomous_skill_layout_unsupported",
+                    format!(
+                        "Cadence rejected discovered skill asset `{relative_path}` because it was not valid UTF-8 text: {error}"
+                    ),
+                )
+            })?;
+        }
+        hash_input.extend_from_slice(relative_path.as_bytes());
+        hash_input.push(0);
+        hash_input.extend_from_slice(&bytes);
+        hash_input.push(0);
+        asset_paths.push(relative_path.clone());
+    }
+
+    if !has_skill_markdown {
+        return Err(CommandError::user_fixable(
+            "autonomous_skill_document_missing",
+            "Cadence rejected discovered skill because SKILL.md was missing.",
+        ));
+    }
+
+    let frontmatter = parse_skill_frontmatter(
+        skill_markdown
+            .as_deref()
+            .expect("checked that SKILL.md exists"),
+    )?;
+    let source = root.source_record(
+        scan_root,
+        root_canonical,
+        skill_directory,
+        &frontmatter.name,
+    )?;
+
+    Ok(CadenceDiscoveredSkill {
+        skill_id: frontmatter.name.clone(),
+        name: frontmatter.name,
+        description: frontmatter.description,
+        user_invocable: frontmatter.user_invocable,
+        local_location: skill_canonical.display().to_string(),
+        version_hash: sha256_hex(&hash_input),
+        asset_paths,
+        total_bytes,
+        source,
+        skill_directory: skill_directory.to_path_buf(),
+    })
+}
+
+fn collect_skill_directories(
+    scan_root: &Path,
+    root_canonical: &Path,
+    current: &Path,
+    skill_directories: &mut Vec<PathBuf>,
+    diagnostics: &mut Vec<CadenceSkillDiscoveryDiagnostic>,
+) -> CommandResult<()> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| {
+            CommandError::retryable(
+                "autonomous_skill_directory_read_failed",
+                format!("Cadence could not enumerate {}: {error}", current.display()),
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            CommandError::retryable(
+                "autonomous_skill_directory_read_failed",
+                format!(
+                    "Cadence could not inspect an entry under {}: {error}",
+                    current.display()
+                ),
+            )
+        })?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            CommandError::retryable(
+                "autonomous_skill_directory_read_failed",
+                format!("Cadence could not inspect {}: {error}", path.display()),
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+                code: "autonomous_skill_path_outside_root".into(),
+                message: format!(
+                    "Cadence skipped {} because skill scanning does not follow symlinks.",
+                    path.display()
+                ),
+                relative_path: path_to_relative_source_path(scan_root, &path).ok(),
+            });
+            continue;
+        }
+        if !metadata.is_dir() {
+            continue;
+        }
+        let canonical = fs::canonicalize(&path).map_err(|error| {
+            CommandError::retryable(
+                "autonomous_skill_directory_unavailable",
+                format!("Cadence could not resolve {}: {error}", path.display()),
+            )
+        })?;
+        if !canonical.starts_with(root_canonical) {
+            diagnostics.push(CadenceSkillDiscoveryDiagnostic {
+                code: "autonomous_skill_path_outside_root".into(),
+                message: format!(
+                    "Cadence skipped {} because it resolves outside the declared skill root.",
+                    path.display()
+                ),
+                relative_path: path_to_relative_source_path(scan_root, &path).ok(),
+            });
+            continue;
+        }
+        if path.join("SKILL.md").is_file() {
+            skill_directories.push(path);
+        } else {
+            collect_skill_directories(
+                scan_root,
+                root_canonical,
+                &path,
+                skill_directories,
+                diagnostics,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_skill_files(
+    skill_root: &Path,
+    current: &Path,
+    files: &mut Vec<(String, PathBuf)>,
+) -> CommandResult<()> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| {
+            CommandError::retryable(
+                "autonomous_skill_directory_read_failed",
+                format!("Cadence could not enumerate {}: {error}", current.display()),
+            )
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            CommandError::retryable(
+                "autonomous_skill_directory_read_failed",
+                format!(
+                    "Cadence could not inspect an entry under {}: {error}",
+                    current.display()
+                ),
+            )
+        })?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            CommandError::retryable(
+                "autonomous_skill_directory_read_failed",
+                format!("Cadence could not inspect {}: {error}", path.display()),
+            )
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(CommandError::user_fixable(
+                "autonomous_skill_path_outside_root",
+                format!(
+                    "Cadence rejected discovered skill because asset {} is a symlink.",
+                    path.display()
+                ),
+            ));
+        }
+        if metadata.is_dir() {
+            collect_skill_files(skill_root, &path, files)?;
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+        let relative_path = path_to_relative_source_path(skill_root, &path)?;
+        files.push((relative_path, path));
+    }
+
+    Ok(())
+}
+
+fn path_to_relative_source_path(root: &Path, path: &Path) -> CommandResult<String> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        CommandError::user_fixable(
+            "autonomous_skill_path_outside_root",
+            format!(
+                "Cadence rejected skill path {} because it is outside declared root {}.",
+                path.display(),
+                root.display()
+            ),
+        )
+    })?;
+    let text = relative.to_string_lossy().replace('\\', "/");
+    normalize_relative_source_path(&text)
+}
+
+fn normalize_required(value: String, field: &'static str) -> CommandResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::invalid_request(field));
+    }
+    Ok(trimmed.to_owned())
+}

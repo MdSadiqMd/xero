@@ -152,6 +152,18 @@ impl CadenceSkillSourceLocator {
         }
     }
 
+    pub fn skill_id(&self) -> &str {
+        match self {
+            Self::Bundled { skill_id, .. }
+            | Self::Local { skill_id, .. }
+            | Self::Project { skill_id, .. }
+            | Self::Dynamic { skill_id, .. }
+            | Self::Mcp { skill_id, .. }
+            | Self::Plugin { skill_id, .. } => skill_id,
+            Self::Github { path, .. } => path.rsplit('/').next().unwrap_or(path),
+        }
+    }
+
     pub fn from_autonomous_github_source(source: &AutonomousSkillSourceMetadata) -> Self {
         Self::Github {
             repo: source.repo.clone(),

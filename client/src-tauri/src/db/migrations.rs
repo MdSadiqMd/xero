@@ -1515,6 +1515,55 @@ pub fn migrations() -> &'static Migrations<'static> {
                     ON agent_action_requests(project_id, status, created_at DESC);
                 "#,
             ),
+            M::up(
+                r#"
+                CREATE TABLE IF NOT EXISTS installed_skill_records (
+                    source_id TEXT PRIMARY KEY,
+                    scope_kind TEXT NOT NULL,
+                    project_id TEXT,
+                    contract_version INTEGER NOT NULL,
+                    skill_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    user_invocable INTEGER,
+                    source_state TEXT NOT NULL,
+                    trust_state TEXT NOT NULL,
+                    source_json TEXT NOT NULL,
+                    cache_key TEXT,
+                    local_location TEXT,
+                    version_hash TEXT,
+                    installed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    last_used_at TEXT,
+                    last_diagnostic_json TEXT,
+                    CHECK (scope_kind IN ('global', 'project')),
+                    CHECK (
+                        (scope_kind = 'global' AND project_id IS NULL)
+                        OR (scope_kind = 'project' AND project_id IS NOT NULL AND project_id <> '')
+                    ),
+                    CHECK (contract_version > 0),
+                    CHECK (skill_id <> ''),
+                    CHECK (name <> ''),
+                    CHECK (description <> ''),
+                    CHECK (user_invocable IS NULL OR user_invocable IN (0, 1)),
+                    CHECK (source_state IN ('installed', 'enabled', 'disabled', 'stale', 'failed', 'blocked')),
+                    CHECK (trust_state IN ('trusted', 'user_approved', 'approval_required', 'untrusted', 'blocked')),
+                    CHECK (source_json <> '' AND json_valid(source_json)),
+                    CHECK (cache_key IS NULL OR cache_key <> ''),
+                    CHECK (local_location IS NULL OR local_location <> ''),
+                    CHECK (cache_key IS NOT NULL OR local_location IS NOT NULL),
+                    CHECK (version_hash IS NULL OR version_hash <> ''),
+                    CHECK (last_used_at IS NULL OR last_used_at <> ''),
+                    CHECK (last_diagnostic_json IS NULL OR (last_diagnostic_json <> '' AND json_valid(last_diagnostic_json))),
+                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_installed_skill_records_scope_skill
+                    ON installed_skill_records(scope_kind, project_id, skill_id, source_id);
+                CREATE INDEX IF NOT EXISTS idx_installed_skill_records_state_updated
+                    ON installed_skill_records(source_state, updated_at DESC);
+                "#,
+            ),
         ])
     });
 

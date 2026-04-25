@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Check, LoaderCircle, Plus, PlugZap, RefreshCcw, Trash2 } from 'lucide-react'
+import { Check, LoaderCircle, Plus, RefreshCcw, Trash2 } from 'lucide-react'
 import { z } from 'zod'
 import type { McpRegistryLoadStatus, McpRegistryMutationStatus, OperatorActionErrorView } from '@/src/features/cadence/use-cadence-desktop-state'
 import {
@@ -372,10 +372,8 @@ export function McpSection({
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        icon={PlugZap}
         title="MCP Servers"
         description="Manage app-local MCP server definitions and inspect typed connection diagnostics."
-        scope="app-wide"
         actions={
           <>
             <Button

@@ -1,4 +1,3 @@
-import { KeyRound } from "lucide-react"
 import type {
   AgentPaneView,
   OperatorActionErrorView,
@@ -58,10 +57,8 @@ export function ProvidersSection({
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        icon={KeyRound}
         title="Providers"
         description="Pick a provider, manage its API key, and choose a model."
-        scope="app-wide"
       />
 
       <ProviderProfileForm

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Bell, Check, LoaderCircle, Plus } from "lucide-react"
+import { Check, LoaderCircle, Plus } from "lucide-react"
 import type { AgentPaneView } from "@/src/features/cadence/use-cadence-desktop-state"
 import type {
   NotificationRouteKindDto,
@@ -154,10 +154,8 @@ export function NotificationsSection({ agent, onUpsertNotificationRoute }: Notif
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        icon={Bell}
         title="Notifications"
         description="Route operator prompts to Telegram or Discord. Each route belongs to this project."
-        scope="project-bound"
       />
 
       <div className="grid gap-3">

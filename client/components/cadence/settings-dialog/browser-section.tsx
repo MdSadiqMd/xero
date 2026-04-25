@@ -1,4 +1,4 @@
-import { Check, Cookie, Globe, Loader2, RefreshCw } from "lucide-react"
+import { Check, Cookie, Loader2, RefreshCw } from "lucide-react"
 import { useEffect } from "react"
 import {
   useCookieImport,
@@ -28,10 +28,8 @@ export function BrowserSection() {
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        icon={Globe}
         title="Browser"
         description="Copy cookies from other installed browsers into Cadence's in-app browser so you stay signed in while developing."
-        scope="system"
         actions={
           <Button
             type="button"

@@ -7,6 +7,7 @@ mod operator;
 mod project_snapshot;
 mod runtime;
 mod runtime_boundary;
+mod skills;
 pub(crate) mod workflow;
 
 pub use agent_core::*;
@@ -45,6 +46,7 @@ pub(crate) use runtime::{
 };
 pub(crate) use runtime_boundary::classify_operator_answer_requirement;
 pub use runtime_boundary::*;
+pub use skills::*;
 pub use workflow::*;
 pub(crate) use workflow::{
     apply_workflow_transition_mutation, attempt_automatic_dispatch_after_transition,

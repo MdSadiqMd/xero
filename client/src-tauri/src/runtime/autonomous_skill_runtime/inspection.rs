@@ -511,7 +511,7 @@ fn parse_frontmatter_bool(value: &str) -> CommandResult<bool> {
     }
 }
 
-fn validate_skill_asset_path(relative_path: &str) -> CommandResult<()> {
+pub(crate) fn validate_skill_asset_path(relative_path: &str) -> CommandResult<()> {
     let normalized = normalize_relative_source_path(relative_path)?;
     if normalized == "SKILL.md" {
         return Ok(());

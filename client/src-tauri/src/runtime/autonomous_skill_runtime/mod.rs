@@ -1,5 +1,6 @@
 mod cache;
 mod contract;
+mod discovery;
 mod inspection;
 mod runtime;
 mod skill_tool;
@@ -15,13 +16,19 @@ pub use contract::{
     CadenceSkillSourceLocator, CadenceSkillSourceRecord, CadenceSkillSourceScope,
     CadenceSkillSourceState, CadenceSkillTrustState, CADENCE_SKILL_SOURCE_CONTRACT_VERSION,
 };
+pub use discovery::{
+    discover_bundled_skill_directory, discover_local_skill_directory,
+    discover_project_skill_directory, load_discovered_skill_context, CadenceDiscoveredSkill,
+    CadenceSkillDirectoryDiscovery, CadenceSkillDiscoveryDiagnostic, PROJECT_SKILL_DIRECTORY,
+};
 pub use runtime::{
     AutonomousSkillDiscoverOutput, AutonomousSkillDiscoverRequest,
     AutonomousSkillDiscoveryCandidate, AutonomousSkillInstallOutput, AutonomousSkillInstallRequest,
     AutonomousSkillInvocationAsset, AutonomousSkillInvokeOutput, AutonomousSkillInvokeRequest,
-    AutonomousSkillResolveOutput, AutonomousSkillResolveRequest, AutonomousSkillRuntime,
-    AutonomousSkillRuntimeConfig, AutonomousSkillRuntimeLimits, AUTONOMOUS_SKILL_SOURCE_REF,
-    AUTONOMOUS_SKILL_SOURCE_REPO, AUTONOMOUS_SKILL_SOURCE_ROOT,
+    AutonomousSkillRegistryFailure, AutonomousSkillRegistryOperation, AutonomousSkillRegistrySink,
+    AutonomousSkillRegistrySuccess, AutonomousSkillResolveOutput, AutonomousSkillResolveRequest,
+    AutonomousSkillRuntime, AutonomousSkillRuntimeConfig, AutonomousSkillRuntimeLimits,
+    AUTONOMOUS_SKILL_SOURCE_REF, AUTONOMOUS_SKILL_SOURCE_REPO, AUTONOMOUS_SKILL_SOURCE_ROOT,
 };
 pub use skill_tool::{
     decide_skill_tool_access, model_may_discover_skill_source,

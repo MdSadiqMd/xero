@@ -40,9 +40,9 @@ const MAX_TIMEOUT_MS: u64 = 20_000;
 const DEFAULT_DISCOVER_RESULT_LIMIT: usize = 5;
 const MAX_DISCOVER_RESULT_LIMIT: usize = 10;
 const MAX_DISCOVER_QUERY_CHARS: usize = 128;
-const MAX_SKILL_FILES: usize = 32;
+pub(crate) const MAX_SKILL_FILES: usize = 32;
 pub(crate) const MAX_SKILL_FILE_BYTES: usize = 128 * 1024;
-const MAX_TOTAL_SKILL_BYTES: usize = 512 * 1024;
+pub(crate) const MAX_TOTAL_SKILL_BYTES: usize = 512 * 1024;
 pub(crate) const ALLOWED_TEXT_EXTENSIONS: &[&str] = &[
     "md", "txt", "json", "yaml", "yml", "toml", "sh", "bash", "py", "js", "ts", "tsx", "jsx",
     "cjs", "mjs",
@@ -228,11 +228,46 @@ pub struct AutonomousSkillInvocationAsset {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSkillRegistryOperation {
+    Install,
+    Invoke,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousSkillRegistrySuccess {
+    pub operation: AutonomousSkillRegistryOperation,
+    pub skill_id: String,
+    pub name: String,
+    pub description: String,
+    pub user_invocable: Option<bool>,
+    pub source: AutonomousSkillSourceMetadata,
+    pub cache_key: String,
+    pub cache_directory: String,
+    pub cache_status: AutonomousSkillCacheStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousSkillRegistryFailure {
+    pub operation: AutonomousSkillRegistryOperation,
+    pub skill_id: String,
+    pub source: AutonomousSkillSourceMetadata,
+    pub cache_key: String,
+    pub diagnostic: CommandError,
+}
+
+pub trait AutonomousSkillRegistrySink: Send + Sync {
+    fn record_success(&self, event: &AutonomousSkillRegistrySuccess) -> CommandResult<()>;
+    fn record_failure(&self, event: &AutonomousSkillRegistryFailure) -> CommandResult<()>;
+}
+
 #[derive(Clone)]
 pub struct AutonomousSkillRuntime {
     config: AutonomousSkillRuntimeConfig,
     source: Arc<dyn AutonomousSkillSource>,
     cache: Arc<dyn AutonomousSkillCacheStore>,
+    registry: Option<Arc<dyn AutonomousSkillRegistrySink>>,
 }
 
 impl fmt::Debug for AutonomousSkillRuntime {
@@ -242,6 +277,7 @@ impl fmt::Debug for AutonomousSkillRuntime {
             .field("config", &self.config)
             .field("has_source_override", &true)
             .field("has_cache_override", &true)
+            .field("has_registry", &self.registry.is_some())
             .finish()
     }
 }
@@ -275,7 +311,16 @@ impl AutonomousSkillRuntime {
             config,
             source,
             cache,
+            registry: None,
         }
+    }
+
+    pub fn with_installed_skill_registry(
+        mut self,
+        registry: Arc<dyn AutonomousSkillRegistrySink>,
+    ) -> Self {
+        self.registry = Some(registry);
+        self
     }
 
     pub fn config(&self) -> &AutonomousSkillRuntimeConfig {
@@ -397,6 +442,41 @@ impl AutonomousSkillRuntime {
         &self,
         request: AutonomousSkillInstallRequest,
     ) -> CommandResult<AutonomousSkillInstallOutput> {
+        let source_for_failure = validate_source_metadata(&request.source).ok();
+        let result = self.install_inner(request);
+        match &result {
+            Ok(output) => {
+                self.record_registry_success(AutonomousSkillRegistrySuccess {
+                    operation: AutonomousSkillRegistryOperation::Install,
+                    skill_id: output.skill_id.clone(),
+                    name: output.name.clone(),
+                    description: output.description.clone(),
+                    user_invocable: output.user_invocable,
+                    source: output.source.clone(),
+                    cache_key: output.cache_key.clone(),
+                    cache_directory: output.cache_directory.clone(),
+                    cache_status: output.cache_status,
+                })?;
+            }
+            Err(error) => {
+                if let Some(source) = source_for_failure {
+                    self.record_registry_failure(AutonomousSkillRegistryFailure {
+                        operation: AutonomousSkillRegistryOperation::Install,
+                        skill_id: skill_id_for_source_path(&source.path),
+                        cache_key: cache_key_for_source(&source),
+                        source,
+                        diagnostic: error.clone(),
+                    });
+                }
+            }
+        }
+        result
+    }
+
+    fn install_inner(
+        &self,
+        request: AutonomousSkillInstallRequest,
+    ) -> CommandResult<AutonomousSkillInstallOutput> {
         let source = validate_source_metadata(&request.source)?;
         let timeout_ms = normalize_timeout_ms(
             request.timeout_ms,
@@ -473,7 +553,42 @@ impl AutonomousSkillRuntime {
         &self,
         request: AutonomousSkillInvokeRequest,
     ) -> CommandResult<AutonomousSkillInvokeOutput> {
-        let install = self.install(AutonomousSkillInstallRequest {
+        let source_for_failure = validate_source_metadata(&request.source).ok();
+        let result = self.invoke_inner(request);
+        match &result {
+            Ok(output) => {
+                self.record_registry_success(AutonomousSkillRegistrySuccess {
+                    operation: AutonomousSkillRegistryOperation::Invoke,
+                    skill_id: output.skill_id.clone(),
+                    name: output.name.clone(),
+                    description: output.description.clone(),
+                    user_invocable: output.user_invocable,
+                    source: output.source.clone(),
+                    cache_key: output.cache_key.clone(),
+                    cache_directory: output.cache_directory.clone(),
+                    cache_status: output.cache_status,
+                })?;
+            }
+            Err(error) => {
+                if let Some(source) = source_for_failure {
+                    self.record_registry_failure(AutonomousSkillRegistryFailure {
+                        operation: AutonomousSkillRegistryOperation::Invoke,
+                        skill_id: skill_id_for_source_path(&source.path),
+                        cache_key: cache_key_for_source(&source),
+                        source,
+                        diagnostic: error.clone(),
+                    });
+                }
+            }
+        }
+        result
+    }
+
+    fn invoke_inner(
+        &self,
+        request: AutonomousSkillInvokeRequest,
+    ) -> CommandResult<AutonomousSkillInvokeOutput> {
+        let install = self.install_inner(AutonomousSkillInstallRequest {
             source: request.source,
             timeout_ms: request.timeout_ms,
         })?;
@@ -531,6 +646,19 @@ impl AutonomousSkillRuntime {
             skill_markdown,
             supporting_assets,
         })
+    }
+
+    fn record_registry_success(&self, event: AutonomousSkillRegistrySuccess) -> CommandResult<()> {
+        if let Some(registry) = self.registry.as_ref() {
+            registry.record_success(&event)?;
+        }
+        Ok(())
+    }
+
+    fn record_registry_failure(&self, event: AutonomousSkillRegistryFailure) {
+        if let Some(registry) = self.registry.as_ref() {
+            let _ = registry.record_failure(&event);
+        }
     }
 
     fn fetch_install_files(
@@ -751,9 +879,13 @@ fn normalize_timeout_ms(
 }
 
 fn cache_key_for_source(source: &AutonomousSkillSourceMetadata) -> String {
-    let skill_id = source.path.rsplit('/').next().unwrap_or("skill");
+    let skill_id = skill_id_for_source_path(&source.path);
     let digest = sha256_hex(format!("{}:{}", source.repo, source.path).as_bytes());
     format!("{}-{}", skill_id, &digest[..12])
+}
+
+fn skill_id_for_source_path(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or("skill").to_owned()
 }
 
 fn map_cache_error_for_install(error: AutonomousSkillCacheError) -> CommandError {

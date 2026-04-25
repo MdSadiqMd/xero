@@ -1,4 +1,4 @@
-import { Code2, Monitor, Rocket } from "lucide-react"
+import { Monitor, Rocket } from "lucide-react"
 import type { PlatformVariant } from "@/components/cadence/shell"
 import { detectPlatform } from "@/components/cadence/shell"
 import { Button } from "@/components/ui/button"
@@ -30,10 +30,8 @@ export function DevelopmentSection({
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        icon={Code2}
         title="Development"
         description="Developer tooling and preview options. Not visible in production builds."
-        scope="developer"
       />
 
       <div className="rounded-lg border border-border bg-card px-5 py-4">

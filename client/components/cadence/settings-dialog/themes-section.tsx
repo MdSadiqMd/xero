@@ -1,4 +1,4 @@
-import { Check, Moon, Palette, Sun } from "lucide-react"
+import { Check, Moon, Sun } from "lucide-react"
 import { useMemo } from "react"
 import { useTheme } from "@/src/features/theme/theme-provider"
 import type { ThemeDefinition } from "@/src/features/theme/theme-definitions"
@@ -21,10 +21,8 @@ export function ThemesSection() {
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
-        icon={Palette}
         title="Themes"
         description="Pick a palette for the entire app. Editor syntax highlighting and diff rendering follow the selected theme."
-        scope="app-wide"
       />
 
       {dark.length > 0 ? (

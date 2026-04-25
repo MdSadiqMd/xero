@@ -296,25 +296,29 @@ Outcome: Cadence has one shared vocabulary for skills, skill sources, plugin sou
 
 Outcome: Cadence can remember installed skills from multiple source types, not just cache a GitHub skill for one invocation.
 
-- Slice 2.1.1: Add a durable installed-skill registry.
+- [x] Slice 2.1.1: Add a durable installed-skill registry.
   - Scope: persist installed skill records with source identity, resolved metadata, cache key or local location, enabled state, trust state, version/hash, timestamps, and last diagnostic.
   - Acceptance: installed skill records survive app restart and can be listed by project and by global scope; duplicate source records converge instead of creating parallel entries.
   - Verification: project-store tests cover create, update, list, disable, re-enable, remove, and corrupt-record rejection.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_durable_registry` passed 4 tests, and full `cargo test --manifest-path client/src-tauri/Cargo.toml` passed.
 
-- Slice 2.1.2: Register GitHub autonomous skills after install/invoke.
+- [x] Slice 2.1.2: Register GitHub autonomous skills after install/invoke.
   - Scope: connect the existing GitHub autonomous skill runtime to the installed-skill registry so successful install or invoke operations leave a durable record.
   - Acceptance: installing a GitHub-backed skill updates registry state and preserves existing cache/lifecycle behavior.
   - Verification: autonomous skill runtime tests assert registry updates for cache hit, cache miss, refresh, and failed install paths.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_durable_registry` passed cache miss, hit, refresh, invoke, and failed-install registry assertions; `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_runtime` passed 7 tests.
 
-- Slice 2.1.3: Add local and project skill directory scanning.
+- [x] Slice 2.1.3: Add local and project skill directory scanning.
   - Scope: scan configured local skill directories and project skill directories for valid `SKILL.md` documents and supported assets using the same validation limits as cached autonomous skills.
   - Acceptance: local/project skills appear as discoverable candidates, invalid skills produce typed diagnostics, and scanning never follows paths outside the declared source root.
   - Verification: filesystem fixture tests cover valid skill discovery, missing frontmatter, duplicate ids, oversized files, unsupported assets, and path traversal attempts.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_durable_registry` passed filesystem fixture coverage for valid local/project discovery, missing frontmatter, duplicate ids, oversized files, unsupported assets, and symlink/path escape rejection.
 
-- Slice 2.1.4: Add bundled skill discovery.
+- [x] Slice 2.1.4: Add bundled skill discovery.
   - Scope: define Cadence-owned bundled skill roots and expose bundled skills through the same registry/discovery path as local and GitHub skills.
   - Acceptance: bundled skills can be discovered and invoked without network access; bundled skill metadata includes a Cadence-controlled version/hash.
   - Verification: unit tests run discovery against fixture bundled skills and assert deterministic ordering.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_durable_registry` passed bundled discovery ordering and offline invocation-context loading assertions.
 
 ##### Phase 2: Expose Skills To The Model Loop
 
