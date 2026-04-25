@@ -39,10 +39,6 @@ type SetState<T> = Dispatch<SetStateAction<T>>
 type RuntimeSessionRecords = Record<string, RuntimeSessionView>
 type RuntimeRunRecords = Record<string, RuntimeRunView>
 type AutonomousRunRecords = Record<string, NonNullable<ProjectDetailView['autonomousRun']>>
-type AutonomousUnitRecords = Record<string, NonNullable<ProjectDetailView['autonomousUnit']>>
-type AutonomousAttemptRecords = Record<string, NonNullable<ProjectDetailView['autonomousAttempt']>>
-type AutonomousHistoryRecords = Record<string, ProjectDetailView['autonomousHistory']>
-type AutonomousRecentArtifactRecords = Record<string, ProjectDetailView['autonomousRecentArtifacts']>
 type NotificationSyncSummaryRecords = Record<string, SyncNotificationAdaptersResponseDto | null>
 type NotificationRouteRecords = Record<string, NotificationRouteDto[]>
 type NotificationRouteErrorRecords = Record<string, OperatorActionErrorView | null>
@@ -88,18 +84,10 @@ export function applyRuntimeToProjectList(project: ProjectListItem, runtimeSessi
 export function applyAutonomousRunState(
   project: ProjectDetailView,
   autonomousRun: ProjectDetailView['autonomousRun'],
-  autonomousUnit: ProjectDetailView['autonomousUnit'],
-  autonomousAttempt: ProjectDetailView['autonomousAttempt'],
-  autonomousHistory: ProjectDetailView['autonomousHistory'],
-  autonomousRecentArtifacts: ProjectDetailView['autonomousRecentArtifacts'],
 ): ProjectDetailView {
   return {
     ...project,
     autonomousRun: autonomousRun ?? null,
-    autonomousUnit: autonomousUnit ?? null,
-    autonomousAttempt: autonomousAttempt ?? null,
-    autonomousHistory,
-    autonomousRecentArtifacts,
   }
 }
 
@@ -245,10 +233,6 @@ interface ProjectLoadRefs {
   runtimeSessionsRef: MutableRefObject<RuntimeSessionRecords>
   runtimeRunsRef: MutableRefObject<RuntimeRunRecords>
   autonomousRunsRef: MutableRefObject<AutonomousRunRecords>
-  autonomousUnitsRef: MutableRefObject<AutonomousUnitRecords>
-  autonomousAttemptsRef: MutableRefObject<AutonomousAttemptRecords>
-  autonomousHistoriesRef: MutableRefObject<AutonomousHistoryRecords>
-  autonomousRecentArtifactsRef: MutableRefObject<AutonomousRecentArtifactRecords>
   notificationSyncSummariesRef: MutableRefObject<NotificationSyncSummaryRecords>
   notificationDispatchesRef: MutableRefObject<Record<string, NotificationDispatchDto[]>>
   notificationRoutesRef: MutableRefObject<NotificationRouteRecords>
@@ -262,10 +246,6 @@ interface ProjectLoadSetters {
   setRuntimeSessions: SetState<RuntimeSessionRecords>
   setRuntimeRuns: SetState<RuntimeRunRecords>
   setAutonomousRuns: SetState<AutonomousRunRecords>
-  setAutonomousUnits: SetState<AutonomousUnitRecords>
-  setAutonomousAttempts: SetState<AutonomousAttemptRecords>
-  setAutonomousHistories: SetState<AutonomousHistoryRecords>
-  setAutonomousRecentArtifacts: SetState<AutonomousRecentArtifactRecords>
   setNotificationSyncSummaries: SetState<NotificationSyncSummaryRecords>
   setNotificationSyncErrors: SetState<NotificationRouteErrorRecords>
   setRuntimeLoadErrors: SetState<RuntimeLoadErrorRecords>
@@ -300,20 +280,13 @@ interface ProjectLoadArgs {
 function createAutonomousFallbackInspection(projectId: string, refs: ProjectLoadRefs): AutonomousInspection {
   return {
     autonomousRun: refs.autonomousRunsRef.current[projectId] ?? null,
-    autonomousUnit: refs.autonomousUnitsRef.current[projectId] ?? null,
-    autonomousAttempt: refs.autonomousAttemptsRef.current[projectId] ?? null,
-    autonomousHistory: refs.autonomousHistoriesRef.current[projectId] ?? [],
-    autonomousRecentArtifacts: refs.autonomousRecentArtifactsRef.current[projectId] ?? [],
   }
 }
 
 function applyAutonomousInspectionRecords(
   projectId: string,
   inspection: AutonomousInspection,
-  setters: Pick<
-    ProjectLoadSetters,
-    'setAutonomousRuns' | 'setAutonomousUnits' | 'setAutonomousAttempts' | 'setAutonomousHistories' | 'setAutonomousRecentArtifacts'
-  >,
+  setters: Pick<ProjectLoadSetters, 'setAutonomousRuns'>,
   options: { allowRemovals: boolean },
 ) {
   const { allowRemovals } = options
@@ -330,28 +303,6 @@ function applyAutonomousInspectionRecords(
         [projectId]: nextRun,
       }
     })
-    setters.setAutonomousUnits((currentUnits) => {
-      const nextUnit = inspection.autonomousUnit
-      if (!nextUnit) {
-        return removeProjectRecord(currentUnits, projectId)
-      }
-
-      return {
-        ...currentUnits,
-        [projectId]: nextUnit,
-      }
-    })
-    setters.setAutonomousAttempts((currentAttempts) => {
-      const nextAttempt = inspection.autonomousAttempt
-      if (!nextAttempt) {
-        return removeProjectRecord(currentAttempts, projectId)
-      }
-
-      return {
-        ...currentAttempts,
-        [projectId]: nextAttempt,
-      }
-    })
   } else {
     const nextRun = inspection.autonomousRun
     if (nextRun) {
@@ -360,32 +311,7 @@ function applyAutonomousInspectionRecords(
         [projectId]: nextRun,
       }))
     }
-
-    const nextUnit = inspection.autonomousUnit
-    if (nextUnit) {
-      setters.setAutonomousUnits((currentUnits) => ({
-        ...currentUnits,
-        [projectId]: nextUnit,
-      }))
-    }
-
-    const nextAttempt = inspection.autonomousAttempt
-    if (nextAttempt) {
-      setters.setAutonomousAttempts((currentAttempts) => ({
-        ...currentAttempts,
-        [projectId]: nextAttempt,
-      }))
-    }
   }
-
-  setters.setAutonomousHistories((currentHistories) => ({
-    ...currentHistories,
-    [projectId]: inspection.autonomousHistory,
-  }))
-  setters.setAutonomousRecentArtifacts((currentArtifacts) => ({
-    ...currentArtifacts,
-    [projectId]: inspection.autonomousRecentArtifacts,
-  }))
 }
 
 export async function loadProjectState({
@@ -565,21 +491,12 @@ export async function loadProjectState({
     const cachedRuntime = refs.runtimeSessionsRef.current[projectId] ?? null
     const cachedRuntimeRun = refs.runtimeRunsRef.current[projectId] ?? null
     const cachedAutonomousRun = refs.autonomousRunsRef.current[projectId] ?? snapshotProject.autonomousRun ?? null
-    const cachedAutonomousUnit = refs.autonomousUnitsRef.current[projectId] ?? snapshotProject.autonomousUnit ?? null
-    const cachedAutonomousAttempt = refs.autonomousAttemptsRef.current[projectId] ?? snapshotProject.autonomousAttempt ?? null
-    const cachedAutonomousHistory = refs.autonomousHistoriesRef.current[projectId] ?? snapshotProject.autonomousHistory
-    const cachedAutonomousRecentArtifacts =
-      refs.autonomousRecentArtifactsRef.current[projectId] ?? snapshotProject.autonomousRecentArtifacts
     const nextProject = applyAutonomousRunState(
       applyRuntimeRun(
         applyRuntimeSession(applyRepositoryStatus(snapshotProject, status), cachedRuntime),
         cachedRuntimeRun,
       ),
       cachedAutonomousRun,
-      cachedAutonomousUnit,
-      cachedAutonomousAttempt,
-      cachedAutonomousHistory,
-      cachedAutonomousRecentArtifacts,
     )
     const nextSummary = mapProjectSummary(snapshotResponse.project)
 
@@ -660,32 +577,12 @@ export async function loadProjectState({
     const finalAutonomousRun = autonomousRunResult.ok
       ? autonomousRunResult.inspection.autonomousRun
       : autonomousRunResult.inspection.autonomousRun ?? cachedAutonomousRun
-    const finalAutonomousUnit = autonomousRunResult.ok
-      ? autonomousRunResult.inspection.autonomousUnit
-      : autonomousRunResult.inspection.autonomousUnit ?? cachedAutonomousUnit
-    const finalAutonomousAttempt = autonomousRunResult.ok
-      ? autonomousRunResult.inspection.autonomousAttempt
-      : autonomousRunResult.inspection.autonomousAttempt ?? cachedAutonomousAttempt
-    const finalAutonomousHistory = autonomousRunResult.ok
-      ? autonomousRunResult.inspection.autonomousHistory
-      : autonomousRunResult.inspection.autonomousHistory.length > 0
-        ? autonomousRunResult.inspection.autonomousHistory
-        : cachedAutonomousHistory
-    const finalAutonomousRecentArtifacts = autonomousRunResult.ok
-      ? autonomousRunResult.inspection.autonomousRecentArtifacts
-      : autonomousRunResult.inspection.autonomousRecentArtifacts.length > 0
-        ? autonomousRunResult.inspection.autonomousRecentArtifacts
-        : cachedAutonomousRecentArtifacts
     const finalizedProject = applyAutonomousRunState(
       applyRuntimeRun(
         finalRuntime ? applyRuntimeSession(nextProject, finalRuntime) : nextProject,
         finalRuntimeRun,
       ),
       finalAutonomousRun,
-      finalAutonomousUnit,
-      finalAutonomousAttempt,
-      finalAutonomousHistory,
-      finalAutonomousRecentArtifacts,
     )
     setters.setActiveProject((currentProject) => {
       if (!currentProject || currentProject.id !== projectId) {

@@ -1,8 +1,6 @@
-import type { Phase, PhaseStatus, PhaseStep } from '@/components/cadence/data'
+import type { Phase } from '@/components/cadence/data'
 import { z } from 'zod'
 import {
-  PHASE_STEPS,
-  STEP_INDEX,
   changeKindSchema,
   isoTimestampSchema,
   nonEmptyOptionalTextSchema,
@@ -10,7 +8,6 @@ import {
   normalizeText,
   nullableTextSchema,
   phaseStatusSchema,
-  phaseStepSchema,
   safePercent,
 } from './shared'
 
@@ -31,7 +28,7 @@ export const phaseSummarySchema = z.object({
   name: z.string().min(1),
   description: z.string(),
   status: phaseStatusSchema,
-  currentStep: phaseStepSchema.nullable().optional(),
+  currentStep: nullableTextSchema,
   taskCount: z.number().int().nonnegative(),
   completedTasks: z.number().int().nonnegative(),
   summary: nullableTextSchema,
@@ -362,54 +359,6 @@ export interface RepositoryDiffView {
   baseRevisionLabel: string
 }
 
-function createStepStatuses(
-  status: PhaseStatus,
-  currentStep: PhaseStep | null,
-): Record<PhaseStep, 'complete' | 'active' | 'pending' | 'skipped'> {
-  if (status === 'complete') {
-    return {
-      discuss: 'complete',
-      plan: 'complete',
-      execute: 'complete',
-      verify: 'complete',
-      ship: 'complete',
-    }
-  }
-
-  if (!currentStep) {
-    return {
-      discuss: 'pending',
-      plan: 'pending',
-      execute: 'pending',
-      verify: 'pending',
-      ship: 'pending',
-    }
-  }
-
-  const activeIndex = STEP_INDEX.get(currentStep) ?? 0
-
-  return PHASE_STEPS.reduce<Record<PhaseStep, 'complete' | 'active' | 'pending' | 'skipped'>>(
-    (acc, step, index) => {
-      if (index < activeIndex) {
-        acc[step] = 'complete'
-      } else if (index === activeIndex) {
-        acc[step] = 'active'
-      } else {
-        acc[step] = 'pending'
-      }
-
-      return acc
-    },
-    {
-      discuss: 'pending',
-      plan: 'pending',
-      execute: 'pending',
-      verify: 'pending',
-      ship: 'pending',
-    },
-  )
-}
-
 export function mapProjectSummary(dto: ProjectSummaryDto): ProjectListItem {
   const branch = normalizeOptionalText(dto.branch)
   const runtime = normalizeOptionalText(dto.runtime)
@@ -456,8 +405,7 @@ export function mapPhase(phase: PhaseSummaryDto): Phase {
     name: normalizeText(phase.name, `Phase ${phase.id}`),
     description: normalizeText(phase.description, 'No phase description provided.'),
     status: phase.status,
-    currentStep: phase.currentStep ?? null,
-    stepStatuses: createStepStatuses(phase.status, phase.currentStep ?? null),
+    currentStep: normalizeOptionalText(phase.currentStep),
     taskCount,
     completedTasks,
     summary: normalizeOptionalText(phase.summary) ?? undefined,
@@ -522,7 +470,7 @@ export function mapRepositoryDiff(diff: RepositoryDiffResponseDto): RepositoryDi
   }
 }
 
-export function applyProjectSummary<T extends { runtimeSession?: unknown; runtimeRun?: unknown; autonomousRun?: unknown; autonomousUnit?: unknown }>(
+export function applyProjectSummary<T extends { runtimeSession?: unknown; runtimeRun?: unknown; autonomousRun?: unknown }>(
   project: T & {
     phases: Phase[]
     repository: unknown
@@ -539,7 +487,6 @@ export function applyProjectSummary<T extends { runtimeSession?: unknown; runtim
     runtimeSession: project.runtimeSession ?? null,
     runtimeRun: project.runtimeRun ?? null,
     autonomousRun: project.autonomousRun ?? null,
-    autonomousUnit: project.autonomousUnit ?? null,
   }
 }
 

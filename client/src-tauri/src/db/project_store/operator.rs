@@ -4,9 +4,8 @@ use rusqlite::{params, Connection, Error as SqlError, ErrorCode};
 
 use crate::{
     commands::{
-        CommandError, OperatorApprovalDto, OperatorApprovalStatus, PhaseStatus, PhaseStep,
-        ResumeHistoryEntryDto, ResumeHistoryStatus, VerificationRecordDto,
-        VerificationRecordStatus,
+        CommandError, OperatorApprovalDto, OperatorApprovalStatus, ResumeHistoryEntryDto,
+        ResumeHistoryStatus, VerificationRecordDto, VerificationRecordStatus,
     },
     db::database_path_for_repo,
 };
@@ -619,7 +618,6 @@ pub fn record_runtime_operator_resume_outcome(
     Ok(ResumeOperatorRunRecord {
         approval_request,
         resume_entry,
-        automatic_dispatch: None,
     })
 }
 
@@ -1920,27 +1918,6 @@ pub(crate) fn decode_optional_non_empty_text(
             format!("Field `{field}` must be null or a non-empty string."),
         )),
         other => Ok(other),
-    }
-}
-
-pub(crate) fn parse_phase_status(value: &str) -> Result<PhaseStatus, String> {
-    match value {
-        "complete" => Ok(PhaseStatus::Complete),
-        "active" => Ok(PhaseStatus::Active),
-        "pending" => Ok(PhaseStatus::Pending),
-        "blocked" => Ok(PhaseStatus::Blocked),
-        other => Err(format!("Unknown phase status `{other}`.")),
-    }
-}
-
-pub(crate) fn parse_phase_step(value: &str) -> Result<PhaseStep, String> {
-    match value {
-        "discuss" => Ok(PhaseStep::Discuss),
-        "plan" => Ok(PhaseStep::Plan),
-        "execute" => Ok(PhaseStep::Execute),
-        "verify" => Ok(PhaseStep::Verify),
-        "ship" => Ok(PhaseStep::Ship),
-        other => Err(format!("Unknown phase current_step `{other}`.")),
     }
 }
 

@@ -1,9 +1,4 @@
 import {
-  createEmptyPlanningLifecycle,
-  type PlanningLifecycleView,
-} from '@/src/lib/cadence-model/workflow'
-import { deriveAutonomousWorkflowContext } from '@/src/lib/cadence-model/autonomous'
-import {
   type NotificationRouteDto,
   type SyncNotificationAdaptersResponseDto,
 } from '@/src/lib/cadence-model/notifications'
@@ -33,7 +28,6 @@ import {
   type ProviderProfilesDto,
 } from '@/src/lib/cadence-model'
 import { projectCheckpointControlLoops } from '../agent-runtime-projections/checkpoint-control-loops'
-import { projectRecentAutonomousUnits } from '../agent-runtime-projections/recent-autonomous-units'
 import {
   composeAgentTrustSnapshot,
   createUnavailableTrustSnapshot,
@@ -116,10 +110,6 @@ export interface BuildAgentViewDependencies {
   activeProviderModelCatalogLoadError: OperatorActionErrorView | null
   runtimeRun: RuntimeRunView | null
   autonomousRun: ProjectDetailView['autonomousRun']
-  autonomousUnit: ProjectDetailView['autonomousUnit']
-  autonomousAttempt: ProjectDetailView['autonomousAttempt']
-  autonomousHistory: ProjectDetailView['autonomousHistory']
-  autonomousRecentArtifacts: ProjectDetailView['autonomousRecentArtifacts']
   runtimeErrorMessage: string | null
   runtimeRunErrorMessage: string | null
   autonomousRunErrorMessage: string | null
@@ -155,10 +145,6 @@ export interface BuildExecutionViewDependencies {
   activePhase: Phase | null
   repositoryStatus: RepositoryStatusView | null
   operatorActionError: OperatorActionErrorView | null
-}
-
-function getPlanningLifecycleView(project: ProjectDetailView): PlanningLifecycleView {
-  return project.lifecycle ?? createEmptyPlanningLifecycle()
 }
 
 function getSelectedProviderProjection(
@@ -593,7 +579,6 @@ export function buildWorkflowView({
     return null
   }
 
-  const lifecycle = getPlanningLifecycleView(project)
   const { selectedProvider, providerMismatch, providerMismatchCopy } = getSelectedProviderProjection(
     providerProfiles,
     runtimeSettings,
@@ -603,11 +588,6 @@ export function buildWorkflowView({
   return {
     project,
     activePhase,
-    lifecycle,
-    activeLifecycleStage: lifecycle.activeStage,
-    lifecyclePercent: lifecycle.percentComplete,
-    hasLifecycle: lifecycle.hasStages,
-    actionRequiredLifecycleCount: lifecycle.actionRequiredCount,
     overallPercent: project.phaseProgressPercent,
     hasPhases: project.phases.length > 0,
     runtimeSession,
@@ -637,10 +617,6 @@ export function buildAgentView({
   activeProviderModelCatalogLoadError,
   runtimeRun,
   autonomousRun,
-  autonomousUnit,
-  autonomousAttempt,
-  autonomousHistory,
-  autonomousRecentArtifacts,
   runtimeErrorMessage,
   runtimeRunErrorMessage,
   autonomousRunErrorMessage,
@@ -702,27 +678,11 @@ export function buildAgentView({
     })
   }
 
-  const autonomousWorkflowContext = deriveAutonomousWorkflowContext({
-    lifecycle: project.lifecycle,
-    handoffPackages: project.handoffPackages,
-    approvalRequests: project.approvalRequests,
-    autonomousUnit: autonomousUnit ?? null,
-    autonomousAttempt: autonomousAttempt ?? null,
-  })
-  const recentAutonomousUnits = projectRecentAutonomousUnits({
-    autonomousHistory,
-    autonomousRecentArtifacts,
-    lifecycle: project.lifecycle,
-    handoffPackages: project.handoffPackages,
-    approvalRequests: project.approvalRequests,
-  })
   const checkpointControlLoop = projectCheckpointControlLoops({
     actionRequiredItems: runtimeStream?.actionRequired ?? [],
     approvalRequests: project.approvalRequests,
     resumeHistory: project.resumeHistory,
     notificationBroker: project.notificationBroker,
-    autonomousHistory,
-    autonomousRecentArtifacts,
   })
   const { selectedProvider, providerMismatch, providerMismatchCopy } = getSelectedProviderProjection(
     providerProfiles,
@@ -789,12 +749,6 @@ export function buildAgentView({
       providerMismatchRecoveryCopy: providerMismatchCopy?.sessionRecoveryCopy ?? null,
       runtimeRun,
       autonomousRun,
-      autonomousUnit,
-      autonomousAttempt,
-      autonomousWorkflowContext,
-      autonomousHistory,
-      autonomousRecentArtifacts,
-      recentAutonomousUnits,
       checkpointControlLoop,
       runtimeErrorMessage,
       runtimeRunErrorMessage,

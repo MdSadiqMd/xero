@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    autonomous::{AutonomousRunDto, AutonomousUnitDto},
+    autonomous::AutonomousRunDto,
     runtime::AgentSessionDto,
     workflow::{
-        OperatorApprovalDto, PhaseSummaryDto, PlanningLifecycleProjectionDto,
-        ResumeHistoryEntryDto, VerificationRecordDto, WorkflowHandoffPackageDto,
+        OperatorApprovalDto, PhaseSummaryDto, ResumeHistoryEntryDto, VerificationRecordDto,
     },
 };
 
@@ -61,9 +60,6 @@ pub const RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND: &str =
 pub const SUBMIT_NOTIFICATION_REPLY_COMMAND: &str = "submit_notification_reply";
 pub const SYNC_NOTIFICATION_ADAPTERS_COMMAND: &str = "sync_notification_adapters";
 pub const UPSERT_RUNTIME_SETTINGS_COMMAND: &str = "upsert_runtime_settings";
-pub const UPSERT_WORKFLOW_GRAPH_COMMAND: &str = "upsert_workflow_graph";
-pub const APPLY_WORKFLOW_TRANSITION_COMMAND: &str = "apply_workflow_transition";
-
 pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     IMPORT_REPOSITORY_COMMAND,
     LIST_PROJECTS_COMMAND,
@@ -115,8 +111,6 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     SUBMIT_NOTIFICATION_REPLY_COMMAND,
     SYNC_NOTIFICATION_ADAPTERS_COMMAND,
     UPSERT_RUNTIME_SETTINGS_COMMAND,
-    UPSERT_WORKFLOW_GRAPH_COMMAND,
-    APPLY_WORKFLOW_TRANSITION_COMMAND,
 ];
 
 pub const PROJECT_UPDATED_EVENT: &str = "project:updated";
@@ -296,18 +290,13 @@ pub struct ProjectSnapshotResponseDto {
     pub project: ProjectSummaryDto,
     pub repository: Option<RepositorySummaryDto>,
     pub phases: Vec<PhaseSummaryDto>,
-    pub lifecycle: PlanningLifecycleProjectionDto,
     pub approval_requests: Vec<OperatorApprovalDto>,
     pub verification_records: Vec<VerificationRecordDto>,
     pub resume_history: Vec<ResumeHistoryEntryDto>,
     #[serde(default)]
-    pub handoff_packages: Vec<WorkflowHandoffPackageDto>,
-    #[serde(default)]
     pub agent_sessions: Vec<AgentSessionDto>,
     #[serde(default)]
     pub autonomous_run: Option<AutonomousRunDto>,
-    #[serde(default)]
-    pub autonomous_unit: Option<AutonomousUnitDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

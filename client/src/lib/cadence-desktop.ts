@@ -180,16 +180,6 @@ import {
   type RuntimeStreamItemKindDto,
   type SubscribeRuntimeStreamResponseDto,
 } from '@/src/lib/cadence-model/runtime-stream'
-import {
-  applyWorkflowTransitionRequestSchema,
-  applyWorkflowTransitionResponseSchema,
-  upsertWorkflowGraphRequestSchema,
-  upsertWorkflowGraphResponseSchema,
-  type ApplyWorkflowTransitionRequestDto,
-  type ApplyWorkflowTransitionResponseDto,
-  type UpsertWorkflowGraphRequestDto,
-  type UpsertWorkflowGraphResponseDto,
-} from '@/src/lib/cadence-model/workflow'
 import { projectSnapshotResponseSchema, type ProjectSnapshotResponseDto } from '@/src/lib/cadence-model'
 
 const COMMANDS = {
@@ -252,8 +242,6 @@ const COMMANDS = {
   submitNotificationReply: 'submit_notification_reply',
   syncNotificationAdapters: 'sync_notification_adapters',
   subscribeRuntimeStream: 'subscribe_runtime_stream',
-  upsertWorkflowGraph: 'upsert_workflow_graph',
-  applyWorkflowTransition: 'apply_workflow_transition',
   browserShow: 'browser_show',
   browserResize: 'browser_resize',
   browserHide: 'browser_hide',
@@ -524,8 +512,6 @@ export interface CadenceDesktopAdapter {
   ): Promise<RecordNotificationDispatchOutcomeResponseDto>
   submitNotificationReply(request: SubmitNotificationReplyRequestDto): Promise<SubmitNotificationReplyResponseDto>
   syncNotificationAdapters(projectId: string): Promise<SyncNotificationAdaptersResponseDto>
-  upsertWorkflowGraph(request: UpsertWorkflowGraphRequestDto): Promise<UpsertWorkflowGraphResponseDto>
-  applyWorkflowTransition(request: ApplyWorkflowTransitionRequestDto): Promise<ApplyWorkflowTransitionResponseDto>
   browserEval(js: string, options?: { timeoutMs?: number }): Promise<unknown>
   browserCurrentUrl(): Promise<string | null>
   browserScreenshot(): Promise<string>
@@ -1394,20 +1380,6 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     const request = syncNotificationAdaptersRequestSchema.parse({ projectId })
     return invokeTyped(COMMANDS.syncNotificationAdapters, syncNotificationAdaptersResponseSchema, {
       request,
-    })
-  },
-
-  upsertWorkflowGraph(request) {
-    const parsedRequest = upsertWorkflowGraphRequestSchema.parse(request)
-    return invokeTyped(COMMANDS.upsertWorkflowGraph, upsertWorkflowGraphResponseSchema, {
-      request: parsedRequest,
-    })
-  },
-
-  applyWorkflowTransition(request) {
-    const parsedRequest = applyWorkflowTransitionRequestSchema.parse(request)
-    return invokeTyped(COMMANDS.applyWorkflowTransition, applyWorkflowTransitionResponseSchema, {
-      request: parsedRequest,
     })
   },
 

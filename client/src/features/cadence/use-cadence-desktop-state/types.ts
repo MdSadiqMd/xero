@@ -1,6 +1,5 @@
 import type { CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import type {
-  AutonomousWorkflowContextView,
   CreateProjectEntryRequestDto,
   CreateProjectEntryResponseDto,
   DeleteProjectEntryResponseDto,
@@ -13,8 +12,6 @@ import type {
   NotificationRouteKindDto,
   OperatorApprovalView,
   Phase,
-  PlanningLifecycleStageView,
-  PlanningLifecycleView,
   ProjectDetailView,
   ProjectListItem,
   ProviderModelCatalogDto,
@@ -59,7 +56,6 @@ import type {
 } from '@/src/lib/cadence-model'
 import type {
   CheckpointControlLoopProjectionView,
-  RecentAutonomousUnitsProjectionView,
 } from '../agent-runtime-projections'
 import type { SelectedRuntimeProviderSource } from './runtime-provider'
 
@@ -245,11 +241,6 @@ export interface DiffScopeSummary {
 export interface WorkflowPaneView {
   project: ProjectDetailView
   activePhase: Phase | null
-  lifecycle: PlanningLifecycleView
-  activeLifecycleStage: PlanningLifecycleStageView | null
-  lifecyclePercent: number
-  hasLifecycle: boolean
-  actionRequiredLifecycleCount: number
   overallPercent: number
   hasPhases: boolean
   runtimeSession?: RuntimeSessionView | null
@@ -298,12 +289,6 @@ export interface AgentPaneView {
   providerMismatchRecoveryCopy?: string | null
   runtimeRun?: RuntimeRunView | null
   autonomousRun?: ProjectDetailView['autonomousRun']
-  autonomousUnit?: ProjectDetailView['autonomousUnit']
-  autonomousAttempt?: ProjectDetailView['autonomousAttempt']
-  autonomousWorkflowContext?: AutonomousWorkflowContextView | null
-  autonomousHistory: ProjectDetailView['autonomousHistory']
-  autonomousRecentArtifacts: ProjectDetailView['autonomousRecentArtifacts']
-  recentAutonomousUnits?: RecentAutonomousUnitsProjectionView
   checkpointControlLoop?: CheckpointControlLoopProjectionView
   runtimeErrorMessage?: string | null
   runtimeRunErrorMessage?: string | null

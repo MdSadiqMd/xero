@@ -4,7 +4,6 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::{
     commands::{
-        map_workflow_automatic_dispatch_outcome,
         runtime_support::{
             emit_project_updated, emit_runtime_run_updated, resolve_project_root,
             runtime_run_dto_from_snapshot, DEFAULT_RUNTIME_RUN_CONTROL_TIMEOUT,
@@ -58,9 +57,6 @@ pub fn resume_operator_run<R: Runtime>(
     Ok(ResumeOperatorRunResponseDto {
         approval_request: resumed.approval_request,
         resume_entry: resumed.resume_entry,
-        automatic_dispatch: resumed
-            .automatic_dispatch
-            .map(map_workflow_automatic_dispatch_outcome),
     })
 }
 
@@ -145,9 +141,6 @@ fn resume_runtime_operator_run<R: Runtime>(
             Ok(ResumeOperatorRunResponseDto {
                 approval_request: resumed.approval_request,
                 resume_entry: resumed.resume_entry,
-                automatic_dispatch: resumed
-                    .automatic_dispatch
-                    .map(map_workflow_automatic_dispatch_outcome),
             })
         }
         Err(error) => {

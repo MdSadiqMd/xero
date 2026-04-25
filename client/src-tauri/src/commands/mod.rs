@@ -1,6 +1,5 @@
 pub mod agent_session;
 pub mod agent_task;
-pub mod apply_workflow_transition;
 pub mod browser;
 pub mod cancel_autonomous_run;
 pub mod emulator;
@@ -42,7 +41,6 @@ pub mod upsert_mcp_server;
 pub mod upsert_notification_route;
 pub mod upsert_notification_route_credentials;
 pub mod upsert_runtime_settings;
-pub mod upsert_workflow_graph;
 
 mod contracts;
 pub(crate) mod runtime_support;
@@ -55,7 +53,6 @@ pub use agent_task::{
     cancel_agent_run, get_agent_run, list_agent_runs, resume_agent_run, send_agent_message,
     start_agent_task, subscribe_agent_stream,
 };
-pub use apply_workflow_transition::apply_workflow_transition;
 pub use browser::{
     browser_back, browser_click, browser_cookies_get, browser_cookies_set, browser_current_url,
     browser_eval, browser_forward, browser_hide, browser_history_state, browser_internal_event,
@@ -136,7 +133,6 @@ pub use upsert_mcp_server::upsert_mcp_server;
 pub use upsert_notification_route::upsert_notification_route;
 pub use upsert_notification_route_credentials::upsert_notification_route_credentials;
 pub use upsert_runtime_settings::upsert_runtime_settings;
-pub use upsert_workflow_graph::upsert_workflow_graph;
 
 pub use contracts::{
     agent::*, autonomous::*, error::*, mcp::*, notifications::*, runtime::*, surface::*,
@@ -149,9 +145,5 @@ pub(crate) use contracts::{
         map_notification_dispatch_record, map_notification_reply_claim_record,
         map_notification_route_credential_readiness, map_notification_route_record,
         parse_notification_route_kind,
-    },
-    workflow::{
-        map_workflow_automatic_dispatch_outcome, map_workflow_handoff_package_record,
-        map_workflow_transition_event_record,
     },
 };

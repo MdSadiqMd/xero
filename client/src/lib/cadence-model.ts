@@ -31,23 +31,9 @@ import {
   type NotificationDispatchDto,
 } from './cadence-model/notifications'
 import {
-  mapPlanningLifecycle,
-  mapWorkflowHandoffPackage,
-  planningLifecycleProjectionSchema,
-  workflowHandoffPackageSchema,
-  type PlanningLifecycleView,
-  type WorkflowHandoffPackageView,
-} from './cadence-model/workflow'
-import {
   autonomousRunSchema,
-  autonomousUnitSchema,
   mapAutonomousRun,
-  mapAutonomousUnit,
   type AutonomousRunView,
-  type AutonomousUnitArtifactView,
-  type AutonomousUnitAttemptView,
-  type AutonomousUnitHistoryEntryView,
-  type AutonomousUnitView,
 } from './cadence-model/autonomous'
 import {
   agentSessionSchema,
@@ -58,7 +44,7 @@ import {
   type RuntimeSessionView,
 } from './cadence-model/runtime'
 
-export type { Phase, PhaseStatus, PhaseStep, Project } from '@/components/cadence/data'
+export type { Phase, PhaseStatus, Project } from '@/components/cadence/data'
 export {
   browserComputerUseActionStatusSchema,
   browserComputerUseSurfaceSchema,
@@ -79,7 +65,6 @@ export type {
 export * from './cadence-model/project'
 export * from './cadence-model/operator-actions'
 export * from './cadence-model/notifications'
-export * from './cadence-model/workflow'
 export * from './cadence-model/runtime'
 export * from './cadence-model/provider-profiles'
 export * from './cadence-model/provider-models'
@@ -93,14 +78,11 @@ export const projectSnapshotResponseSchema = z
     project: projectSummarySchema,
     repository: repositorySummarySchema.nullable(),
     phases: z.array(phaseSummarySchema),
-    lifecycle: planningLifecycleProjectionSchema,
     approvalRequests: z.array(operatorApprovalSchema),
     verificationRecords: z.array(verificationRecordSchema),
     resumeHistory: z.array(resumeHistoryEntrySchema),
-    handoffPackages: z.array(workflowHandoffPackageSchema).optional(),
     agentSessions: z.array(agentSessionSchema),
     autonomousRun: z.lazy(() => autonomousRunSchema).nullable().optional(),
-    autonomousUnit: z.lazy(() => autonomousUnitSchema).nullable().optional(),
     notificationDispatches: z.array(notificationDispatchSchema).optional(),
     notificationReplyClaims: z.array(notificationReplyClaimSchema).optional(),
   })
@@ -112,24 +94,6 @@ export const projectSnapshotResponseSchema = z
         message: 'Autonomous run project id must match the selected project snapshot id.',
       })
     }
-
-    if (snapshot.autonomousUnit && snapshot.autonomousUnit.projectId !== snapshot.project.id) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['autonomousUnit', 'projectId'],
-        message: 'Autonomous unit project id must match the selected project snapshot id.',
-      })
-    }
-
-    if (snapshot.autonomousRun && snapshot.autonomousUnit) {
-      if (snapshot.autonomousUnit.runId !== snapshot.autonomousRun.runId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['autonomousUnit', 'runId'],
-          message: 'Autonomous unit run id must match the active autonomous run id.',
-        })
-      }
-    }
   })
 
 export type ProjectSnapshotResponseDto = z.infer<typeof projectSnapshotResponseSchema>
@@ -138,7 +102,6 @@ export interface ProjectDetailView extends Project {
   branchLabel: string
   runtimeLabel: string
   phaseProgressPercent: number
-  lifecycle: PlanningLifecycleView
   repository: RepositoryView | null
   repositoryStatus: RepositoryStatusView | null
   approvalRequests: OperatorApprovalView[]
@@ -146,7 +109,6 @@ export interface ProjectDetailView extends Project {
   latestDecisionOutcome: OperatorDecisionOutcomeView | null
   verificationRecords: VerificationRecordView[]
   resumeHistory: ResumeHistoryEntryView[]
-  handoffPackages: WorkflowHandoffPackageView[]
   agentSessions: AgentSessionView[]
   selectedAgentSession: AgentSessionView | null
   selectedAgentSessionId: string
@@ -154,10 +116,6 @@ export interface ProjectDetailView extends Project {
   runtimeSession?: RuntimeSessionView | null
   runtimeRun?: RuntimeRunView | null
   autonomousRun?: AutonomousRunView | null
-  autonomousUnit?: AutonomousUnitView | null
-  autonomousAttempt?: AutonomousUnitAttemptView | null
-  autonomousHistory: AutonomousUnitHistoryEntryView[]
-  autonomousRecentArtifacts: AutonomousUnitArtifactView[]
 }
 
 export function mapProjectSnapshot(
@@ -168,9 +126,6 @@ export function mapProjectSnapshot(
   const approvalRequests = snapshot.approvalRequests.map(mapOperatorApproval)
   const verificationRecords = snapshot.verificationRecords.map(mapVerificationRecord)
   const resumeHistory = snapshot.resumeHistory.map(mapResumeHistoryEntry)
-  const handoffPackages = (snapshot.handoffPackages ?? [])
-    .filter((pkg) => pkg.projectId === snapshot.project.id)
-    .map(mapWorkflowHandoffPackage)
   const agentSessions = snapshot.agentSessions
     .filter((session) => session.projectId === snapshot.project.id)
     .map(mapAgentSession)
@@ -180,17 +135,11 @@ export function mapProjectSnapshot(
   const notificationDispatches = options.notificationDispatches ?? snapshot.notificationDispatches ?? []
   const notificationBroker = mapNotificationBroker(snapshot.project.id, notificationDispatches)
 
-  if (!snapshot.lifecycle) {
-    throw new Error('Cadence received a project snapshot without the required lifecycle projection.')
-  }
-
   const autonomousRun = snapshot.autonomousRun ? mapAutonomousRun(snapshot.autonomousRun) : null
-  const autonomousUnit = snapshot.autonomousUnit ? mapAutonomousUnit(snapshot.autonomousUnit) : null
 
   return {
     ...summary,
     phases: snapshot.phases.map(mapPhase),
-    lifecycle: mapPlanningLifecycle(snapshot.lifecycle),
     repository: snapshot.repository ? mapRepository(snapshot.repository) : null,
     repositoryStatus: null,
     approvalRequests,
@@ -198,7 +147,6 @@ export function mapProjectSnapshot(
     latestDecisionOutcome: getLatestDecisionOutcome(approvalRequests),
     verificationRecords,
     resumeHistory,
-    handoffPackages,
     agentSessions,
     selectedAgentSession,
     selectedAgentSessionId,
@@ -206,10 +154,6 @@ export function mapProjectSnapshot(
     runtimeSession: null,
     runtimeRun: null,
     autonomousRun,
-    autonomousUnit,
-    autonomousAttempt: null,
-    autonomousHistory: [],
-    autonomousRecentArtifacts: [],
   }
 }
 

@@ -84,17 +84,6 @@ function makeSnapshot(id: string, name: string): ProjectSnapshotResponseDto {
         summary: null,
       },
     ],
-    lifecycle: {
-      stages: [
-        {
-          stage: 'discussion',
-          nodeId: 'workflow-discussion',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-15T20:00:00Z',
-        },
-      ],
-    },
     approvalRequests: [],
     verificationRecords: [],
     resumeHistory: [],
@@ -1258,6 +1247,9 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       : state.agentView?.operatorActionStatus === 'running' && state.agentView?.pendingOperatorActionId === firstApproval.actionId
         ? 'running'
         : latestResumeForFirstApproval?.status ?? 'waiting'
+  const handoffPackages =
+    (state.activeProject as (typeof state.activeProject & { handoffPackages?: { handoffTransitionId: string }[] }) | null)
+      ?.handoffPackages ?? []
 
   return (
     <div>
@@ -1440,9 +1432,9 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="operator-action-status">{state.agentView?.operatorActionStatus ?? 'idle'}</div>
       <div data-testid="pending-operator-action-id">{state.agentView?.pendingOperatorActionId ?? 'none'}</div>
       <div data-testid="operator-action-error">{state.agentView?.operatorActionError?.message ?? 'none'}</div>
-      <div data-testid="handoff-package-count">{String(state.activeProject?.handoffPackages.length ?? 0)}</div>
+      <div data-testid="handoff-package-count">{String(handoffPackages.length)}</div>
       <div data-testid="latest-handoff-transition-id">
-        {state.activeProject?.handoffPackages[state.activeProject.handoffPackages.length - 1]?.handoffTransitionId ?? 'none'}
+        {handoffPackages[handoffPackages.length - 1]?.handoffTransitionId ?? 'none'}
       </div>
       <div data-testid="workflow-has-lifecycle">{String(state.workflowView?.hasLifecycle ?? false)}</div>
       <div data-testid="workflow-lifecycle-percent">{String(state.workflowView?.lifecyclePercent ?? 0)}</div>
@@ -1857,7 +1849,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(setup.getRuntimeRun.mock.calls.length).toBeGreaterThan(initialRuntimeRunCalls)
   })
 
-  it('hydrates autonomous run and unit truth independently from the durable ledger', async () => {
+  it('hydrates autonomous run truth independently from the durable ledger', async () => {
     const setup = createMockAdapter({
       autonomousStates: {
         'project-1': makeAutonomousRunState('project-1', {
@@ -1880,8 +1872,8 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('autonomous-run-provider-id')).toHaveTextContent('azure_openai')
     expect(screen.getByTestId('autonomous-run-status')).toHaveTextContent('running')
     expect(screen.getByTestId('autonomous-run-recovery')).toHaveTextContent('recovery_required')
-    expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('auto-project-1:checkpoint:2')
-    expect(screen.getByTestId('autonomous-unit-status')).toHaveTextContent('active')
+    expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('none')
+    expect(screen.getByTestId('recent-unit-count')).toHaveTextContent('0')
   })
 
   it('preserves the last truthful autonomous run state when later autonomous refreshes fail', async () => {
@@ -1901,29 +1893,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('autonomous refresh failed'))
     expect(screen.getByTestId('autonomous-run-id')).toHaveTextContent('auto-project-1')
     expect(screen.getByTestId('autonomous-run-provider-id')).toHaveTextContent('azure_openai')
-    expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('auto-project-1:checkpoint:2')
-  })
-
-  it('fails closed on malformed autonomous worker kinds and keeps the last truthful autonomous state visible', async () => {
-    const setup = createMockAdapter({
-      autonomousStates: {
-        'project-1': makeAutonomousRunState('project-1', { runId: 'auto-project-1', providerId: 'azure_openai' }),
-      },
-    })
-
-    render(<Harness adapter={setup.adapter} />)
-
-    await waitFor(() => expect(screen.getByTestId('autonomous-run-id')).toHaveTextContent('auto-project-1'))
-
-    setup.getAutonomousRun.mockRejectedValueOnce(
-      new Error('Invalid enum value for autonomous unit kind. Expected one of researcher|planner|executor|verifier, received Researcher.'),
-    )
-    fireEvent.click(screen.getByRole('button', { name: 'Retry state' }))
-
-    await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('researcher|planner|executor|verifier'))
-    expect(screen.getByTestId('autonomous-run-id')).toHaveTextContent('auto-project-1')
-    expect(screen.getByTestId('autonomous-run-provider-id')).toHaveTextContent('azure_openai')
-    expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('auto-project-1:checkpoint:2')
+    expect(screen.getByTestId('autonomous-unit-id')).toHaveTextContent('none')
   })
 
   it('starts, inspects, and cancels the autonomous run through the hook actions', async () => {
@@ -1958,7 +1928,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel autonomous run' }))
     await waitFor(() => expect(screen.getByTestId('autonomous-run-status')).toHaveTextContent('cancelled'))
     expect(screen.getByTestId('autonomous-run-recovery')).toHaveTextContent('terminal')
-    expect(screen.getByTestId('autonomous-unit-status')).toHaveTextContent('cancelled')
+    expect(screen.getByTestId('autonomous-unit-status')).toHaveTextContent('none')
   })
 
   it('keeps recovered checkpoints visible while the live runtime stream is still reconnecting', async () => {
@@ -1986,112 +1956,6 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('messages-reason')).toHaveTextContent(
       'Cadence is reconnecting the live runtime stream while keeping durable checkpoints visible for this selected project.',
     )
-  })
-
-  it('projects bounded recent autonomous units from durable history while live runtime state recovers', async () => {
-    const recoveredState = makeRecoveredAutonomousRunState('project-1')
-    recoveredState.history = [
-      makeAutonomousHistoryEntry({
-        projectId: 'project-1',
-        unitId: 'unit-history-2',
-        sequence: 2,
-        workflowNodeId: 'workflow-research',
-        handoffTransitionId: 'handoff-history-2',
-        handoffPackageHash: 'hash-history-2',
-        unitUpdatedAt: '2026-04-16T20:05:00Z',
-        artifactSummary: 'Read README.md from the imported repository root.',
-      }),
-      makeAutonomousHistoryEntry({
-        projectId: 'project-1',
-        unitId: 'unit-history-1',
-        sequence: 1,
-        latestAttempt: false,
-        unitUpdatedAt: '2026-04-16T20:04:00Z',
-      }),
-    ]
-
-    const setup = createMockAdapter({
-      runtimeSessions: {
-        'project-1': makeRuntimeSession('project-1', {
-          phase: 'authenticated',
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          accountId: 'acct-1',
-          lastErrorCode: null,
-          lastError: null,
-        }),
-      },
-      runtimeRuns: {
-        'project-1': makeRuntimeRun('project-1'),
-      },
-      autonomousStates: {
-        'project-1': recoveredState,
-      },
-    })
-
-    render(<Harness adapter={setup.adapter} />)
-
-    await waitFor(() => expect(screen.getByTestId('recent-unit-count')).toHaveTextContent('2'))
-    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
-    expect(screen.getByTestId('recent-unit-first-workflow-state')).toHaveTextContent('Snapshot lag')
-    expect(screen.getByTestId('recent-unit-first-evidence-state')).toHaveTextContent('1 recent evidence row')
-    expect(screen.getByTestId('recent-unit-first-linkage-source')).toHaveTextContent('attempt')
-    expect(screen.getByTestId('recent-unit-first-attempt-id')).toHaveTextContent('unit-history-2:attempt:1')
-    expect(screen.getByTestId('recent-unit-first-attempt-number')).toHaveTextContent('1')
-    expect(screen.getByTestId('recent-unit-first-child-session-id')).toHaveTextContent('child-2')
-    expect(screen.getByTestId('recent-unit-first-workflow-node-id')).toHaveTextContent('workflow-research')
-    expect(screen.getByTestId('recent-unit-first-workflow-transition-id')).toHaveTextContent('unit-history-2:transition:1')
-    expect(screen.getByTestId('recent-unit-first-workflow-handoff-transition-id')).toHaveTextContent('handoff-history-2')
-    expect(screen.getByTestId('recent-unit-first-workflow-handoff-hash')).toHaveTextContent('hash-history-2')
-    expect(screen.getByTestId('recent-unit-window-label')).toHaveTextContent('Showing 2 durable units')
-  })
-
-  it('preserves the last truthful recent-unit projection when later autonomous refreshes fail', async () => {
-    const recoveredState = makeRecoveredAutonomousRunState('project-1')
-    recoveredState.history = [
-      makeAutonomousHistoryEntry({
-        projectId: 'project-1',
-        unitId: 'unit-history-2',
-        sequence: 2,
-        workflowNodeId: 'workflow-research',
-        handoffTransitionId: 'handoff-history-2',
-        handoffPackageHash: 'hash-history-2',
-        unitUpdatedAt: '2026-04-16T20:05:00Z',
-        artifactSummary: 'Read README.md from the imported repository root.',
-      }),
-    ]
-
-    const setup = createMockAdapter({
-      autonomousStates: {
-        'project-1': recoveredState,
-      },
-    })
-
-    render(<Harness adapter={setup.adapter} />)
-
-    await waitFor(() => expect(screen.getByTestId('recent-unit-count')).toHaveTextContent('1'))
-    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
-    expect(screen.getByTestId('recent-unit-first-workflow-state')).toHaveTextContent('Snapshot lag')
-    expect(screen.getByTestId('recent-unit-window-label')).toHaveTextContent('Showing 1 durable unit')
-    expect(screen.getByTestId('recent-unit-first-linkage-source')).toHaveTextContent('attempt')
-    expect(screen.getByTestId('recent-unit-first-attempt-id')).toHaveTextContent('unit-history-2:attempt:1')
-    expect(screen.getByTestId('recent-unit-first-workflow-transition-id')).toHaveTextContent('unit-history-2:transition:1')
-    expect(screen.getByTestId('recent-unit-first-workflow-handoff-transition-id')).toHaveTextContent('handoff-history-2')
-    expect(screen.getByTestId('recent-unit-first-workflow-handoff-hash')).toHaveTextContent('hash-history-2')
-
-    setup.getAutonomousRun.mockRejectedValueOnce(new Error('autonomous refresh failed'))
-    fireEvent.click(screen.getByRole('button', { name: 'Retry state' }))
-
-    await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('autonomous refresh failed'))
-    expect(screen.getByTestId('recent-unit-count')).toHaveTextContent('1')
-    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
-    expect(screen.getByTestId('recent-unit-first-workflow-state')).toHaveTextContent('Snapshot lag')
-    expect(screen.getByTestId('recent-unit-window-label')).toHaveTextContent('Showing 1 durable unit')
-    expect(screen.getByTestId('recent-unit-first-linkage-source')).toHaveTextContent('attempt')
-    expect(screen.getByTestId('recent-unit-first-attempt-id')).toHaveTextContent('unit-history-2:attempt:1')
-    expect(screen.getByTestId('recent-unit-first-workflow-transition-id')).toHaveTextContent('unit-history-2:transition:1')
-    expect(screen.getByTestId('recent-unit-first-workflow-handoff-transition-id')).toHaveTextContent('handoff-history-2')
-    expect(screen.getByTestId('recent-unit-first-workflow-handoff-hash')).toHaveTextContent('hash-history-2')
   })
 
   it('resubscribes on runtime_run:updated when the active session receives a new run id', async () => {
@@ -2172,10 +2036,10 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     render(<Harness adapter={setup.adapter} />)
 
     await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
-    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('true')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('discussion')
+    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('false')
+    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
     expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
-    expect(screen.getByTestId('handoff-package-count')).toHaveTextContent('1')
+    expect(screen.getByTestId('handoff-package-count')).toHaveTextContent('0')
     expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(1)
 
     vi.mocked(setup.subscribeRuntimeStream).mockResolvedValueOnce({
@@ -2201,251 +2065,17 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
 
     await waitFor(() => expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1b'))
-    await waitFor(() => expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('research'))
+    await waitFor(() => expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none'))
 
     expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1b')
     expect(screen.getByTestId('stream-item-count')).toHaveTextContent('0')
     expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_run:updated')
-    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('50')
-    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('1')
-    expect(screen.getByTestId('handoff-package-count')).toHaveTextContent('1')
-    expect(vi.mocked(setup.getProjectSnapshot).mock.calls.length).toBeGreaterThan(snapshotCallsBeforeEvent)
+    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
+    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('0')
+    expect(screen.getByTestId('handoff-package-count')).toHaveTextContent('0')
+    expect(vi.mocked(setup.getProjectSnapshot).mock.calls.length).toBe(snapshotCallsBeforeEvent)
     expect(vi.mocked(setup.listNotificationRoutes).mock.calls.length).toBe(routeRefreshesBeforeEvent)
     expect(vi.mocked(setup.syncNotificationAdapters).mock.calls.length).toBe(syncRefreshesBeforeEvent)
-  })
-
-  it('advances lifecycle and handoff continuity to terminal roadmap state from runtime_run:updated refreshes', async () => {
-    const setup = createMockAdapter({
-      runtimeSessions: {
-        'project-1': makeRuntimeSession('project-1', {
-          phase: 'authenticated',
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          accountId: 'acct-1',
-          lastErrorCode: null,
-          lastError: null,
-        }),
-      },
-      runtimeRuns: {
-        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
-      },
-    })
-
-    const runIds = ['run-project-1', 'run-project-1b', 'run-project-1c', 'run-project-1d'] as const
-    const lifecycleSnapshots: ProjectSnapshotResponseDto['lifecycle']['stages'][] = [
-      [
-        {
-          stage: 'discussion',
-          nodeId: 'workflow-discussion',
-          status: 'active',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:00:00Z',
-        },
-        {
-          stage: 'research',
-          nodeId: 'workflow-research',
-          status: 'pending',
-          actionRequired: false,
-          lastTransitionAt: null,
-        },
-        {
-          stage: 'requirements',
-          nodeId: 'workflow-requirements',
-          status: 'pending',
-          actionRequired: false,
-          lastTransitionAt: null,
-        },
-        {
-          stage: 'roadmap',
-          nodeId: 'workflow-roadmap',
-          status: 'pending',
-          actionRequired: false,
-          lastTransitionAt: null,
-        },
-      ],
-      [
-        {
-          stage: 'discussion',
-          nodeId: 'workflow-discussion',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:00:00Z',
-        },
-        {
-          stage: 'research',
-          nodeId: 'workflow-research',
-          status: 'active',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:01:00Z',
-        },
-        {
-          stage: 'requirements',
-          nodeId: 'workflow-requirements',
-          status: 'pending',
-          actionRequired: false,
-          lastTransitionAt: null,
-        },
-        {
-          stage: 'roadmap',
-          nodeId: 'workflow-roadmap',
-          status: 'pending',
-          actionRequired: false,
-          lastTransitionAt: null,
-        },
-      ],
-      [
-        {
-          stage: 'discussion',
-          nodeId: 'workflow-discussion',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:00:00Z',
-        },
-        {
-          stage: 'research',
-          nodeId: 'workflow-research',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:01:00Z',
-        },
-        {
-          stage: 'requirements',
-          nodeId: 'workflow-requirements',
-          status: 'active',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:02:00Z',
-        },
-        {
-          stage: 'roadmap',
-          nodeId: 'workflow-roadmap',
-          status: 'pending',
-          actionRequired: false,
-          lastTransitionAt: null,
-        },
-      ],
-      [
-        {
-          stage: 'discussion',
-          nodeId: 'workflow-discussion',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:00:00Z',
-        },
-        {
-          stage: 'research',
-          nodeId: 'workflow-research',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:01:00Z',
-        },
-        {
-          stage: 'requirements',
-          nodeId: 'workflow-requirements',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:02:00Z',
-        },
-        {
-          stage: 'roadmap',
-          nodeId: 'workflow-roadmap',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-16T14:03:00Z',
-        },
-      ],
-    ]
-
-    let snapshotIndex = 0
-    vi.mocked(setup.getProjectSnapshot).mockImplementation(async (projectId: string) => {
-      const snapshot = makeSnapshot(projectId, projectId === 'project-1' ? 'Cadence' : 'orchestra')
-      if (projectId !== 'project-1') {
-        return snapshot
-      }
-
-      const handoffPackages = [
-        ...runIds.slice(0, snapshotIndex + 1).map((_runId, index) => ({
-          ...makeHandoffPackage('project-1', `auto:txn-00${index + 1}`),
-          id: index + 1,
-        })),
-        {
-          ...makeHandoffPackage('project-2', `auto:txn-ghost-${snapshotIndex + 1}`),
-          id: 100 + snapshotIndex,
-        },
-      ]
-
-      return {
-        ...snapshot,
-        lifecycle: {
-          stages: lifecycleSnapshots[snapshotIndex],
-        },
-        handoffPackages,
-        approvalRequests: [],
-      }
-    })
-
-    vi.mocked(setup.getRuntimeRun).mockImplementation(async (projectId: string) => {
-      if (projectId === 'project-1') {
-        return makeRuntimeRun('project-1', {
-          runId: runIds[snapshotIndex],
-          lastCheckpointSequence: snapshotIndex + 2,
-          updatedAt: `2026-04-16T14:0${snapshotIndex}:10Z`,
-        })
-      }
-
-      return makeRuntimeRun(projectId, { runId: `run-${projectId}` })
-    })
-
-    render(<Harness adapter={setup.adapter} />)
-
-    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent(runIds[0]))
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('discussion')
-    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
-    expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0')
-    expect(screen.getByTestId('handoff-package-count')).toHaveTextContent('1')
-    expect(screen.getByTestId('latest-handoff-transition-id')).toHaveTextContent('auto:txn-001')
-
-    const expectedActiveStages = ['research', 'requirements', 'none'] as const
-    const expectedLifecyclePercents = ['25', '50', '100'] as const
-
-    for (let nextIndex = 1; nextIndex < runIds.length; nextIndex += 1) {
-      const nextRunId = runIds[nextIndex]
-
-      vi.mocked(setup.subscribeRuntimeStream).mockResolvedValueOnce({
-        response: makeStreamResponse('project-1', {
-          runId: nextRunId,
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-        }),
-        unsubscribe: vi.fn(),
-      })
-
-      snapshotIndex = nextIndex
-      act(() => {
-        setup.emitRuntimeRunUpdated({
-          projectId: 'project-1',
-          run: makeRuntimeRun('project-1', {
-            runId: nextRunId,
-            lastCheckpointSequence: nextIndex + 2,
-            updatedAt: `2026-04-16T14:1${nextIndex}:00Z`,
-          }),
-        })
-      })
-
-      await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent(nextRunId))
-      await waitFor(() => expect(screen.getByTestId('runtime-run-id')).toHaveTextContent(nextRunId))
-      await waitFor(() =>
-        expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent(expectedActiveStages[nextIndex - 1]),
-      )
-
-      expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_run:updated')
-      expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent(expectedLifecyclePercents[nextIndex - 1])
-      expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('0')
-      expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0')
-      expect(screen.getByTestId('handoff-package-count')).toHaveTextContent(String(nextIndex + 1))
-      expect(screen.getByTestId('latest-handoff-transition-id')).toHaveTextContent(`auto:txn-00${nextIndex + 1}`)
-    }
-
-    expect(vi.mocked(setup.subscribeRuntimeStream).mock.calls.length).toBeGreaterThanOrEqual(4)
   })
 
   it('hydrates gate-linked pending approvals from durable snapshot truth on project:updated refresh', async () => {
@@ -3250,321 +2880,6 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('messages-reason')).toHaveTextContent('malformed toolSummary payload')
   })
 
-  it('keeps MCP, gate pause, worker linkage, and runtime_run refresh truth continuous under malformed follow-up events', async () => {
-    const gateActionId = 'scope:auto-dispatch:workflow-research:requires_user_input'
-    const pendingState = makeRecoveredAutonomousRunState('project-1')
-    pendingState.history = [
-      makeAutonomousHistoryEntry({
-        projectId: 'project-1',
-        unitId: 'unit-history-1',
-        sequence: 1,
-        workflowNodeId: 'workflow-discussion',
-        handoffTransitionId: 'handoff-history-1',
-        handoffPackageHash: 'hash-history-1',
-        unitUpdatedAt: '2026-04-16T20:04:00Z',
-        artifactSummary: 'Recovered previous worker linkage.',
-      }),
-    ]
-
-    const advancedState = makeRecoveredAutonomousRunState('project-1')
-    advancedState.history = [
-      makeAutonomousHistoryEntry({
-        projectId: 'project-1',
-        unitId: 'unit-history-2',
-        sequence: 2,
-        workflowNodeId: 'workflow-research',
-        handoffTransitionId: 'handoff-history-2',
-        handoffPackageHash: 'hash-history-2',
-        unitUpdatedAt: '2026-04-16T20:06:00Z',
-        artifactSummary: 'Recovered newer worker linkage after gate progression.',
-      }),
-      makeAutonomousHistoryEntry({
-        projectId: 'project-1',
-        unitId: 'unit-history-malformed',
-        sequence: 1,
-        workflowNodeId: 'workflow-research',
-        handoffTransitionId: '   ',
-        handoffPackageHash: '   ',
-        unitUpdatedAt: '2026-04-16T20:03:00Z',
-      }),
-    ]
-
-    const setup = createMockAdapter({
-      runtimeSessions: {
-        'project-1': makeRuntimeSession('project-1', {
-          phase: 'authenticated',
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          accountId: 'acct-1',
-          lastErrorCode: null,
-          lastError: null,
-        }),
-      },
-      runtimeRuns: {
-        'project-1': makeRuntimeRun('project-1', {
-          runId: 'run-project-1',
-          lastCheckpointSequence: 2,
-          updatedAt: '2026-04-16T20:05:00Z',
-        }),
-      },
-      autonomousStates: {
-        'project-1': pendingState,
-      },
-      snapshots: {
-        'project-1': {
-          ...makeSnapshot('project-1', 'Cadence'),
-          approvalRequests: [],
-          handoffPackages: [makeHandoffPackage('project-1', 'auto:txn-001')],
-        },
-      },
-    })
-
-    let snapshotMode: 'base' | 'gate_pending' | 'advanced' = 'base'
-    vi.mocked(setup.getProjectSnapshot).mockImplementation(async (projectId: string) => {
-      const baseSnapshot = {
-        ...makeSnapshot(projectId, projectId === 'project-1' ? 'Cadence' : 'orchestra'),
-        handoffPackages: [
-          makeHandoffPackage('project-1', snapshotMode === 'advanced' ? 'auto:txn-002' : 'auto:txn-001'),
-          makeHandoffPackage('project-2', 'auto:txn-ghost'),
-        ],
-      }
-
-      if (projectId !== 'project-1') {
-        return baseSnapshot
-      }
-
-      if (snapshotMode === 'gate_pending') {
-        return {
-          ...baseSnapshot,
-          approvalRequests: [makeGateLinkedPendingApproval(gateActionId)],
-        }
-      }
-
-      if (snapshotMode === 'advanced') {
-        return {
-          ...baseSnapshot,
-          approvalRequests: [],
-        }
-      }
-
-      return {
-        ...baseSnapshot,
-        approvalRequests: [],
-      }
-    })
-
-    vi.mocked(setup.getRuntimeRun).mockImplementation(async (projectId: string) => {
-      if (projectId !== 'project-1') {
-        return makeRuntimeRun(projectId, { runId: `run-${projectId}` })
-      }
-
-      if (snapshotMode === 'advanced') {
-        return makeRuntimeRun('project-1', {
-          runId: 'run-project-1',
-          lastCheckpointSequence: 3,
-          updatedAt: '2026-04-16T20:06:00Z',
-        })
-      }
-
-      return makeRuntimeRun('project-1', {
-        runId: 'run-project-1',
-        lastCheckpointSequence: 2,
-        updatedAt: '2026-04-16T20:05:00Z',
-      })
-    })
-
-    vi.mocked(setup.getAutonomousRun).mockImplementation(async (projectId: string) => {
-      if (projectId !== 'project-1') {
-        return makeRecoveredAutonomousRunState(projectId)
-      }
-
-      return snapshotMode === 'advanced' ? advancedState : pendingState
-    })
-
-    render(<Harness adapter={setup.adapter} />)
-
-    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
-    await waitFor(() => expect(screen.getByTestId('stream-run-id')).toHaveTextContent('run-project-1'))
-    await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0'))
-    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-1')
-
-    act(() => {
-      setup.emitRuntimeStream(0, {
-        projectId: 'project-1',
-        runtimeKind: 'openai_codex',
-        runId: 'run-project-1',
-        sessionId: 'session-1',
-        flowId: 'flow-1',
-        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
-        item: {
-          kind: 'tool',
-          runId: 'run-project-1',
-          sequence: 1,
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          text: null,
-          toolCallId: 'mcp-invoke-1',
-          toolName: 'mcp.invoke',
-          toolState: 'succeeded',
-          toolSummary: {
-            kind: 'mcp_capability',
-            serverId: 'linear',
-            capabilityKind: 'prompt',
-            capabilityId: 'summarize_context',
-            capabilityName: 'Summarize Context',
-          },
-          skillId: null,
-          skillStage: null,
-          skillResult: null,
-          skillSource: null,
-          skillCacheStatus: null,
-          skillDiagnostic: null,
-          actionId: null,
-          boundaryId: null,
-          actionType: null,
-          title: null,
-          detail: 'MCP capability invocation succeeded.',
-          code: null,
-          message: null,
-          retryable: null,
-          createdAt: '2026-04-16T20:05:10Z',
-        },
-      })
-    })
-
-    await waitFor(() => expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('mcp-invoke-1'))
-    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('mcp_capability')
-
-    snapshotMode = 'gate_pending'
-    act(() => {
-      setup.emitRuntimeStream(0, {
-        projectId: 'project-1',
-        runtimeKind: 'openai_codex',
-        runId: 'run-project-1',
-        sessionId: 'session-1',
-        flowId: 'flow-1',
-        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
-        item: {
-          kind: 'action_required',
-          runId: 'run-project-1',
-          sequence: 2,
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          text: null,
-          toolCallId: null,
-          toolName: null,
-          toolState: null,
-          actionId: gateActionId,
-          boundaryId: null,
-          actionType: 'review_worktree',
-          title: 'Review worktree changes',
-          detail: 'Cadence is paused at a workflow gate pending operator input.',
-          code: 'workflow_transition_gate_unmet',
-          message: 'The workflow transition is blocked until the operator resolves the gate.',
-          retryable: true,
-          createdAt: '2026-04-16T20:05:20Z',
-        },
-      })
-    })
-
-    await waitFor(() => expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_stream:action_required'))
-    await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('1'))
-    expect(screen.getByTestId('stream-action-required-count')).toHaveTextContent('1')
-
-    snapshotMode = 'advanced'
-    act(() => {
-      setup.emitRuntimeRunUpdated({
-        projectId: 'project-1',
-        run: makeRuntimeRun('project-1', {
-          runId: 'run-project-1',
-          lastCheckpointSequence: 3,
-          updatedAt: '2026-04-16T20:06:00Z',
-        }),
-      })
-    })
-
-    await waitFor(() => expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_run:updated'))
-    await waitFor(() => expect(screen.getByTestId('runtime-run-checkpoint-count')).toHaveTextContent('2'))
-    await waitFor(() => expect(screen.getByTestId('pending-approval-count')).toHaveTextContent('0'))
-    await waitFor(() => expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2'))
-    expect(screen.getByTestId('recent-unit-first-workflow-handoff-transition-id')).toHaveTextContent('handoff-history-2')
-    expect(screen.getByTestId('recent-unit-first-workflow-handoff-hash')).toHaveTextContent('hash-history-2')
-    expect(screen.getByTestId('latest-handoff-transition-id')).toHaveTextContent('auto:txn-002')
-
-    act(() => {
-      setup.emitRuntimeRunUpdatedError(
-        new CadenceDesktopError({
-          code: 'adapter_contract_mismatch',
-          errorClass: 'adapter_contract_mismatch',
-          message: 'Event runtime_run:updated returned an unexpected payload shape.',
-          retryable: false,
-        }),
-      )
-    })
-
-    await waitFor(() =>
-      expect(screen.getByTestId('error')).toHaveTextContent(
-        'Event runtime_run:updated returned an unexpected payload shape.',
-      ),
-    )
-    expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1')
-    expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('mcp-invoke-1')
-    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
-
-    const latestStreamSubscriptionIndex = Math.max(0, setup.streamSubscriptions.length - 1)
-
-    act(() => {
-      setup.emitRuntimeStream(latestStreamSubscriptionIndex, {
-        projectId: 'project-1',
-        runtimeKind: 'openai_codex',
-        runId: 'run-project-1',
-        sessionId: 'session-1',
-        flowId: 'flow-1',
-        subscribedItemKinds: ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
-        item: {
-          kind: 'tool',
-          runId: 'run-project-1',
-          sequence: 3,
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          text: null,
-          toolCallId: 'mcp-invoke-2',
-          toolName: 'mcp.invoke',
-          toolState: 'failed',
-          toolSummary: {
-            kind: 'mcp_capability',
-            serverId: 'linear',
-            capabilityKind: 'unsupported_kind',
-            capabilityId: 'summarize_context',
-            capabilityName: 'Summarize Context',
-          },
-          skillId: null,
-          skillStage: null,
-          skillResult: null,
-          skillSource: null,
-          skillCacheStatus: null,
-          skillDiagnostic: null,
-          actionId: null,
-          boundaryId: null,
-          actionType: null,
-          title: null,
-          detail: 'Malformed MCP summary after refresh.',
-          code: null,
-          message: null,
-          retryable: null,
-          createdAt: '2026-04-16T20:06:10Z',
-        },
-      } as unknown as RuntimeStreamEventDto)
-    })
-
-    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('error'))
-    expect(screen.getByTestId('stream-tool-first-id')).toHaveTextContent('mcp-invoke-1')
-    expect(screen.getByTestId('stream-tool-first-summary-kind')).toHaveTextContent('mcp_capability')
-    expect(screen.getByTestId('messages-reason')).toHaveTextContent('malformed toolSummary payload')
-    expect(screen.getByTestId('recent-unit-first-id')).toHaveTextContent('unit-history-2')
-    expect(screen.getByTestId('refresh-source')).toHaveTextContent('runtime_run:updated')
-  })
-
   it('fails closed on malformed skill events and preserves the last truthful skill lane', async () => {
     const setup = createMockAdapter({
       runtimeSessions: {
@@ -3962,164 +3277,6 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     const syncCallsAfterBoundaryClear = project1SyncCount()
     await new Promise((resolve) => setTimeout(resolve, BLOCKED_NOTIFICATION_SYNC_POLL_MS + 250))
     expect(project1SyncCount()).toBe(syncCallsAfterBoundaryClear)
-  })
-
-  it('projects typed advanced browser failure recovery guidance on checkpoint cards', async () => {
-    const actionId = 'flow:flow-1:run:run-project-1:boundary:boundary-advanced:browser_click'
-    const runId = 'auto-project-1'
-    const unitId = 'unit-advanced'
-    const attemptId = `${unitId}:attempt:1`
-
-    const advancedState = makeRecoveredAutonomousRunState('project-1')
-    advancedState.history = [
-      {
-        unit: {
-          projectId: 'project-1',
-          runId,
-          unitId,
-          sequence: 1,
-          kind: 'executor',
-          status: 'failed',
-          summary: 'Browser recovery boundary failed while preserving durable evidence.',
-          boundaryId: 'boundary-advanced',
-          workflowLinkage: null,
-          startedAt: '2026-04-16T20:10:00Z',
-          finishedAt: '2026-04-16T20:10:20Z',
-          updatedAt: '2026-04-16T20:10:20Z',
-          lastErrorCode: 'advanced_browser_failure_timeout',
-          lastError: null,
-        },
-        latestAttempt: {
-          projectId: 'project-1',
-          runId,
-          unitId,
-          attemptId,
-          attemptNumber: 1,
-          childSessionId: 'child-advanced',
-          status: 'failed',
-          boundaryId: 'boundary-advanced',
-          workflowLinkage: null,
-          startedAt: '2026-04-16T20:10:00Z',
-          finishedAt: '2026-04-16T20:10:20Z',
-          updatedAt: '2026-04-16T20:10:20Z',
-          lastErrorCode: 'advanced_browser_failure_timeout',
-          lastError: null,
-        },
-        artifacts: [
-          {
-            projectId: 'project-1',
-            runId,
-            unitId,
-            attemptId,
-            artifactId: 'artifact-timeout-malformed',
-            artifactKind: 'tool_result',
-            status: 'recorded',
-            summary: 'Malformed advanced browser failure payload should not override prior truthful class.',
-            contentHash: 'hash-malformed',
-            payload: {
-              kind: 'tool_result',
-              projectId: 'project-1',
-              runId,
-              unitId,
-              attemptId,
-              artifactId: 'artifact-timeout-malformed',
-              toolCallId: 'browser-click-malformed',
-              toolName: 'browser.click',
-              toolState: 'failed',
-              commandResult: {
-                exitCode: 1,
-                timedOut: true,
-                summary: 'browser.click timed out',
-              },
-              toolSummary: {
-                kind: 'browser_computer_use',
-                surface: 'browser',
-                action: 'click',
-                status: 'failed',
-                target: '#submit',
-                outcome: 'advanced_browser_failure_unknown: malformed classification',
-              },
-              actionId,
-              boundaryId: 'boundary-advanced',
-            },
-            createdAt: '2026-04-16T20:10:22Z',
-            updatedAt: '2026-04-16T20:10:22Z',
-          },
-          {
-            projectId: 'project-1',
-            runId,
-            unitId,
-            attemptId,
-            artifactId: 'artifact-timeout-truthful',
-            artifactKind: 'tool_result',
-            status: 'recorded',
-            summary: 'Browser action timed out at the checkpoint boundary.',
-            contentHash: 'hash-truthful',
-            payload: {
-              kind: 'tool_result',
-              projectId: 'project-1',
-              runId,
-              unitId,
-              attemptId,
-              artifactId: 'artifact-timeout-truthful',
-              toolCallId: 'browser-click-truthful',
-              toolName: 'browser.click',
-              toolState: 'failed',
-              commandResult: {
-                exitCode: 1,
-                timedOut: true,
-                summary: 'browser.click timed out',
-              },
-              toolSummary: {
-                kind: 'browser_computer_use',
-                surface: 'browser',
-                action: 'click',
-                status: 'failed',
-                target: '#submit',
-                outcome:
-                  'advanced_browser_failure_timeout: Browser action timed out. Retry with a higher timeout_ms or resume from the same boundary.',
-              },
-              actionId,
-              boundaryId: 'boundary-advanced',
-            },
-            createdAt: '2026-04-16T20:10:21Z',
-            updatedAt: '2026-04-16T20:10:21Z',
-          },
-        ],
-      },
-    ]
-
-    const setup = createMockAdapter({
-      runtimeSessions: {
-        'project-1': makeRuntimeSession('project-1', {
-          phase: 'authenticated',
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          accountId: 'acct-1',
-          lastErrorCode: null,
-          lastError: null,
-        }),
-      },
-      runtimeRuns: {
-        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
-      },
-      autonomousStates: {
-        'project-1': advancedState,
-      },
-    })
-
-    render(<Harness adapter={setup.adapter} />)
-
-    await waitFor(() => expect(screen.getByTestId('checkpoint-loop-count')).toHaveTextContent('1'))
-    expect(screen.getByTestId('checkpoint-loop-first-action-id')).toHaveTextContent(actionId)
-    expect(screen.getByTestId('checkpoint-loop-first-failure-class')).toHaveTextContent('timeout')
-    expect(screen.getByTestId('checkpoint-loop-first-failure-class-label')).toHaveTextContent('Timeout')
-    expect(screen.getByTestId('checkpoint-loop-first-failure-code')).toHaveTextContent(
-      'advanced_browser_failure_timeout',
-    )
-    expect(screen.getByTestId('checkpoint-loop-first-resumability')).toHaveTextContent('unknown')
-    expect(screen.getByTestId('checkpoint-loop-first-recovery-recommendation')).toHaveTextContent('retry')
-    expect(screen.getByTestId('checkpoint-loop-first-recovery-recommendation-label')).toHaveTextContent('Retry')
   })
 
   it('stops blocked-checkpoint sync polling when the active project changes', async () => {

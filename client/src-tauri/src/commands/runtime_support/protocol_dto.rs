@@ -1,18 +1,13 @@
 use crate::{
     commands::{
-        AutonomousSkillCacheStatusDto, AutonomousSkillLifecycleCacheDto,
-        AutonomousSkillLifecycleDiagnosticDto, AutonomousSkillLifecycleResultDto,
-        AutonomousSkillLifecycleSourceDto, AutonomousSkillLifecycleStageDto,
+        AutonomousSkillCacheStatusDto, AutonomousSkillLifecycleDiagnosticDto,
+        AutonomousSkillLifecycleResultDto, AutonomousSkillLifecycleSourceDto,
+        AutonomousSkillLifecycleStageDto,
         BrowserComputerUseActionStatusDto, BrowserComputerUseSurfaceDto,
         BrowserComputerUseToolResultSummaryDto, CommandToolResultSummaryDto,
         FileToolResultSummaryDto, GitToolResultScopeDto, GitToolResultSummaryDto,
         McpCapabilityKindDto, McpCapabilityToolResultSummaryDto, ToolResultSummaryDto,
         WebToolResultContentKindDto, WebToolResultSummaryDto,
-    },
-    db::project_store::{
-        AutonomousSkillCacheStatusRecord, AutonomousSkillLifecycleCacheRecord,
-        AutonomousSkillLifecycleDiagnosticRecord, AutonomousSkillLifecycleResultRecord,
-        AutonomousSkillLifecycleSourceRecord, AutonomousSkillLifecycleStageRecord,
     },
     runtime::protocol::{
         BrowserComputerUseActionStatus, BrowserComputerUseSurface, GitToolResultScope,
@@ -127,69 +122,6 @@ pub(crate) fn autonomous_skill_lifecycle_diagnostic_dto_from_protocol(
         code: diagnostic.code.clone(),
         message: diagnostic.message.clone(),
         retryable: diagnostic.retryable,
-    }
-}
-
-pub(super) fn autonomous_skill_lifecycle_source_dto_from_record(
-    source: &AutonomousSkillLifecycleSourceRecord,
-) -> AutonomousSkillLifecycleSourceDto {
-    AutonomousSkillLifecycleSourceDto {
-        repo: source.repo.clone(),
-        path: source.path.clone(),
-        reference: source.reference.clone(),
-        tree_hash: source.tree_hash.clone(),
-    }
-}
-
-pub(super) fn autonomous_skill_lifecycle_cache_dto_from_record(
-    cache: &AutonomousSkillLifecycleCacheRecord,
-) -> AutonomousSkillLifecycleCacheDto {
-    AutonomousSkillLifecycleCacheDto {
-        key: cache.key.clone(),
-        status: cache.status.as_ref().map(autonomous_skill_cache_status_dto),
-    }
-}
-
-pub(super) fn autonomous_skill_lifecycle_diagnostic_dto_from_record(
-    diagnostic: &AutonomousSkillLifecycleDiagnosticRecord,
-) -> AutonomousSkillLifecycleDiagnosticDto {
-    AutonomousSkillLifecycleDiagnosticDto {
-        code: diagnostic.code.clone(),
-        message: diagnostic.message.clone(),
-        retryable: diagnostic.retryable,
-    }
-}
-
-pub(super) fn autonomous_skill_lifecycle_stage_dto(
-    stage: &AutonomousSkillLifecycleStageRecord,
-) -> AutonomousSkillLifecycleStageDto {
-    match stage {
-        AutonomousSkillLifecycleStageRecord::Discovery => {
-            AutonomousSkillLifecycleStageDto::Discovery
-        }
-        AutonomousSkillLifecycleStageRecord::Install => AutonomousSkillLifecycleStageDto::Install,
-        AutonomousSkillLifecycleStageRecord::Invoke => AutonomousSkillLifecycleStageDto::Invoke,
-    }
-}
-
-pub(super) fn autonomous_skill_lifecycle_result_dto(
-    result: &AutonomousSkillLifecycleResultRecord,
-) -> AutonomousSkillLifecycleResultDto {
-    match result {
-        AutonomousSkillLifecycleResultRecord::Succeeded => {
-            AutonomousSkillLifecycleResultDto::Succeeded
-        }
-        AutonomousSkillLifecycleResultRecord::Failed => AutonomousSkillLifecycleResultDto::Failed,
-    }
-}
-
-pub(super) fn autonomous_skill_cache_status_dto(
-    status: &AutonomousSkillCacheStatusRecord,
-) -> AutonomousSkillCacheStatusDto {
-    match status {
-        AutonomousSkillCacheStatusRecord::Miss => AutonomousSkillCacheStatusDto::Miss,
-        AutonomousSkillCacheStatusRecord::Hit => AutonomousSkillCacheStatusDto::Hit,
-        AutonomousSkillCacheStatusRecord::Refreshed => AutonomousSkillCacheStatusDto::Refreshed,
     }
 }
 

@@ -2032,7 +2032,7 @@ describe('useCadenceDesktopState', () => {
     expect(setup.getProjectSnapshot.mock.calls.length).toBe(initialSnapshotCalls)
   })
 
-  it('projects persisted workflow phases into the workflow view while keeping execution git truth live', async () => {
+  it('keeps the empty workflow view scaffold while execution git truth stays live', async () => {
     const setup = createMockAdapter({
       listProjects: {
         projects: [
@@ -2103,31 +2103,6 @@ describe('useCadenceDesktopState', () => {
               summary: '   ',
             },
           ],
-          lifecycle: {
-            stages: [
-              {
-                stage: 'discussion',
-                nodeId: 'workflow-discussion',
-                status: 'complete',
-                actionRequired: false,
-                lastTransitionAt: '2026-04-15T17:59:00Z',
-              },
-              {
-                stage: 'research',
-                nodeId: 'workflow-research',
-                status: 'active',
-                actionRequired: true,
-                lastTransitionAt: '2026-04-15T18:00:00Z',
-              },
-              {
-                stage: 'requirements',
-                nodeId: 'workflow-requirements',
-                status: 'pending',
-                actionRequired: false,
-                lastTransitionAt: null,
-              },
-            ],
-          },
           approvalRequests: [],
           verificationRecords: [],
           resumeHistory: [],
@@ -2178,10 +2153,10 @@ describe('useCadenceDesktopState', () => {
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
 
     expect(screen.getByTestId('workflow-has-phases')).toHaveTextContent('true')
-    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('true')
-    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('33')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('research')
-    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('1')
+    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('false')
+    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
+    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
+    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('0')
     expect(screen.getByTestId('workflow-overall-percent')).toHaveTextContent('33')
     expect(screen.getByTestId('workflow-active-phase')).toHaveTextContent('Live projection')
     expect(screen.getByTestId('execution-status-count')).toHaveTextContent('1')
@@ -2293,7 +2268,7 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('error')).toHaveTextContent('none')
   })
 
-  it('exposes lifecycle-first workflow data when phases are empty but lifecycle stages are present', async () => {
+  it('keeps the workflow scaffold empty when snapshots have no phases', async () => {
     const setup = createMockAdapter({
       listProjects: {
         projects: [
@@ -2325,24 +2300,6 @@ describe('useCadenceDesktopState', () => {
             runtime: null,
           },
           phases: [],
-          lifecycle: {
-            stages: [
-              {
-                stage: 'discussion',
-                nodeId: 'workflow-discussion',
-                status: 'complete',
-                actionRequired: false,
-                lastTransitionAt: '2026-04-15T17:59:00Z',
-              },
-              {
-                stage: 'research',
-                nodeId: 'workflow-research',
-                status: 'active',
-                actionRequired: true,
-                lastTransitionAt: '2026-04-15T18:00:00Z',
-              },
-            ],
-          },
         },
       },
       statuses: {
@@ -2382,10 +2339,10 @@ describe('useCadenceDesktopState', () => {
 
     await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
     expect(screen.getByTestId('workflow-has-phases')).toHaveTextContent('false')
-    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('true')
-    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('50')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('research')
-    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('1')
+    expect(screen.getByTestId('workflow-has-lifecycle')).toHaveTextContent('false')
+    expect(screen.getByTestId('workflow-lifecycle-percent')).toHaveTextContent('0')
+    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
+    expect(screen.getByTestId('workflow-lifecycle-action-required')).toHaveTextContent('0')
   })
 
   it('supports cancelled imports and successful imports without duplicating project rows', async () => {
@@ -2665,7 +2622,7 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('active-project')).toHaveTextContent('Cadence')
   })
 
-  it('keeps the prior snapshot when the adapter rejects a mixed-version snapshot missing lifecycle', async () => {
+  it('accepts snapshots without lifecycle projection after workflow model removal', async () => {
     const setup = createMockAdapter({
       listProjects: { projects: [makeProjectSummary('project-1', 'Cadence'), makeProjectSummary('project-2', 'orchestra')] },
     })
@@ -2686,12 +2643,10 @@ describe('useCadenceDesktopState', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Select project 2' }))
 
-    await waitFor(() =>
-      expect(screen.getByTestId('error')).toHaveTextContent('without the required lifecycle projection'),
-    )
-    expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1')
-    expect(screen.getByTestId('active-project')).toHaveTextContent('Cadence')
-    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('research')
+    await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-2'))
+    expect(screen.getByTestId('error')).toHaveTextContent('none')
+    expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
+    expect(screen.getByTestId('workflow-active-lifecycle-stage')).toHaveTextContent('none')
   })
 
   it('keeps the current selection intact when repository status loading fails', async () => {

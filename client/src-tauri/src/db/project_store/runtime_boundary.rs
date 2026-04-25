@@ -8,30 +8,23 @@ use crate::{
 };
 
 use super::{
-    apply_workflow_transition_mutation, attempt_automatic_dispatch_after_transition,
-    decode_operator_resume_transition_context, derive_operator_scope_prefix,
-    derive_resume_transition_id, enqueue_notification_dispatches_best_effort_with_connection,
-    find_prohibited_transition_diagnostic_content, is_plan_mode_required_gate_key,
+    derive_operator_scope_prefix, enqueue_notification_dispatches_best_effort_with_connection,
+    find_prohibited_transition_diagnostic_content,
     map_operator_loop_commit_error, map_operator_loop_transaction_error,
     map_operator_loop_write_error, map_runtime_run_write_error,
     normalize_runtime_checkpoint_summary, open_project_database, operator_approval_status_label,
-    read_latest_transition_id, read_operator_approval_by_action_id, read_project_row,
-    read_resume_history_entry_by_id, read_runtime_run_row, read_runtime_run_snapshot,
-    read_transition_event_by_transition_id, runtime_run_checkpoint_kind_sql_value,
+    read_operator_approval_by_action_id, read_project_row, read_resume_history_entry_by_id,
+    read_runtime_run_row, read_runtime_run_snapshot, runtime_run_checkpoint_kind_sql_value,
     validate_non_empty_text, validate_runtime_action_required_payload,
     NotificationDispatchEnqueueRecord, ResolveOperatorAnswerRequirement,
     RuntimeActionRequiredPersistedRecord, RuntimeActionRequiredUpsertRecord,
-    RuntimeOperatorResumeTarget, RuntimeRunCheckpointKind, WorkflowAutomaticDispatchOutcome,
-    WorkflowGateState, WorkflowTransitionGateDecision, WorkflowTransitionGateMutationRecord,
-    WorkflowTransitionMutationApplyOutcome, WorkflowTransitionMutationRecord,
-    OPERATOR_RESUME_MUTATION_ERROR_PROFILE,
+    RuntimeOperatorResumeTarget, RuntimeRunCheckpointKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResumeOperatorRunRecord {
     pub approval_request: OperatorApprovalDto,
     pub resume_entry: ResumeHistoryEntryDto,
-    pub automatic_dispatch: Option<WorkflowAutomaticDispatchOutcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -514,7 +507,7 @@ pub fn resume_operator_run_with_user_answer(
     expected_user_answer: Option<&str>,
 ) -> Result<ResumeOperatorRunRecord, CommandError> {
     let database_path = database_path_for_repo(repo_root);
-    let mut connection = open_project_database(repo_root, &database_path)?;
+    let connection = open_project_database(repo_root, &database_path)?;
     read_project_row(&connection, &database_path, repo_root, project_id)?;
 
     let transaction = connection.unchecked_transaction().map_err(|error| {
@@ -584,87 +577,11 @@ pub fn resume_operator_run_with_user_answer(
         )
     })?;
 
-    let transition_context =
-        decode_operator_resume_transition_context(&approval_request, action_id)?;
-
     let created_at = crate::auth::now_timestamp();
-    let mut summary = format!(
+    let summary = format!(
         "Operator resumed the selected project's runtime session after approving {}.",
         approval_request.title
     );
-    let mut completion_transition_id: Option<String> = None;
-
-    if let Some(context) = transition_context {
-        let transition_id = derive_resume_transition_id(action_id, &context);
-        completion_transition_id = Some(transition_id.clone());
-
-        let mutation_outcome = if let Some(existing) = read_transition_event_by_transition_id(
-            &transaction,
-            &database_path,
-            project_id,
-            &transition_id,
-        )? {
-            WorkflowTransitionMutationApplyOutcome::Replayed(existing)
-        } else {
-            let causal_transition_id =
-                read_latest_transition_id(&transaction, &database_path, project_id)?;
-
-            let (required_gate_requirement, gate_updates) =
-                if is_plan_mode_required_gate_key(&context.gate_key) {
-                    (None, Vec::new())
-                } else {
-                    (
-                        Some(context.gate_key.clone()),
-                        vec![WorkflowTransitionGateMutationRecord {
-                            node_id: context.gate_node_id.clone(),
-                            gate_key: context.gate_key.clone(),
-                            gate_state: WorkflowGateState::Satisfied,
-                            decision_context: Some(context.user_answer.clone()),
-                            require_pending_or_blocked: true,
-                        }],
-                    )
-                };
-
-            let transition = WorkflowTransitionMutationRecord {
-                transition_id,
-                causal_transition_id,
-                from_node_id: context.transition_from_node_id.clone(),
-                to_node_id: context.transition_to_node_id.clone(),
-                transition_kind: context.transition_kind.clone(),
-                gate_decision: WorkflowTransitionGateDecision::Approved,
-                gate_decision_context: Some(context.user_answer.clone()),
-                gate_updates,
-                required_gate_requirement,
-                occurred_at: created_at.clone(),
-            };
-
-            apply_workflow_transition_mutation(
-                &transaction,
-                &database_path,
-                project_id,
-                &transition,
-                &OPERATOR_RESUME_MUTATION_ERROR_PROFILE,
-                map_operator_loop_write_error,
-            )?
-        };
-
-        summary = match mutation_outcome {
-            WorkflowTransitionMutationApplyOutcome::Applied => format!(
-                "Operator resumed the selected project's runtime session after approving {} and applied transition {} -> {} ({}).",
-                approval_request.title,
-                context.transition_from_node_id,
-                context.transition_to_node_id,
-                context.transition_kind,
-            ),
-            WorkflowTransitionMutationApplyOutcome::Replayed(_) => format!(
-                "Operator resumed the selected project's runtime session after approving {} and reused existing transition {} -> {} ({}).",
-                approval_request.title,
-                context.transition_from_node_id,
-                context.transition_to_node_id,
-                context.transition_kind,
-            ),
-        };
-    }
 
     transaction
         .execute(
@@ -724,37 +641,9 @@ pub fn resume_operator_run_with_user_answer(
                 )
             })?;
 
-    let automatic_dispatch = if let Some(transition_id) = completion_transition_id {
-        let transition_event = read_transition_event_by_transition_id(
-            &connection,
-            &database_path,
-            project_id,
-            &transition_id,
-        )?
-        .ok_or_else(|| {
-            CommandError::system_fault(
-                "workflow_transition_event_missing_after_persist",
-                format!(
-                    "Cadence persisted transition `{transition_id}` in {} but could not read it back.",
-                    database_path.display()
-                ),
-            )
-        })?;
-
-        Some(attempt_automatic_dispatch_after_transition(
-            &mut connection,
-            &database_path,
-            project_id,
-            &transition_event,
-        ))
-    } else {
-        None
-    };
-
     Ok(ResumeOperatorRunRecord {
         approval_request,
         resume_entry,
-        automatic_dispatch,
     })
 }
 

@@ -378,27 +378,6 @@ pub(crate) fn enqueue_notification_dispatches_best_effort_with_connection(
     }
 }
 
-pub(crate) fn format_notification_dispatch_enqueue_outcome(
-    outcome: &NotificationDispatchEnqueueOutcomeRecord,
-) -> String {
-    let code = outcome
-        .code
-        .as_deref()
-        .unwrap_or("notification_dispatch_enqueue_skipped");
-    let message = outcome
-        .message
-        .as_deref()
-        .unwrap_or("Cadence skipped notification dispatch fan-out.");
-
-    match outcome.status {
-        NotificationDispatchEnqueueStatus::Enqueued => format!(
-            "{code}: {message} (dispatch_count={}).",
-            outcome.dispatch_count
-        ),
-        NotificationDispatchEnqueueStatus::Skipped => format!("{code}: {message}"),
-    }
-}
-
 pub fn load_notification_dispatches(
     repo_root: &Path,
     project_id: &str,

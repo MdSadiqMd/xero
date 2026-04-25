@@ -68,16 +68,10 @@ function extractRuntimeBoundaryIdFromActionId(actionId: string, actionType: stri
 
 export function getBlockedNotificationSyncPollTarget(options: {
   project: ProjectDetailView | null
-  autonomousUnit: ProjectDetailView['autonomousUnit'] | null
   runtimeStream: RuntimeStreamView | null
 }): BlockedNotificationSyncPollTarget | null {
-  const { project, autonomousUnit, runtimeStream } = options
-  if (!project || !autonomousUnit || autonomousUnit.status !== 'blocked') {
-    return null
-  }
-
-  const boundaryId = autonomousUnit.boundaryId?.trim()
-  if (!boundaryId) {
+  const { project, runtimeStream } = options
+  if (!project) {
     return null
   }
 
@@ -88,22 +82,27 @@ export function getBlockedNotificationSyncPollTarget(options: {
 
   const pendingActionIds = new Set(pendingApprovals.map((approval) => approval.actionId))
   const matchingRuntimeAction = [...(runtimeStream?.actionRequired ?? [])]
-    .filter((item) => pendingActionIds.has(item.actionId) && item.boundaryId?.trim() === boundaryId)
+    .filter((item) => pendingActionIds.has(item.actionId) && item.boundaryId?.trim())
     .sort((left, right) => getTimestampMs(right.createdAt) - getTimestampMs(left.createdAt))[0]
 
   if (matchingRuntimeAction) {
     return {
       projectId: project.id,
       actionId: matchingRuntimeAction.actionId,
-      boundaryId,
+      boundaryId: matchingRuntimeAction.boundaryId?.trim() ?? '',
     }
   }
 
-  const matchingApproval = pendingApprovals.find(
-    (approval) => extractRuntimeBoundaryIdFromActionId(approval.actionId, approval.actionType) === boundaryId,
+  const matchingApproval = pendingApprovals.find((approval) =>
+    Boolean(extractRuntimeBoundaryIdFromActionId(approval.actionId, approval.actionType)),
   )
 
   if (!matchingApproval) {
+    return null
+  }
+
+  const boundaryId = extractRuntimeBoundaryIdFromActionId(matchingApproval.actionId, matchingApproval.actionType)
+  if (!boundaryId) {
     return null
   }
 

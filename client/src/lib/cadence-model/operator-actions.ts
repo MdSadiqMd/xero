@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { workflowAutomaticDispatchOutcomeSchema } from './workflow'
 import {
   isoTimestampSchema,
   nonEmptyOptionalTextSchema,
@@ -350,7 +349,6 @@ export const resumeOperatorRunRequestSchema = z
 export const resumeOperatorRunResponseSchema = z.object({
   approvalRequest: operatorApprovalSchema,
   resumeEntry: resumeHistoryEntrySchema,
-  automaticDispatch: workflowAutomaticDispatchOutcomeSchema.optional(),
 })
 
 export type OperatorApprovalStatusDto = z.infer<typeof operatorApprovalStatusSchema>

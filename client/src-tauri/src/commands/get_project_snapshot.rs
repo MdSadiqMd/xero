@@ -104,7 +104,6 @@ pub fn get_project_snapshot<R: Runtime>(
                     AutonomousSyncIntent::Observe,
                 )?;
                 snapshot.autonomous_run = autonomous_state.run;
-                snapshot.autonomous_unit = autonomous_state.unit;
                 return Ok(snapshot);
             }
             Err(error) => {

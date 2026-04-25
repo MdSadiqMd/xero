@@ -14,7 +14,6 @@ import { getStreamStatusMeta, getToolSummaryContext } from '@/components/cadence
 import { displayValue, formatSequence } from '@/components/cadence/agent-runtime/shared-helpers'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type { RuntimeSessionView, RuntimeStreamToolItemView } from '@/src/lib/cadence-model'
-import { createEmptyPlanningLifecycle } from '@/src/lib/cadence-model/workflow'
 
 function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
   return {
@@ -32,7 +31,6 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
       branchLabel: 'main',
       runtimeLabel: 'Runtime unavailable',
       phaseProgressPercent: 0,
-      lifecycle: createEmptyPlanningLifecycle(),
       repository: null,
       repositoryStatus: null,
       approvalRequests: [],
@@ -40,7 +38,6 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
       latestDecisionOutcome: null,
       verificationRecords: [],
       resumeHistory: [],
-      handoffPackages: [],
       agentSessions: [],
       selectedAgentSession: null,
       selectedAgentSessionId: 'agent-session-main',
@@ -63,10 +60,6 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
       runtimeSession: null,
       runtimeRun: null,
       autonomousRun: null,
-      autonomousUnit: null,
-      autonomousAttempt: null,
-      autonomousHistory: [],
-      autonomousRecentArtifacts: [],
     },
     activePhase: null,
     branchLabel: 'main',
@@ -74,8 +67,6 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     runtimeLabel: 'Runtime unavailable',
     repositoryLabel: 'Cadence',
     repositoryPath: '/tmp/Cadence',
-    autonomousHistory: [],
-    autonomousRecentArtifacts: [],
     notificationBroker: {
       dispatches: [],
       actions: [],

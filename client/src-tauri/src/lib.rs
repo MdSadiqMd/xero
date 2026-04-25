@@ -123,8 +123,6 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::record_notification_dispatch_outcome::record_notification_dispatch_outcome,
             commands::submit_notification_reply::submit_notification_reply,
             commands::sync_notification_adapters::sync_notification_adapters,
-            commands::upsert_workflow_graph::upsert_workflow_graph,
-            commands::apply_workflow_transition::apply_workflow_transition,
             commands::browser::browser_show,
             commands::browser::browser_resize,
             commands::browser::browser_hide,

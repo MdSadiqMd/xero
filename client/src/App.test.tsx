@@ -3985,52 +3985,6 @@ describe('CadenceApp current UI', () => {
     expect(screen.getByText('Live action required')).toBeVisible()
   })
 
-  it('keeps recovered durable policy denials understandable and visible on the shipped Agent surface after the live row clears', async () => {
-    const deniedActionId = 'flow:flow-1:run:run-1:boundary:boundary-denied-1:review_command'
-    const setup = createAdapter({
-      runtimeSession: makeRuntimeSession('project-1', {
-        phase: 'authenticated',
-        sessionId: 'session-1',
-        accountId: 'acct-1',
-        flowId: 'flow-1',
-        lastErrorCode: null,
-        lastError: null,
-      }),
-      runtimeRun: makeRuntimeRun('project-1', {
-        runId: 'run-1',
-        controls: {
-          active: {
-            modelId: 'openai_codex',
-            thinkingEffort: 'medium',
-            approvalMode: 'yolo',
-            planModeRequired: false,
-            revision: 2,
-            appliedAt: '2026-04-22T12:07:00Z',
-          },
-          pending: null,
-        },
-        updatedAt: '2026-04-22T12:08:00Z',
-      }),
-      autonomousState: makeRecoveredPolicyDeniedAutonomousState('project-1', {
-        actionId: deniedActionId,
-        boundaryId: 'boundary-denied-1',
-      }),
-    })
-
-    render(<CadenceApp adapter={setup.adapter} />)
-
-    await waitFor(() =>
-      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-
-    await waitFor(() => expect(screen.getByLabelText('Agent input')).toBeEnabled())
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible())
-    expect(screen.getByText('Recovered durable denial')).toBeVisible()
-    expect(screen.getAllByText('Policy denied').length).toBeGreaterThan(0)
-  })
-
   it('opens Settings and runs the current provider and notification flows', async () => {
     const { adapter, upsertNotificationRoute } = createAdapter({
       runtimeRun: null,

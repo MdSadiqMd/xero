@@ -40,12 +40,7 @@ pub fn cancel_autonomous_run<R: Runtime>(
             ));
         }
     } else {
-        return Ok(AutonomousRunStateDto {
-            run: None,
-            unit: None,
-            attempt: None,
-            history: Vec::new(),
-        });
+        return Ok(AutonomousRunStateDto { run: None });
     }
 
     let after = stop_supervised_runtime_run(

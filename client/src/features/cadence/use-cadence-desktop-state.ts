@@ -17,10 +17,6 @@ import {
   selectAgentSessionId,
   upsertProjectListItem,
   notificationRouteCredentialReadinessSchema,
-  type AutonomousUnitAttemptView,
-  type AutonomousUnitArtifactView,
-  type AutonomousUnitHistoryEntryView,
-  type AutonomousWorkflowContextView,
   type CreateProjectEntryRequestDto,
   type CreateProjectEntryResponseDto,
   type DeleteProjectEntryResponseDto,
@@ -34,8 +30,6 @@ import {
   type NotificationRouteKindDto,
   type OperatorApprovalView,
   type Phase,
-  type PlanningLifecycleStageView,
-  type PlanningLifecycleView,
   type ProjectDetailView,
   type ProjectListItem,
   type ProviderModelCatalogDto,
@@ -310,10 +304,6 @@ export function useCadenceDesktopState(
   const [runtimeSessions, setRuntimeSessions] = useState<Record<string, RuntimeSessionView>>({})
   const [runtimeRuns, setRuntimeRuns] = useState<Record<string, RuntimeRunView>>({})
   const [autonomousRuns, setAutonomousRuns] = useState<Record<string, NonNullable<ProjectDetailView['autonomousRun']>>>({})
-  const [autonomousUnits, setAutonomousUnits] = useState<Record<string, NonNullable<ProjectDetailView['autonomousUnit']>>>({})
-  const [autonomousAttempts, setAutonomousAttempts] = useState<Record<string, NonNullable<ProjectDetailView['autonomousAttempt']>>>({})
-  const [autonomousHistories, setAutonomousHistories] = useState<Record<string, AutonomousUnitHistoryEntryView[]>>({})
-  const [autonomousRecentArtifacts, setAutonomousRecentArtifacts] = useState<Record<string, AutonomousUnitArtifactView[]>>({})
   const [notificationRoutes, setNotificationRoutes] = useState<Record<string, NotificationRouteDto[]>>({})
   const [notificationRouteLoadStatuses, setNotificationRouteLoadStatuses] = useState<
     Record<string, NotificationRoutesLoadStatus>
@@ -398,10 +388,6 @@ export function useCadenceDesktopState(
   const runtimeSessionsRef = useRef<Record<string, RuntimeSessionView>>({})
   const runtimeRunsRef = useRef<Record<string, RuntimeRunView>>({})
   const autonomousRunsRef = useRef<Record<string, NonNullable<ProjectDetailView['autonomousRun']>>>({})
-  const autonomousUnitsRef = useRef<Record<string, NonNullable<ProjectDetailView['autonomousUnit']>>>({})
-  const autonomousAttemptsRef = useRef<Record<string, NonNullable<ProjectDetailView['autonomousAttempt']>>>({})
-  const autonomousHistoriesRef = useRef<Record<string, AutonomousUnitHistoryEntryView[]>>({})
-  const autonomousRecentArtifactsRef = useRef<Record<string, AutonomousUnitArtifactView[]>>({})
   const notificationRoutesRef = useRef<Record<string, NotificationRouteDto[]>>({})
   const notificationRouteLoadStatusesRef = useRef<Record<string, NotificationRoutesLoadStatus>>({})
   const notificationRouteLoadErrorsRef = useRef<Record<string, OperatorActionErrorView | null>>({})
@@ -464,22 +450,6 @@ export function useCadenceDesktopState(
   useEffect(() => {
     autonomousRunsRef.current = autonomousRuns
   }, [autonomousRuns])
-
-  useEffect(() => {
-    autonomousUnitsRef.current = autonomousUnits
-  }, [autonomousUnits])
-
-  useEffect(() => {
-    autonomousAttemptsRef.current = autonomousAttempts
-  }, [autonomousAttempts])
-
-  useEffect(() => {
-    autonomousHistoriesRef.current = autonomousHistories
-  }, [autonomousHistories])
-
-  useEffect(() => {
-    autonomousRecentArtifactsRef.current = autonomousRecentArtifacts
-  }, [autonomousRecentArtifacts])
 
   useEffect(() => {
     notificationRoutesRef.current = notificationRoutes
@@ -665,10 +635,6 @@ export function useCadenceDesktopState(
       projectId: string,
       inspection: {
         autonomousRun: ProjectDetailView['autonomousRun']
-        autonomousUnit: ProjectDetailView['autonomousUnit']
-        autonomousAttempt: ProjectDetailView['autonomousAttempt']
-        autonomousHistory: ProjectDetailView['autonomousHistory']
-        autonomousRecentArtifacts: ProjectDetailView['autonomousRecentArtifacts']
       },
       options: { clearGlobalError?: boolean; loadError?: string | null } = {},
     ) => {
@@ -684,34 +650,6 @@ export function useCadenceDesktopState(
           [projectId]: inspection.autonomousRun,
         }
       })
-      setAutonomousUnits((currentUnits) => {
-        if (!inspection.autonomousUnit) {
-          return removeProjectRecord(currentUnits, projectId)
-        }
-
-        return {
-          ...currentUnits,
-          [projectId]: inspection.autonomousUnit,
-        }
-      })
-      setAutonomousAttempts((currentAttempts) => {
-        if (!inspection.autonomousAttempt) {
-          return removeProjectRecord(currentAttempts, projectId)
-        }
-
-        return {
-          ...currentAttempts,
-          [projectId]: inspection.autonomousAttempt,
-        }
-      })
-      setAutonomousHistories((currentHistories) => ({
-        ...currentHistories,
-        [projectId]: inspection.autonomousHistory,
-      }))
-      setAutonomousRecentArtifacts((currentArtifacts) => ({
-        ...currentArtifacts,
-        [projectId]: inspection.autonomousRecentArtifacts,
-      }))
       setAutonomousRunLoadErrors((currentErrors) => ({
         ...currentErrors,
         [projectId]: options.loadError ?? null,
@@ -721,10 +659,6 @@ export function useCadenceDesktopState(
           ? applyAutonomousRunState(
               currentProject,
               inspection.autonomousRun,
-              inspection.autonomousUnit,
-              inspection.autonomousAttempt,
-              inspection.autonomousHistory,
-              inspection.autonomousRecentArtifacts,
             )
           : currentProject,
       )
@@ -895,10 +829,6 @@ export function useCadenceDesktopState(
           runtimeSessionsRef,
           runtimeRunsRef,
           autonomousRunsRef,
-          autonomousUnitsRef,
-          autonomousAttemptsRef,
-          autonomousHistoriesRef,
-          autonomousRecentArtifactsRef,
           notificationSyncSummariesRef,
           notificationDispatchesRef,
           notificationRoutesRef,
@@ -911,10 +841,6 @@ export function useCadenceDesktopState(
           setRuntimeSessions,
           setRuntimeRuns,
           setAutonomousRuns,
-          setAutonomousUnits,
-          setAutonomousAttempts,
-          setAutonomousHistories,
-          setAutonomousRecentArtifacts,
           setNotificationSyncSummaries,
           setNotificationSyncErrors,
           setRuntimeLoadErrors,
@@ -1005,10 +931,6 @@ export function useCadenceDesktopState(
         setRepositoryStatus(null)
         setRuntimeRuns({})
         setAutonomousRuns({})
-        setAutonomousUnits({})
-        setAutonomousAttempts({})
-        setAutonomousHistories({})
-        setAutonomousRecentArtifacts({})
         setNotificationRoutes({})
         setNotificationRouteLoadStatuses({})
         setNotificationRouteLoadErrors({})
@@ -1446,18 +1368,6 @@ export function useCadenceDesktopState(
   const activeAutonomousRun = activeProjectId
     ? autonomousRuns[activeProjectId] ?? activeProject?.autonomousRun ?? null
     : null
-  const activeAutonomousUnit = activeProjectId
-    ? autonomousUnits[activeProjectId] ?? activeProject?.autonomousUnit ?? null
-    : null
-  const activeAutonomousAttempt = activeProjectId
-    ? autonomousAttempts[activeProjectId] ?? activeProject?.autonomousAttempt ?? null
-    : null
-  const activeAutonomousHistory = activeProjectId
-    ? autonomousHistories[activeProjectId] ?? activeProject?.autonomousHistory ?? []
-    : []
-  const activeAutonomousRecentArtifacts = activeProjectId
-    ? autonomousRecentArtifacts[activeProjectId] ?? activeProject?.autonomousRecentArtifacts ?? []
-    : []
   const activeAutonomousRunErrorMessage = activeProjectId ? autonomousRunLoadErrors[activeProjectId] ?? null : null
   const activeRuntimeRunId = activeRuntimeRun?.runId ?? null
   const activeRuntimeSubscriptionKey =
@@ -1516,10 +1426,9 @@ export function useCadenceDesktopState(
     () =>
       getBlockedNotificationSyncPollTarget({
         project: activeProject,
-        autonomousUnit: activeAutonomousUnit,
         runtimeStream: activeRuntimeStream,
       }),
-    [activeAutonomousUnit, activeProject, activeRuntimeStream],
+    [activeProject, activeRuntimeStream],
   )
   const activeBlockedNotificationSyncPollKey = getBlockedNotificationSyncPollKey(
     activeBlockedNotificationSyncPollTarget,
@@ -1574,10 +1483,6 @@ export function useCadenceDesktopState(
         activeProviderModelCatalogLoadError,
         runtimeRun: activeRuntimeRun,
         autonomousRun: activeAutonomousRun,
-        autonomousUnit: activeAutonomousUnit,
-        autonomousAttempt: activeAutonomousAttempt,
-        autonomousHistory: activeAutonomousHistory,
-        autonomousRecentArtifacts: activeAutonomousRecentArtifacts,
         runtimeErrorMessage: activeRuntimeErrorMessage,
         runtimeRunErrorMessage: activeRuntimeRunErrorMessage,
         autonomousRunErrorMessage: activeAutonomousRunErrorMessage,
@@ -1613,12 +1518,8 @@ export function useCadenceDesktopState(
       activeProviderModelCatalog,
       activeProviderModelCatalogLoadError,
       activeProviderModelCatalogLoadStatus,
-      activeAutonomousAttempt,
-      activeAutonomousHistory,
-      activeAutonomousRecentArtifacts,
       activeAutonomousRun,
       activeAutonomousRunErrorMessage,
-      activeAutonomousUnit,
       activeBlockedNotificationSyncPollTarget,
       activeRuntimeErrorMessage,
       activeRuntimeRun,

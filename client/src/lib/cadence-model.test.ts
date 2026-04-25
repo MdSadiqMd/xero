@@ -3,23 +3,14 @@ import {
   applyRepositoryStatus,
   applyRuntimeSession,
   applyRuntimeStreamIssue,
-  applyWorkflowTransitionRequestSchema,
-  applyWorkflowTransitionResponseSchema,
   autonomousRunStateSchema,
-  autonomousToolResultPayloadSchema,
-  autonomousUnitAttemptSchema,
-  autonomousUnitSchema,
   composeNotificationRouteTarget,
   createRuntimeStreamFromSubscription,
   decomposeNotificationRouteTarget,
-  deriveAutonomousWorkflowContext,
   getRuntimeStreamStatusLabel,
   listNotificationDispatchesResponseSchema,
   listNotificationRoutesResponseSchema,
-  mapAutonomousArtifact,
-  mapAutonomousUnit,
   mapProjectSnapshot,
-  mapPlanningLifecycle,
   mapProjectSummary,
   mapRepositoryStatus,
   mapRuntimeRun,
@@ -49,9 +40,6 @@ import {
   upsertNotificationRouteRequestSchema,
   upsertProviderProfileRequestSchema,
   upsertRuntimeSettingsRequestSchema,
-  upsertWorkflowGraphRequestSchema,
-  upsertWorkflowGraphResponseSchema,
-  type AutonomousUnitArtifactDto,
   type ProjectSnapshotResponseDto,
   type RepositoryStatusResponseDto,
   type RuntimeSessionDto,
@@ -103,24 +91,6 @@ function makeSnapshot(overrides: Partial<ProjectSnapshotResponseDto> = {}): Proj
         summary: null,
       },
     ],
-    lifecycle: {
-      stages: [
-        {
-          stage: 'discussion',
-          nodeId: 'workflow-discussion',
-          status: 'complete',
-          actionRequired: false,
-          lastTransitionAt: '2026-04-15T17:59:00Z',
-        },
-        {
-          stage: 'research',
-          nodeId: 'workflow-research',
-          status: 'active',
-          actionRequired: true,
-          lastTransitionAt: '2026-04-15T18:00:00Z',
-        },
-      ],
-    },
     approvalRequests: [],
     verificationRecords: [],
     resumeHistory: [],
@@ -154,7 +124,6 @@ function makeAutonomousRun(overrides: Partial<NonNullable<ProjectSnapshotRespons
     supervisorKind: 'detached_pty',
     status: 'stale' as const,
     recoveryState: 'recovery_required' as const,
-    activeUnitId: 'run-1:checkpoint:2',
     duplicateStartDetected: false,
     duplicateStartRunId: null,
     duplicateStartReason: null,
@@ -179,43 +148,6 @@ function makeAutonomousRun(overrides: Partial<NonNullable<ProjectSnapshotRespons
     },
     updatedAt: '2026-04-15T23:10:03Z',
     ...overrides,
-  }
-}
-
-function makeAutonomousUnit(overrides: Partial<NonNullable<ProjectSnapshotResponseDto['autonomousUnit']>> = {}) {
-  return {
-    projectId: 'project-1',
-    runId: 'run-1',
-    unitId: 'run-1:checkpoint:2',
-    sequence: 2,
-    kind: 'executor' as const,
-    status: 'active' as const,
-    summary: 'Supervisor heartbeat recorded.',
-    boundaryId: null,
-    startedAt: '2026-04-15T23:10:02Z',
-    finishedAt: null,
-    updatedAt: '2026-04-15T23:10:03Z',
-    lastErrorCode: 'runtime_supervisor_connect_failed',
-    lastError: {
-      code: 'runtime_supervisor_connect_failed',
-      message: 'Cadence could not connect to the detached supervisor control endpoint.',
-    },
-    ...overrides,
-  }
-}
-
-function makeHandoffPackage(projectId = 'project-1', transitionId = 'auto:txn-001') {
-  return {
-    id: 42,
-    projectId,
-    handoffTransitionId: transitionId,
-    causalTransitionId: 'txn-000',
-    fromNodeId: 'workflow-discussion',
-    toNodeId: 'workflow-research',
-    transitionKind: 'advance',
-    packagePayload: '{"schemaVersion":1,"triggerTransition":{"transitionId":"auto:txn-001"}}',
-    packageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
-    createdAt: '2026-04-16T14:00:00Z',
   }
 }
 
@@ -487,326 +419,16 @@ describe('cadence-model', () => {
     expect(summary.phaseProgressPercent).toBe(0)
   })
 
-  it('maps persisted workflow phases into project detail views without fabricating summaries', () => {
+  it('maps persisted phase snapshots into project detail views without fabricating workflow state', () => {
     const project = mapProjectSnapshot(makeSnapshot())
 
     expect(project.phaseProgressPercent).toBe(33)
     expect(project.completedPhases).toBe(1)
     expect(project.repository?.headShaLabel).toBe('abc123')
-    expect(project.lifecycle.hasStages).toBe(true)
-    expect(project.lifecycle.activeStage?.stage).toBe('research')
-    expect(project.lifecycle.actionRequiredCount).toBe(1)
     expect(project.phases).toHaveLength(2)
     expect(project.phases[0].summary).toBe('Imported successfully')
     expect(project.phases[1].summary).toBeUndefined()
-    expect(project.phases[1].stepStatuses.execute).toBe('active')
-    expect(project.phases[1].stepStatuses.verify).toBe('pending')
-  })
-
-  it('maps lifecycle unblock metadata when gate linkage fields are complete', () => {
-    const lifecycle = mapPlanningLifecycle({
-      stages: [
-        {
-          stage: 'research',
-          nodeId: 'workflow-research',
-          status: 'blocked',
-          actionRequired: true,
-          unblockReason: 'research is waiting on a linked operator gate approval.',
-          unblockGateKey: 'requires_user_input',
-          unblockActionId: 'action-123',
-          lastTransitionAt: '2026-04-15T18:00:00Z',
-        },
-      ],
-    })
-
-    expect(lifecycle.byStage.research?.actionRequired).toBe(true)
-    expect(lifecycle.byStage.research?.unblock).toEqual({
-      reason: 'research is waiting on a linked operator gate approval.',
-      gateKey: 'requires_user_input',
-      actionId: 'action-123',
-    })
-  })
-
-  it('drops malformed lifecycle unblock metadata while preserving fail-closed action-required state', () => {
-    const lifecycle = mapPlanningLifecycle({
-      stages: [
-        {
-          stage: 'research',
-          nodeId: 'workflow-research',
-          status: 'blocked',
-          actionRequired: true,
-          unblockReason: 'research is waiting on a linked operator gate approval.',
-          unblockGateKey: null,
-          unblockActionId: 'action-123',
-          lastTransitionAt: '2026-04-15T18:00:00Z',
-        },
-      ],
-    })
-
-    expect(lifecycle.byStage.research?.actionRequired).toBe(true)
-    expect(lifecycle.byStage.research?.unblock).toBeNull()
-  })
-
-  it('rejects malformed lifecycle unblock reason field types at the parse boundary', () => {
-    expect(() =>
-      projectSnapshotResponseSchema.parse(
-        makeSnapshot({
-          lifecycle: {
-            stages: [
-              {
-                stage: 'research',
-                nodeId: 'workflow-research',
-                status: 'blocked',
-                actionRequired: true,
-                unblockReason: 7,
-                unblockGateKey: 'requires_user_input',
-                unblockActionId: 'action-123',
-                lastTransitionAt: '2026-04-15T18:00:00Z',
-              } as unknown as ProjectSnapshotResponseDto['lifecycle']['stages'][number],
-            ],
-          },
-        }),
-      ),
-    ).toThrow()
-  })
-
-  it('derives linked workflow context from autonomous linkage, lifecycle projection, and handoff truth', () => {
-    const project = mapProjectSnapshot(
-      makeSnapshot({
-        lifecycle: {
-          stages: [
-            {
-              stage: 'discussion',
-              nodeId: 'workflow-discussion',
-              status: 'complete',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-16T13:59:00Z',
-            },
-            {
-              stage: 'research',
-              nodeId: 'workflow-research',
-              status: 'active',
-              actionRequired: true,
-              lastTransitionAt: '2026-04-16T14:00:00Z',
-            },
-          ],
-        },
-        approvalRequests: [
-          {
-            actionId: 'scope:auto-dispatch:workflow-research:requires_user_input',
-            sessionId: 'session-1',
-            flowId: 'flow-1',
-            actionType: 'review_worktree',
-            title: 'Review worktree changes',
-            detail: 'Inspect the pending repository diff before continuing.',
-            gateNodeId: 'workflow-research',
-            gateKey: 'requires_user_input',
-            transitionFromNodeId: 'workflow-discussion',
-            transitionToNodeId: 'workflow-research',
-            transitionKind: 'advance',
-            userAnswer: null,
-            status: 'pending',
-            decisionNote: null,
-            createdAt: '2026-04-16T14:00:00Z',
-            updatedAt: '2026-04-16T14:00:00Z',
-            resolvedAt: null,
-          },
-        ],
-        handoffPackages: [makeHandoffPackage('project-1', 'auto:txn-001')],
-      }),
-    )
-
-    const context = deriveAutonomousWorkflowContext({
-      lifecycle: project.lifecycle,
-      handoffPackages: project.handoffPackages,
-      approvalRequests: project.approvalRequests,
-      autonomousUnit: mapAutonomousUnit(
-        autonomousUnitSchema.parse({
-          ...makeAutonomousUnit(),
-          workflowLinkage: {
-            workflowNodeId: 'workflow-research',
-            transitionId: 'auto:txn-001',
-            causalTransitionId: 'txn-000',
-            handoffTransitionId: 'auto:txn-001',
-            handoffPackageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
-          },
-        }),
-      ),
-      autonomousAttempt: null,
-    })
-
-    expect(context).toMatchObject({
-      linkageSource: 'unit',
-      state: 'ready',
-      stateLabel: 'In sync',
-      linkedNodeLabel: 'Workflow Research',
-      linkedStage: {
-        stage: 'research',
-        status: 'active',
-      },
-      handoff: {
-        handoffTransitionId: 'auto:txn-001',
-        packageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
-      },
-      pendingApproval: {
-        actionId: 'scope:auto-dispatch:workflow-research:requires_user_input',
-      },
-    })
-    expect(context?.detail).toContain('Pending approval')
-  })
-
-  it('flags linked workflow snapshot lag instead of fabricating lifecycle advancement when linkage outruns the active stage', () => {
-    const project = mapProjectSnapshot(
-      makeSnapshot({
-        lifecycle: {
-          stages: [
-            {
-              stage: 'discussion',
-              nodeId: 'workflow-discussion',
-              status: 'active',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-16T13:59:00Z',
-            },
-            {
-              stage: 'research',
-              nodeId: 'workflow-research',
-              status: 'pending',
-              actionRequired: true,
-              lastTransitionAt: null,
-            },
-          ],
-        },
-      }),
-    )
-
-    const context = deriveAutonomousWorkflowContext({
-      lifecycle: project.lifecycle,
-      handoffPackages: project.handoffPackages,
-      approvalRequests: project.approvalRequests,
-      autonomousUnit: mapAutonomousUnit(
-        autonomousUnitSchema.parse({
-          ...makeAutonomousUnit(),
-          workflowLinkage: {
-            workflowNodeId: 'workflow-research',
-            transitionId: 'auto:txn-002',
-            causalTransitionId: 'txn-001',
-            handoffTransitionId: 'auto:txn-002',
-            handoffPackageHash: '1111111111111111111111111111111111111111111111111111111111111111',
-          },
-        }),
-      ),
-      autonomousAttempt: null,
-    })
-
-    expect(project.lifecycle.activeStage?.stage).toBe('discussion')
-    expect(context).toMatchObject({
-      state: 'awaiting_snapshot',
-      stateLabel: 'Snapshot lag',
-      linkedStage: {
-        stage: 'research',
-        status: 'pending',
-      },
-      activeLifecycleStage: {
-        stage: 'discussion',
-      },
-      handoff: null,
-    })
-    expect(context?.detail).toContain('keeping lifecycle progression anchored to snapshot truth')
-  })
-
-  it('rejects malformed autonomous workflow linkage payloads at the adapter boundary', () => {
-    expect(() =>
-      autonomousUnitSchema.parse({
-        ...makeAutonomousUnit(),
-        workflowLinkage: {
-          workflowNodeId: '   ',
-          transitionId: 'auto:txn-001',
-          causalTransitionId: 'txn-000',
-          handoffTransitionId: 'auto:txn-001',
-          handoffPackageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
-        },
-      }),
-    ).toThrow()
-
-    expect(() =>
-      autonomousUnitAttemptSchema.parse({
-        projectId: 'project-1',
-        runId: 'run-1',
-        unitId: 'run-1:checkpoint:2',
-        attemptId: 'attempt-1',
-        attemptNumber: 1,
-        childSessionId: 'child-session-1',
-        status: 'active',
-        boundaryId: 'checkpoint:2',
-        workflowLinkage: {
-          workflowNodeId: 'workflow-research',
-          transitionId: 'auto:txn-001',
-          causalTransitionId: 'txn-000',
-          handoffTransitionId: '   ',
-          handoffPackageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
-        },
-        startedAt: '2026-04-16T14:00:00Z',
-        finishedAt: null,
-        updatedAt: '2026-04-16T14:00:01Z',
-        lastErrorCode: null,
-        lastError: null,
-      }),
-    ).toThrow()
-
-    expect(() =>
-      autonomousRunStateSchema.parse({
-        run: makeAutonomousRun(),
-        unit: {
-          ...makeAutonomousUnit({ projectId: 'project-2' }),
-          workflowLinkage: {
-            workflowNodeId: 'workflow-research',
-            transitionId: 'auto:txn-001',
-            causalTransitionId: 'txn-000',
-            handoffTransitionId: 'auto:txn-001',
-            handoffPackageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
-          },
-        },
-        attempt: null,
-        history: [],
-      }),
-    ).toThrow(/Autonomous unit project id must match the autonomous run project id/)
-  })
-
-  it('maps additive handoff packages while filtering cross-project rows', () => {
-    const project = mapProjectSnapshot(
-      makeSnapshot({
-        handoffPackages: [
-          makeHandoffPackage('project-1', 'auto:txn-001'),
-          makeHandoffPackage('project-1', 'auto:txn-002'),
-          makeHandoffPackage('project-2', 'auto:txn-ghost'),
-        ],
-      }),
-    )
-
-    expect(project.handoffPackages).toHaveLength(2)
-    expect(project.handoffPackages.map((pkg) => pkg.handoffTransitionId)).toEqual(['auto:txn-001', 'auto:txn-002'])
-    expect(project.handoffPackages[0]).toMatchObject({
-      projectId: 'project-1',
-      handoffTransitionId: 'auto:txn-001',
-      packageHash: 'c6488be19a74f4cd78d6d0ec03f0f8ec0a8ec8e53e1fd0f96af7f3298df138f7',
-    })
-    expect(project.lifecycle.activeStage?.stage).toBe('research')
-  })
-
-  it('rejects malformed handoff-package payloads at the snapshot contract boundary even for cross-project rows', () => {
-    expect(() =>
-      projectSnapshotResponseSchema.parse(
-        makeSnapshot({
-          handoffPackages: [
-            makeHandoffPackage('project-1', 'auto:txn-001'),
-            {
-              ...makeHandoffPackage('project-2', 'auto:txn-ghost'),
-              packageHash: 7,
-            } as unknown as ReturnType<typeof makeHandoffPackage>,
-          ],
-        }),
-      ),
-    ).toThrow()
+    expect(project.phases[1].currentStep).toBe('execute')
   })
 
   it('projects bounded notification broker metadata while filtering cross-project dispatch rows', () => {
@@ -1728,7 +1350,7 @@ describe('cadence-model', () => {
     ).toThrow()
   })
 
-  it('derives phase step status and zero-safe progress from project snapshots', () => {
+  it('keeps phase current-step strings generic and zero-safe progress bounded', () => {
     const project = mapProjectSnapshot(
       makeSnapshot({
         project: {
@@ -1759,258 +1381,31 @@ describe('cadence-model', () => {
 
     expect(project.phaseProgressPercent).toBe(0)
     expect(project.phases[0].description).toBe('No phase description provided.')
-    expect(project.phases[0].stepStatuses.discuss).toBe('complete')
-    expect(project.phases[0].stepStatuses.plan).toBe('complete')
-    expect(project.phases[0].stepStatuses.execute).toBe('complete')
-    expect(project.phases[0].stepStatuses.verify).toBe('active')
-    expect(project.phases[0].stepStatuses.ship).toBe('pending')
+    expect(project.phases[0].currentStep).toBe('verify')
   })
 
-  it('maps lifecycle-first snapshots even when legacy phases are empty', () => {
-    const project = mapProjectSnapshot(
-      makeSnapshot({
-        project: {
-          id: 'project-1',
-          name: 'Cadence',
-          description: 'Desktop shell',
-          milestone: 'M001',
-          totalPhases: 0,
-          completedPhases: 0,
-          activePhase: 0,
-          branch: 'main',
-          runtime: 'codex',
-        },
-        phases: [],
-        lifecycle: {
-          stages: [
-            {
-              stage: 'discussion',
-              nodeId: 'workflow-discussion',
-              status: 'complete',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-15T17:59:00Z',
-            },
-            {
-              stage: 'research',
-              nodeId: 'workflow-research',
-              status: 'active',
-              actionRequired: true,
-              lastTransitionAt: '2026-04-15T18:00:00Z',
-            },
-            {
-              stage: 'requirements',
-              nodeId: 'workflow-requirements',
-              status: 'pending',
-              actionRequired: false,
-              lastTransitionAt: null,
-            },
-          ],
-        },
-      }),
-    )
-
-    expect(project.phases).toHaveLength(0)
-    expect(project.lifecycle.hasStages).toBe(true)
-    expect(project.lifecycle.stages).toHaveLength(3)
-    expect(project.lifecycle.activeStage?.stage).toBe('research')
-    expect(project.lifecycle.byStage.requirements?.status).toBe('pending')
-    expect(project.lifecycle.percentComplete).toBe(33)
-    expect(project.lifecycle.actionRequiredCount).toBe(1)
-  })
-
-  it('projects auto-dispatch lifecycle advancement with deterministic stage ordering', () => {
-    const project = mapProjectSnapshot(
-      makeSnapshot({
-        phases: [],
-        lifecycle: {
-          stages: [
-            {
-              stage: 'requirements',
-              nodeId: 'workflow-requirements',
-              status: 'pending',
-              actionRequired: false,
-              lastTransitionAt: null,
-            },
-            {
-              stage: 'research',
-              nodeId: 'workflow-research',
-              status: 'active',
-              actionRequired: true,
-              lastTransitionAt: '2026-04-16T14:01:00Z',
-            },
-            {
-              stage: 'discussion',
-              nodeId: 'workflow-discussion',
-              status: 'complete',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-16T14:00:00Z',
-            },
-          ],
-        },
-      }),
-    )
-
-    expect(project.lifecycle.hasStages).toBe(true)
-    expect(project.lifecycle.stages.map((stage) => stage.stage)).toEqual(['discussion', 'research', 'requirements'])
-    expect(project.lifecycle.activeStage?.stage).toBe('research')
-    expect(project.lifecycle.completedCount).toBe(1)
-    expect(project.lifecycle.actionRequiredCount).toBe(1)
-    expect(project.lifecycle.percentComplete).toBe(33)
-    expect(project.lifecycle.byStage.roadmap).toBeNull()
-  })
-
-  it('keeps legacy phase consumers compatible when lifecycle projection is empty', () => {
-    const project = mapProjectSnapshot(
-      makeSnapshot({
-        lifecycle: {
-          stages: [],
-        },
-      }),
-    )
-
-    expect(project.phases).toHaveLength(2)
-    expect(project.lifecycle.hasStages).toBe(false)
-    expect(project.lifecycle.stages).toHaveLength(0)
-    expect(project.lifecycle.byStage.discussion).toBeNull()
-  })
-
-  it('rejects malformed project snapshot lifecycle payloads at the contract boundary', () => {
-    expect(() =>
-      projectSnapshotResponseSchema.parse({
-        ...makeSnapshot(),
-        lifecycle: {
-          stages: [
-            {
-              stage: 'discussion',
-              nodeId: 'workflow-discussion',
-              status: 'complete',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-15T17:59:00Z',
-            },
-            {
-              stage: 'discussion',
-              nodeId: 'workflow-discussion-duplicate',
-              status: 'active',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-15T18:01:00Z',
-            },
-          ],
-        },
-      }),
-    ).toThrow(/Duplicate lifecycle stage/)
-
-    expect(() =>
-      projectSnapshotResponseSchema.parse({
-        ...makeSnapshot(),
-        lifecycle: {
-          stages: [
-            {
-              stage: 'unknown',
-              nodeId: 'workflow-discussion',
-              status: 'complete',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-15T17:59:00Z',
-            },
-          ],
-        },
-      }),
-    ).toThrow()
-
-    expect(() =>
-      projectSnapshotResponseSchema.parse({
-        ...makeSnapshot(),
-        lifecycle: {
-          stages: [
-            {
-              stage: 'discussion',
-              nodeId: 'workflow-discussion',
-              status: 'unknown',
-              actionRequired: false,
-              lastTransitionAt: '2026-04-15T17:59:00Z',
-            },
-          ],
-        },
-      }),
-    ).toThrow()
-
-    expect(() => {
-      const snapshot = makeSnapshot()
-      const { lifecycle: _lifecycle, ...legacySnapshot } = snapshot
-      projectSnapshotResponseSchema.parse(legacySnapshot)
-    }).toThrow()
-  })
-
-  it('maps autonomous run and unit truth from project snapshots independently of runtime auth state', () => {
+  it('maps autonomous run truth from project snapshots independently of runtime auth state', () => {
     const project = mapProjectSnapshot(
       makeSnapshot({
         autonomousRun: makeAutonomousRun({ providerId: 'azure_openai', duplicateStartDetected: true, duplicateStartRunId: 'run-1' }),
-        autonomousUnit: makeAutonomousUnit(),
       }),
     )
 
     expect(project.autonomousRun?.runId).toBe('run-1')
     expect(project.autonomousRun?.providerId).toBe('azure_openai')
-    expect(project.autonomousRun?.statusLabel).toBe('Autonomous run stale')
+    expect(project.autonomousRun?.statusLabel).toBe('Stale')
     expect(project.autonomousRun?.recoveryLabel).toBe('Recovery required')
     expect(project.autonomousRun?.duplicateStartDetected).toBe(true)
-    expect(project.autonomousRun?.runtimeLabel).toBe('Openai Codex · Autonomous run stale')
-    expect(project.autonomousUnit?.unitId).toBe('run-1:checkpoint:2')
-    expect(project.autonomousUnit?.kindLabel).toBe('Executor worker')
-    expect(project.autonomousUnit?.statusLabel).toBe('Active')
+    expect(project.autonomousRun?.runtimeLabel).toBe('openai_codex · Stale')
     expect(project.runtimeSession).toBeNull()
     expect(project.runtimeRun).toBeNull()
   })
 
-  it('rejects malformed autonomous run/unit payloads at the contract boundary', () => {
+  it('rejects malformed autonomous run payloads at the contract boundary', () => {
     expect(() =>
       projectSnapshotResponseSchema.parse({
         ...makeSnapshot(),
-        autonomousRun: makeAutonomousRun(),
-        autonomousUnit: makeAutonomousUnit({ runId: 'run-2' }),
-      }),
-    ).toThrow(/Autonomous unit run id must match/)
-  })
-
-  it('accepts runtime worker kinds and maps deterministic worker-purpose labels', () => {
-    const workerKinds = [
-      { kind: 'researcher', label: 'Researcher worker' },
-      { kind: 'planner', label: 'Planner worker' },
-      { kind: 'executor', label: 'Executor worker' },
-      { kind: 'verifier', label: 'Verifier worker' },
-    ] as const
-
-    for (const workerKind of workerKinds) {
-      const mapped = mapAutonomousUnit(
-        autonomousUnitSchema.parse({
-          ...makeAutonomousUnit(),
-          kind: workerKind.kind,
-        }),
-      )
-
-      expect(mapped.kind).toBe(workerKind.kind)
-      expect(mapped.kindLabel).toBe(workerKind.label)
-    }
-  })
-
-  it('fails closed on malformed autonomous worker kinds at the schema boundary', () => {
-    expect(() =>
-      autonomousUnitSchema.parse({
-        ...makeAutonomousUnit(),
-        kind: 'worker',
-      }),
-    ).toThrow()
-
-    expect(() =>
-      autonomousUnitSchema.parse({
-        ...makeAutonomousUnit(),
-        kind: '   ',
-      }),
-    ).toThrow()
-
-    expect(() =>
-      autonomousUnitSchema.parse({
-        ...makeAutonomousUnit(),
-        kind: 'Researcher',
+        autonomousRun: makeAutonomousRun({ providerId: '   ' }),
       }),
     ).toThrow()
   })
@@ -2447,7 +1842,7 @@ describe('cadence-model', () => {
     ).toThrow(/Invalid enum value/)
   })
 
-  it('projects additive tool summaries through autonomous artifacts while rejecting malformed nested summary drift', () => {
+  it('accepts additive tool summary contracts while rejecting malformed nested summary drift', () => {
     const fileSummary = toolResultSummarySchema.parse({
       kind: 'file',
       path: 'src/lib.rs',
@@ -2496,46 +1891,7 @@ describe('cadence-model', () => {
       mcpSummary.kind,
     ]).toEqual(['file', 'git', 'web', 'browser_computer_use', 'mcp_capability'])
 
-    const artifactPayloadBase = {
-      kind: 'tool_result' as const,
-      projectId: 'project-1',
-      runId: 'run-1',
-      unitId: 'run-1:checkpoint:2',
-      attemptId: 'attempt-1',
-      artifactId: 'artifact-1',
-      toolCallId: 'tool-call-1',
-      toolName: 'git_diff',
-      toolState: 'succeeded' as const,
-      commandResult: null,
-      actionId: 'action-1',
-      boundaryId: 'boundary-1',
-    }
-
-    const artifactWithSummary: AutonomousUnitArtifactDto = {
-      projectId: 'project-1',
-      runId: 'run-1',
-      unitId: 'run-1:checkpoint:2',
-      attemptId: 'attempt-1',
-      artifactId: 'artifact-1',
-      artifactKind: 'tool_result',
-      status: 'recorded',
-      summary: 'Git diff summary recorded.',
-      contentHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-      payload: autonomousToolResultPayloadSchema.parse({
-        ...artifactPayloadBase,
-        toolSummary: gitSummary,
-      }),
-      createdAt: '2026-04-16T14:00:00Z',
-      updatedAt: '2026-04-16T14:00:01Z',
-    }
-
-    const mappedArtifact = mapAutonomousArtifact(artifactWithSummary)
-    expect(mappedArtifact.toolSummary).toEqual(gitSummary)
-    expect(mappedArtifact.toolSummary?.kind).toBe('git')
-    if (mappedArtifact.toolSummary?.kind !== 'git') {
-      throw new Error('Expected a git tool summary for the mapped artifact.')
-    }
-    expect(mappedArtifact.toolSummary.baseRevision).toBe('main~1')
+    expect(gitSummary.baseRevision).toBe('main~1')
 
     expect(mcpSummary.kind).toBe('mcp_capability')
     if (mcpSummary.kind !== 'mcp_capability') {
@@ -2551,12 +1907,6 @@ describe('cadence-model', () => {
     expect(browserComputerUseSummary.surface).toBe('browser')
     expect(browserComputerUseSummary.action).toBe('click')
     expect(browserComputerUseSummary.status).toBe('succeeded')
-
-    const legacyArtifact = mapAutonomousArtifact({
-      ...artifactWithSummary,
-      payload: autonomousToolResultPayloadSchema.parse(artifactPayloadBase),
-    })
-    expect(legacyArtifact.toolSummary).toBeNull()
 
     expect(() =>
       toolResultSummarySchema.parse({
@@ -2621,28 +1971,22 @@ describe('cadence-model', () => {
     ).toThrow()
 
     expect(() =>
-      autonomousToolResultPayloadSchema.parse({
-        ...artifactPayloadBase,
-        toolSummary: {
-          kind: 'command',
-          exitCode: 0,
-          timedOut: false,
-          stdoutTruncated: 'yes',
-          stderrTruncated: false,
-          stdoutRedacted: false,
-          stderrRedacted: false,
-        },
+      toolResultSummarySchema.parse({
+        kind: 'command',
+        exitCode: 0,
+        timedOut: false,
+        stdoutTruncated: 'yes',
+        stderrTruncated: false,
+        stdoutRedacted: false,
+        stderrRedacted: false,
       }),
     ).toThrow()
 
     expect(() =>
-      autonomousToolResultPayloadSchema.parse({
-        ...artifactPayloadBase,
-        toolSummary: {
-          kind: 'file',
-          path: 'src/lib.rs',
-          scope: 'workspace',
-        },
+      toolResultSummarySchema.parse({
+        kind: 'file',
+        path: 'src/lib.rs',
+        scope: 'workspace',
       }),
     ).toThrow()
   })
@@ -3679,321 +3023,6 @@ describe('cadence-model', () => {
         updatedAt: 'not-a-timestamp',
       }),
     ).toThrow()
-  })
-
-  it('validates workflow graph command request/response payloads at the TS boundary', () => {
-    const upsertRequest = upsertWorkflowGraphRequestSchema.parse({
-      projectId: 'project-1',
-      nodes: [
-        {
-          nodeId: 'plan',
-          phaseId: 1,
-          sortOrder: 1,
-          name: 'Plan',
-          description: 'Plan workflow',
-          status: 'active',
-          currentStep: 'plan',
-          taskCount: 2,
-          completedTasks: 1,
-          summary: 'In progress',
-        },
-      ],
-      edges: [
-        {
-          fromNodeId: 'plan',
-          toNodeId: 'execute',
-          transitionKind: 'advance',
-          gateRequirement: 'execution_gate',
-        },
-      ],
-      gates: [
-        {
-          nodeId: 'execute',
-          gateKey: 'execution_gate',
-          gateState: 'pending',
-          actionType: 'approve_execution',
-          title: 'Approve execution',
-          detail: 'Operator approval required.',
-          decisionContext: null,
-        },
-      ],
-    })
-
-    const upsertResponse = upsertWorkflowGraphResponseSchema.parse({
-      nodes: upsertRequest.nodes,
-      edges: upsertRequest.edges,
-      gates: [
-        {
-          nodeId: 'execute',
-          gateKey: 'execution_gate',
-          gateState: 'pending',
-          actionType: 'approve_execution',
-          title: 'Approve execution',
-          detail: 'Operator approval required.',
-          decisionContext: null,
-        },
-      ],
-      phases: [
-        {
-          id: 1,
-          name: 'Plan',
-          description: 'Plan workflow',
-          status: 'active',
-          currentStep: 'plan',
-          taskCount: 2,
-          completedTasks: 1,
-          summary: 'In progress',
-        },
-      ],
-    })
-
-    const transitionRequest = applyWorkflowTransitionRequestSchema.parse({
-      projectId: 'project-1',
-      transitionId: 'txn-002',
-      causalTransitionId: 'txn-001',
-      fromNodeId: 'plan',
-      toNodeId: 'execute',
-      transitionKind: 'advance',
-      gateDecision: 'approved',
-      gateDecisionContext: 'operator-approved',
-      gateUpdates: [
-        {
-          gateKey: 'execution_gate',
-          gateState: 'satisfied',
-          decisionContext: 'approved by operator',
-        },
-      ],
-      occurredAt: '2026-04-15T18:01:00Z',
-    })
-
-    const transitionResponse = applyWorkflowTransitionResponseSchema.parse({
-      transitionEvent: {
-        id: 12,
-        transitionId: 'txn-002',
-        causalTransitionId: 'txn-001',
-        fromNodeId: 'plan',
-        toNodeId: 'execute',
-        transitionKind: 'advance',
-        gateDecision: 'approved',
-        gateDecisionContext: 'operator-approved',
-        createdAt: '2026-04-15T18:01:00Z',
-      },
-      automaticDispatch: {
-        status: 'applied',
-        transitionEvent: {
-          id: 13,
-          transitionId: 'auto:txn-003',
-          causalTransitionId: 'txn-002',
-          fromNodeId: 'execute',
-          toNodeId: 'verify',
-          transitionKind: 'advance',
-          gateDecision: 'approved',
-          gateDecisionContext: null,
-          createdAt: '2026-04-15T18:02:00Z',
-        },
-        handoffPackage: {
-          status: 'persisted',
-          package: makeHandoffPackage('project-1', 'auto:txn-003'),
-          code: null,
-          message: null,
-        },
-        code: null,
-        message: null,
-      },
-      phases: upsertResponse.phases,
-    })
-
-    const resumeResponse = resumeOperatorRunResponseSchema.parse({
-      approvalRequest: {
-        actionId: 'flow-1:review_worktree',
-        sessionId: 'session-1',
-        flowId: 'flow-1',
-        actionType: 'review_worktree',
-        title: 'Review worktree',
-        detail: 'Review worktree before resume.',
-        gateNodeId: null,
-        gateKey: null,
-        transitionFromNodeId: null,
-        transitionToNodeId: null,
-        transitionKind: null,
-        userAnswer: 'Looks safe',
-        status: 'approved',
-        decisionNote: 'Looks safe',
-        createdAt: '2026-04-16T12:00:00Z',
-        updatedAt: '2026-04-16T12:01:00Z',
-        resolvedAt: '2026-04-16T12:01:00Z',
-      },
-      resumeEntry: {
-        id: 9,
-        sourceActionId: 'flow-1:review_worktree',
-        sessionId: 'session-1',
-        status: 'started',
-        summary: 'Operator resumed the selected project runtime session.',
-        createdAt: '2026-04-16T12:01:10Z',
-      },
-      automaticDispatch: {
-        status: 'skipped',
-        transitionEvent: null,
-        handoffPackage: null,
-        code: 'workflow_handoff_redaction_failed',
-        message: 'Cadence skipped handoff package persistence due to redaction policy.',
-      },
-    })
-
-    expect(upsertResponse.nodes[0]?.nodeId).toBe('plan')
-    expect(transitionRequest.gateUpdates[0]?.gateState).toBe('satisfied')
-    expect(transitionResponse.transitionEvent.gateDecision).toBe('approved')
-    expect(transitionResponse.automaticDispatch?.status).toBe('applied')
-    expect(resumeResponse.automaticDispatch?.status).toBe('skipped')
-  })
-
-  it('rejects malformed workflow graph and transition payloads at the schema boundary', () => {
-    expect(() =>
-      upsertWorkflowGraphRequestSchema.parse({
-        projectId: 'project-1',
-        nodes: [
-          {
-            nodeId: 'plan',
-            phaseId: 1,
-            sortOrder: 1,
-            name: 'Plan',
-            description: 'Plan workflow',
-            status: 'active',
-            currentStep: 'plan',
-            taskCount: 2,
-            completedTasks: 1,
-            summary: null,
-            extra: true,
-          },
-        ],
-        edges: [],
-        gates: [],
-      }),
-    ).toThrow()
-
-    expect(() =>
-      applyWorkflowTransitionRequestSchema.parse({
-        projectId: 'project-1',
-        transitionId: 'txn-002',
-        causalTransitionId: null,
-        fromNodeId: 'plan',
-        toNodeId: 'execute',
-        transitionKind: 'advance',
-        gateDecision: 'allow',
-        gateDecisionContext: null,
-        gateUpdates: [],
-        occurredAt: '2026-04-15T18:01:00Z',
-      }),
-    ).toThrow()
-
-    expect(() =>
-      applyWorkflowTransitionResponseSchema.parse({
-        transitionEvent: {
-          id: 12,
-          transitionId: 'txn-002',
-          causalTransitionId: 'txn-001',
-          fromNodeId: 'plan',
-          toNodeId: 'execute',
-          transitionKind: 'advance',
-          gateDecision: 'approved',
-          gateDecisionContext: 'operator-approved',
-          createdAt: 'not-a-timestamp',
-        },
-        phases: [],
-      }),
-    ).toThrow()
-
-    expect(() =>
-      applyWorkflowTransitionResponseSchema.parse({
-        transitionEvent: {
-          id: 12,
-          transitionId: 'txn-002',
-          causalTransitionId: 'txn-001',
-          fromNodeId: 'plan',
-          toNodeId: 'execute',
-          transitionKind: 'advance',
-          gateDecision: 'approved',
-          gateDecisionContext: 'operator-approved',
-          createdAt: '2026-04-15T18:01:00Z',
-        },
-        automaticDispatch: {
-          status: 'applied',
-          transitionEvent: null,
-          handoffPackage: null,
-          code: null,
-          message: null,
-        },
-        phases: [],
-      }),
-    ).toThrow(/Applied\/replayed automatic dispatch outcomes must include transition and handoff payloads/)
-
-    expect(() =>
-      applyWorkflowTransitionResponseSchema.parse({
-        transitionEvent: {
-          id: 12,
-          transitionId: 'txn-002',
-          causalTransitionId: 'txn-001',
-          fromNodeId: 'plan',
-          toNodeId: 'execute',
-          transitionKind: 'advance',
-          gateDecision: 'approved',
-          gateDecisionContext: 'operator-approved',
-          createdAt: '2026-04-15T18:01:00Z',
-        },
-        automaticDispatch: {
-          status: 'skipped',
-          transitionEvent: null,
-          handoffPackage: null,
-          code: 'workflow_transition_gate_unmet',
-          message: null,
-        },
-        phases: [],
-      }),
-    ).toThrow(/Skipped automatic dispatch outcomes must include non-empty `code` and `message` diagnostics/)
-
-    expect(() =>
-      resumeOperatorRunResponseSchema.parse({
-        approvalRequest: {
-          actionId: 'flow-1:review_worktree',
-          sessionId: 'session-1',
-          flowId: 'flow-1',
-          actionType: 'review_worktree',
-          title: 'Review worktree',
-          detail: 'Review worktree before resume.',
-          gateNodeId: null,
-          gateKey: null,
-          transitionFromNodeId: null,
-          transitionToNodeId: null,
-          transitionKind: null,
-          userAnswer: 'Looks safe',
-          status: 'approved',
-          decisionNote: 'Looks safe',
-          createdAt: '2026-04-16T12:00:00Z',
-          updatedAt: '2026-04-16T12:01:00Z',
-          resolvedAt: '2026-04-16T12:01:00Z',
-        },
-        resumeEntry: {
-          id: 9,
-          sourceActionId: 'flow-1:review_worktree',
-          sessionId: 'session-1',
-          status: 'started',
-          summary: 'Operator resumed the selected project runtime session.',
-          createdAt: '2026-04-16T12:01:10Z',
-        },
-        automaticDispatch: {
-          status: 'skipped',
-          transitionEvent: null,
-          handoffPackage: {
-            status: 'persisted',
-            package: null,
-            code: null,
-            message: null,
-          },
-          code: 'workflow_handoff_redaction_failed',
-          message: 'Cadence skipped handoff package persistence due to redaction policy.',
-        },
-      }),
-    ).toThrow(/Skipped automatic dispatch outcomes must not include transition or handoff payloads/)
   })
 
   it('admits local and ambient provider-profile contracts without fake api keys', () => {

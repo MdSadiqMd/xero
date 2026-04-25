@@ -1,8 +1,4 @@
 import { z } from 'zod'
-import type { PhaseStep } from '@/components/cadence/data'
-
-export const PHASE_STEPS = ['discuss', 'plan', 'execute', 'verify', 'ship'] as const satisfies readonly PhaseStep[]
-export const STEP_INDEX = new Map(PHASE_STEPS.map((step, index) => [step, index]))
 
 export const changeKindSchema = z.enum([
   'added',
@@ -15,7 +11,6 @@ export const changeKindSchema = z.enum([
 ])
 
 export const phaseStatusSchema = z.enum(['complete', 'active', 'pending', 'blocked'])
-export const phaseStepSchema = z.enum(PHASE_STEPS)
 export const nullableTextSchema = z.string().nullable().optional()
 export const nonEmptyOptionalTextSchema = z.string().trim().min(1).nullable().optional()
 export const isoTimestampSchema = z.string().datetime({ offset: true })

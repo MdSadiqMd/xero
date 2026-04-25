@@ -1,8 +1,4 @@
 import type {
-  AutonomousAdvancedFailureClass,
-  AutonomousAdvancedFailureRecoveryRecommendation,
-  AutonomousUnitArtifactView,
-  AutonomousUnitHistoryEntryView,
   NotificationBrokerActionView,
   NotificationBrokerView,
   OperatorApprovalView,
@@ -25,8 +21,30 @@ export type CheckpointControlLoopTruthSource =
 export type CheckpointControlLoopResumability = 'resumable' | 'awaiting_approval' | 'not_resumable' | 'unknown'
 
 export type CheckpointControlLoopRecoveryRecommendation =
-  | AutonomousAdvancedFailureRecoveryRecommendation
+  | 'retry'
+  | 'approve_resume'
+  | 'fix_permissions_policy'
   | 'observe'
+
+export type CheckpointControlLoopAdvancedFailureClass =
+  | 'timeout'
+  | 'policy_permission'
+  | 'validation_runtime'
+
+interface CheckpointPolicyDeniedEvidence {
+  detail: string | null
+  summary: string | null
+  updatedAt: string
+  createdAt: string
+}
+
+interface CheckpointAdvancedFailureEvidence {
+  advancedFailureClass: CheckpointControlLoopAdvancedFailureClass | null
+  advancedFailureClassLabel: string | null
+  advancedFailureDiagnosticCode: string | null
+  advancedFailureRecommendation: CheckpointControlLoopRecoveryRecommendation | null
+  advancedFailureRecommendationDetail: string | null
+}
 
 export interface CheckpointControlLoopEvidencePreview {
   artifactId: string
@@ -69,7 +87,7 @@ export interface CheckpointControlLoopCardView {
   resumabilityLabel: string
   resumabilityDetail: string
   isResumable: boolean
-  advancedFailureClass: AutonomousAdvancedFailureClass | null
+  advancedFailureClass: CheckpointControlLoopAdvancedFailureClass | null
   advancedFailureClassLabel: string | null
   advancedFailureDiagnosticCode: string | null
   recoveryRecommendation: CheckpointControlLoopRecoveryRecommendation
@@ -111,7 +129,7 @@ interface CheckpointControlLoopCardAccumulator {
   approval: OperatorApprovalView | null
   latestResume: ResumeHistoryEntryView | null
   brokerAction: NotificationBrokerActionView | null
-  evidence: AutonomousUnitArtifactView[]
+  evidence: CheckpointControlLoopEvidencePreview[]
 }
 
 function createCheckpointControlLoopKey(actionId: string, boundaryId: string | null): string {
@@ -159,34 +177,6 @@ function formatCheckpointGateLinkage(approval: OperatorApprovalView | null): str
   return transition
     ? `${approval.gateNodeId} · ${approval.gateKey} · ${transition}`
     : `${approval.gateNodeId} · ${approval.gateKey}`
-}
-
-function getUniqueCheckpointArtifacts(options: {
-  autonomousHistory: AutonomousUnitHistoryEntryView[]
-  autonomousRecentArtifacts: AutonomousUnitArtifactView[]
-}): AutonomousUnitArtifactView[] {
-  const deduped = new Map<string, AutonomousUnitArtifactView>()
-
-  const appendArtifact = (artifact: AutonomousUnitArtifactView) => {
-    const artifactId = normalizeText(artifact.artifactId)
-    if (!artifactId || deduped.has(artifactId)) {
-      return
-    }
-
-    deduped.set(artifactId, artifact)
-  }
-
-  for (const entry of options.autonomousHistory) {
-    for (const artifact of entry.artifacts ?? []) {
-      appendArtifact(artifact)
-    }
-  }
-
-  for (const artifact of options.autonomousRecentArtifacts) {
-    appendArtifact(artifact)
-  }
-
-  return sortByNewest([...deduped.values()], (artifact) => artifact.updatedAt || artifact.createdAt)
 }
 
 function getSingleCardForAction(options: {
@@ -276,45 +266,18 @@ function upsertCheckpointControlLoopCard(options: {
   return created
 }
 
-function appendCheckpointEvidence(card: CheckpointControlLoopCardAccumulator, artifact: AutonomousUnitArtifactView): void {
-  const artifactId = normalizeText(artifact.artifactId)
-  if (!artifactId) {
-    return
-  }
-
-  if (card.evidence.some((entry) => entry.artifactId === artifactId)) {
-    return
-  }
-
-  card.evidence.push(artifact)
-  card.evidence.sort(
-    (left, right) => getTimestampMs(right.updatedAt || right.createdAt) - getTimestampMs(left.updatedAt || left.createdAt),
-  )
-}
-
-function isCheckpointArtifactUsable(artifact: AutonomousUnitArtifactView): boolean {
-  const actionId = normalizeText(artifact.actionId)
-  if (!actionId) {
-    return false
-  }
-
-  if (!artifact.isPolicyDenied) {
-    return true
-  }
-
-  return Boolean(normalizeText(artifact.boundaryId) && normalizeText(artifact.diagnosticCode))
-}
-
 function getLatestPolicyDeniedArtifact(
   card: CheckpointControlLoopCardAccumulator,
-): AutonomousUnitArtifactView | null {
-  return card.evidence.find((artifact) => artifact.isPolicyDenied) ?? null
+): CheckpointPolicyDeniedEvidence | null {
+  void card
+  return null
 }
 
 function getLatestAdvancedFailureArtifact(
   card: CheckpointControlLoopCardAccumulator,
-): AutonomousUnitArtifactView | null {
-  return card.evidence.find((artifact) => artifact.advancedFailureClass !== null) ?? null
+): CheckpointAdvancedFailureEvidence | null {
+  void card
+  return null
 }
 
 function getCheckpointResumability(card: CheckpointControlLoopCardAccumulator): {
@@ -383,7 +346,7 @@ function getCheckpointRecoveryState(options: {
   card: CheckpointControlLoopCardAccumulator
   resumability: ReturnType<typeof getCheckpointResumability>
 }): {
-  advancedFailureClass: AutonomousAdvancedFailureClass | null
+  advancedFailureClass: CheckpointControlLoopAdvancedFailureClass | null
   advancedFailureClassLabel: string | null
   advancedFailureDiagnosticCode: string | null
   recoveryRecommendation: CheckpointControlLoopRecoveryRecommendation
@@ -724,14 +687,8 @@ function getCheckpointEvidenceState(card: CheckpointControlLoopCardAccumulator):
       evidenceCount === 1
         ? 'Showing the latest durable evidence row linked to this action.'
         : 'Showing the newest durable evidence rows linked to this action.',
-    latestEvidenceAt: evidence[0]?.updatedAt || evidence[0]?.createdAt || null,
-    evidencePreviews: evidence.slice(0, MAX_CHECKPOINT_CONTROL_LOOP_EVIDENCE_PREVIEWS).map((artifact) => ({
-      artifactId: artifact.artifactId,
-      artifactKindLabel: artifact.artifactKindLabel,
-      statusLabel: artifact.statusLabel,
-      summary: artifact.summary,
-      updatedAt: artifact.updatedAt || artifact.createdAt,
-    })),
+    latestEvidenceAt: evidence[0]?.updatedAt ?? null,
+    evidencePreviews: evidence.slice(0, MAX_CHECKPOINT_CONTROL_LOOP_EVIDENCE_PREVIEWS),
   }
 }
 
@@ -763,7 +720,6 @@ function getCheckpointSortTimestamp(card: CheckpointControlLoopCardAccumulator):
     card.latestResume?.createdAt,
     card.brokerAction?.latestUpdatedAt,
     card.evidence[0]?.updatedAt,
-    card.evidence[0]?.createdAt,
   ]
 
   let selected: string | null = null
@@ -784,37 +740,11 @@ export function projectCheckpointControlLoops(options: {
   approvalRequests: OperatorApprovalView[]
   resumeHistory: ResumeHistoryEntryView[]
   notificationBroker: NotificationBrokerView
-  autonomousHistory: AutonomousUnitHistoryEntryView[]
-  autonomousRecentArtifacts: AutonomousUnitArtifactView[]
   limit?: number
 }): CheckpointControlLoopProjectionView {
   const limit = Math.max(1, options.limit ?? MAX_CHECKPOINT_CONTROL_LOOPS)
   const cardsByKey = new Map<string, CheckpointControlLoopCardAccumulator>()
   const keysByActionId = new Map<string, string[]>()
-
-  const allArtifacts = getUniqueCheckpointArtifacts({
-    autonomousHistory: options.autonomousHistory,
-    autonomousRecentArtifacts: options.autonomousRecentArtifacts,
-  })
-
-  for (const artifact of allArtifacts) {
-    if (!isCheckpointArtifactUsable(artifact)) {
-      continue
-    }
-
-    const actionId = normalizeText(artifact.actionId)!
-    const card = upsertCheckpointControlLoopCard({
-      actionId,
-      boundaryId: artifact.boundaryId,
-      allowCreateWithoutBoundary: true,
-      cardsByKey,
-      keysByActionId,
-    })
-
-    if (card) {
-      appendCheckpointEvidence(card, artifact)
-    }
-  }
 
   for (const liveActionRequired of sortByNewest(options.actionRequiredItems, (item) => item.createdAt)) {
     const card = upsertCheckpointControlLoopCard({

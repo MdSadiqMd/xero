@@ -173,7 +173,7 @@ pub fn migrations() -> &'static Migrations<'static> {
                     UNIQUE (project_id, sort_order),
                     CHECK (node_id <> ''),
                     CHECK (status IN ('complete', 'active', 'pending', 'blocked')),
-                    CHECK (current_step IS NULL OR current_step IN ('discuss', 'plan', 'execute', 'verify', 'ship')),
+                    CHECK (current_step IS NULL OR current_step <> ''),
                     CHECK (completed_tasks <= task_count)
                 );
 
@@ -563,7 +563,7 @@ pub fn migrations() -> &'static Migrations<'static> {
                     updated_at TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                     CHECK (unit_id <> ''),
-                    CHECK (kind IN ('researcher', 'planner', 'executor', 'verifier')),
+                    CHECK (kind <> ''),
                     CHECK (status IN ('pending', 'active', 'blocked', 'paused', 'completed', 'cancelled', 'failed')),
                     CHECK (summary <> ''),
                     CHECK (boundary_id IS NULL OR boundary_id <> ''),
@@ -1075,7 +1075,7 @@ pub fn migrations() -> &'static Migrations<'static> {
                     updated_at TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                     CHECK (unit_id <> ''),
-                    CHECK (kind IN ('researcher', 'planner', 'executor', 'verifier')),
+                    CHECK (kind <> ''),
                     CHECK (status IN ('pending', 'active', 'blocked', 'paused', 'completed', 'cancelled', 'failed')),
                     CHECK (summary <> ''),
                     CHECK (boundary_id IS NULL OR boundary_id <> ''),
@@ -1562,6 +1562,20 @@ pub fn migrations() -> &'static Migrations<'static> {
                     ON installed_skill_records(scope_kind, project_id, skill_id, source_id);
                 CREATE INDEX IF NOT EXISTS idx_installed_skill_records_state_updated
                     ON installed_skill_records(source_state, updated_at DESC);
+                "#,
+            ),
+            M::up(
+                r#"
+                DROP TABLE IF EXISTS workflow_handoff_packages;
+                DROP TABLE IF EXISTS workflow_transition_events;
+                DROP TABLE IF EXISTS workflow_gate_metadata;
+                DROP TABLE IF EXISTS workflow_graph_edges;
+                DROP TABLE IF EXISTS workflow_graph_nodes;
+                DROP TABLE IF EXISTS workflow_phases;
+
+                DROP TABLE IF EXISTS autonomous_unit_artifacts;
+                DROP TABLE IF EXISTS autonomous_unit_attempts;
+                DROP TABLE IF EXISTS autonomous_units;
                 "#,
             ),
         ])
