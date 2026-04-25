@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
     thread,
@@ -16,14 +16,21 @@ use cadence_desktop_lib::{
         diff::MAX_PATCH_BYTES,
         repository::{ensure_cadence_excluded, CanonicalRepository},
     },
+    mcp::{
+        persist_mcp_registry, McpConnectionState, McpConnectionStatus, McpRegistry,
+        McpServerRecord, McpTransport,
+    },
     registry::{self, RegistryProjectRecord},
     runtime::{
-        AutonomousCommandPolicyOutcome, AutonomousCommandRequest, AutonomousEditRequest,
-        AutonomousFindRequest, AutonomousGitDiffRequest, AutonomousGitStatusRequest,
-        AutonomousReadRequest, AutonomousSearchRequest, AutonomousToolAccessAction,
+        AutonomousCodeIntelAction, AutonomousCodeIntelRequest, AutonomousCommandPolicyOutcome,
+        AutonomousCommandRequest, AutonomousEditRequest, AutonomousFindRequest,
+        AutonomousGitDiffRequest, AutonomousGitStatusRequest, AutonomousMcpAction,
+        AutonomousMcpRequest, AutonomousNotebookEditRequest, AutonomousReadRequest,
+        AutonomousSearchRequest, AutonomousSubagentRequest, AutonomousSubagentType,
+        AutonomousTodoAction, AutonomousTodoRequest, AutonomousToolAccessAction,
         AutonomousToolAccessRequest, AutonomousToolOutput, AutonomousToolRequest,
-        AutonomousToolRuntime, AutonomousToolRuntimeLimits, AutonomousWebConfig,
-        AutonomousWebFetchContentKind, AutonomousWebFetchRequest,
+        AutonomousToolRuntime, AutonomousToolRuntimeLimits, AutonomousToolSearchRequest,
+        AutonomousWebConfig, AutonomousWebFetchContentKind, AutonomousWebFetchRequest,
         AutonomousWebSearchProviderConfig, AutonomousWebSearchRequest, AutonomousWriteRequest,
     },
     state::DesktopState,
@@ -239,6 +246,94 @@ fn spawn_static_http_server(status: u16, content_type: &str, body: &str) -> Stri
     format!("http://{address}")
 }
 
+fn spawn_mcp_http_server(sse_result: bool) -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test mcp http server");
+    let address = listener.local_addr().expect("test mcp http server addr");
+
+    thread::spawn(move || {
+        for _ in 0..3 {
+            let (mut stream, _) = listener.accept().expect("accept test mcp request");
+            let body = read_http_request_body(&mut stream);
+            let value: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({}));
+            let method = value
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let id = value.get("id").and_then(serde_json::Value::as_i64);
+
+            if id.is_none() {
+                write!(
+                    stream,
+                    "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+                )
+                .expect("write notification response");
+                continue;
+            }
+
+            let result = match method {
+                "initialize" => serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {}
+                }),
+                "tools/list" => serde_json::json!({
+                    "tools": [
+                        {
+                            "name": if sse_result { "sse_tool" } else { "http_tool" },
+                            "description": "test tool"
+                        }
+                    ]
+                }),
+                other => serde_json::json!({ "echoed": other }),
+            };
+            let json = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result
+            })
+            .to_string();
+            let (content_type, response_body) = if sse_result && method == "tools/list" {
+                (
+                    "text/event-stream",
+                    format!("event: message\ndata: {json}\n\n"),
+                )
+            } else {
+                ("application/json", json)
+            };
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nmcp-session-id: test-session\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+                response_body.len(),
+                response_body,
+            )
+            .expect("write mcp response");
+        }
+    });
+
+    format!("http://{address}/mcp")
+}
+
+fn read_http_request_body(stream: &mut impl Read) -> String {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut content_length = 0_usize;
+    loop {
+        line.clear();
+        let bytes = reader.read_line(&mut line).expect("read request header");
+        if bytes == 0 || line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().expect("content length");
+            }
+        }
+    }
+    let mut body = vec![0_u8; content_length];
+    reader.read_exact(&mut body).expect("read request body");
+    String::from_utf8(body).expect("utf8 request body")
+}
+
 #[test]
 fn tool_runtime_tool_access_lists_and_grants_requested_groups() {
     let root = tempfile::tempdir().expect("temp dir");
@@ -283,6 +378,306 @@ fn tool_runtime_tool_access_lists_and_grants_requested_groups() {
             assert!(output.denied_tools.contains(&"missing_tool".into()));
         }
         other => panic!("unexpected output: {other:?}"),
+    }
+}
+
+#[test]
+fn tool_runtime_executes_priority_one_agent_surface_tools() {
+    let root = tempfile::tempdir().expect("temp dir");
+    fs::create_dir_all(root.path().join("src")).expect("create src");
+    fs::write(
+        root.path().join("src").join("lib.rs"),
+        "pub struct Greeter;\n\npub fn greet() {}\n",
+    )
+    .expect("seed source");
+    fs::write(
+        root.path().join("work.ipynb"),
+        serde_json::json!({
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": ["print('old')\n"],
+                    "outputs": [],
+                    "execution_count": null
+                }
+            ],
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 5
+        })
+        .to_string(),
+    )
+    .expect("seed notebook");
+
+    let mcp_registry_path = root.path().join("mcp-registry.json");
+    persist_mcp_registry(
+        &mcp_registry_path,
+        &McpRegistry {
+            version: 1,
+            servers: vec![McpServerRecord {
+                id: "workspace-mcp".into(),
+                name: "Workspace MCP".into(),
+                transport: McpTransport::Stdio {
+                    command: "node".into(),
+                    args: vec!["server.mjs".into()],
+                },
+                env: Vec::new(),
+                cwd: None,
+                connection: McpConnectionState {
+                    status: McpConnectionStatus::Connected,
+                    diagnostic: None,
+                    last_checked_at: Some("2026-04-25T00:00:00Z".into()),
+                    last_healthy_at: Some("2026-04-25T00:00:00Z".into()),
+                },
+                updated_at: "2026-04-25T00:00:00Z".into(),
+            }],
+            updated_at: "2026-04-25T00:00:00Z".into(),
+        },
+    )
+    .expect("persist mcp registry");
+
+    let runtime = AutonomousToolRuntime::new(root.path())
+        .expect("runtime")
+        .with_mcp_registry_path(mcp_registry_path);
+
+    let tool_search = runtime
+        .tool_search(AutonomousToolSearchRequest {
+            query: "notebook".into(),
+            limit: None,
+        })
+        .expect("tool search");
+    match tool_search.output {
+        AutonomousToolOutput::ToolSearch(output) => {
+            assert!(output
+                .matches
+                .iter()
+                .any(|item| item.tool_name == "notebook_edit"));
+        }
+        other => panic!("unexpected tool search output: {other:?}"),
+    }
+
+    let todo = runtime
+        .todo(AutonomousTodoRequest {
+            action: AutonomousTodoAction::Upsert,
+            id: Some("inspect".into()),
+            title: Some("Inspect symbols".into()),
+            notes: None,
+            status: None,
+        })
+        .expect("todo upsert");
+    match todo.output {
+        AutonomousToolOutput::Todo(output) => {
+            assert_eq!(output.items.len(), 1);
+            assert_eq!(output.items[0].id, "inspect");
+        }
+        other => panic!("unexpected todo output: {other:?}"),
+    }
+
+    let subagent = runtime
+        .subagent(AutonomousSubagentRequest {
+            agent_type: AutonomousSubagentType::Explore,
+            prompt: "Find the relevant symbols.".into(),
+            model_id: Some("fast-model".into()),
+        })
+        .expect("subagent task");
+    match subagent.output {
+        AutonomousToolOutput::Subagent(output) => {
+            assert_eq!(output.task.subagent_id, "subagent-1");
+            assert_eq!(output.task.model_id.as_deref(), Some("fast-model"));
+        }
+        other => panic!("unexpected subagent output: {other:?}"),
+    }
+
+    let symbols = runtime
+        .code_intel(AutonomousCodeIntelRequest {
+            action: AutonomousCodeIntelAction::Symbols,
+            query: Some("greet".into()),
+            path: Some("src".into()),
+            limit: Some(10),
+        })
+        .expect("code intel symbols");
+    match symbols.output {
+        AutonomousToolOutput::CodeIntel(output) => {
+            assert!(output.symbols.iter().any(|symbol| symbol.name == "greet"));
+            assert!(output.diagnostics.is_empty());
+        }
+        other => panic!("unexpected code intel output: {other:?}"),
+    }
+
+    let notebook = runtime
+        .notebook_edit(AutonomousNotebookEditRequest {
+            path: "work.ipynb".into(),
+            cell_index: 0,
+            expected_source: Some("print('old')\n".into()),
+            replacement_source: "print('new')\n".into(),
+        })
+        .expect("notebook edit");
+    assert_eq!(notebook.tool_name, "notebook_edit");
+    assert!(fs::read_to_string(root.path().join("work.ipynb"))
+        .expect("read notebook")
+        .contains("print('new')"));
+
+    let mcp = runtime
+        .mcp(AutonomousMcpRequest {
+            action: AutonomousMcpAction::ListServers,
+            server_id: None,
+            name: None,
+            uri: None,
+            arguments: None,
+            timeout_ms: None,
+        })
+        .expect("mcp list");
+    match mcp.output {
+        AutonomousToolOutput::Mcp(output) => {
+            assert_eq!(output.servers.len(), 1);
+            assert_eq!(output.servers[0].server_id, "workspace-mcp");
+            assert_eq!(output.servers[0].status, "connected");
+        }
+        other => panic!("unexpected mcp output: {other:?}"),
+    }
+}
+
+#[test]
+fn tool_runtime_invokes_mcp_capabilities_across_transports() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let stdio_server = root.path().join("mcp_stdio_server.py");
+    fs::write(
+        &stdio_server,
+        r#"
+import json
+import sys
+
+def read_message():
+    content_length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        name, _, value = line.decode("utf-8").partition(":")
+        if name.lower() == "content-length":
+            content_length = int(value.strip())
+    if content_length is None:
+        return None
+    return json.loads(sys.stdin.buffer.read(content_length).decode("utf-8"))
+
+def write_message(payload):
+    body = json.dumps(payload).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("utf-8"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+while True:
+    message = read_message()
+    if message is None:
+        break
+    if "id" not in message:
+        continue
+    method = message.get("method")
+    if method == "initialize":
+        result = {"protocolVersion": "2024-11-05", "capabilities": {}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "stdio_tool", "description": "test tool"}]}
+    else:
+        result = {"echoed": method}
+    write_message({"jsonrpc": "2.0", "id": message["id"], "result": result})
+"#,
+    )
+    .expect("write stdio mcp server");
+
+    let http_url = spawn_mcp_http_server(false);
+    let sse_url = spawn_mcp_http_server(true);
+    let mcp_registry_path = root.path().join("mcp-registry.json");
+    persist_mcp_registry(
+        &mcp_registry_path,
+        &McpRegistry {
+            version: 1,
+            servers: vec![
+                McpServerRecord {
+                    id: "stdio-mcp".into(),
+                    name: "Stdio MCP".into(),
+                    transport: McpTransport::Stdio {
+                        command: "python3".into(),
+                        args: vec![stdio_server.to_string_lossy().into_owned()],
+                    },
+                    env: Vec::new(),
+                    cwd: None,
+                    connection: McpConnectionState {
+                        status: McpConnectionStatus::Connected,
+                        diagnostic: None,
+                        last_checked_at: Some("2026-04-25T00:00:00Z".into()),
+                        last_healthy_at: Some("2026-04-25T00:00:00Z".into()),
+                    },
+                    updated_at: "2026-04-25T00:00:00Z".into(),
+                },
+                McpServerRecord {
+                    id: "http-mcp".into(),
+                    name: "HTTP MCP".into(),
+                    transport: McpTransport::Http { url: http_url },
+                    env: Vec::new(),
+                    cwd: None,
+                    connection: McpConnectionState {
+                        status: McpConnectionStatus::Connected,
+                        diagnostic: None,
+                        last_checked_at: Some("2026-04-25T00:00:00Z".into()),
+                        last_healthy_at: Some("2026-04-25T00:00:00Z".into()),
+                    },
+                    updated_at: "2026-04-25T00:00:00Z".into(),
+                },
+                McpServerRecord {
+                    id: "sse-mcp".into(),
+                    name: "SSE MCP".into(),
+                    transport: McpTransport::Sse { url: sse_url },
+                    env: Vec::new(),
+                    cwd: None,
+                    connection: McpConnectionState {
+                        status: McpConnectionStatus::Connected,
+                        diagnostic: None,
+                        last_checked_at: Some("2026-04-25T00:00:00Z".into()),
+                        last_healthy_at: Some("2026-04-25T00:00:00Z".into()),
+                    },
+                    updated_at: "2026-04-25T00:00:00Z".into(),
+                },
+            ],
+            updated_at: "2026-04-25T00:00:00Z".into(),
+        },
+    )
+    .expect("persist mcp registry");
+
+    let runtime = AutonomousToolRuntime::new(root.path())
+        .expect("runtime")
+        .with_mcp_registry_path(mcp_registry_path);
+
+    for (server_id, expected_tool) in [
+        ("stdio-mcp", "stdio_tool"),
+        ("http-mcp", "http_tool"),
+        ("sse-mcp", "sse_tool"),
+    ] {
+        let result = runtime
+            .mcp(AutonomousMcpRequest {
+                action: AutonomousMcpAction::ListTools,
+                server_id: Some(server_id.into()),
+                name: None,
+                uri: None,
+                arguments: None,
+                timeout_ms: Some(5_000),
+            })
+            .expect("list mcp tools");
+        match result.output {
+            AutonomousToolOutput::Mcp(output) => {
+                let tools = output
+                    .result
+                    .expect("mcp list tools result")
+                    .get("tools")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .expect("tools array");
+                assert!(tools.iter().any(|tool| tool["name"] == expected_tool));
+            }
+            other => panic!("unexpected mcp output: {other:?}"),
+        }
     }
 }
 

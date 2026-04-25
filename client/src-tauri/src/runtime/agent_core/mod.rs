@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 
 mod events;
@@ -52,15 +53,18 @@ use crate::{
             AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD,
         },
         redaction::{find_prohibited_persistence_content, redact_command_argv_for_persistence},
-        AutonomousToolOutput, AutonomousToolRequest, AutonomousToolResult, AutonomousToolRuntime,
-        AUTONOMOUS_TOOL_COMMAND, AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+        AutonomousSubagentExecutor, AutonomousSubagentTask, AutonomousToolOutput,
+        AutonomousToolRequest, AutonomousToolResult, AutonomousToolRuntime,
+        AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_COMMAND, AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
         AUTONOMOUS_TOOL_COMMAND_SESSION_START, AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
         AUTONOMOUS_TOOL_DELETE, AUTONOMOUS_TOOL_EDIT, AUTONOMOUS_TOOL_FIND,
         AUTONOMOUS_TOOL_GIT_DIFF, AUTONOMOUS_TOOL_GIT_STATUS, AUTONOMOUS_TOOL_HASH,
-        AUTONOMOUS_TOOL_LIST, AUTONOMOUS_TOOL_MKDIR, AUTONOMOUS_TOOL_PATCH, AUTONOMOUS_TOOL_READ,
-        AUTONOMOUS_TOOL_RENAME, AUTONOMOUS_TOOL_SEARCH, AUTONOMOUS_TOOL_TOOL_ACCESS,
-        AUTONOMOUS_TOOL_WEB_FETCH, AUTONOMOUS_TOOL_WEB_SEARCH, AUTONOMOUS_TOOL_WRITE,
-        OPENAI_CODEX_PROVIDER_ID,
+        AUTONOMOUS_TOOL_LIST, AUTONOMOUS_TOOL_MCP, AUTONOMOUS_TOOL_MKDIR,
+        AUTONOMOUS_TOOL_NOTEBOOK_EDIT, AUTONOMOUS_TOOL_PATCH, AUTONOMOUS_TOOL_POWERSHELL,
+        AUTONOMOUS_TOOL_READ, AUTONOMOUS_TOOL_RENAME, AUTONOMOUS_TOOL_SEARCH,
+        AUTONOMOUS_TOOL_SUBAGENT, AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_ACCESS,
+        AUTONOMOUS_TOOL_TOOL_SEARCH, AUTONOMOUS_TOOL_WEB_FETCH, AUTONOMOUS_TOOL_WEB_SEARCH,
+        AUTONOMOUS_TOOL_WRITE, OPENAI_CODEX_PROVIDER_ID,
     },
 };
 
@@ -450,7 +454,7 @@ pub fn drive_owned_agent_run(
     let snapshot =
         project_store::load_agent_run(&request.repo_root, &request.project_id, &request.run_id)?;
     let controls = runtime_controls_from_request(request.controls.as_ref());
-    let tool_runtime = request
+    let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
         .with_cancellation_token(cancellation.clone());
@@ -471,6 +475,16 @@ pub fn drive_owned_agent_run(
             ),
         ));
     }
+    let tool_runtime = tool_runtime_with_subagent_executor(
+        base_tool_runtime,
+        &request.repo_root,
+        &request.project_id,
+        &request.run_id,
+        &snapshot.run.agent_session_id,
+        controls.clone(),
+        request.provider_config.clone(),
+        cancellation.clone(),
+    );
     let messages = provider_messages_from_snapshot(&snapshot)?;
 
     match drive_provider_loop(
@@ -669,7 +683,8 @@ pub fn drive_owned_agent_continuation(
         ));
     }
 
-    let provider = create_provider_adapter(request.provider_config)?;
+    let provider_config = request.provider_config.clone();
+    let provider = create_provider_adapter(provider_config.clone())?;
     if provider.provider_id() != before.run.provider_id
         || provider.model_id() != before.run.model_id
     {
@@ -689,11 +704,21 @@ pub fn drive_owned_agent_continuation(
         project_store::load_agent_run(&request.repo_root, &request.project_id, &request.run_id)?;
     let messages = provider_messages_from_snapshot(&snapshot)?;
     let controls = runtime_controls_from_request(request.controls.as_ref());
-    let tool_runtime = request
+    let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
         .with_cancellation_token(cancellation.clone());
     let tool_registry = tool_registry_for_snapshot(&request.repo_root, &snapshot, &controls)?;
+    let tool_runtime = tool_runtime_with_subagent_executor(
+        base_tool_runtime,
+        &request.repo_root,
+        &request.project_id,
+        &request.run_id,
+        &snapshot.run.agent_session_id,
+        controls.clone(),
+        provider_config,
+        cancellation.clone(),
+    );
     match drive_provider_loop(
         provider.as_ref(),
         messages,
@@ -967,6 +992,139 @@ fn mark_owned_agent_run_cancelled(
         None,
         &now_timestamp(),
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tool_runtime_with_subagent_executor(
+    tool_runtime: AutonomousToolRuntime,
+    repo_root: &Path,
+    project_id: &str,
+    parent_run_id: &str,
+    agent_session_id: &str,
+    controls: RuntimeRunControlStateDto,
+    provider_config: AgentProviderConfig,
+    cancellation: AgentRunCancellationToken,
+) -> AutonomousToolRuntime {
+    if tool_runtime.subagent_execution_depth > 0 {
+        return tool_runtime;
+    }
+    let child_tool_runtime = tool_runtime
+        .clone()
+        .without_subagent_executor()
+        .with_subagent_execution_depth(tool_runtime.subagent_execution_depth + 1);
+    tool_runtime.with_subagent_executor(Arc::new(OwnedAgentSubagentExecutor {
+        repo_root: repo_root.to_path_buf(),
+        project_id: project_id.to_owned(),
+        parent_run_id: parent_run_id.to_owned(),
+        agent_session_id: agent_session_id.to_owned(),
+        controls,
+        provider_config,
+        tool_runtime: child_tool_runtime,
+        cancellation,
+    }))
+}
+
+#[derive(Clone)]
+struct OwnedAgentSubagentExecutor {
+    repo_root: PathBuf,
+    project_id: String,
+    parent_run_id: String,
+    agent_session_id: String,
+    controls: RuntimeRunControlStateDto,
+    provider_config: AgentProviderConfig,
+    tool_runtime: AutonomousToolRuntime,
+    cancellation: AgentRunCancellationToken,
+}
+
+impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
+    fn execute_subagent(
+        &self,
+        mut task: AutonomousSubagentTask,
+    ) -> CommandResult<AutonomousSubagentTask> {
+        self.cancellation.check_cancelled()?;
+        let child_run_id =
+            sanitize_action_id(&format!("{}-{}", self.parent_run_id, task.subagent_id));
+        let model_id = task
+            .model_id
+            .as_deref()
+            .unwrap_or(self.controls.active.model_id.as_str())
+            .to_owned();
+        let provider_config = route_provider_config_model(self.provider_config.clone(), &model_id);
+        let prompt = subagent_prompt(&task, &self.parent_run_id);
+        let request = OwnedAgentRunRequest {
+            repo_root: self.repo_root.clone(),
+            project_id: self.project_id.clone(),
+            agent_session_id: self.agent_session_id.clone(),
+            run_id: child_run_id.clone(),
+            prompt,
+            controls: Some(RuntimeRunControlInputDto {
+                model_id,
+                thinking_effort: self.controls.active.thinking_effort.clone(),
+                approval_mode: self.controls.active.approval_mode.clone(),
+                plan_mode_required: false,
+            }),
+            tool_runtime: self.tool_runtime.clone(),
+            provider_config,
+        };
+
+        create_owned_agent_run(&request)?;
+        let snapshot = drive_owned_agent_run(request, self.cancellation.clone())?;
+        task.run_id = Some(child_run_id);
+        task.completed_at = Some(now_timestamp());
+        task.status = match snapshot.run.status {
+            AgentRunStatus::Completed => "completed".into(),
+            AgentRunStatus::Cancelled => "cancelled".into(),
+            AgentRunStatus::Failed => "failed".into(),
+            _ => format!("{:?}", snapshot.run.status).to_ascii_lowercase(),
+        };
+        task.result_summary = Some(subagent_result_summary(&snapshot));
+        Ok(task)
+    }
+}
+
+fn route_provider_config_model(
+    mut provider_config: AgentProviderConfig,
+    model_id: &str,
+) -> AgentProviderConfig {
+    if model_id.trim().is_empty() {
+        return provider_config;
+    }
+    match &mut provider_config {
+        AgentProviderConfig::Fake => {}
+        AgentProviderConfig::OpenAiResponses(config) => config.model_id = model_id.into(),
+        AgentProviderConfig::OpenAiCompatible(config) => config.model_id = model_id.into(),
+        AgentProviderConfig::Anthropic(config) => config.model_id = model_id.into(),
+        AgentProviderConfig::Bedrock(config) => config.model_id = model_id.into(),
+        AgentProviderConfig::Vertex(config) => config.model_id = model_id.into(),
+    }
+    provider_config
+}
+
+fn subagent_prompt(task: &AutonomousSubagentTask, parent_run_id: &str) -> String {
+    format!(
+        "You are a {:?} subagent for parent owned-agent run `{parent_run_id}`. Work only on this focused task, return concise findings, and do not change files unless the task explicitly requires it.\n\n{}",
+        task.agent_type,
+        task.prompt
+    )
+}
+
+fn subagent_result_summary(snapshot: &AgentRunSnapshotRecord) -> String {
+    if let Some(error) = snapshot.run.last_error.as_ref() {
+        return format!("{}: {}", error.code, error.message);
+    }
+    snapshot
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == AgentMessageRole::Assistant)
+        .map(|message| message.content.trim().to_owned())
+        .filter(|content| !content.is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "Subagent run finished with status {:?}.",
+                snapshot.run.status
+            )
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1751,6 +1909,57 @@ fn select_tool_names_for_prompt(
     if contains_any(
         &lowered,
         &[
+            "mcp",
+            "model context protocol",
+            "resource",
+            "prompt template",
+            "invoke tool",
+        ],
+    ) {
+        add_tool_group(&mut names, "mcp");
+    }
+
+    if contains_any(
+        &lowered,
+        &[
+            "subagent",
+            "sub-agent",
+            "delegate",
+            "todo",
+            "task list",
+            "tool search",
+            "deferred tool",
+        ],
+    ) {
+        add_tool_group(&mut names, "agent_ops");
+    }
+
+    if contains_any(&lowered, &["notebook", "jupyter", ".ipynb", "cell"]) {
+        add_tool_group(&mut names, "notebook");
+    }
+
+    if contains_any(
+        &lowered,
+        &[
+            "lsp",
+            "symbol",
+            "symbols",
+            "diagnostic",
+            "diagnostics",
+            "code intelligence",
+            "code-intelligence",
+        ],
+    ) {
+        add_tool_group(&mut names, "intelligence");
+    }
+
+    if contains_any(&lowered, &["powershell", "pwsh", "windows shell"]) {
+        add_tool_group(&mut names, "powershell");
+    }
+
+    if contains_any(
+        &lowered,
+        &[
             "emulator",
             "simulator",
             "mobile",
@@ -1833,6 +2042,27 @@ fn explicit_tool_names_from_prompt(prompt: &str) -> BTreeSet<String> {
             }
             line if line.starts_with("tool:command_") => {
                 names.insert(AUTONOMOUS_TOOL_COMMAND.into());
+            }
+            line if line.starts_with("tool:mcp_") => {
+                names.insert(AUTONOMOUS_TOOL_MCP.into());
+            }
+            line if line.starts_with("tool:subagent ") => {
+                names.insert(AUTONOMOUS_TOOL_SUBAGENT.into());
+            }
+            line if line.starts_with("tool:todo_") => {
+                names.insert(AUTONOMOUS_TOOL_TODO.into());
+            }
+            line if line.starts_with("tool:notebook_edit ") => {
+                names.insert(AUTONOMOUS_TOOL_NOTEBOOK_EDIT.into());
+            }
+            line if line.starts_with("tool:code_intel_") => {
+                names.insert(AUTONOMOUS_TOOL_CODE_INTEL.into());
+            }
+            line if line.starts_with("tool:powershell ") => {
+                names.insert(AUTONOMOUS_TOOL_POWERSHELL.into());
+            }
+            line if line.starts_with("tool:tool_search ") => {
+                names.insert(AUTONOMOUS_TOOL_TOOL_SEARCH.into());
             }
             _ => {}
         }
@@ -1934,7 +2164,7 @@ fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                         "groups",
                         json!({
                             "type": "array",
-                            "description": "Optional tool groups to request. Known groups: core, mutation, command, web, emulator, solana.",
+                            "description": "Optional tool groups to request. Known groups: core, mutation, command, web, emulator, solana, agent_ops, mcp, intelligence, notebook, powershell.",
                             "items": { "type": "string" }
                         }),
                     ),
@@ -2158,6 +2388,156 @@ fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
             object_schema(
                 &["sessionId"],
                 &[("sessionId", string_schema("Command session handle."))],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_MCP,
+            "List connected MCP servers or invoke MCP tools, resources, and prompts through the app-local registry.",
+            object_schema(
+                &["action"],
+                &[
+                    (
+                        "action",
+                        enum_schema(
+                            "MCP action to execute.",
+                            &[
+                                "list_servers",
+                                "list_tools",
+                                "list_resources",
+                                "list_prompts",
+                                "invoke_tool",
+                                "read_resource",
+                                "get_prompt",
+                            ],
+                        ),
+                    ),
+                    ("serverId", string_schema("MCP server id for capability actions.")),
+                    ("name", string_schema("Tool or prompt name for invocation actions.")),
+                    ("uri", string_schema("Resource URI for read_resource.")),
+                    (
+                        "arguments",
+                        json!({
+                            "type": "object",
+                            "description": "Optional MCP arguments object.",
+                            "additionalProperties": true
+                        }),
+                    ),
+                    (
+                        "timeoutMs",
+                        integer_schema("Optional timeout in milliseconds."),
+                    ),
+                ],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_SUBAGENT,
+            "Spawn a built-in model-routed subagent for explore, plan, general, or verification work.",
+            object_schema(
+                &["agentType", "prompt"],
+                &[
+                    (
+                        "agentType",
+                        enum_schema(
+                            "Built-in subagent type.",
+                            &["explore", "plan", "general", "verify"],
+                        ),
+                    ),
+                    ("prompt", string_schema("Focused task for the subagent.")),
+                    (
+                        "modelId",
+                        string_schema("Optional model route requested for this subagent."),
+                    ),
+                ],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_TODO,
+            "Maintain model-visible planning state for the current owned-agent run.",
+            object_schema(
+                &["action"],
+                &[
+                    (
+                        "action",
+                        enum_schema(
+                            "Todo action to execute.",
+                            &["list", "upsert", "complete", "delete", "clear"],
+                        ),
+                    ),
+                    ("id", string_schema("Todo id for update, complete, or delete.")),
+                    ("title", string_schema("Todo title for upsert.")),
+                    ("notes", string_schema("Optional todo notes for upsert.")),
+                    (
+                        "status",
+                        enum_schema(
+                            "Todo status for upsert.",
+                            &["pending", "in_progress", "completed"],
+                        ),
+                    ),
+                ],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
+            "Edit a Jupyter notebook cell source by cell index.",
+            object_schema(
+                &["path", "cellIndex", "replacementSource"],
+                &[
+                    ("path", string_schema("Repo-relative .ipynb path.")),
+                    ("cellIndex", integer_schema("Zero-based notebook cell index.")),
+                    (
+                        "expectedSource",
+                        string_schema("Optional exact current source guard."),
+                    ),
+                    (
+                        "replacementSource",
+                        string_schema("Replacement source text for the cell."),
+                    ),
+                ],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_CODE_INTEL,
+            "Inspect source symbols or JSON diagnostics without requiring command execution.",
+            object_schema(
+                &["action"],
+                &[
+                    (
+                        "action",
+                        enum_schema(
+                            "Code intelligence action.",
+                            &["symbols", "diagnostics"],
+                        ),
+                    ),
+                    ("query", string_schema("Optional symbol query.")),
+                    ("path", string_schema("Optional repo-relative file or directory scope.")),
+                    ("limit", integer_schema("Maximum result count.")),
+                ],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_POWERSHELL,
+            "Run PowerShell through the same repo-scoped command policy used for shell commands.",
+            object_schema(
+                &["script"],
+                &[
+                    ("script", string_schema("PowerShell script text to run.")),
+                    ("cwd", string_schema("Optional repo-relative working directory.")),
+                    (
+                        "timeoutMs",
+                        integer_schema("Optional timeout in milliseconds."),
+                    ),
+                ],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_TOOL_SEARCH,
+            "Search deferred autonomous tool capabilities by name, group, or description.",
+            object_schema(
+                &["query"],
+                &[
+                    ("query", string_schema("Tool capability query.")),
+                    ("limit", integer_schema("Maximum result count.")),
+                ],
             ),
         ),
         descriptor(
@@ -2485,6 +2865,68 @@ fn parse_fake_tool_directives(prompt: &str) -> Vec<AgentToolCall> {
             });
             continue;
         }
+        if let Some(query) = line.strip_prefix("tool:tool_search ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-tool-search-{}", calls.len() + 1),
+                tool_name: "tool_search".into(),
+                input: json!({ "query": query.trim(), "limit": 10 }),
+            });
+            continue;
+        }
+        if let Some(title) = line.strip_prefix("tool:todo_upsert ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-todo-{}", calls.len() + 1),
+                tool_name: "todo".into(),
+                input: json!({ "action": "upsert", "title": title.trim() }),
+            });
+            continue;
+        }
+        if let Some(id) = line.strip_prefix("tool:todo_complete ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-todo-{}", calls.len() + 1),
+                tool_name: "todo".into(),
+                input: json!({ "action": "complete", "id": id.trim() }),
+            });
+            continue;
+        }
+        if let Some(prompt) = line.strip_prefix("tool:subagent ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-subagent-{}", calls.len() + 1),
+                tool_name: "subagent".into(),
+                input: json!({ "agentType": "explore", "prompt": prompt.trim() }),
+            });
+            continue;
+        }
+        if line == "tool:mcp_list" {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-mcp-{}", calls.len() + 1),
+                tool_name: "mcp".into(),
+                input: json!({ "action": "list_servers" }),
+            });
+            continue;
+        }
+        if let Some(server_id) = line.strip_prefix("tool:mcp_list_tools ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-mcp-{}", calls.len() + 1),
+                tool_name: "mcp".into(),
+                input: json!({ "action": "list_tools", "serverId": server_id.trim() }),
+            });
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("tool:code_intel_symbols ") {
+            let (path, query) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-code-intel-{}", calls.len() + 1),
+                tool_name: "code_intel".into(),
+                input: json!({
+                    "action": "symbols",
+                    "path": path,
+                    "query": query,
+                    "limit": 20
+                }),
+            });
+            continue;
+        }
         if let Some(query) = line.strip_prefix("tool:search ") {
             calls.push(AgentToolCall {
                 tool_call_id: format!("tool-call-search-{}", calls.len() + 1),
@@ -2664,6 +3106,7 @@ fn record_file_change_event(
         ),
         AutonomousToolOutput::Edit(output) => ("edit", output.path.as_str()),
         AutonomousToolOutput::Patch(output) => ("patch", output.path.as_str()),
+        AutonomousToolOutput::NotebookEdit(output) => ("notebook_edit", output.path.as_str()),
         AutonomousToolOutput::Delete(output) => ("delete", output.path.as_str()),
         AutonomousToolOutput::Rename(output) => ("rename", output.from_path.as_str()),
         AutonomousToolOutput::Mkdir(output) => ("mkdir", output.path.as_str()),
@@ -2726,6 +3169,7 @@ fn rollback_checkpoint_for_request(
     let (path, operation) = match request {
         AutonomousToolRequest::Edit(request) => (request.path.as_str(), "edit"),
         AutonomousToolRequest::Patch(request) => (request.path.as_str(), "patch"),
+        AutonomousToolRequest::NotebookEdit(request) => (request.path.as_str(), "notebook_edit"),
         AutonomousToolRequest::Delete(request) => (request.path.as_str(), "delete"),
         AutonomousToolRequest::Rename(request) => (request.from_path.as_str(), "rename"),
         AutonomousToolRequest::Write(request) if old_hash.is_some() => {
@@ -3117,6 +3561,7 @@ impl AgentWorkspaceGuard {
             AutonomousToolOutput::Edit(output) => output.path.as_str(),
             AutonomousToolOutput::Write(output) => output.path.as_str(),
             AutonomousToolOutput::Patch(output) => output.path.as_str(),
+            AutonomousToolOutput::NotebookEdit(output) => output.path.as_str(),
             AutonomousToolOutput::Delete(output) => output.path.as_str(),
             AutonomousToolOutput::Rename(output) => output.from_path.as_str(),
             AutonomousToolOutput::Hash(output) => output.path.as_str(),
@@ -3142,6 +3587,7 @@ fn planned_file_change_path(request: &AutonomousToolRequest) -> Option<&str> {
         AutonomousToolRequest::Edit(request) => Some(request.path.as_str()),
         AutonomousToolRequest::Write(request) => Some(request.path.as_str()),
         AutonomousToolRequest::Patch(request) => Some(request.path.as_str()),
+        AutonomousToolRequest::NotebookEdit(request) => Some(request.path.as_str()),
         AutonomousToolRequest::Delete(request) => Some(request.path.as_str()),
         AutonomousToolRequest::Rename(request) => Some(request.from_path.as_str()),
         _ => None,

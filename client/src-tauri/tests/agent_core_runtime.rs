@@ -221,6 +221,13 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
         "command_session_start",
         "command_session_read",
         "command_session_stop",
+        "mcp",
+        "subagent",
+        "todo",
+        "notebook_edit",
+        "code_intel",
+        "powershell",
+        "tool_search",
         "web_search",
         "web_fetch",
         "browser",
@@ -274,6 +281,13 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
     assert_eq!(tool_access.input_schema["required"], json!(["action"]));
 
     assert!(registry.descriptor("browser").is_some());
+    assert!(registry.descriptor("mcp").is_some());
+    assert!(registry.descriptor("subagent").is_some());
+    assert!(registry.descriptor("todo").is_some());
+    assert!(registry.descriptor("notebook_edit").is_some());
+    assert!(registry.descriptor("code_intel").is_some());
+    assert!(registry.descriptor("powershell").is_some());
+    assert!(registry.descriptor("tool_search").is_some());
     let emulator = registry
         .descriptor("emulator")
         .expect("emulator descriptor");
@@ -352,6 +366,20 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
     assert!(audit_names.contains("read"));
     assert!(audit_names.contains("git_diff"));
     assert!(audit_names.contains("command"));
+
+    let priority_tools = ToolRegistry::for_prompt(
+        temp.path(),
+        "Use MCP, subagents, todos, code intelligence, notebooks, and PowerShell.",
+        &controls,
+    );
+    let priority_names = priority_tools.descriptor_names();
+    assert!(priority_names.contains("mcp"));
+    assert!(priority_names.contains("subagent"));
+    assert!(priority_names.contains("todo"));
+    assert!(priority_names.contains("tool_search"));
+    assert!(priority_names.contains("code_intel"));
+    assert!(priority_names.contains("notebook_edit"));
+    assert!(priority_names.contains("powershell"));
 
     let app_use = ToolRegistry::for_prompt(
         temp.path(),
@@ -434,6 +462,86 @@ fn owned_agent_file_tools_cover_patch_hash_mkdir_rename_and_delete() {
     assert!(operations.contains(&"create"));
     assert!(operations.contains(&"rename"));
     assert!(operations.contains(&"delete"));
+}
+
+#[test]
+fn owned_agent_priority_one_tools_dispatch_and_persist_journal() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    fs::write(
+        repo_root.join("src").join("lib.rs"),
+        "pub struct Greeter;\n\npub fn greet() {}\n",
+    )
+    .expect("seed rust source");
+    let tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+
+    let snapshot = run_owned_agent_task(OwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+        run_id: "owned-run-priority-tools-1".into(),
+        prompt: [
+            "Exercise priority one tools.",
+            "tool:tool_search mcp",
+            "tool:todo_upsert Inspect the owned-agent priority surface",
+            "tool:subagent Explore priority one work",
+            "tool:code_intel_symbols src/lib.rs greet",
+            "tool:mcp_list",
+        ]
+        .join("\n"),
+        controls: None,
+        tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+    })
+    .expect("owned agent priority tools should succeed");
+
+    assert_eq!(
+        snapshot.run.status,
+        db::project_store::AgentRunStatus::Completed
+    );
+    let tool_names = snapshot
+        .tool_calls
+        .iter()
+        .map(|tool_call| tool_call.tool_name.as_str())
+        .collect::<Vec<_>>();
+    assert!(tool_names.contains(&"tool_search"));
+    assert!(tool_names.contains(&"todo"));
+    assert!(tool_names.contains(&"subagent"));
+    assert!(tool_names.contains(&"code_intel"));
+    assert!(tool_names.contains(&"mcp"));
+    assert!(snapshot.messages.iter().any(|message| {
+        message.role == db::project_store::AgentMessageRole::Tool
+            && message.content.contains("\"toolName\":\"code_intel\"")
+            && message.content.contains("\"name\":\"greet\"")
+    }));
+    assert!(snapshot.messages.iter().any(|message| {
+        message.role == db::project_store::AgentMessageRole::Tool
+            && message.content.contains("\"toolName\":\"subagent\"")
+            && message.content.contains("\"status\":\"completed\"")
+            && message
+                .content
+                .contains("\"runId\":\"owned-run-priority-tools-1-subagent-1\"")
+    }));
+    let child_snapshot = db::project_store::load_agent_run(
+        &repo_root,
+        &project_id,
+        "owned-run-priority-tools-1-subagent-1",
+    )
+    .expect("subagent child run should be persisted");
+    assert_eq!(
+        child_snapshot.run.status,
+        db::project_store::AgentRunStatus::Completed
+    );
+    assert!(child_snapshot
+        .run
+        .prompt
+        .contains("Explore priority one work"));
 }
 
 #[test]

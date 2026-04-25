@@ -3,14 +3,16 @@ pub mod emulator;
 mod filesystem;
 mod git;
 mod policy;
+mod priority_tools;
 mod process;
 mod repo_scope;
 pub mod solana;
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize};
@@ -84,6 +86,13 @@ pub const AUTONOMOUS_TOOL_COMMAND: &str = "command";
 pub const AUTONOMOUS_TOOL_COMMAND_SESSION_START: &str = "command_session_start";
 pub const AUTONOMOUS_TOOL_COMMAND_SESSION_READ: &str = "command_session_read";
 pub const AUTONOMOUS_TOOL_COMMAND_SESSION_STOP: &str = "command_session_stop";
+pub const AUTONOMOUS_TOOL_MCP: &str = "mcp";
+pub const AUTONOMOUS_TOOL_SUBAGENT: &str = "subagent";
+pub const AUTONOMOUS_TOOL_TODO: &str = "todo";
+pub const AUTONOMOUS_TOOL_NOTEBOOK_EDIT: &str = "notebook_edit";
+pub const AUTONOMOUS_TOOL_CODE_INTEL: &str = "code_intel";
+pub const AUTONOMOUS_TOOL_POWERSHELL: &str = "powershell";
+pub const AUTONOMOUS_TOOL_TOOL_SEARCH: &str = "tool_search";
 
 const DEFAULT_READ_LINE_COUNT: usize = 200;
 const MAX_READ_LINE_COUNT: usize = 400;
@@ -152,6 +161,15 @@ const TOOL_ACCESS_SOLANA_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_SOLANA_COST,
     AUTONOMOUS_TOOL_SOLANA_DOCS,
 ];
+const TOOL_ACCESS_AGENT_OPS_TOOLS: &[&str] = &[
+    AUTONOMOUS_TOOL_SUBAGENT,
+    AUTONOMOUS_TOOL_TODO,
+    AUTONOMOUS_TOOL_TOOL_SEARCH,
+];
+const TOOL_ACCESS_MCP_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_MCP];
+const TOOL_ACCESS_INTELLIGENCE_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_CODE_INTEL];
+const TOOL_ACCESS_NOTEBOOK_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_NOTEBOOK_EDIT];
+const TOOL_ACCESS_POWERSHELL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_POWERSHELL];
 
 pub fn tool_access_group_tools(group: &str) -> Option<&'static [&'static str]> {
     match group.trim() {
@@ -161,6 +179,11 @@ pub fn tool_access_group_tools(group: &str) -> Option<&'static [&'static str]> {
         "web" => Some(TOOL_ACCESS_WEB_TOOLS),
         "emulator" => Some(TOOL_ACCESS_EMULATOR_TOOLS),
         "solana" => Some(TOOL_ACCESS_SOLANA_TOOLS),
+        "agent_ops" => Some(TOOL_ACCESS_AGENT_OPS_TOOLS),
+        "mcp" => Some(TOOL_ACCESS_MCP_TOOLS),
+        "intelligence" => Some(TOOL_ACCESS_INTELLIGENCE_TOOLS),
+        "notebook" => Some(TOOL_ACCESS_NOTEBOOK_TOOLS),
+        "powershell" => Some(TOOL_ACCESS_POWERSHELL_TOOLS),
         _ => None,
     }
 }
@@ -173,6 +196,11 @@ pub fn tool_access_all_known_tools() -> std::collections::BTreeSet<&'static str>
         TOOL_ACCESS_WEB_TOOLS,
         TOOL_ACCESS_EMULATOR_TOOLS,
         TOOL_ACCESS_SOLANA_TOOLS,
+        TOOL_ACCESS_AGENT_OPS_TOOLS,
+        TOOL_ACCESS_MCP_TOOLS,
+        TOOL_ACCESS_INTELLIGENCE_TOOLS,
+        TOOL_ACCESS_NOTEBOOK_TOOLS,
+        TOOL_ACCESS_POWERSHELL_TOOLS,
     ]
     .into_iter()
     .flat_map(|tools| tools.iter().copied())
@@ -187,6 +215,11 @@ pub fn tool_access_group_descriptors() -> Vec<AutonomousToolAccessGroup> {
         ("web", TOOL_ACCESS_WEB_TOOLS),
         ("emulator", TOOL_ACCESS_EMULATOR_TOOLS),
         ("solana", TOOL_ACCESS_SOLANA_TOOLS),
+        ("agent_ops", TOOL_ACCESS_AGENT_OPS_TOOLS),
+        ("mcp", TOOL_ACCESS_MCP_TOOLS),
+        ("intelligence", TOOL_ACCESS_INTELLIGENCE_TOOLS),
+        ("notebook", TOOL_ACCESS_NOTEBOOK_TOOLS),
+        ("powershell", TOOL_ACCESS_POWERSHELL_TOOLS),
     ]
     .into_iter()
     .map(|(name, tools)| AutonomousToolAccessGroup {
@@ -227,7 +260,7 @@ impl Default for AutonomousToolRuntimeLimits {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AutonomousToolRuntime {
     pub(super) repo_root: PathBuf,
     pub(super) limits: AutonomousToolRuntimeLimits,
@@ -237,7 +270,31 @@ pub struct AutonomousToolRuntime {
     pub(super) emulator_executor: Option<Arc<dyn EmulatorExecutor>>,
     pub(super) solana_executor: Option<Arc<dyn SolanaExecutor>>,
     pub(super) cancellation_token: Option<AgentRunCancellationToken>,
+    pub(super) mcp_registry_path: Option<PathBuf>,
+    pub(super) todo_items: Arc<Mutex<BTreeMap<String, AutonomousTodoItem>>>,
+    pub(super) subagent_tasks: Arc<Mutex<BTreeMap<String, AutonomousSubagentTask>>>,
+    pub(super) subagent_executor: Option<Arc<dyn AutonomousSubagentExecutor>>,
+    pub(super) subagent_execution_depth: usize,
     process_sessions: Arc<process::ProcessSessionRegistry>,
+}
+
+impl std::fmt::Debug for AutonomousToolRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AutonomousToolRuntime")
+            .field("repo_root", &self.repo_root)
+            .field("limits", &self.limits)
+            .field("command_controls", &self.command_controls)
+            .field("mcp_registry_path", &self.mcp_registry_path)
+            .field("subagent_execution_depth", &self.subagent_execution_depth)
+            .finish_non_exhaustive()
+    }
+}
+
+pub trait AutonomousSubagentExecutor: Send + Sync {
+    fn execute_subagent(
+        &self,
+        task: AutonomousSubagentTask,
+    ) -> CommandResult<AutonomousSubagentTask>;
 }
 
 impl AutonomousToolRuntime {
@@ -292,6 +349,11 @@ impl AutonomousToolRuntime {
             emulator_executor: None,
             solana_executor: None,
             cancellation_token: None,
+            mcp_registry_path: None,
+            todo_items: Arc::new(Mutex::new(BTreeMap::new())),
+            subagent_tasks: Arc::new(Mutex::new(BTreeMap::new())),
+            subagent_executor: None,
+            subagent_execution_depth: 0,
             process_sessions: Arc::new(process::ProcessSessionRegistry::default()),
         })
     }
@@ -336,7 +398,8 @@ impl AutonomousToolRuntime {
             state.autonomous_web_config(),
         )?
         .with_browser_executor(browser_executor)
-        .with_emulator_executor(emulator::tauri_emulator_executor(app.clone()));
+        .with_emulator_executor(emulator::tauri_emulator_executor(app.clone()))
+        .with_mcp_registry_path(state.mcp_registry_file(app)?);
 
         let runtime = match app.try_state::<crate::commands::SolanaState>() {
             Some(solana_state) => runtime.with_solana_executor(Arc::new(
@@ -367,6 +430,26 @@ impl AutonomousToolRuntime {
 
     pub fn with_cancellation_token(mut self, token: AgentRunCancellationToken) -> Self {
         self.cancellation_token = Some(token);
+        self
+    }
+
+    pub fn with_mcp_registry_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.mcp_registry_path = Some(path.into());
+        self
+    }
+
+    pub fn with_subagent_executor(mut self, executor: Arc<dyn AutonomousSubagentExecutor>) -> Self {
+        self.subagent_executor = Some(executor);
+        self
+    }
+
+    pub fn without_subagent_executor(mut self) -> Self {
+        self.subagent_executor = None;
+        self
+    }
+
+    pub fn with_subagent_execution_depth(mut self, depth: usize) -> Self {
+        self.subagent_execution_depth = depth;
         self
     }
 
@@ -412,6 +495,13 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::CommandSessionStop(request) => {
                 self.command_session_stop(request)
             }
+            AutonomousToolRequest::Mcp(request) => self.mcp(request),
+            AutonomousToolRequest::Subagent(request) => self.subagent(request),
+            AutonomousToolRequest::Todo(request) => self.todo(request),
+            AutonomousToolRequest::NotebookEdit(request) => self.notebook_edit(request),
+            AutonomousToolRequest::CodeIntel(request) => self.code_intel(request),
+            AutonomousToolRequest::PowerShell(request) => self.powershell(request),
+            AutonomousToolRequest::ToolSearch(request) => self.tool_search(request),
             AutonomousToolRequest::Browser(request) => self.browser(request),
             AutonomousToolRequest::Emulator(request) => self.emulator(request),
             AutonomousToolRequest::SolanaCluster(request) => self
@@ -518,6 +608,9 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::Command(request) => self.command_with_operator_approval(request),
             AutonomousToolRequest::CommandSessionStart(request) => {
                 self.command_session_start_with_operator_approval(request)
+            }
+            AutonomousToolRequest::PowerShell(request) => {
+                self.powershell_with_operator_approval(request)
             }
             request => self.execute(request),
         }
@@ -729,6 +822,14 @@ pub enum AutonomousToolRequest {
     CommandSessionStart(AutonomousCommandSessionStartRequest),
     CommandSessionRead(AutonomousCommandSessionReadRequest),
     CommandSessionStop(AutonomousCommandSessionStopRequest),
+    Mcp(AutonomousMcpRequest),
+    Subagent(AutonomousSubagentRequest),
+    Todo(AutonomousTodoRequest),
+    NotebookEdit(AutonomousNotebookEditRequest),
+    CodeIntel(AutonomousCodeIntelRequest),
+    #[serde(rename = "powershell")]
+    PowerShell(AutonomousPowerShellRequest),
+    ToolSearch(AutonomousToolSearchRequest),
     Browser(AutonomousBrowserRequest),
     Emulator(AutonomousEmulatorRequest),
     SolanaCluster(AutonomousSolanaClusterRequest),
@@ -909,6 +1010,160 @@ pub struct AutonomousCommandSessionStopRequest {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousMcpAction {
+    ListServers,
+    ListTools,
+    ListResources,
+    ListPrompts,
+    InvokeTool,
+    ReadResource,
+    GetPrompt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousMcpRequest {
+    pub action: AutonomousMcpAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSubagentType {
+    Explore,
+    Plan,
+    General,
+    Verify,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSubagentRequest {
+    pub agent_type: AutonomousSubagentType,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSubagentTask {
+    pub subagent_id: String,
+    pub agent_type: AutonomousSubagentType,
+    pub prompt: String,
+    pub model_id: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousTodoAction {
+    List,
+    Upsert,
+    Complete,
+    Delete,
+    Clear,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousTodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousTodoRequest {
+    pub action: AutonomousTodoAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<AutonomousTodoStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousTodoItem {
+    pub id: String,
+    pub title: String,
+    pub notes: Option<String>,
+    pub status: AutonomousTodoStatus,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousNotebookEditRequest {
+    pub path: String,
+    pub cell_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_source: Option<String>,
+    pub replacement_source: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousCodeIntelAction {
+    Symbols,
+    Diagnostics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCodeIntelRequest {
+    pub action: AutonomousCodeIntelAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousPowerShellRequest {
+    pub script: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousToolSearchRequest {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomousCommandPolicyOutcome {
@@ -964,6 +1219,12 @@ pub enum AutonomousToolOutput {
     Hash(AutonomousHashOutput),
     Command(AutonomousCommandOutput),
     CommandSession(AutonomousCommandSessionOutput),
+    Mcp(AutonomousMcpOutput),
+    Subagent(AutonomousSubagentOutput),
+    Todo(AutonomousTodoOutput),
+    NotebookEdit(AutonomousNotebookEditOutput),
+    CodeIntel(AutonomousCodeIntelOutput),
+    ToolSearch(AutonomousToolSearchOutput),
     Browser(AutonomousBrowserOutput),
     Emulator(AutonomousEmulatorOutput),
     Solana(AutonomousSolanaOutput),
@@ -1174,4 +1435,98 @@ pub struct AutonomousCommandSessionOutput {
     pub chunks: Vec<AutonomousCommandSessionChunk>,
     pub next_sequence: u64,
     pub policy: Option<AutonomousCommandPolicyTrace>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousMcpServerSummary {
+    pub server_id: String,
+    pub name: String,
+    pub transport: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousMcpOutput {
+    pub action: AutonomousMcpAction,
+    pub servers: Vec<AutonomousMcpServerSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSubagentOutput {
+    pub task: AutonomousSubagentTask,
+    pub active_tasks: Vec<AutonomousSubagentTask>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousTodoOutput {
+    pub action: AutonomousTodoAction,
+    pub items: Vec<AutonomousTodoItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_item: Option<AutonomousTodoItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousNotebookEditOutput {
+    pub path: String,
+    pub cell_index: usize,
+    pub cell_type: String,
+    pub old_source_chars: usize,
+    pub new_source_chars: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCodeSymbol {
+    pub path: String,
+    pub line: usize,
+    pub kind: String,
+    pub name: String,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCodeDiagnostic {
+    pub path: String,
+    pub line: usize,
+    pub column: usize,
+    pub severity: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousCodeIntelOutput {
+    pub action: AutonomousCodeIntelAction,
+    pub symbols: Vec<AutonomousCodeSymbol>,
+    pub diagnostics: Vec<AutonomousCodeDiagnostic>,
+    pub scanned_files: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousToolSearchMatch {
+    pub tool_name: String,
+    pub group: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousToolSearchOutput {
+    pub query: String,
+    pub matches: Vec<AutonomousToolSearchMatch>,
+    pub truncated: bool,
 }
