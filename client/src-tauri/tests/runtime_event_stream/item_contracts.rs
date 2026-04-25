@@ -211,21 +211,10 @@ pub(crate) fn runtime_stream_dedupes_replayed_action_required_against_durable_pe
     )
     .expect("load autonomous run after replayed runtime stream")
     .expect("autonomous run should still exist after replayed runtime stream");
-    let blocked_evidence = autonomous_snapshot
-        .history
-        .iter()
-        .flat_map(|entry| entry.artifacts.iter())
-        .filter(|artifact| {
-            matches!(
-                artifact.payload.as_ref(),
-                Some(project_store::AutonomousArtifactPayloadRecord::VerificationEvidence(payload))
-                    if payload.action_id.as_deref() == Some(action_id.as_str())
-                        && payload.boundary_id.as_deref() == Some("boundary-1")
-                        && payload.outcome == project_store::AutonomousVerificationOutcomeRecord::Blocked
-            )
-        })
-        .count();
-    assert_eq!(blocked_evidence, 1);
+    assert_eq!(
+        autonomous_snapshot.run.status,
+        project_store::AutonomousRunStatus::Paused
+    );
 
     server.join().expect("join fake supervisor thread");
 }

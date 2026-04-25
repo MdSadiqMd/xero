@@ -37,10 +37,24 @@ pub struct ToolRegistry {
     descriptors: Vec<AgentToolDescriptor>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ToolRegistryOptions {
+    pub skill_tool_enabled: bool,
+}
+
 impl ToolRegistry {
     pub fn builtin() -> Self {
+        Self::builtin_with_options(ToolRegistryOptions::default())
+    }
+
+    pub fn builtin_with_options(options: ToolRegistryOptions) -> Self {
         Self {
-            descriptors: builtin_tool_descriptors(),
+            descriptors: builtin_tool_descriptors()
+                .into_iter()
+                .filter(|descriptor| {
+                    options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL
+                })
+                .collect(),
         }
     }
 
@@ -49,13 +63,36 @@ impl ToolRegistry {
         prompt: &str,
         controls: &RuntimeRunControlStateDto,
     ) -> Self {
-        Self::for_tool_names(select_tool_names_for_prompt(repo_root, prompt, controls))
+        Self::for_prompt_with_options(repo_root, prompt, controls, ToolRegistryOptions::default())
+    }
+
+    pub fn for_prompt_with_options(
+        repo_root: &Path,
+        prompt: &str,
+        controls: &RuntimeRunControlStateDto,
+        options: ToolRegistryOptions,
+    ) -> Self {
+        let mut names = select_tool_names_for_prompt(repo_root, prompt, controls);
+        if !options.skill_tool_enabled {
+            names.remove(AUTONOMOUS_TOOL_SKILL);
+        }
+        Self::for_tool_names_with_options(names, options)
     }
 
     pub fn for_tool_names(tool_names: BTreeSet<String>) -> Self {
+        Self::for_tool_names_with_options(tool_names, ToolRegistryOptions::default())
+    }
+
+    pub fn for_tool_names_with_options(
+        tool_names: BTreeSet<String>,
+        options: ToolRegistryOptions,
+    ) -> Self {
         let descriptors = builtin_tool_descriptors()
             .into_iter()
-            .filter(|descriptor| tool_names.contains(descriptor.name.as_str()))
+            .filter(|descriptor| {
+                tool_names.contains(descriptor.name.as_str())
+                    && (options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL)
+            })
             .collect();
         Self { descriptors }
     }

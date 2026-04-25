@@ -334,6 +334,7 @@ pub(crate) fn tool_registry_for_snapshot(
     repo_root: &Path,
     snapshot: &AgentRunSnapshotRecord,
     controls: &RuntimeRunControlStateDto,
+    skill_tool_enabled: bool,
 ) -> CommandResult<ToolRegistry> {
     let prompt_context = snapshot
         .messages
@@ -353,7 +354,12 @@ pub(crate) fn tool_registry_for_snapshot(
         prompt_context.as_str()
     };
 
-    let mut registry = ToolRegistry::for_prompt(repo_root, prompt_context, controls);
+    let mut registry = ToolRegistry::for_prompt_with_options(
+        repo_root,
+        prompt_context,
+        controls,
+        ToolRegistryOptions { skill_tool_enabled },
+    );
     registry.expand_with_tool_names(granted_tools_from_snapshot(snapshot)?);
     Ok(registry)
 }

@@ -15,11 +15,10 @@ pub(crate) use cadence_desktop_lib::{
         SupervisorToolCallState, SUPERVISOR_PROTOCOL_VERSION,
     },
     runtime::{
-        autonomous_orchestrator::persist_supervisor_event, launch_detached_runtime_supervisor,
-        probe_runtime_run, stop_runtime_run, submit_runtime_run_input,
-        RuntimeSupervisorLaunchContext, RuntimeSupervisorLaunchEnv, RuntimeSupervisorLaunchRequest,
-        RuntimeSupervisorProbeRequest, RuntimeSupervisorStopRequest,
-        RuntimeSupervisorSubmitInputRequest,
+        launch_detached_runtime_supervisor, probe_runtime_run, stop_runtime_run,
+        submit_runtime_run_input, RuntimeSupervisorLaunchContext, RuntimeSupervisorLaunchEnv,
+        RuntimeSupervisorLaunchRequest, RuntimeSupervisorProbeRequest,
+        RuntimeSupervisorStopRequest, RuntimeSupervisorSubmitInputRequest,
     },
     state::DesktopState,
 };
@@ -420,6 +419,7 @@ pub(crate) fn seed_running_runtime_run(
     .expect("seed running runtime run");
 }
 
+#[cfg(any())]
 pub(crate) fn seed_active_autonomous_run(repo_root: &Path, project_id: &str, run_id: &str) {
     let timestamp = "2026-04-16T12:00:00Z";
     let payload = project_store::AutonomousRunUpsertRecord {

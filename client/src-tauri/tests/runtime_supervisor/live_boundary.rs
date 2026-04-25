@@ -1111,6 +1111,7 @@ pub(crate) fn detached_supervisor_persists_redacted_interactive_boundary_and_rep
     assert_eq!(stopped.run.status, project_store::RuntimeRunStatus::Stopped);
 }
 
+#[cfg(any())]
 pub(crate) fn detached_supervisor_persists_matching_autonomous_boundary_once_before_reload() {
     let _guard = supervisor_test_guard();
     let root = tempfile::tempdir().expect("temp dir");

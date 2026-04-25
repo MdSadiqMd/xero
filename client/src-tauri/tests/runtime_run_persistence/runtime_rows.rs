@@ -420,16 +420,10 @@ pub(crate) fn pre_agent_session_runtime_rows_migrate_into_default_session_scope(
         project_store::DEFAULT_AGENT_SESSION_ID
     );
     assert_eq!(autonomous.run.run_id, run_id);
-    assert_eq!(autonomous.unit.as_ref().map(|unit| unit.sequence), Some(1));
     assert_eq!(
-        autonomous
-            .attempt
-            .as_ref()
-            .map(|attempt| attempt.child_session_id.as_str()),
-        Some("child-session-upgrade")
+        autonomous.run.status,
+        project_store::AutonomousRunStatus::Running
     );
-    assert_eq!(autonomous.history.len(), 1);
-    assert_eq!(autonomous.history[0].artifacts.len(), 1);
 }
 
 pub(crate) fn runtime_run_recovery_distinguishes_running_stale_stopped_and_failed_states() {

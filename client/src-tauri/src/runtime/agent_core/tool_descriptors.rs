@@ -134,6 +134,21 @@ pub(crate) fn select_tool_names_for_prompt(
         add_tool_group(&mut names, "agent_ops");
     }
 
+    if contains_any(
+        &lowered,
+        &[
+            "skill",
+            "skills",
+            "skilltool",
+            "skill tool",
+            "installed skill",
+            "project skill",
+            "bundled skill",
+        ],
+    ) {
+        add_tool_group(&mut names, "skills");
+    }
+
     if contains_any(&lowered, &["notebook", "jupyter", ".ipynb", "cell"]) {
         add_tool_group(&mut names, "notebook");
     }
@@ -266,6 +281,9 @@ fn explicit_tool_names_from_prompt(prompt: &str) -> BTreeSet<String> {
             }
             line if line.starts_with("tool:tool_search ") => {
                 names.insert(AUTONOMOUS_TOOL_TOOL_SEARCH.into());
+            }
+            line if line.starts_with("tool:skill_") => {
+                names.insert(AUTONOMOUS_TOOL_SKILL.into());
             }
             _ => {}
         }
@@ -768,6 +786,11 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
             ),
         ),
         descriptor(
+            AUTONOMOUS_TOOL_SKILL,
+            "Discover, resolve, install, invoke, reload, or create Cadence skills for model-visible instructions and assets.",
+            skill_schema(),
+        ),
+        descriptor(
             AUTONOMOUS_TOOL_WEB_SEARCH,
             "Search the web through the configured backend.",
             object_schema(
@@ -939,6 +962,82 @@ fn browser_schema() -> JsonValue {
     )
 }
 
+fn skill_schema() -> JsonValue {
+    json!({
+        "oneOf": [
+            object_schema(
+                &["operation", "includeUnavailable"],
+                &[
+                    ("operation", enum_schema("SkillTool operation.", &["list"])),
+                    ("query", string_schema("Optional skill search query.")),
+                    ("includeUnavailable", boolean_schema("Include disabled, blocked, failed, or otherwise unavailable skills.")),
+                    ("limit", integer_schema("Maximum skill candidates to return.")),
+                ],
+            ),
+            object_schema(
+                &["operation", "includeUnavailable"],
+                &[
+                    ("operation", enum_schema("SkillTool operation.", &["resolve"])),
+                    ("sourceId", string_schema("Canonical skill-source id from a prior SkillTool result.")),
+                    ("skillId", string_schema("Skill id to resolve when sourceId is unknown.")),
+                    ("includeUnavailable", boolean_schema("Include unavailable skills for diagnostics.")),
+                ],
+            ),
+            object_schema(
+                &["operation", "sourceId"],
+                &[
+                    ("operation", enum_schema("SkillTool operation.", &["install"])),
+                    ("sourceId", string_schema("Canonical skill-source id to install.")),
+                    ("approvalGrantId", string_schema("Optional user approval grant id for untrusted sources.")),
+                ],
+            ),
+            object_schema(
+                &["operation", "sourceId", "includeSupportingAssets"],
+                &[
+                    ("operation", enum_schema("SkillTool operation.", &["invoke"])),
+                    ("sourceId", string_schema("Canonical skill-source id to invoke.")),
+                    ("approvalGrantId", string_schema("Optional user approval grant id for untrusted sources.")),
+                    ("includeSupportingAssets", boolean_schema("Return validated supporting assets alongside SKILL.md.")),
+                ],
+            ),
+            object_schema(
+                &["operation"],
+                &[
+                    ("operation", enum_schema("SkillTool operation.", &["reload"])),
+                    ("sourceId", string_schema("Optional canonical source id to reload.")),
+                    ("sourceKind", enum_schema("Optional source kind to reload.", &["bundled", "local", "project", "github", "dynamic", "mcp", "plugin"])),
+                ],
+            ),
+            object_schema(
+                &["operation", "skillId", "markdown", "supportingAssets"],
+                &[
+                    ("operation", enum_schema("SkillTool operation.", &["create_dynamic"])),
+                    ("skillId", string_schema("New dynamic skill id in kebab-case.")),
+                    ("markdown", string_schema("Complete SKILL.md content with required frontmatter.")),
+                    (
+                        "supportingAssets",
+                        json!({
+                            "type": "array",
+                            "description": "Text supporting assets to stage with the dynamic skill.",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": ["relativePath", "content"],
+                                "properties": {
+                                    "relativePath": { "type": "string" },
+                                    "content": { "type": "string" }
+                                }
+                            }
+                        }),
+                    ),
+                    ("sourceRunId", string_schema("Optional completed run id that produced this candidate.")),
+                    ("sourceArtifactId", string_schema("Optional completed artifact id that produced this candidate.")),
+                ],
+            )
+        ]
+    })
+}
+
 fn solana_tool_descriptors() -> Vec<AgentToolDescriptor> {
     [
         (
@@ -1097,6 +1196,32 @@ pub(crate) fn parse_fake_tool_directives(prompt: &str) -> Vec<AgentToolCall> {
                 tool_call_id: format!("tool-call-tool-search-{}", calls.len() + 1),
                 tool_name: "tool_search".into(),
                 input: json!({ "query": query.trim(), "limit": 10 }),
+            });
+            continue;
+        }
+        if let Some(query) = line.strip_prefix("tool:skill_list ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-skill-list-{}", calls.len() + 1),
+                tool_name: "skill".into(),
+                input: json!({
+                    "operation": "list",
+                    "query": query.trim(),
+                    "includeUnavailable": false,
+                    "limit": 10
+                }),
+            });
+            continue;
+        }
+        if let Some(source_id) = line.strip_prefix("tool:skill_invoke ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-skill-invoke-{}", calls.len() + 1),
+                tool_name: "skill".into(),
+                input: json!({
+                    "operation": "invoke",
+                    "sourceId": source_id.trim(),
+                    "approvalGrantId": null,
+                    "includeSupportingAssets": true
+                }),
             });
             continue;
         }

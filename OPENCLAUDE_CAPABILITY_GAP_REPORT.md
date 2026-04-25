@@ -324,25 +324,29 @@ Outcome: Cadence can remember installed skills from multiple source types, not j
 
 Outcome: owned agents can see, choose, install, and invoke skills through a Cadence-native SkillTool.
 
-- Slice 2.2.1: Add a model-visible SkillTool descriptor.
+- [x] Slice 2.2.1: Add a model-visible SkillTool descriptor.
   - Scope: add a tool descriptor for skill discovery and resolution with strict input schemas and concise descriptions suitable for model planning.
   - Acceptance: the tool appears in owned-agent tool discovery only when skill support is enabled and reports unavailable states clearly when no sources are configured.
   - Verification: owned-agent tool registry tests cover enabled/disabled availability and tool-search discoverability.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed SkillTool descriptor/tool-search gating assertions and `cargo test --manifest-path client/src-tauri/Cargo.toml --test agent_core_runtime` passed owned-agent tool registry coverage.
 
-- Slice 2.2.2: Implement SkillTool discover and resolve.
+- [x] Slice 2.2.2: Implement SkillTool discover and resolve.
   - Scope: route model requests through the durable registry plus source scanners; return ranked candidates with source type, trust state, enabled state, and short descriptions.
   - Acceptance: discovery merges GitHub, bundled, local, and project skills; disabled or blocked skills are visible only when the request asks for them or when needed for diagnostics.
   - Verification: backend tests cover merged source ordering, query matching, trust filtering, and malformed request rejection.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed merged GitHub/bundled/local/project discovery, query filtering, trust filtering, disabled-source diagnostics, and stale-source detection; `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_tool_contract` passed malformed request rejection.
 
-- Slice 2.2.3: Implement SkillTool install and invoke.
+- [x] Slice 2.2.3: Implement SkillTool install and invoke.
   - Scope: install missing skills when allowed, load validated skill markdown/assets, and return a model-consumable invocation payload while recording lifecycle events.
   - Acceptance: invocation works for cached GitHub skills, bundled skills, local skills, and project skills; approval is required for untrusted sources before first use; failures leave durable diagnostics.
   - Verification: owned-agent runtime tests cover trusted invocation, approval-required invocation, rejected invocation, stale source refresh, and asset loading.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed trusted bundled/GitHub invocation, approval-required local invocation, stale bundled refresh, dynamic rejection, and asset-loading assertions; `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_tool_runtime` passed adjacent runtime dispatch coverage.
 
-- Slice 2.2.4: Add dynamic skill discovery during work.
+- [x] Slice 2.2.4: Add dynamic skill discovery during work.
   - Scope: let the model create a discoverable dynamic skill candidate from an approved source or completed run artifact without automatically trusting it.
   - Acceptance: dynamic skills start disabled or untrusted, can be reviewed later in settings, and never become model-invocable until explicitly enabled or trusted by policy.
   - Verification: tests cover dynamic candidate creation, duplicate merging, disabled-by-default behavior, and lifecycle telemetry.
+  - Completed: 2026-04-25. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed dynamic candidate creation, duplicate merge, disabled/untrusted defaults, lifecycle output, and non-invocable behavior.
 
 ##### Phase 3: Add User-Facing Skill Management
 

@@ -18,7 +18,14 @@ pub fn create_owned_agent_run(
     )?;
 
     let controls = runtime_controls_from_request(request.controls.as_ref());
-    let tool_registry = ToolRegistry::for_prompt(&request.repo_root, &request.prompt, &controls);
+    let tool_registry = ToolRegistry::for_prompt_with_options(
+        &request.repo_root,
+        &request.prompt,
+        &controls,
+        ToolRegistryOptions {
+            skill_tool_enabled: request.tool_runtime.skill_tool_enabled(),
+        },
+    );
     let system_prompt = assemble_system_prompt(&request.repo_root, tool_registry.descriptors())?;
     let provider = create_provider_adapter(request.provider_config.clone())?;
     let now = now_timestamp();
@@ -92,11 +99,13 @@ pub fn drive_owned_agent_run(
     let snapshot =
         project_store::load_agent_run(&request.repo_root, &request.project_id, &request.run_id)?;
     let controls = runtime_controls_from_request(request.controls.as_ref());
+    let skill_tool_enabled = request.tool_runtime.skill_tool_enabled();
     let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
         .with_cancellation_token(cancellation.clone());
-    let tool_registry = tool_registry_for_snapshot(&request.repo_root, &snapshot, &controls)?;
+    let tool_registry =
+        tool_registry_for_snapshot(&request.repo_root, &snapshot, &controls, skill_tool_enabled)?;
     let provider = create_provider_adapter(request.provider_config.clone())?;
     if provider.provider_id() != snapshot.run.provider_id
         || provider.model_id() != snapshot.run.model_id
@@ -250,7 +259,9 @@ pub fn prepare_owned_agent_continuation(
             &request.project_id,
             &request.run_id,
         )?;
-        let tool_registry = ToolRegistry::builtin();
+        let tool_registry = ToolRegistry::builtin_with_options(ToolRegistryOptions {
+            skill_tool_enabled: request.tool_runtime.skill_tool_enabled(),
+        });
         let replay_tool_runtime = request
             .tool_runtime
             .clone()
@@ -342,11 +353,13 @@ pub fn drive_owned_agent_continuation(
         project_store::load_agent_run(&request.repo_root, &request.project_id, &request.run_id)?;
     let messages = provider_messages_from_snapshot(&snapshot)?;
     let controls = runtime_controls_from_request(request.controls.as_ref());
+    let skill_tool_enabled = request.tool_runtime.skill_tool_enabled();
     let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
         .with_cancellation_token(cancellation.clone());
-    let tool_registry = tool_registry_for_snapshot(&request.repo_root, &snapshot, &controls)?;
+    let tool_registry =
+        tool_registry_for_snapshot(&request.repo_root, &snapshot, &controls, skill_tool_enabled)?;
     let tool_runtime = tool_runtime_with_subagent_executor(
         base_tool_runtime,
         &request.repo_root,

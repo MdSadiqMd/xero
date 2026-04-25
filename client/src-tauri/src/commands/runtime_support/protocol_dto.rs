@@ -2,12 +2,11 @@ use crate::{
     commands::{
         AutonomousSkillCacheStatusDto, AutonomousSkillLifecycleDiagnosticDto,
         AutonomousSkillLifecycleResultDto, AutonomousSkillLifecycleSourceDto,
-        AutonomousSkillLifecycleStageDto,
-        BrowserComputerUseActionStatusDto, BrowserComputerUseSurfaceDto,
-        BrowserComputerUseToolResultSummaryDto, CommandToolResultSummaryDto,
-        FileToolResultSummaryDto, GitToolResultScopeDto, GitToolResultSummaryDto,
-        McpCapabilityKindDto, McpCapabilityToolResultSummaryDto, ToolResultSummaryDto,
-        WebToolResultContentKindDto, WebToolResultSummaryDto,
+        AutonomousSkillLifecycleStageDto, BrowserComputerUseActionStatusDto,
+        BrowserComputerUseSurfaceDto, BrowserComputerUseToolResultSummaryDto,
+        CommandToolResultSummaryDto, FileToolResultSummaryDto, GitToolResultScopeDto,
+        GitToolResultSummaryDto, McpCapabilityKindDto, McpCapabilityToolResultSummaryDto,
+        ToolResultSummaryDto, WebToolResultContentKindDto, WebToolResultSummaryDto,
     },
     runtime::protocol::{
         BrowserComputerUseActionStatus, BrowserComputerUseSurface, GitToolResultScope,

@@ -163,7 +163,36 @@ pub fn load_discovered_skill_context(
     candidate: &CadenceDiscoveredSkill,
     include_supporting_assets: bool,
 ) -> CommandResult<CadenceSkillToolContextPayload> {
-    let markdown_path = candidate.skill_directory.join("SKILL.md");
+    load_skill_context_from_directory(
+        &candidate.source.source_id,
+        &candidate.skill_id,
+        &candidate.skill_directory,
+        Some(&candidate.asset_paths),
+        include_supporting_assets,
+    )
+}
+
+pub fn load_skill_context_from_directory(
+    source_id: &str,
+    skill_id: &str,
+    skill_directory: impl AsRef<Path>,
+    expected_asset_paths: Option<&[String]>,
+    include_supporting_assets: bool,
+) -> CommandResult<CadenceSkillToolContextPayload> {
+    let skill_directory = skill_directory.as_ref();
+    let asset_paths = match expected_asset_paths {
+        Some(paths) => paths.to_vec(),
+        None => {
+            let mut files = Vec::new();
+            collect_skill_files(skill_directory, skill_directory, &mut files)?;
+            files.sort_by(|left, right| left.0.cmp(&right.0));
+            files
+                .into_iter()
+                .map(|(relative_path, _)| relative_path)
+                .collect()
+        }
+    };
+    let markdown_path = skill_directory.join("SKILL.md");
     let markdown_bytes = fs::read(&markdown_path).map_err(|error| {
         CommandError::retryable(
             "autonomous_skill_document_read_failed",
@@ -178,21 +207,29 @@ pub fn load_discovered_skill_context(
             "autonomous_skill_document_invalid",
             format!(
                 "Cadence rejected discovered skill `{}` because SKILL.md was not valid UTF-8 text: {error}",
-                candidate.skill_id
+                skill_id
             ),
         )
     })?;
-    parse_skill_frontmatter(&markdown_content)?;
+    let frontmatter = parse_skill_frontmatter(&markdown_content)?;
+    if frontmatter.name != skill_id {
+        return Err(CommandError::user_fixable(
+            "autonomous_skill_document_invalid",
+            format!(
+                "Cadence rejected discovered skill `{skill_id}` because SKILL.md frontmatter name `{}` did not match.",
+                frontmatter.name
+            ),
+        ));
+    }
 
     let mut supporting_assets = Vec::new();
     if include_supporting_assets {
-        for relative_path in candidate
-            .asset_paths
+        for relative_path in asset_paths
             .iter()
             .filter(|path| path.as_str() != "SKILL.md")
         {
             validate_skill_asset_path(relative_path)?;
-            let path = candidate.skill_directory.join(relative_path);
+            let path = skill_directory.join(relative_path);
             let bytes = fs::read(&path).map_err(|error| {
                 CommandError::retryable(
                     "autonomous_skill_asset_read_failed",
@@ -221,8 +258,8 @@ pub fn load_discovered_skill_context(
 
     validate_skill_tool_context_payload(CadenceSkillToolContextPayload {
         contract_version: CADENCE_SKILL_TOOL_CONTRACT_VERSION,
-        source_id: candidate.source.source_id.clone(),
-        skill_id: candidate.skill_id.clone(),
+        source_id: source_id.to_owned(),
+        skill_id: skill_id.to_owned(),
         markdown: CadenceSkillToolContextDocument {
             relative_path: "SKILL.md".into(),
             sha256: sha256_hex(&markdown_bytes),

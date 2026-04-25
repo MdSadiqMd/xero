@@ -5,11 +5,10 @@ use rusqlite::{params, Connection, Error as SqlError};
 use crate::{commands::CommandError, db::database_path_for_repo};
 
 use super::runtime::{
-    decode_runtime_run_bool, decode_runtime_run_optional_non_empty_text,
-    decode_runtime_run_reason, find_prohibited_runtime_persistence_content,
-    map_runtime_run_commit_error, map_runtime_run_decode_error,
-    map_runtime_run_transaction_error, map_runtime_run_write_error, read_runtime_run_row,
-    require_runtime_run_non_empty_owned, RuntimeRunDiagnosticRecord,
+    decode_runtime_run_bool, decode_runtime_run_optional_non_empty_text, decode_runtime_run_reason,
+    find_prohibited_runtime_persistence_content, map_runtime_run_commit_error,
+    map_runtime_run_decode_error, map_runtime_run_transaction_error, map_runtime_run_write_error,
+    read_runtime_run_row, require_runtime_run_non_empty_owned, RuntimeRunDiagnosticRecord,
 };
 use super::{open_runtime_database, read_project_row, validate_non_empty_text};
 
@@ -192,25 +191,41 @@ pub fn upsert_autonomous_run(
     }
 
     let duplicate_start_detected = i64::from(payload.run.duplicate_start_detected);
-    let pause_reason_code = payload.run.pause_reason.as_ref().map(|reason| reason.code.as_str());
+    let pause_reason_code = payload
+        .run
+        .pause_reason
+        .as_ref()
+        .map(|reason| reason.code.as_str());
     let pause_reason_message = payload
         .run
         .pause_reason
         .as_ref()
         .map(|reason| reason.message.as_str());
-    let cancel_reason_code = payload.run.cancel_reason.as_ref().map(|reason| reason.code.as_str());
+    let cancel_reason_code = payload
+        .run
+        .cancel_reason
+        .as_ref()
+        .map(|reason| reason.code.as_str());
     let cancel_reason_message = payload
         .run
         .cancel_reason
         .as_ref()
         .map(|reason| reason.message.as_str());
-    let crash_reason_code = payload.run.crash_reason.as_ref().map(|reason| reason.code.as_str());
+    let crash_reason_code = payload
+        .run
+        .crash_reason
+        .as_ref()
+        .map(|reason| reason.code.as_str());
     let crash_reason_message = payload
         .run
         .crash_reason
         .as_ref()
         .map(|reason| reason.message.as_str());
-    let last_error_code = payload.run.last_error.as_ref().map(|reason| reason.code.as_str());
+    let last_error_code = payload
+        .run
+        .last_error
+        .as_ref()
+        .map(|reason| reason.code.as_str());
     let last_error_message = payload
         .run
         .last_error
@@ -622,8 +637,11 @@ fn decode_autonomous_run_row(
         "crashed_at",
         database_path,
     )?;
-    let stopped_at =
-        decode_runtime_run_optional_non_empty_text(raw_row.stopped_at, "stopped_at", database_path)?;
+    let stopped_at = decode_runtime_run_optional_non_empty_text(
+        raw_row.stopped_at,
+        "stopped_at",
+        database_path,
+    )?;
     let pause_reason = decode_runtime_run_reason(
         raw_row.pause_reason_code,
         raw_row.pause_reason_message,

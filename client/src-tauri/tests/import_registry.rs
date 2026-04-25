@@ -8,10 +8,10 @@ use std::{
 use cadence_desktop_lib::{
     commands::{
         get_project_snapshot, import_repository, list_projects, remove_project, CommandError,
-        CommandErrorClass, ImportRepositoryRequestDto, ListProjectsResponseDto, PhaseStatus,
-        PhaseStep, PhaseSummaryDto, ProjectIdRequestDto, ProjectSnapshotResponseDto,
-        ProjectUpdateReason, ProjectUpdatedPayloadDto, RepositoryStatusChangedPayloadDto,
-        PROJECT_UPDATED_EVENT, REPOSITORY_STATUS_CHANGED_EVENT,
+        CommandErrorClass, ImportRepositoryRequestDto, ListProjectsResponseDto,
+        ProjectIdRequestDto, ProjectSnapshotResponseDto, ProjectUpdateReason,
+        ProjectUpdatedPayloadDto, RepositoryStatusChangedPayloadDto, PROJECT_UPDATED_EVENT,
+        REPOSITORY_STATUS_CHANGED_EVENT,
     },
     configure_builder_with_state,
     db::migrations::migrations,
@@ -278,86 +278,12 @@ fn assert_database_rows(repo_root: &Path, project_id: &str, repository_id: &str,
     assert!(repository_row.4);
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PhaseRowFixture<'a> {
-    project_id: &'a str,
-    id: u32,
-    name: &'a str,
-    description: &'a str,
-    status: &'a str,
-    current_step: Option<&'a str>,
-    task_count: u32,
-    completed_tasks: u32,
-    summary: Option<&'a str>,
-}
-
 fn open_state_connection(repo_root: &Path) -> Connection {
     let connection = Connection::open(database_path(repo_root)).expect("open sqlite db");
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .expect("enable foreign keys");
     connection
-}
-
-fn insert_project_fixture(repo_root: &Path, project_id: &str, name: &str) {
-    let connection = open_state_connection(repo_root);
-    connection
-        .execute(
-            r#"
-            INSERT INTO projects (
-                id,
-                name,
-                description,
-                milestone,
-                total_phases,
-                completed_phases,
-                active_phase,
-                branch,
-                runtime,
-                updated_at
-            )
-            VALUES (?1, ?2, '', '', 0, 0, 0, NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-            "#,
-            params![project_id, name],
-        )
-        .expect("insert project fixture");
-}
-
-fn insert_phase_rows(repo_root: &Path, phase_rows: &[PhaseRowFixture<'_>]) {
-    let connection = open_state_connection(repo_root);
-
-    for phase in phase_rows {
-        connection
-            .execute(
-                r#"
-                INSERT INTO workflow_phases (
-                    project_id,
-                    id,
-                    name,
-                    description,
-                    status,
-                    current_step,
-                    task_count,
-                    completed_tasks,
-                    summary,
-                    updated_at
-                )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                "#,
-                params![
-                    phase.project_id,
-                    phase.id,
-                    phase.name,
-                    phase.description,
-                    phase.status,
-                    phase.current_step,
-                    phase.task_count,
-                    phase.completed_tasks,
-                    phase.summary,
-                ],
-            )
-            .expect("insert phase fixture");
-    }
 }
 
 fn overwrite_project_summary_counts(
@@ -658,14 +584,9 @@ fn import_repository_reuses_preexisting_repo_local_database() {
         .collect::<Result<Vec<_>, _>>()
         .expect("collect graph table names");
 
-    assert_eq!(
-        graph_tables,
-        vec![
-            "workflow_gate_metadata".to_string(),
-            "workflow_graph_edges".to_string(),
-            "workflow_graph_nodes".to_string(),
-            "workflow_transition_events".to_string(),
-        ]
+    assert!(
+        graph_tables.is_empty(),
+        "removed workflow graph tables should be dropped during import migration"
     );
 }
 
@@ -875,10 +796,6 @@ fn list_projects_reopens_valid_imports_and_prunes_deleted_roots() {
 
     let snapshot = snapshot_with_app(&app, &primary_import.project.id).expect("snapshot succeeds");
     assert!(snapshot.phases.is_empty());
-    assert!(
-        snapshot.lifecycle.stages.is_empty(),
-        "lifecycle projection should stay empty when no workflow graph rows exist"
-    );
     assert_summary_counts_match_snapshot(&response.projects[0], &snapshot);
     assert_eq!(response.projects[0].total_phases, 0);
     assert_eq!(response.projects[0].completed_phases, 0);
@@ -939,67 +856,24 @@ fn remove_project_hides_registry_entry_without_touching_repo_local_state_and_rei
 }
 
 #[test]
-fn get_project_snapshot_projects_seeded_phase_rows_into_ordered_dtos() {
+fn get_project_snapshot_derives_zero_phase_counts_after_workflow_phase_table_removal() {
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let repository_root = init_git_repo();
     let app = build_mock_app(create_state(&registry_root));
 
     let imported = import_with_app(&app, repository_root.path()).expect("import succeeds");
-    insert_project_fixture(repository_root.path(), "project-shadow", "shadow");
-    insert_phase_rows(
-        repository_root.path(),
-        &[
-            PhaseRowFixture {
-                project_id: &imported.project.id,
-                id: 2,
-                name: "Execute shell",
-                description: "Project repo-local phases through the shell.",
-                status: "active",
-                current_step: Some("execute"),
-                task_count: 4,
-                completed_tasks: 1,
-                summary: None,
-            },
-            PhaseRowFixture {
-                project_id: &imported.project.id,
-                id: 1,
-                name: "Plan workflow",
-                description: "Capture the durable workflow projection.",
-                status: "complete",
-                current_step: Some("ship"),
-                task_count: 3,
-                completed_tasks: 3,
-                summary: Some("Planned and recorded."),
-            },
-            PhaseRowFixture {
-                project_id: "project-shadow",
-                id: 1,
-                name: "Shadow phase",
-                description: "Should never leak into the selected snapshot.",
-                status: "blocked",
-                current_step: Some("verify"),
-                task_count: 9,
-                completed_tasks: 0,
-                summary: Some("Ignore me."),
-            },
-        ],
-    );
     overwrite_project_summary_counts(repository_root.path(), &imported.project.id, 99, 88, 77);
 
     let snapshot = snapshot_with_app(&app, &imported.project.id).expect("snapshot succeeds");
     let list_response = list_with_app(&app).expect("list projects succeeds");
     assert_eq!(list_response.projects.len(), 1);
     assert_summary_counts_match_snapshot(&list_response.projects[0], &snapshot);
-    assert_eq!(list_response.projects[0].total_phases, 2);
-    assert_eq!(list_response.projects[0].completed_phases, 1);
-    assert_eq!(list_response.projects[0].active_phase, 2);
-    assert_eq!(snapshot.project.total_phases, 2);
-    assert_eq!(snapshot.project.completed_phases, 1);
-    assert_eq!(snapshot.project.active_phase, 2);
-    assert!(
-        snapshot.lifecycle.stages.is_empty(),
-        "legacy workflow_phases rows should not fabricate planning lifecycle projection"
-    );
+    assert_eq!(list_response.projects[0].total_phases, 0);
+    assert_eq!(list_response.projects[0].completed_phases, 0);
+    assert_eq!(list_response.projects[0].active_phase, 0);
+    assert_eq!(snapshot.project.total_phases, 0);
+    assert_eq!(snapshot.project.completed_phases, 0);
+    assert_eq!(snapshot.project.active_phase, 0);
     assert_eq!(snapshot.project.id, imported.project.id);
     assert_eq!(
         snapshot
@@ -1008,91 +882,7 @@ fn get_project_snapshot_projects_seeded_phase_rows_into_ordered_dtos() {
             .map(|repository| repository.id.as_str()),
         Some(imported.repository.id.as_str())
     );
-    assert_eq!(
-        snapshot.phases,
-        vec![
-            PhaseSummaryDto {
-                id: 1,
-                name: "Plan workflow".into(),
-                description: "Capture the durable workflow projection.".into(),
-                status: PhaseStatus::Complete,
-                current_step: Some(PhaseStep::Ship),
-                task_count: 3,
-                completed_tasks: 3,
-                summary: Some("Planned and recorded.".into()),
-            },
-            PhaseSummaryDto {
-                id: 2,
-                name: "Execute shell".into(),
-                description: "Project repo-local phases through the shell.".into(),
-                status: PhaseStatus::Active,
-                current_step: Some(PhaseStep::Execute),
-                task_count: 4,
-                completed_tasks: 1,
-                summary: None,
-            },
-        ]
-    );
-}
-
-#[test]
-fn get_project_snapshot_surfaces_unknown_phase_status_as_schema_drift() {
-    let registry_root = tempfile::tempdir().expect("registry temp dir");
-    let repository_root = init_git_repo();
-    let app = build_mock_app(create_state(&registry_root));
-
-    let imported = import_with_app(&app, repository_root.path()).expect("import succeeds");
-    insert_phase_rows(
-        repository_root.path(),
-        &[PhaseRowFixture {
-            project_id: &imported.project.id,
-            id: 1,
-            name: "Broken phase",
-            description: "Status text should decode strictly.",
-            status: "mystery",
-            current_step: Some("plan"),
-            task_count: 1,
-            completed_tasks: 0,
-            summary: None,
-        }],
-    );
-
-    let error = snapshot_with_app(&app, &imported.project.id)
-        .expect_err("snapshot should fail on unknown phase status");
-    assert_eq!(error.code, "project_phase_decode_failed");
-    assert_eq!(error.class, CommandErrorClass::SystemFault);
-    assert!(error.message.contains("Unknown phase status `mystery`."));
-}
-
-#[test]
-fn get_project_snapshot_surfaces_unknown_phase_step_as_schema_drift() {
-    let registry_root = tempfile::tempdir().expect("registry temp dir");
-    let repository_root = init_git_repo();
-    let app = build_mock_app(create_state(&registry_root));
-
-    let imported = import_with_app(&app, repository_root.path()).expect("import succeeds");
-    insert_phase_rows(
-        repository_root.path(),
-        &[PhaseRowFixture {
-            project_id: &imported.project.id,
-            id: 1,
-            name: "Broken step",
-            description: "Current step text should decode strictly.",
-            status: "active",
-            current_step: Some("invent"),
-            task_count: 2,
-            completed_tasks: 1,
-            summary: Some("Unexpected step."),
-        }],
-    );
-
-    let error = snapshot_with_app(&app, &imported.project.id)
-        .expect_err("snapshot should fail on unknown phase current_step");
-    assert_eq!(error.code, "project_phase_decode_failed");
-    assert_eq!(error.class, CommandErrorClass::SystemFault);
-    assert!(error
-        .message
-        .contains("Unknown phase current_step `invent`."));
+    assert!(snapshot.phases.is_empty());
 }
 
 #[test]
@@ -1106,7 +896,6 @@ fn get_project_snapshot_returns_truthful_zero_phase_state_and_typed_missing_db_e
     assert_eq!(snapshot.project.id, imported.project.id);
     assert_eq!(snapshot.project.runtime, None);
     assert!(snapshot.phases.is_empty());
-    assert!(snapshot.lifecycle.stages.is_empty());
     assert_eq!(
         snapshot
             .repository

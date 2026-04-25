@@ -100,11 +100,10 @@ fn durable_run_payload(
         existing.is_some_and(|existing| existing.run.run_id == runtime_snapshot.run.run_id);
     let existing_run = same_run.then(|| existing.expect("checked same-run autonomous snapshot"));
 
-    let duplicate_start_detected =
-        matches!(intent, AutonomousSyncIntent::DuplicateStart)
-            || existing_run
-                .map(|snapshot| snapshot.run.duplicate_start_detected)
-                .unwrap_or(false);
+    let duplicate_start_detected = matches!(intent, AutonomousSyncIntent::DuplicateStart)
+        || existing_run
+            .map(|snapshot| snapshot.run.duplicate_start_detected)
+            .unwrap_or(false);
     let duplicate_start_run_id =
         duplicate_start_detected.then(|| runtime_snapshot.run.run_id.clone());
     let duplicate_start_reason = duplicate_start_detected.then_some(
@@ -120,22 +119,18 @@ fn durable_run_payload(
     let last_error = runtime_snapshot.run.last_error.clone();
 
     let (status, cancelled_at, cancel_reason) = match runtime_snapshot.run.status {
-        RuntimeRunStatus::Stopped
-            if matches!(intent, AutonomousSyncIntent::CancelRequested) =>
-        {
-            (
-                AutonomousRunStatus::Cancelled,
-                runtime_snapshot
-                    .run
-                    .stopped_at
-                    .clone()
-                    .or_else(|| Some(crate::auth::now_timestamp())),
-                Some(RuntimeRunDiagnosticRecord {
-                    code: "autonomous_run_cancelled".into(),
-                    message: "Operator cancelled the autonomous run from the desktop shell.".into(),
-                }),
-            )
-        }
+        RuntimeRunStatus::Stopped if matches!(intent, AutonomousSyncIntent::CancelRequested) => (
+            AutonomousRunStatus::Cancelled,
+            runtime_snapshot
+                .run
+                .stopped_at
+                .clone()
+                .or_else(|| Some(crate::auth::now_timestamp())),
+            Some(RuntimeRunDiagnosticRecord {
+                code: "autonomous_run_cancelled".into(),
+                message: "Operator cancelled the autonomous run from the desktop shell.".into(),
+            }),
+        ),
         RuntimeRunStatus::Stopped => (
             existing_run
                 .map(|snapshot| snapshot.run.status.clone())

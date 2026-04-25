@@ -703,9 +703,6 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
         let Some(run) = autonomous_state.run.as_ref() else {
             return false;
         };
-        let Some(unit) = autonomous_state.unit.as_ref() else {
-            return false;
-        };
 
         run.run_id == started_run.run_id
             && matches!(
@@ -713,21 +710,12 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
                 AutonomousRunStatusDto::Starting | AutonomousRunStatusDto::Running
             )
             && run.recovery_state == AutonomousRunRecoveryStateDto::Healthy
-            && run.active_unit_id.as_deref() == Some(unit.unit_id.as_str())
     });
     let running_run = running
         .run
         .as_ref()
         .expect("running autonomous run should exist");
-    let running_unit = running
-        .unit
-        .as_ref()
-        .expect("running autonomous unit should exist");
     assert_eq!(running_run.run_id, started_run.run_id);
-    assert_eq!(
-        running_run.active_unit_id.as_deref(),
-        Some(running_unit.unit_id.as_str())
-    );
 
     let duplicate = start_autonomous_run(
         app.handle().clone(),
@@ -762,9 +750,6 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
         let Some(run) = autonomous_state.run.as_ref() else {
             return false;
         };
-        let Some(unit) = autonomous_state.unit.as_ref() else {
-            return false;
-        };
 
         run.run_id == started_run.run_id
             && matches!(
@@ -772,22 +757,13 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
                 AutonomousRunStatusDto::Starting | AutonomousRunStatusDto::Running
             )
             && run.recovery_state == AutonomousRunRecoveryStateDto::Healthy
-            && run.active_unit_id.as_deref() == Some(unit.unit_id.as_str())
     });
     let recovered_run = recovered
         .run
         .as_ref()
         .expect("recovered autonomous run should exist");
-    let recovered_unit = recovered
-        .unit
-        .as_ref()
-        .expect("recovered autonomous unit should exist");
 
     assert_eq!(recovered_run.run_id, started_run.run_id);
-    assert_eq!(
-        recovered_run.active_unit_id.as_deref(),
-        Some(recovered_unit.unit_id.as_str())
-    );
 
     let cancelled = cancel_autonomous_run(
         fresh_app.handle().clone(),

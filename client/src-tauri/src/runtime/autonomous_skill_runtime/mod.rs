@@ -18,8 +18,9 @@ pub use contract::{
 };
 pub use discovery::{
     discover_bundled_skill_directory, discover_local_skill_directory,
-    discover_project_skill_directory, load_discovered_skill_context, CadenceDiscoveredSkill,
-    CadenceSkillDirectoryDiscovery, CadenceSkillDiscoveryDiagnostic, PROJECT_SKILL_DIRECTORY,
+    discover_project_skill_directory, load_discovered_skill_context,
+    load_skill_context_from_directory, CadenceDiscoveredSkill, CadenceSkillDirectoryDiscovery,
+    CadenceSkillDiscoveryDiagnostic, PROJECT_SKILL_DIRECTORY,
 };
 pub use runtime::{
     AutonomousSkillDiscoverOutput, AutonomousSkillDiscoverRequest,
@@ -35,12 +36,12 @@ pub use skill_tool::{
     skill_tool_diagnostic_from_command_error, validate_skill_tool_context_payload,
     validate_skill_tool_input, validate_skill_tool_lifecycle_event, CadenceSkillToolAccessDecision,
     CadenceSkillToolAccessStatus, CadenceSkillToolContextAsset, CadenceSkillToolContextDocument,
-    CadenceSkillToolContextPayload, CadenceSkillToolDiagnostic, CadenceSkillToolInput,
-    CadenceSkillToolLifecycleEvent, CadenceSkillToolLifecycleResult, CadenceSkillToolOperation,
-    CADENCE_SKILL_TOOL_CONTRACT_VERSION, CADENCE_SKILL_TOOL_DEFAULT_LIMIT,
-    CADENCE_SKILL_TOOL_MAX_CONTEXT_ASSETS, CADENCE_SKILL_TOOL_MAX_CONTEXT_ASSET_BYTES,
-    CADENCE_SKILL_TOOL_MAX_CONTEXT_MARKDOWN_BYTES, CADENCE_SKILL_TOOL_MAX_LIMIT,
-    CADENCE_SKILL_TOOL_MAX_QUERY_CHARS,
+    CadenceSkillToolContextPayload, CadenceSkillToolDiagnostic, CadenceSkillToolDynamicAssetInput,
+    CadenceSkillToolInput, CadenceSkillToolLifecycleEvent, CadenceSkillToolLifecycleResult,
+    CadenceSkillToolOperation, CADENCE_SKILL_TOOL_CONTRACT_VERSION,
+    CADENCE_SKILL_TOOL_DEFAULT_LIMIT, CADENCE_SKILL_TOOL_MAX_CONTEXT_ASSETS,
+    CADENCE_SKILL_TOOL_MAX_CONTEXT_ASSET_BYTES, CADENCE_SKILL_TOOL_MAX_CONTEXT_MARKDOWN_BYTES,
+    CADENCE_SKILL_TOOL_MAX_LIMIT, CADENCE_SKILL_TOOL_MAX_QUERY_CHARS,
 };
 pub use source::{
     AutonomousSkillSource, AutonomousSkillSourceEntryKind, AutonomousSkillSourceError,

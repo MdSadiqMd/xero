@@ -6,6 +6,7 @@ mod policy;
 mod priority_tools;
 mod process;
 mod repo_scope;
+mod skills;
 pub mod solana;
 
 use std::{
@@ -24,6 +25,12 @@ use super::autonomous_web_runtime::{
     AutonomousWebSearchRequest, AUTONOMOUS_TOOL_WEB_FETCH, AUTONOMOUS_TOOL_WEB_SEARCH,
 };
 
+use super::autonomous_skill_runtime::{
+    AutonomousSkillRuntime, CadenceSkillSourceKind, CadenceSkillSourceState,
+    CadenceSkillToolAccessDecision, CadenceSkillToolContextPayload, CadenceSkillToolDiagnostic,
+    CadenceSkillToolInput, CadenceSkillToolLifecycleEvent, CadenceSkillToolOperation,
+    CadenceSkillTrustState,
+};
 use crate::{
     commands::{
         BranchSummaryDto, CommandError, CommandResult, RepositoryDiffScope,
@@ -94,6 +101,7 @@ pub const AUTONOMOUS_TOOL_CODE_INTEL: &str = "code_intel";
 pub const AUTONOMOUS_TOOL_LSP: &str = "lsp";
 pub const AUTONOMOUS_TOOL_POWERSHELL: &str = "powershell";
 pub const AUTONOMOUS_TOOL_TOOL_SEARCH: &str = "tool_search";
+pub const AUTONOMOUS_TOOL_SKILL: &str = "skill";
 
 const DEFAULT_READ_LINE_COUNT: usize = 200;
 const MAX_READ_LINE_COUNT: usize = 400;
@@ -171,6 +179,7 @@ const TOOL_ACCESS_MCP_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_MCP];
 const TOOL_ACCESS_INTELLIGENCE_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_LSP];
 const TOOL_ACCESS_NOTEBOOK_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_NOTEBOOK_EDIT];
 const TOOL_ACCESS_POWERSHELL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_POWERSHELL];
+const TOOL_ACCESS_SKILL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_SKILL];
 
 pub fn tool_access_group_tools(group: &str) -> Option<&'static [&'static str]> {
     match group.trim() {
@@ -185,6 +194,7 @@ pub fn tool_access_group_tools(group: &str) -> Option<&'static [&'static str]> {
         "intelligence" => Some(TOOL_ACCESS_INTELLIGENCE_TOOLS),
         "notebook" => Some(TOOL_ACCESS_NOTEBOOK_TOOLS),
         "powershell" => Some(TOOL_ACCESS_POWERSHELL_TOOLS),
+        "skills" => Some(TOOL_ACCESS_SKILL_TOOLS),
         _ => None,
     }
 }
@@ -202,6 +212,7 @@ pub fn tool_access_all_known_tools() -> std::collections::BTreeSet<&'static str>
         TOOL_ACCESS_INTELLIGENCE_TOOLS,
         TOOL_ACCESS_NOTEBOOK_TOOLS,
         TOOL_ACCESS_POWERSHELL_TOOLS,
+        TOOL_ACCESS_SKILL_TOOLS,
     ]
     .into_iter()
     .flat_map(|tools| tools.iter().copied())
@@ -221,6 +232,7 @@ pub fn tool_access_group_descriptors() -> Vec<AutonomousToolAccessGroup> {
         ("intelligence", TOOL_ACCESS_INTELLIGENCE_TOOLS),
         ("notebook", TOOL_ACCESS_NOTEBOOK_TOOLS),
         ("powershell", TOOL_ACCESS_POWERSHELL_TOOLS),
+        ("skills", TOOL_ACCESS_SKILL_TOOLS),
     ]
     .into_iter()
     .map(|(name, tools)| AutonomousToolAccessGroup {
@@ -276,6 +288,7 @@ pub struct AutonomousToolRuntime {
     pub(super) subagent_tasks: Arc<Mutex<BTreeMap<String, AutonomousSubagentTask>>>,
     pub(super) subagent_executor: Option<Arc<dyn AutonomousSubagentExecutor>>,
     pub(super) subagent_execution_depth: usize,
+    pub(super) skill_tool: Option<AutonomousSkillToolRuntime>,
     process_sessions: Arc<process::ProcessSessionRegistry>,
 }
 
@@ -287,6 +300,7 @@ impl std::fmt::Debug for AutonomousToolRuntime {
             .field("command_controls", &self.command_controls)
             .field("mcp_registry_path", &self.mcp_registry_path)
             .field("subagent_execution_depth", &self.subagent_execution_depth)
+            .field("skill_tool_enabled", &self.skill_tool.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -355,6 +369,7 @@ impl AutonomousToolRuntime {
             subagent_tasks: Arc::new(Mutex::new(BTreeMap::new())),
             subagent_executor: None,
             subagent_execution_depth: 0,
+            skill_tool: None,
             process_sessions: Arc::new(process::ProcessSessionRegistry::default()),
         })
     }
@@ -391,8 +406,17 @@ impl AutonomousToolRuntime {
         state: &DesktopState,
         project_id: &str,
     ) -> CommandResult<Self> {
-        let repo_root = resolve_imported_repo_root(app, state, project_id)?;
         let browser_executor = browser::tauri_browser_executor(app.clone(), state.clone());
+        let repo_root = resolve_imported_repo_root(app, state, project_id)?;
+        let skill_runtime = AutonomousSkillRuntime::for_app(app, state).map(|runtime| {
+            runtime.with_installed_skill_registry(Arc::new(
+                crate::db::project_store::ProjectStoreInstalledSkillRegistry::project(
+                    repo_root.clone(),
+                    project_id.to_owned(),
+                )
+                .expect("project id already validated by imported project registry"),
+            ))
+        })?;
         let runtime = Self::with_limits_and_web_config(
             repo_root,
             AutonomousToolRuntimeLimits::default(),
@@ -400,7 +424,13 @@ impl AutonomousToolRuntime {
         )?
         .with_browser_executor(browser_executor)
         .with_emulator_executor(emulator::tauri_emulator_executor(app.clone()))
-        .with_mcp_registry_path(state.mcp_registry_file(app)?);
+        .with_mcp_registry_path(state.mcp_registry_file(app)?)
+        .with_skill_tool(
+            project_id.to_owned(),
+            skill_runtime,
+            default_bundled_skill_roots(app),
+            default_local_skill_roots(),
+        );
 
         let runtime = match app.try_state::<crate::commands::SolanaState>() {
             Some(solana_state) => runtime.with_solana_executor(Arc::new(
@@ -454,6 +484,31 @@ impl AutonomousToolRuntime {
         self
     }
 
+    pub fn with_skill_tool(
+        mut self,
+        project_id: impl Into<String>,
+        github_runtime: AutonomousSkillRuntime,
+        bundled_roots: Vec<AutonomousBundledSkillRoot>,
+        local_roots: Vec<AutonomousLocalSkillRoot>,
+    ) -> Self {
+        self.skill_tool = Some(AutonomousSkillToolRuntime::new(
+            project_id.into(),
+            github_runtime,
+            bundled_roots,
+            local_roots,
+        ));
+        self
+    }
+
+    pub fn with_skill_tool_disabled(mut self) -> Self {
+        self.skill_tool = None;
+        self
+    }
+
+    pub fn skill_tool_enabled(&self) -> bool {
+        self.skill_tool.is_some()
+    }
+
     fn check_cancelled(&self) -> CommandResult<()> {
         if let Some(token) = &self.cancellation_token {
             token.check_cancelled()?;
@@ -504,6 +559,7 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::Lsp(request) => self.lsp(request),
             AutonomousToolRequest::PowerShell(request) => self.powershell(request),
             AutonomousToolRequest::ToolSearch(request) => self.tool_search(request),
+            AutonomousToolRequest::Skill(request) => self.skill(request),
             AutonomousToolRequest::Browser(request) => self.browser(request),
             AutonomousToolRequest::Emulator(request) => self.emulator(request),
             AutonomousToolRequest::SolanaCluster(request) => self
@@ -704,7 +760,7 @@ impl AutonomousToolRuntime {
                 action: "list".into(),
                 granted_tools: Vec::new(),
                 denied_tools: Vec::new(),
-                available_groups: tool_access_group_descriptors(),
+                available_groups: self.available_tool_access_groups(),
                 message:
                     "Available tool groups returned. Request a group or specific tool by name."
                         .into(),
@@ -716,7 +772,13 @@ impl AutonomousToolRuntime {
                 for group in request.groups {
                     match tool_access_group_tools(&group) {
                         Some(tools) => {
-                            requested.extend(tools.iter().map(|tool| (*tool).to_owned()))
+                            for tool in tools {
+                                if self.tool_available_by_runtime(tool) {
+                                    requested.insert((*tool).to_owned());
+                                } else {
+                                    denied.insert(group.clone());
+                                }
+                            }
                         }
                         None => {
                             denied.insert(group);
@@ -726,7 +788,9 @@ impl AutonomousToolRuntime {
 
                 let known_tools = tool_access_all_known_tools();
                 for tool in request.tools {
-                    if known_tools.contains(tool.as_str()) {
+                    if known_tools.contains(tool.as_str())
+                        && self.tool_available_by_runtime(tool.as_str())
+                    {
                         requested.insert(tool);
                     } else {
                         denied.insert(tool);
@@ -737,7 +801,7 @@ impl AutonomousToolRuntime {
                     action: "request".into(),
                     granted_tools: requested.into_iter().collect(),
                     denied_tools: denied.into_iter().collect(),
-                    available_groups: tool_access_group_descriptors(),
+                    available_groups: self.available_tool_access_groups(),
                     message: "Requested tools will be exposed on the next provider turn.".into(),
                 }
             }
@@ -749,6 +813,23 @@ impl AutonomousToolRuntime {
             command_result: None,
             output: AutonomousToolOutput::ToolAccess(output),
         })
+    }
+
+    fn available_tool_access_groups(&self) -> Vec<AutonomousToolAccessGroup> {
+        tool_access_group_descriptors()
+            .into_iter()
+            .filter(|group| {
+                group.name != "skills"
+                    || group
+                        .tools
+                        .iter()
+                        .any(|tool| self.tool_available_by_runtime(tool))
+            })
+            .collect()
+    }
+
+    fn tool_available_by_runtime(&self, tool: &str) -> bool {
+        tool != AUTONOMOUS_TOOL_SKILL || self.skill_tool_enabled()
     }
 
     pub fn web_fetch(
@@ -833,6 +914,7 @@ pub enum AutonomousToolRequest {
     #[serde(rename = "powershell")]
     PowerShell(AutonomousPowerShellRequest),
     ToolSearch(AutonomousToolSearchRequest),
+    Skill(CadenceSkillToolInput),
     Browser(AutonomousBrowserRequest),
     Emulator(AutonomousEmulatorRequest),
     SolanaCluster(AutonomousSolanaClusterRequest),
@@ -1253,6 +1335,7 @@ pub enum AutonomousToolOutput {
     CodeIntel(AutonomousCodeIntelOutput),
     Lsp(AutonomousLspOutput),
     ToolSearch(AutonomousToolSearchOutput),
+    Skill(AutonomousSkillToolOutput),
     Browser(AutonomousBrowserOutput),
     Emulator(AutonomousEmulatorOutput),
     Solana(AutonomousSolanaOutput),
@@ -1606,5 +1689,129 @@ pub struct AutonomousToolSearchMatch {
 pub struct AutonomousToolSearchOutput {
     pub query: String,
     pub matches: Vec<AutonomousToolSearchMatch>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousLocalSkillRoot {
+    pub root_id: String,
+    pub root_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousBundledSkillRoot {
+    pub bundle_id: String,
+    pub version: String,
+    pub root_path: PathBuf,
+}
+
+#[derive(Clone)]
+pub(super) struct AutonomousSkillToolRuntime {
+    project_id: String,
+    github_runtime: AutonomousSkillRuntime,
+    bundled_roots: Vec<AutonomousBundledSkillRoot>,
+    local_roots: Vec<AutonomousLocalSkillRoot>,
+    discovery_cache: Arc<Mutex<BTreeMap<String, skills::CachedSkillToolCandidate>>>,
+}
+
+impl AutonomousSkillToolRuntime {
+    fn new(
+        project_id: String,
+        github_runtime: AutonomousSkillRuntime,
+        bundled_roots: Vec<AutonomousBundledSkillRoot>,
+        local_roots: Vec<AutonomousLocalSkillRoot>,
+    ) -> Self {
+        Self {
+            project_id,
+            github_runtime,
+            bundled_roots,
+            local_roots,
+            discovery_cache: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+}
+
+fn default_bundled_skill_roots<R: Runtime>(app: &AppHandle<R>) -> Vec<AutonomousBundledSkillRoot> {
+    app.path()
+        .resource_dir()
+        .ok()
+        .map(|root| root.join("skills"))
+        .filter(|root| root.is_dir())
+        .map(|root| {
+            vec![AutonomousBundledSkillRoot {
+                bundle_id: "cadence".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                root_path: root,
+            }]
+        })
+        .unwrap_or_default()
+}
+
+fn default_local_skill_roots() -> Vec<AutonomousLocalSkillRoot> {
+    dirs::home_dir()
+        .map(|home| home.join(".cadence").join("skills"))
+        .filter(|root| root.is_dir())
+        .map(|root| {
+            vec![AutonomousLocalSkillRoot {
+                root_id: "user".into(),
+                root_path: root,
+            }]
+        })
+        .unwrap_or_default()
+}
+
+impl std::fmt::Debug for AutonomousSkillToolRuntime {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AutonomousSkillToolRuntime")
+            .field("project_id", &self.project_id)
+            .field("bundled_roots", &self.bundled_roots)
+            .field("local_roots", &self.local_roots)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousSkillToolStatus {
+    Succeeded,
+    Unavailable,
+    ApprovalRequired,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillToolCandidate {
+    pub source_id: String,
+    pub skill_id: String,
+    pub name: String,
+    pub description: String,
+    pub source_kind: CadenceSkillSourceKind,
+    pub state: CadenceSkillSourceState,
+    pub trust: CadenceSkillTrustState,
+    pub enabled: bool,
+    pub installed: bool,
+    pub user_invocable: Option<bool>,
+    pub version_hash: Option<String>,
+    pub cache_key: Option<String>,
+    pub access: CadenceSkillToolAccessDecision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSkillToolOutput {
+    pub operation: CadenceSkillToolOperation,
+    pub status: AutonomousSkillToolStatus,
+    pub message: String,
+    pub candidates: Vec<AutonomousSkillToolCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<AutonomousSkillToolCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<CadenceSkillToolContextPayload>,
+    #[serde(default)]
+    pub lifecycle_events: Vec<CadenceSkillToolLifecycleEvent>,
+    #[serde(default)]
+    pub diagnostics: Vec<CadenceSkillToolDiagnostic>,
     pub truncated: bool,
 }

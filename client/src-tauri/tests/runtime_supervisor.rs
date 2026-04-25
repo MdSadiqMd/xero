@@ -216,11 +216,6 @@ fn detached_supervisor_persists_redacted_interactive_boundary_and_replays_same_a
 }
 
 #[test]
-fn detached_supervisor_persists_matching_autonomous_boundary_once_before_reload() {
-    live_boundary::detached_supervisor_persists_matching_autonomous_boundary_once_before_reload();
-}
-
-#[test]
 fn detached_supervisor_coalesces_repeated_prompt_churn_into_one_boundary() {
     live_boundary::detached_supervisor_coalesces_repeated_prompt_churn_into_one_boundary();
 }

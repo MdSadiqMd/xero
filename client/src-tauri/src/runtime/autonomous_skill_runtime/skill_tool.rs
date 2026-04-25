@@ -32,6 +32,7 @@ pub enum CadenceSkillToolOperation {
     Install,
     Invoke,
     Reload,
+    CreateDynamic,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -64,6 +65,14 @@ pub enum CadenceSkillToolInput {
     Reload {
         source_id: Option<String>,
         source_kind: Option<CadenceSkillSourceKind>,
+    },
+    #[serde(rename_all = "camelCase")]
+    CreateDynamic {
+        skill_id: String,
+        markdown: String,
+        supporting_assets: Vec<CadenceSkillToolDynamicAssetInput>,
+        source_run_id: Option<String>,
+        source_artifact_id: Option<String>,
     },
 }
 
@@ -143,6 +152,13 @@ pub struct CadenceSkillToolContextAsset {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CadenceSkillToolDynamicAssetInput {
+    pub relative_path: String,
+    pub content: String,
+}
+
 impl CadenceSkillToolInput {
     pub fn operation(&self) -> CadenceSkillToolOperation {
         match self {
@@ -151,6 +167,7 @@ impl CadenceSkillToolInput {
             Self::Install { .. } => CadenceSkillToolOperation::Install,
             Self::Invoke { .. } => CadenceSkillToolOperation::Invoke,
             Self::Reload { .. } => CadenceSkillToolOperation::Reload,
+            Self::CreateDynamic { .. } => CadenceSkillToolOperation::CreateDynamic,
         }
     }
 }
@@ -272,6 +289,58 @@ pub fn validate_skill_tool_input(
             source_id: source_id.map(normalize_source_id).transpose()?,
             source_kind,
         }),
+        CadenceSkillToolInput::CreateDynamic {
+            skill_id,
+            markdown,
+            supporting_assets,
+            source_run_id,
+            source_artifact_id,
+        } => {
+            let skill_id = normalize_skill_id(&skill_id)?;
+            let markdown = validate_non_empty_text(markdown, "markdown")?;
+            if markdown.as_bytes().len() > CADENCE_SKILL_TOOL_MAX_CONTEXT_MARKDOWN_BYTES {
+                return Err(CommandError::user_fixable(
+                    "skill_tool_context_too_large",
+                    format!(
+                        "Cadence requires dynamic SkillTool markdown to be {} bytes or smaller.",
+                        CADENCE_SKILL_TOOL_MAX_CONTEXT_MARKDOWN_BYTES
+                    ),
+                ));
+            }
+            let mut normalized_assets = Vec::with_capacity(supporting_assets.len());
+            if supporting_assets.len() > CADENCE_SKILL_TOOL_MAX_CONTEXT_ASSETS {
+                return Err(CommandError::user_fixable(
+                    "skill_tool_context_too_large",
+                    format!(
+                        "Cadence rejected dynamic SkillTool input because it contained more than {CADENCE_SKILL_TOOL_MAX_CONTEXT_ASSETS} supporting assets."
+                    ),
+                ));
+            }
+            for asset in supporting_assets {
+                let relative_path = normalize_relative_source_path(&asset.relative_path)?;
+                validate_context_asset(CadenceSkillToolContextAsset {
+                    relative_path: relative_path.clone(),
+                    sha256: "0".repeat(64),
+                    bytes: asset.content.as_bytes().len(),
+                    content: asset.content.clone(),
+                })?;
+                normalized_assets.push(CadenceSkillToolDynamicAssetInput {
+                    relative_path,
+                    content: asset.content,
+                });
+            }
+            Ok(CadenceSkillToolInput::CreateDynamic {
+                skill_id,
+                markdown,
+                supporting_assets: normalized_assets,
+                source_run_id: source_run_id
+                    .map(|value| validate_non_empty_text(value, "sourceRunId"))
+                    .transpose()?,
+                source_artifact_id: source_artifact_id
+                    .map(|value| validate_non_empty_text(value, "sourceArtifactId"))
+                    .transpose()?,
+            })
+        }
     }
 }
 
@@ -377,6 +446,13 @@ pub fn decide_skill_tool_access(
                 record.trust,
             )?)
         }
+        CadenceSkillToolOperation::CreateDynamic => Ok(access_decision(
+            operation,
+            source_id,
+            CadenceSkillToolAccessStatus::Allowed,
+            true,
+            None,
+        )),
     }
 }
 

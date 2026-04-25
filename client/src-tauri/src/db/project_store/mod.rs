@@ -15,8 +15,8 @@ pub use agent_session::*;
 pub(crate) use agent_session::{ensure_agent_session_active, touch_agent_session_runtime_run};
 pub use autonomous::*;
 pub(crate) use connection::{open_project_database, open_runtime_database};
-pub use notifications::*;
 pub(crate) use notifications::enqueue_notification_dispatches_best_effort_with_connection;
+pub use notifications::*;
 pub use operator::*;
 pub(crate) use operator::{
     decode_optional_non_empty_text, derive_operator_scope_prefix, is_retryable_sql_error,

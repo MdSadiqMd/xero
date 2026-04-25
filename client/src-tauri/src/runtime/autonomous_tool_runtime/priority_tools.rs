@@ -29,8 +29,8 @@ use super::{
     AutonomousTodoStatus, AutonomousToolOutput, AutonomousToolResult, AutonomousToolRuntime,
     AutonomousToolSearchMatch, AutonomousToolSearchOutput, AutonomousToolSearchRequest,
     AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_LSP, AUTONOMOUS_TOOL_MCP,
-    AUTONOMOUS_TOOL_NOTEBOOK_EDIT, AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_SUBAGENT,
-    AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_SEARCH,
+    AUTONOMOUS_TOOL_NOTEBOOK_EDIT, AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_SKILL,
+    AUTONOMOUS_TOOL_SUBAGENT, AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_SEARCH,
 };
 
 use crate::{
@@ -58,7 +58,7 @@ impl AutonomousToolRuntime {
         let query = request.query.trim().to_ascii_lowercase();
         let mut matches = Vec::new();
 
-        for (tool_name, group, description) in priority_tool_catalog() {
+        for (tool_name, group, description) in priority_tool_catalog(self.skill_tool_enabled()) {
             let haystack = format!("{tool_name} {group} {description}").to_ascii_lowercase();
             if haystack.contains(&query) {
                 matches.push(AutonomousToolSearchMatch {
@@ -1027,8 +1027,10 @@ fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
-fn priority_tool_catalog() -> &'static [(&'static str, &'static str, &'static str)] {
-    &[
+fn priority_tool_catalog(
+    skill_tool_enabled: bool,
+) -> Vec<(&'static str, &'static str, &'static str)> {
+    let mut catalog = vec![
         ("read", "core", "Read repo-scoped UTF-8 files."),
         ("search", "core", "Search text in repo-scoped files."),
         ("find", "core", "Find repo-scoped files by glob."),
@@ -1231,7 +1233,15 @@ fn priority_tool_catalog() -> &'static [(&'static str, &'static str, &'static st
             "powershell",
             "Run PowerShell through command policy.",
         ),
-    ]
+    ];
+    if skill_tool_enabled {
+        catalog.push((
+            AUTONOMOUS_TOOL_SKILL,
+            "skills",
+            "Discover, resolve, install, invoke, reload, or create Cadence skills.",
+        ));
+    }
+    catalog
 }
 
 fn bounded_limit(value: Option<usize>, default: usize) -> CommandResult<usize> {
