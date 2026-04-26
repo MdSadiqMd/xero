@@ -1,35 +1,81 @@
-# Provider setup and diagnostics
+# Provider Setup And Diagnostics
 
-Cadence keeps provider setup app-local and desktop-first. Provider profiles store non-secret metadata in the profile registry and store API keys or token links in the app-local credential store. Diagnostics and copied doctor reports should describe enough setup state to repair a profile without exposing raw secrets.
+Cadence keeps provider setup app-local and desktop-first. Provider profiles store non-secret metadata in the provider profile registry, while API keys and token links stay in the app-local credential store. Diagnostics and copied doctor reports are designed to show enough setup state to repair a profile without exposing raw keys, OAuth tokens, bearer headers, local credential file contents, or secret-bearing paths.
 
-## OpenAI-compatible recipes
+## Supported Provider Paths
 
-The Providers settings surface includes first-class recipes that save through the existing `openai_api` provider profile contract:
+Use the first-class provider presets when your provider is listed directly in Providers settings:
 
-- LiteLLM proxy
-- LM Studio
-- Mistral
-- Groq
-- Together AI
-- DeepSeek
-- NVIDIA NIM
-- MiniMax
-- Azure AI Foundry
-- Atomic Chat local
-- Custom `/v1` gateway
+| Provider | Auth mode | Setup notes |
+| --- | --- | --- |
+| OpenAI Codex | OAuth | Sign in from Providers or runtime bind. Cadence stores a redacted app-local session link rather than a checked-in token. |
+| OpenRouter | API key | Add an app-local key, choose a model, then run Check connection for live catalog and reachability diagnostics. |
+| Anthropic | API key | Add an app-local Anthropic key. Manual model entry remains available if catalog discovery is unavailable. |
+| GitHub Models | API token | Add a GitHub token in Providers settings. Device-flow onboarding is intentionally out of scope for this phase. |
+| OpenAI-compatible | API key or custom endpoint | Use for OpenAI, LiteLLM, Mistral, hosted compatible gateways, and custom `/v1` routes. |
+| Ollama | Local | Start Ollama and use the default local endpoint or an edited local base URL. No placeholder API key is stored. |
+| Azure OpenAI | API key | Use for deployment URLs that need Azure `api-version` metadata. Model ID should match the deployment name. |
+| Gemini AI Studio | API key | Add an app-local Gemini key and use the built-in Gemini runtime path. |
+| Amazon Bedrock | Ambient AWS | Provide region metadata. Cadence checks ambient AWS readiness and does not store cloud keys. |
+| Google Vertex AI | Ambient ADC | Provide region and project metadata. Cadence checks ambient ADC readiness and does not store cloud keys. |
 
-Recipes prefill label, model id, base URL expectations, key requirements, catalog expectations, and repair copy. They do not create a separate runtime. Runtime launch, profile validation, model catalog probing, stale binding detection, and doctor diagnostics all continue through the OpenAI-compatible provider path.
+For a common cloud setup, pick the provider preset, fill the required key or ambient metadata, save the profile, then run Check connection. For a local setup, start the local server first, confirm its base URL, save the profile without a fake key, then run Check connection. For a custom gateway, use an OpenAI-compatible recipe so Cadence can prefill the correct runtime shape.
 
-Hosted recipes require an app-local API key unless the recipe explicitly says the key is optional. Local recipes such as LM Studio and Atomic Chat local do not store placeholder keys. If a local server exposes a different port, update the base URL before saving the profile.
+## OpenAI-Compatible Recipes
 
-Azure AI Foundry uses the OpenAI-compatible endpoint route in the `openai_api` recipe path. Deployment-level Azure OpenAI endpoints that require `api-version` metadata should use the dedicated Azure OpenAI preset instead.
+The Providers settings surface includes recipe metadata that saves through the existing `openai_api` provider profile contract. Recipes do not create a separate runtime. Runtime launch, profile validation, model catalog probing, stale binding detection, and doctor diagnostics all continue through the OpenAI-compatible provider path.
 
-## GitHub Models onboarding
+| Recipe | Default base URL | Key mode | Catalog expectation |
+| --- | --- | --- | --- |
+| LiteLLM proxy | `http://127.0.0.1:4000/v1` | Optional | Live or manual |
+| LM Studio | `http://127.0.0.1:1234/v1` | None | Live or manual |
+| Mistral | `https://api.mistral.ai/v1` | Required | Live or manual |
+| Groq | `https://api.groq.com/openai/v1` | Required | Live or manual |
+| Together AI | `https://api.together.xyz/v1` | Required | Live or manual |
+| DeepSeek | `https://api.deepseek.com/v1` | Required | Live or manual |
+| NVIDIA NIM | `https://integrate.api.nvidia.com/v1` | Required | Live or manual |
+| MiniMax | `https://api.minimax.io/v1` | Required | Live or manual |
+| Azure AI Foundry | User supplied | Required | Manual |
+| Atomic Chat local | `http://127.0.0.1:1337/v1` | None | Live or manual |
+| Custom `/v1` gateway | User supplied | Required | Live or manual |
 
-Cadence supports GitHub Models through a saved app-local token on the `github_models` provider profile. GitHub device-flow onboarding is intentionally out of scope for the current desktop auth model because it would need a dedicated auth flow, cancellation handling, token-link storage, and redaction coverage. Users should add a token in Providers settings, then run Check connection or an extended doctor report.
+Hosted recipes require an app-local API key unless the recipe explicitly marks the key optional. Local recipes such as LM Studio and Atomic Chat local do not store placeholder keys. If a local server uses a different port, update the base URL before saving the profile.
 
-## Diagnostics workflow
+Azure AI Foundry uses the OpenAI-compatible endpoint route. If the endpoint is an Azure OpenAI deployment URL that requires `api-version` metadata, use the dedicated Azure OpenAI preset instead.
 
-Use Check connection on an individual provider profile when editing credentials, endpoint metadata, or model ids. Use quick diagnostics when the issue looks local to saved profiles, runtime state, MCP settings, notification routes, or app paths. Use extended diagnostics when reachability, hosted provider auth, model catalogs, or local model servers need to be probed.
+## GitHub Models Onboarding
 
-Doctor JSON is intended for support and future CLI/headless surfaces. It should remain redacted, stable, and useful even when a subset of provider checks fails.
+Cadence supports GitHub Models through a saved app-local token on the `github_models` provider profile. GitHub device-flow onboarding is intentionally out of scope for the current desktop auth model because it would need a dedicated auth flow, cancellation handling, token-link storage, and redaction coverage.
+
+Set up GitHub Models by adding a token in Providers settings, saving the profile, then running Check connection or an extended doctor report. Diagnostics use the same provider readiness, catalog, runtime binding, and stale-token checks as other API-key providers.
+
+## Diagnostics Workflow
+
+Use Check connection on an individual provider profile when editing credentials, endpoint metadata, or model IDs. It is the fastest way to answer "is this profile usable right now?" without scanning unrelated runtime state.
+
+Use quick diagnostics when the issue looks local to saved profiles, runtime state, MCP settings, notification routes, or app paths. Quick mode does not probe hosted provider APIs or local model servers, so it is safe when offline and useful for support reports that only need local state.
+
+Use extended diagnostics when reachability, hosted provider auth, model catalogs, or local model servers need to be probed. Extended mode may contact configured provider endpoints and local services, but copied report output remains redacted.
+
+Diagnostic states mean:
+
+- Passed: Cadence could validate the checked dependency.
+- Warning: Cadence found a recoverable issue or stale-but-usable state, such as a cached model catalog after a retryable refresh failure.
+- Failed: Cadence found a blocking issue, such as missing credentials, malformed profile metadata, bad endpoint shape, failed runtime binding, or an unavailable required file.
+- Skipped: Cadence intentionally did not run the check, usually because the related feature is not configured or quick mode skipped network probing.
+
+Support engineers should start with the report summary, then inspect failed and warning groups in this order: provider profiles, model catalogs, runtime supervisor, MCP dependencies, and settings dependencies. A single provider problem can cascade into runtime failures, so repair provider-profile failures first and re-run diagnostics before chasing secondary runtime messages.
+
+## Doctor JSON Privacy Contract
+
+Doctor JSON is intended for support and future CLI/headless surfaces. It should be stable enough to copy into an issue and private enough to share without manual scrubbing.
+
+The diagnostics contract redacts:
+
+- API keys and assignment-style secrets, including common OpenAI, Anthropic, GitHub, AWS, OAuth, session, and bearer-token names.
+- Authorization and bearer header values, including opaque tokens that do not use recognizable prefixes.
+- Local credential paths such as ADC files, AWS credential files, app-data paths, and temp paths.
+- Endpoint credentials in URLs, including usernames, passwords, sensitive query parameters, and secret-looking path segments.
+- Nested diagnostic checks before report rendering, so copied JSON is redacted even if a check was constructed outside the normal diagnostic factory.
+
+Reports intentionally keep non-secret repair metadata such as provider ID, profile ID, endpoint host, region, project ID, model catalog source, retryability, and remediation text. This is the metadata support needs to explain the failure without asking users for raw secrets.

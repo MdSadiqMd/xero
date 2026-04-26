@@ -593,20 +593,32 @@ Outcome: Cadence covers OpenClaude's missing provider setup surface either as fi
 
 Outcome: Priority 3 is safe enough to call complete and useful for both users and implementation agents.
 
-- [ ] Slice 3.5.1: Document provider setup and diagnostics workflows.
+- [x] Slice 3.5.1: Document provider setup and diagnostics workflows.
   - Scope: document how users configure each supported provider path, how recipe-based OpenAI-compatible setup works, what each diagnostic state means, and when to use quick vs extended doctor reports.
   - Acceptance: a fresh user can set up a common cloud provider, a local provider, and a custom OpenAI-compatible endpoint without reading source code; a support engineer can interpret a redacted doctor JSON report.
   - Verification: docs review plus tests for any executable examples or fixture-backed recipes included in the docs.
+  - Completed: 2026-04-26. Implementation: expanded `docs/provider-setup-and-diagnostics.md` with direct provider setup paths, OpenAI-compatible recipe behavior, GitHub Models token onboarding, quick vs extended diagnostics, diagnostic state meanings, support triage order, and the doctor JSON privacy contract. Verification evidence: docs review confirmed the file uses descriptive workflow guidance only and adds no executable examples or fixtures requiring separate test coverage.
 
-- [ ] Slice 3.5.2: Add privacy and no-secret hardening for diagnostics.
+- [x] Slice 3.5.2: Add privacy and no-secret hardening for diagnostics.
   - Scope: audit doctor output, provider diagnostics, copied JSON, runtime failure text, and model-facing diagnostics for leaked API keys, OAuth tokens, local secret file contents, and unnecessary absolute paths.
   - Acceptance: diagnostics include enough non-secret metadata to repair the issue while excluding raw secrets and secret-bearing paths from persisted, copied, and model-visible surfaces.
   - Verification: Rust and TypeScript tests cover redaction of API keys, bearer headers, OAuth/session ids, ADC/AWS path content, local endpoint credentials, and nested diagnostic payloads.
+  - Completed: 2026-04-26. Implementation: hardened the shared Rust and TypeScript diagnostic redaction paths for opaque bearer headers, compact authorization headers, cloud credential path assignments, AWS/API-key/session-token names, local endpoint URL credentials, and nested doctor-report checks constructed outside the normal diagnostic factory before copied JSON or human output is rendered. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test provider_diagnostics_contract` passed 6 tests including the new redaction coverage; `pnpm --dir client exec vitest run src/lib/cadence-model/diagnostics.test.ts` passed 1 test file and 5 tests including copied JSON redaction.
 
-- [ ] Slice 3.5.3: Declare Priority 3 complete.
+- [x] Slice 3.5.3: Declare Priority 3 complete.
   - Scope: run focused Rust tests for provider profiles, provider model catalogs, runtime session/supervisor diagnostics, and doctor report generation; run focused React tests for Providers and Diagnostics settings surfaces; run build/type checks.
   - Acceptance: the report can mark Priority 3 complete only after provider reachability, doctor reports, profile repair, recommendations, setup recipes/presets, docs, and privacy hardening all have passing verification.
   - Verification: record the exact commands and passing results in the completion note, using one Cargo command at a time.
+  - Completed: 2026-04-26. Verification evidence:
+    - `cargo fmt --manifest-path client/src-tauri/Cargo.toml` passed.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test provider_diagnostics_contract` passed 6 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test provider_model_catalog_bridge` passed 26 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test doctor_report_command` passed 2 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test runtime_session_bridge` passed 41 tests.
+    - `pnpm --dir client exec vitest run src/lib/cadence-model/diagnostics.test.ts src/lib/cadence-model/provider-setup.test.ts components/cadence/settings-dialog.test.tsx components/cadence/agent-runtime.test.tsx` passed 4 test files and 77 tests covering provider, diagnostics, settings, and runtime UI behavior.
+    - `pnpm --dir client exec eslint src/lib/cadence-model/diagnostics.ts src/lib/cadence-model/diagnostics.test.ts components/cadence/settings-dialog/diagnostics-section.tsx components/cadence/provider-profiles/provider-profile-form.tsx` passed.
+    - `pnpm --dir client exec tsc --noEmit` passed.
+    - `pnpm --dir client build` passed with the existing Vite large-chunk warning.
 
 ### Priority 4: Add Session Memory And Context Management
 

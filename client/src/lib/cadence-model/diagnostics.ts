@@ -321,11 +321,11 @@ export function createCadenceDoctorReport(input: CadenceDoctorReportInput): Cade
       total: 0,
       highestSeverity: 'info' as const,
     },
-    profileChecks: sortDiagnosticChecks(input.profileChecks ?? []),
-    modelCatalogChecks: sortDiagnosticChecks(input.modelCatalogChecks ?? []),
-    runtimeSupervisorChecks: sortDiagnosticChecks(input.runtimeSupervisorChecks ?? []),
-    mcpDependencyChecks: sortDiagnosticChecks(input.mcpDependencyChecks ?? []),
-    settingsDependencyChecks: sortDiagnosticChecks(input.settingsDependencyChecks ?? []),
+    profileChecks: sanitizeAndSortDiagnosticChecks(input.profileChecks ?? []),
+    modelCatalogChecks: sanitizeAndSortDiagnosticChecks(input.modelCatalogChecks ?? []),
+    runtimeSupervisorChecks: sanitizeAndSortDiagnosticChecks(input.runtimeSupervisorChecks ?? []),
+    mcpDependencyChecks: sanitizeAndSortDiagnosticChecks(input.mcpDependencyChecks ?? []),
+    settingsDependencyChecks: sanitizeAndSortDiagnosticChecks(input.settingsDependencyChecks ?? []),
   }
   report.summary = summarizeDiagnosticChecks(collectDoctorChecks(report))
   return cadenceDoctorReportSchema.parse(report)
@@ -336,21 +336,22 @@ export function renderCadenceDoctorReport(
   mode: CadenceDoctorReportOutputModeDto,
 ): string {
   const parsed = cadenceDoctorReportSchema.parse(report)
+  const sanitized = createCadenceDoctorReport(parsed)
   if (mode === 'json') {
-    return JSON.stringify(parsed, null, 2)
+    return JSON.stringify(sanitized, null, 2)
   }
 
   const lines = [
-    `Cadence doctor report ${parsed.reportId}`,
-    `Generated: ${parsed.generatedAt}`,
-    `Mode: ${parsed.mode}`,
-    `Summary: ${parsed.summary.passed} passed, ${parsed.summary.warnings} warning(s), ${parsed.summary.failed} failed, ${parsed.summary.skipped} skipped`,
+    `Cadence doctor report ${sanitized.reportId}`,
+    `Generated: ${sanitized.generatedAt}`,
+    `Mode: ${sanitized.mode}`,
+    `Summary: ${sanitized.summary.passed} passed, ${sanitized.summary.warnings} warning(s), ${sanitized.summary.failed} failed, ${sanitized.summary.skipped} skipped`,
   ]
-  pushHumanGroup(lines, 'Provider profiles', parsed.profileChecks)
-  pushHumanGroup(lines, 'Model catalogs', parsed.modelCatalogChecks)
-  pushHumanGroup(lines, 'Runtime supervisor', parsed.runtimeSupervisorChecks)
-  pushHumanGroup(lines, 'MCP dependencies', parsed.mcpDependencyChecks)
-  pushHumanGroup(lines, 'Settings dependencies', parsed.settingsDependencyChecks)
+  pushHumanGroup(lines, 'Provider profiles', sanitized.profileChecks)
+  pushHumanGroup(lines, 'Model catalogs', sanitized.modelCatalogChecks)
+  pushHumanGroup(lines, 'Runtime supervisor', sanitized.runtimeSupervisorChecks)
+  pushHumanGroup(lines, 'MCP dependencies', sanitized.mcpDependencyChecks)
+  pushHumanGroup(lines, 'Settings dependencies', sanitized.settingsDependencyChecks)
   return lines.join('\n')
 }
 
@@ -395,13 +396,17 @@ export function sanitizeDiagnosticText(value: string): {
     const bare = trimWordPunctuation(word)
     const lower = bare.toLowerCase()
     if (redactNext) {
+      if (isAuthorizationScheme(lower)) {
+        return word
+      }
+
       redactNext = false
       redacted = true
       redactionClass = strongestRedactionClass(redactionClass, 'secret')
       return word.replace(bare, '[redacted]')
     }
 
-    if (lower === 'bearer' || lower === 'authorization:' || lower === 'authorization') {
+    if (lower === 'authorization' || lower === 'bearer' || isSensitiveValueLabel(lower)) {
       redactNext = true
       return word
     }
@@ -409,8 +414,11 @@ export function sanitizeDiagnosticText(value: string): {
     const assignment = redactSensitiveAssignment(bare)
     if (assignment) {
       redacted = true
-      redactionClass = strongestRedactionClass(redactionClass, 'secret')
-      return word.replace(bare, assignment)
+      redactionClass = strongestRedactionClass(redactionClass, assignment.redactionClass)
+      if (assignment.redactNext) {
+        redactNext = true
+      }
+      return word.replace(bare, assignment.value)
     }
 
     if (looksLikeSecretToken(bare)) {
@@ -531,6 +539,25 @@ function sortDiagnosticChecks(checks: readonly CadenceDiagnosticCheckDto[]): Cad
   )
 }
 
+function sanitizeAndSortDiagnosticChecks(checks: readonly CadenceDiagnosticCheckDto[]): CadenceDiagnosticCheckDto[] {
+  return sortDiagnosticChecks(
+    checks.map((check) =>
+      createCadenceDiagnosticCheck({
+        subject: check.subject,
+        status: check.status,
+        severity: check.severity,
+        retryable: check.retryable,
+        code: check.code,
+        message: check.message,
+        affectedProfileId: check.affectedProfileId,
+        affectedProviderId: check.affectedProviderId,
+        endpoint: check.endpoint,
+        remediation: check.remediation,
+      }),
+    ),
+  )
+}
+
 function pushHumanGroup(lines: string[], label: string, checks: readonly CadenceDiagnosticCheckDto[]): void {
   if (checks.length === 0) {
     return
@@ -584,14 +611,30 @@ function trimWordPunctuation(value: string): string {
   return value.replace(/^[,;:.()[\]"']+|[,;:.()[\]"']+$/g, '')
 }
 
-function redactSensitiveAssignment(value: string): string | null {
+function redactSensitiveAssignment(value: string): {
+  value: string
+  redactionClass: CadenceDiagnosticRedactionClassDto
+  redactNext: boolean
+} | null {
   for (const separator of ['=', ':']) {
     const index = value.indexOf(separator)
     if (index > 0) {
       const key = value.slice(0, index)
       const secret = value.slice(index + 1)
       if (secret.trim().length > 0 && isSensitiveName(key)) {
-        return `${key}${separator}[redacted]`
+        return {
+          value: `${key}${separator}[redacted]`,
+          redactionClass: 'secret',
+          redactNext: isAuthorizationScheme(trimWordPunctuation(secret).toLowerCase()),
+        }
+      }
+
+      if (looksLikeRawLocalPath(secret.trim())) {
+        return {
+          value: `${key}${separator}[redacted-path]`,
+          redactionClass: 'local_path',
+          redactNext: false,
+        }
       }
     }
   }
@@ -604,10 +647,17 @@ function isSensitiveName(value: string): boolean {
     'access_token',
     'api_key',
     'apikey',
+    'anthropic_api_key',
     'authorization',
+    'aws_access_key_id',
+    'aws_secret_access_key',
+    'aws_session_token',
     'auth_token',
     'bearer',
     'client_secret',
+    'github_token',
+    'google_oauth_access_token',
+    'openai_api_key',
     'password',
     'private_key',
     'refresh_token',
@@ -617,6 +667,33 @@ function isSensitiveName(value: string): boolean {
     'token',
     'x_api_key',
   ].includes(normalized)
+}
+
+function isAuthorizationScheme(value: string): boolean {
+  return ['bearer', 'basic', 'token'].includes(value)
+}
+
+function isSensitiveValueLabel(value: string): boolean {
+  return [
+    'access_token',
+    'api_key',
+    'apikey',
+    'anthropic_api_key',
+    'aws_access_key_id',
+    'aws_secret_access_key',
+    'aws_session_token',
+    'auth_token',
+    'client_secret',
+    'github_token',
+    'google_oauth_access_token',
+    'openai_api_key',
+    'password',
+    'private_key',
+    'refresh_token',
+    'session_id',
+    'session_token',
+    'x_api_key',
+  ].includes(value)
 }
 
 function looksLikeSecretToken(value: string): boolean {

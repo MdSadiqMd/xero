@@ -97,6 +97,94 @@ describe('diagnostics contract', () => {
     expect(json).toContain('redacted')
   })
 
+  it('redacts opaque auth headers, cloud credential paths, and nested copied doctor payloads', () => {
+    const authHeader = sanitizeDiagnosticText(
+      'Provider returned Authorization: Bearer opaque-oauth-token-123 during refresh.',
+    )
+    expect(authHeader.redacted).toBe(true)
+    expect(authHeader.redactionClass).toBe('secret')
+    expect(authHeader.value).toContain('Authorization: Bearer [redacted]')
+    expect(authHeader.value).not.toContain('opaque-oauth-token-123')
+
+    const compactAuthHeader = sanitizeDiagnosticText(
+      'Provider returned Authorization:Bearer compact-oauth-token-456 during refresh.',
+    )
+    expect(compactAuthHeader.redacted).toBe(true)
+    expect(compactAuthHeader.value).not.toContain('compact-oauth-token-456')
+
+    const cloudPaths = sanitizeDiagnosticText(
+      'ADC failed at GOOGLE_APPLICATION_CREDENTIALS=/Users/sn0w/.config/gcloud/application_default_credentials.json and AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY.',
+    )
+    expect(cloudPaths.redacted).toBe(true)
+    expect(cloudPaths.redactionClass).toBe('secret')
+    expect(cloudPaths.value).not.toContain('/Users/sn0w')
+    expect(cloudPaths.value).not.toContain('wJalrXUtnFEMI')
+    expect(cloudPaths.value).toContain('[redacted-path]')
+
+    const rawNested = {
+      contractVersion: 1,
+      checkId: 'diagnostic:v1:settings_dependency:global:global:nested_secret_payload',
+      subject: 'settings_dependency',
+      status: 'failed',
+      severity: 'error',
+      retryable: false,
+      code: 'nested_secret_payload',
+      message: 'Nested doctor payload included Authorization: Bearer opaque-nested-token-456 from /Users/sn0w/.aws/credentials.',
+      affectedProfileId: null,
+      affectedProviderId: null,
+      endpoint: {
+        baseUrl: 'http://local-user:local-pass@127.0.0.1:4000/v1?api_key=opaque-local-key',
+        host: null,
+        apiVersion: null,
+        region: null,
+        projectId: null,
+        modelListStrategy: 'refresh_token=rt_opaque_nested_secret',
+        redacted: false,
+      },
+      remediation: 'Remove session_id=sess_nested_secret before copying diagnostics.',
+      redactionClass: 'public',
+      redacted: false,
+    } as const
+
+    const copiedJson = renderCadenceDoctorReport({
+      contractVersion: 1,
+      reportId: 'doctor-20260426-privacy',
+      generatedAt: '2026-04-26T12:00:00Z',
+      mode: 'quick_local',
+      versions: {
+        appVersion: '0.1.0',
+        runtimeSupervisorVersion: '0.1.0',
+        runtimeProtocolVersion: 'diagnostics-v1',
+      },
+      summary: {
+        passed: 0,
+        warnings: 0,
+        failed: 1,
+        skipped: 0,
+        total: 1,
+        highestSeverity: 'error',
+      },
+      profileChecks: [],
+      modelCatalogChecks: [],
+      runtimeSupervisorChecks: [],
+      mcpDependencyChecks: [],
+      settingsDependencyChecks: [rawNested],
+    }, 'json')
+
+    for (const leaked of [
+      'opaque-nested-token-456',
+      'local-pass',
+      'opaque-local-key',
+      'rt_opaque_nested_secret',
+      'sess_nested_secret',
+      '/Users/sn0w',
+    ]) {
+      expect(copiedJson).not.toContain(leaked)
+    }
+    expect(copiedJson).toContain('"redactionClass": "secret"')
+    expect(copiedJson).toContain('"redacted": true')
+  })
+
   it('accepts strict provider-profile diagnostics and rejects cross-profile catalog payloads', () => {
     expect(runDoctorReportRequestSchema.parse({})).toEqual({ mode: 'quick_local' })
     expect(runDoctorReportRequestSchema.parse({ mode: 'extended_network' })).toEqual({

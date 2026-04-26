@@ -12,13 +12,14 @@ use cadence_desktop_lib::{
     runtime::{
         ambient_auth_failure_diagnostic, invalid_base_url_diagnostic,
         provider_model_catalog_diagnostic, provider_profile_readiness_diagnostic,
-        provider_profile_validation_diagnostics, render_doctor_report,
+        provider_profile_validation_diagnostics, render_doctor_report, sanitize_diagnostic_text,
         stale_runtime_binding_diagnostic, summarize_diagnostic_checks,
         unsupported_provider_diagnostic, validate_diagnostic_check, validate_doctor_report,
-        CadenceDiagnosticCheck, CadenceDiagnosticCheckInput, CadenceDiagnosticSeverity,
-        CadenceDiagnosticStatus, CadenceDiagnosticSubject, CadenceDoctorReport,
-        CadenceDoctorReportInput, CadenceDoctorReportMode, CadenceDoctorReportOutputMode,
-        CadenceDoctorVersionInfo, CADENCE_DIAGNOSTIC_CONTRACT_VERSION,
+        CadenceDiagnosticCheck, CadenceDiagnosticCheckInput, CadenceDiagnosticEndpointMetadata,
+        CadenceDiagnosticRedactionClass, CadenceDiagnosticSeverity, CadenceDiagnosticStatus,
+        CadenceDiagnosticSubject, CadenceDoctorReport, CadenceDoctorReportInput,
+        CadenceDoctorReportMode, CadenceDoctorReportOutputMode, CadenceDoctorVersionInfo,
+        CADENCE_DIAGNOSTIC_CONTRACT_VERSION,
     },
 };
 
@@ -542,6 +543,105 @@ fn provider_diagnostics_validate_state_combinations_and_catalog_retryability() {
             .expect("manual catalog diagnostic");
     assert_eq!(manual.status, CadenceDiagnosticStatus::Skipped);
     assert!(!manual.retryable);
+}
+
+#[test]
+fn diagnostics_redact_auth_headers_cloud_paths_and_nested_report_payloads() {
+    let (auth_header, auth_redacted, auth_class) = sanitize_diagnostic_text(
+        "Provider returned Authorization: Bearer opaque-oauth-token-123 during refresh.",
+    );
+    assert!(auth_redacted);
+    assert_eq!(auth_class, CadenceDiagnosticRedactionClass::Secret);
+    assert!(!auth_header.contains("opaque-oauth-token-123"));
+    assert!(auth_header.contains("Authorization: Bearer [redacted]"));
+
+    let (compact_auth_header, compact_auth_redacted, _) = sanitize_diagnostic_text(
+        "Provider returned Authorization:Bearer compact-oauth-token-456 during refresh.",
+    );
+    assert!(compact_auth_redacted);
+    assert!(!compact_auth_header.contains("compact-oauth-token-456"));
+
+    let (cloud_paths, cloud_redacted, cloud_class) = sanitize_diagnostic_text(
+        "ADC failed at GOOGLE_APPLICATION_CREDENTIALS=/Users/sn0w/.config/gcloud/application_default_credentials.json and AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY.",
+    );
+    assert!(cloud_redacted);
+    assert_eq!(cloud_class, CadenceDiagnosticRedactionClass::Secret);
+    assert!(!cloud_paths.contains("/Users/sn0w"));
+    assert!(!cloud_paths.contains("wJalrXUtnFEMI"));
+    assert!(cloud_paths.contains("[redacted-path]"));
+
+    let raw_nested = CadenceDiagnosticCheck {
+        contract_version: CADENCE_DIAGNOSTIC_CONTRACT_VERSION,
+        check_id: "diagnostic:v1:settings_dependency:global:global:nested_secret_payload".into(),
+        subject: CadenceDiagnosticSubject::SettingsDependency,
+        status: CadenceDiagnosticStatus::Failed,
+        severity: CadenceDiagnosticSeverity::Error,
+        retryable: false,
+        code: "nested_secret_payload".into(),
+        message: "Nested doctor payload included Authorization: Bearer opaque-nested-token-456 from /Users/sn0w/.aws/credentials.".into(),
+        affected_profile_id: None,
+        affected_provider_id: None,
+        endpoint: Some(CadenceDiagnosticEndpointMetadata {
+            base_url: Some(
+                "http://local-user:local-pass@127.0.0.1:4000/v1?api_key=opaque-local-key"
+                    .into(),
+            ),
+            host: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            model_list_strategy: Some("refresh_token=rt_opaque_nested_secret".into()),
+            redacted: false,
+        }),
+        remediation: Some(
+            "Remove session_id=sess_nested_secret before copying diagnostics.".into(),
+        ),
+        redaction_class: CadenceDiagnosticRedactionClass::Public,
+        redacted: false,
+    };
+
+    let report = CadenceDoctorReport::new(CadenceDoctorReportInput {
+        report_id: "doctor-20260426-privacy".into(),
+        generated_at: "2026-04-26T12:00:00Z".into(),
+        mode: CadenceDoctorReportMode::QuickLocal,
+        versions: CadenceDoctorVersionInfo {
+            app_version: "0.1.0".into(),
+            runtime_supervisor_version: Some("0.1.0".into()),
+            runtime_protocol_version: Some("diagnostics-v1".into()),
+        },
+        profile_checks: vec![],
+        model_catalog_checks: vec![],
+        runtime_supervisor_checks: vec![],
+        mcp_dependency_checks: vec![],
+        settings_dependency_checks: vec![raw_nested],
+    })
+    .expect("doctor report sanitizes nested checks");
+
+    let nested = report
+        .settings_dependency_checks
+        .first()
+        .expect("nested diagnostic");
+    assert!(nested.redacted);
+    assert_eq!(
+        nested.redaction_class,
+        CadenceDiagnosticRedactionClass::Secret
+    );
+
+    let json = render_doctor_report(&report, CadenceDoctorReportOutputMode::Json)
+        .expect("render redacted doctor report");
+    for leaked in [
+        "opaque-nested-token-456",
+        "local-pass",
+        "opaque-local-key",
+        "rt_opaque_nested_secret",
+        "sess_nested_secret",
+        "/Users/sn0w",
+    ] {
+        assert!(
+            !json.contains(leaked),
+            "doctor report leaked secret fragment {leaked}"
+        );
+    }
 }
 
 #[test]

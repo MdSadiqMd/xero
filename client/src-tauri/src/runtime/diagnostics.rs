@@ -1129,6 +1129,10 @@ pub fn sanitize_diagnostic_text(value: &str) -> (String, bool, CadenceDiagnostic
             let bare = trim_word_punctuation(word);
             let lower = bare.to_ascii_lowercase();
             if redact_next {
+                if is_authorization_scheme(&lower) {
+                    return word.to_owned();
+                }
+
                 redact_next = false;
                 redacted = true;
                 redaction_class = strongest_redaction_class(
@@ -1138,18 +1142,19 @@ pub fn sanitize_diagnostic_text(value: &str) -> (String, bool, CadenceDiagnostic
                 return word.replace(bare, "[redacted]");
             }
 
-            if lower == "bearer" || lower == "authorization:" || lower == "authorization" {
+            if lower == "authorization" || lower == "bearer" || is_sensitive_value_label(&lower) {
                 redact_next = true;
                 return word.to_owned();
             }
 
-            if let Some(redacted_assignment) = redact_sensitive_assignment(bare) {
+            if let Some(assignment) = redact_sensitive_assignment(bare) {
                 redacted = true;
-                redaction_class = strongest_redaction_class(
-                    redaction_class,
-                    CadenceDiagnosticRedactionClass::Secret,
-                );
-                return word.replace(bare, &redacted_assignment);
+                redaction_class =
+                    strongest_redaction_class(redaction_class, assignment.redaction_class);
+                if assignment.redact_next {
+                    redact_next = true;
+                }
+                return word.replace(bare, &assignment.value);
             }
 
             if looks_like_secret_token(bare) {
@@ -1180,7 +1185,7 @@ fn sort_and_validate_checks(
 ) -> CommandResult<Vec<CadenceDiagnosticCheck>> {
     let mut checks = checks
         .into_iter()
-        .map(validate_diagnostic_check)
+        .map(sanitize_diagnostic_check)
         .collect::<CommandResult<Vec<_>>>()?;
     checks.sort_by(|left, right| {
         (
@@ -1199,6 +1204,23 @@ fn sort_and_validate_checks(
             ))
     });
     Ok(checks)
+}
+
+fn sanitize_diagnostic_check(
+    check: CadenceDiagnosticCheck,
+) -> CommandResult<CadenceDiagnosticCheck> {
+    CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+        subject: check.subject,
+        status: check.status,
+        severity: check.severity,
+        retryable: check.retryable,
+        code: check.code,
+        message: check.message,
+        affected_profile_id: check.affected_profile_id,
+        affected_provider_id: check.affected_provider_id,
+        endpoint: check.endpoint,
+        remediation: check.remediation,
+    })
 }
 
 fn render_compact_human_report(report: &CadenceDoctorReport) -> String {
@@ -1509,11 +1531,31 @@ fn trim_word_punctuation(value: &str) -> &str {
     })
 }
 
-fn redact_sensitive_assignment(value: &str) -> Option<String> {
+struct DiagnosticAssignmentRedaction {
+    value: String,
+    redaction_class: CadenceDiagnosticRedactionClass,
+    redact_next: bool,
+}
+
+fn redact_sensitive_assignment(value: &str) -> Option<DiagnosticAssignmentRedaction> {
     for separator in ['=', ':'] {
         if let Some((key, secret)) = value.split_once(separator) {
             if is_sensitive_name(key) && !secret.trim().is_empty() {
-                return Some(format!("{}{}[redacted]", key, separator));
+                return Some(DiagnosticAssignmentRedaction {
+                    value: format!("{}{}[redacted]", key, separator),
+                    redaction_class: CadenceDiagnosticRedactionClass::Secret,
+                    redact_next: is_authorization_scheme(
+                        &trim_word_punctuation(secret).to_ascii_lowercase(),
+                    ),
+                });
+            }
+
+            if looks_like_raw_local_path(secret.trim()) {
+                return Some(DiagnosticAssignmentRedaction {
+                    value: format!("{}{}[redacted-path]", key, separator),
+                    redaction_class: CadenceDiagnosticRedactionClass::LocalPath,
+                    redact_next: false,
+                });
             }
         }
     }
@@ -1531,10 +1573,17 @@ fn is_sensitive_name(value: &str) -> bool {
         "access_token"
             | "api_key"
             | "apikey"
+            | "anthropic_api_key"
             | "authorization"
+            | "aws_access_key_id"
+            | "aws_secret_access_key"
+            | "aws_session_token"
             | "auth_token"
             | "bearer"
             | "client_secret"
+            | "github_token"
+            | "google_oauth_access_token"
+            | "openai_api_key"
             | "password"
             | "private_key"
             | "refresh_token"
@@ -1542,6 +1591,34 @@ fn is_sensitive_name(value: &str) -> bool {
             | "session_id"
             | "session_token"
             | "token"
+            | "x_api_key"
+    )
+}
+
+fn is_authorization_scheme(value: &str) -> bool {
+    matches!(value, "bearer" | "basic" | "token")
+}
+
+fn is_sensitive_value_label(value: &str) -> bool {
+    matches!(
+        value,
+        "access_token"
+            | "api_key"
+            | "apikey"
+            | "anthropic_api_key"
+            | "aws_access_key_id"
+            | "aws_secret_access_key"
+            | "aws_session_token"
+            | "auth_token"
+            | "client_secret"
+            | "github_token"
+            | "google_oauth_access_token"
+            | "openai_api_key"
+            | "password"
+            | "private_key"
+            | "refresh_token"
+            | "session_id"
+            | "session_token"
             | "x_api_key"
     )
 }

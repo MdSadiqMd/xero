@@ -163,9 +163,9 @@ export function AgentSessionsSidebar({
                 key={entry.session.agentSessionId}
                 className={cn(
                   entry.state === 'entering' &&
-                    'motion-standard animate-in fade-in-0 slide-in-from-top-1',
+                    'animate-in fade-in-0 slide-in-from-right-4 duration-300 ease-out',
                   entry.state === 'exiting' &&
-                    'motion-standard animate-out fade-out-0 slide-out-to-top-1 fill-mode-forwards pointer-events-none',
+                    'animate-out fade-out-0 slide-out-to-left-4 fill-mode-forwards duration-300 ease-out pointer-events-none',
                 )}
                 onAnimationEnd={(event) => {
                   if (event.target !== event.currentTarget) return
