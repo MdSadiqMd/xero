@@ -793,6 +793,16 @@ function createMockAdapter(options?: {
     archivedAt: '2026-04-15T18:00:00Z',
     updatedAt: '2026-04-15T18:00:00Z',
   }))
+  const restoreAgentSession = vi.fn(async (request: { projectId: string; agentSessionId: string }) => ({
+    ...makeAgentSession(request.projectId),
+    agentSessionId: request.agentSessionId,
+    status: 'active' as const,
+    archivedAt: null,
+    updatedAt: '2026-04-15T18:00:00Z',
+  }))
+  const deleteAgentSession = vi.fn(async (_request: { projectId: string; agentSessionId: string }) => {
+    return undefined
+  })
   const getRepositoryStatus = vi.fn(async (projectId: string) => statuses[projectId])
   const getRepositoryDiff = vi.fn(async (_projectId: string, scope: 'staged' | 'unstaged' | 'worktree') => {
     const configuredDiff = options?.diffs?.[scope]
@@ -1594,6 +1604,8 @@ function createMockAdapter(options?: {
     getAgentSession,
     updateAgentSession,
     archiveAgentSession,
+    restoreAgentSession,
+    deleteAgentSession,
     getAutonomousRun,
     getRuntimeRun,
     getRuntimeSession,

@@ -1657,6 +1657,37 @@ function createAdapter(options?: {
       )
       return archivedSession
     },
+    restoreAgentSession: async (request) => {
+      const existing = currentSnapshot.agentSessions.find(
+        (session) => session.projectId === request.projectId && session.agentSessionId === request.agentSessionId,
+      )
+      if (!existing) {
+        throw new Error(`Missing agent session ${request.agentSessionId}`)
+      }
+
+      const restoredSession = {
+        ...existing,
+        status: 'active' as const,
+        archivedAt: null,
+        updatedAt: '2026-04-23T12:10:00Z',
+      }
+      updateAgentSessions(
+        currentSnapshot.agentSessions.map((session) =>
+          session.projectId === request.projectId && session.agentSessionId === request.agentSessionId
+            ? restoredSession
+            : session,
+        ),
+      )
+      return restoredSession
+    },
+    deleteAgentSession: async (request) => {
+      updateAgentSessions(
+        currentSnapshot.agentSessions.filter(
+          (session) =>
+            !(session.projectId === request.projectId && session.agentSessionId === request.agentSessionId),
+        ),
+      )
+    },
     getAutonomousRun: async () => currentAutonomousState ?? { run: null },
     getRuntimeRun: async () => currentRuntimeRun,
     getRuntimeSettings: async () => currentRuntimeSettings,

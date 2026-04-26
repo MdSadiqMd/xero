@@ -12,7 +12,12 @@ export function useAgentSessionMutations({
   operations,
 }: UseCadenceDesktopMutationsArgs): Pick<
   CadenceDesktopMutationActions,
-  'createAgentSession' | 'selectAgentSession' | 'archiveAgentSession' | 'renameAgentSession'
+  | 'createAgentSession'
+  | 'selectAgentSession'
+  | 'archiveAgentSession'
+  | 'restoreAgentSession'
+  | 'deleteAgentSession'
+  | 'renameAgentSession'
 > {
   const { activeProjectIdRef, activeProjectRef } = refs
   const { loadProject } = operations
@@ -68,6 +73,34 @@ export function useAgentSessionMutations({
     [activeProjectIdRef, activeProjectRef, adapter, loadProject],
   )
 
+  const restoreAgentSession = useCallback(
+    async (agentSessionId: string) => {
+      const projectId = getActiveProjectId(
+        activeProjectIdRef,
+        'Select an imported project before restoring an agent session.',
+      )
+
+      await adapter.restoreAgentSession({ projectId, agentSessionId })
+      await loadProject(projectId, 'selection')
+      return activeProjectIdRef.current === projectId ? activeProjectRef.current : null
+    },
+    [activeProjectIdRef, activeProjectRef, adapter, loadProject],
+  )
+
+  const deleteAgentSession = useCallback(
+    async (agentSessionId: string) => {
+      const projectId = getActiveProjectId(
+        activeProjectIdRef,
+        'Select an imported project before deleting an agent session.',
+      )
+
+      await adapter.deleteAgentSession({ projectId, agentSessionId })
+      await loadProject(projectId, 'selection')
+      return activeProjectIdRef.current === projectId ? activeProjectRef.current : null
+    },
+    [activeProjectIdRef, activeProjectRef, adapter, loadProject],
+  )
+
   const renameAgentSession = useCallback(
     async (agentSessionId: string, title: string) => {
       const projectId = getActiveProjectId(
@@ -90,6 +123,8 @@ export function useAgentSessionMutations({
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
+    restoreAgentSession,
+    deleteAgentSession,
     renameAgentSession,
   }
 }

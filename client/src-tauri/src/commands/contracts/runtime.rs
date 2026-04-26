@@ -255,6 +255,20 @@ pub struct ArchiveAgentSessionRequestDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RestoreAgentSessionRequestDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteAgentSessionRequestDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListAgentSessionsResponseDto {
     pub sessions: Vec<AgentSessionDto>,
 }

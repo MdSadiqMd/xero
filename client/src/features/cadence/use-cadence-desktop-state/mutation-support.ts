@@ -103,6 +103,8 @@ export type CadenceDesktopMutationActions = Pick<
   | 'createAgentSession'
   | 'selectAgentSession'
   | 'archiveAgentSession'
+  | 'restoreAgentSession'
+  | 'deleteAgentSession'
   | 'renameAgentSession'
 >
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AgentRuntime } from '@/components/cadence/agent-runtime'
 import { AgentSessionsSidebar } from '@/components/cadence/agent-sessions-sidebar'
+import { ArchivedSessionsDialog } from '@/components/cadence/archived-sessions-dialog'
 import { type View } from '@/components/cadence/data'
 import { EmptyPanel } from '@/components/cadence/empty-panel'
 import { ExecutionView } from '@/components/cadence/execution-view'
@@ -19,6 +20,7 @@ import { SolanaWorkbenchSidebar } from '@/components/cadence/solana-workbench-si
 import { SettingsDialog, type SettingsSection } from '@/components/cadence/settings-dialog'
 import { VcsSidebar } from '@/components/cadence/vcs-sidebar'
 import { CadenceDesktopAdapter as DefaultCadenceDesktopAdapter, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
+import { mapAgentSession } from '@/src/lib/cadence-model/runtime'
 import { type RepositoryDiffScope } from '@/src/lib/cadence-model/project'
 import { useCadenceDesktopState } from '@/src/features/cadence/use-cadence-desktop-state'
 import { cn } from '@/lib/utils'
@@ -136,12 +138,15 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
+    restoreAgentSession,
+    deleteAgentSession,
   } = useCadenceDesktopState({ adapter })
 
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('providers')
   const [pendingAgentSessionId, setPendingAgentSessionId] = useState<string | null>(null)
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
+  const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(false)
   const [gamesOpen, setGamesOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [iosOpen, setIosOpen] = useState(false)
@@ -361,15 +366,39 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     return (
       <>
         <AgentSessionsSidebar
+          projectId={activeProject.id}
           projectLabel={activeProject.name}
           sessions={activeProject.agentSessions}
           selectedSessionId={activeProject.selectedAgentSessionId}
           onSelectSession={handleSelectAgentSession}
           onCreateSession={handleCreateAgentSession}
           onArchiveSession={handleArchiveAgentSession}
+          onOpenArchivedSessions={() => setArchivedSessionsOpen(true)}
           pendingSessionId={pendingAgentSessionId}
           isCreating={isCreatingAgentSession}
           collapsed={activeView !== 'agent'}
+        />
+        <ArchivedSessionsDialog
+          open={archivedSessionsOpen}
+          onOpenChange={setArchivedSessionsOpen}
+          projectId={activeProject.id}
+          projectLabel={activeProject.name}
+          onLoad={async (projectId) => {
+            const response = await resolvedAdapter.listAgentSessions({
+              projectId,
+              includeArchived: true,
+            })
+            return response.sessions
+              .filter((session) => session.status === 'archived')
+              .map(mapAgentSession)
+          }}
+          onRestore={async (agentSessionId) => {
+            await restoreAgentSession(agentSessionId)
+            await selectAgentSession(agentSessionId)
+          }}
+          onDelete={async (agentSessionId) => {
+            await deleteAgentSession(agentSessionId)
+          }}
         />
         <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
           {workflowView ? (

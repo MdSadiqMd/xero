@@ -168,7 +168,9 @@ import {
   runtimeUpdatedPayloadSchema,
   archiveAgentSessionRequestSchema,
   createAgentSessionRequestSchema,
+  deleteAgentSessionRequestSchema,
   getAgentSessionRequestSchema,
+  restoreAgentSessionRequestSchema,
   getRuntimeRunRequestSchema,
   agentSessionSchema,
   listAgentSessionsRequestSchema,
@@ -181,7 +183,9 @@ import {
   type AgentSessionDto,
   type ArchiveAgentSessionRequestDto,
   type CreateAgentSessionRequestDto,
+  type DeleteAgentSessionRequestDto,
   type GetAgentSessionRequestDto,
+  type RestoreAgentSessionRequestDto,
   type GetRuntimeRunRequestDto,
   type ListAgentSessionsRequestDto,
   type ListAgentSessionsResponseDto,
@@ -255,6 +259,8 @@ const COMMANDS = {
   getAgentSession: 'get_agent_session',
   updateAgentSession: 'update_agent_session',
   archiveAgentSession: 'archive_agent_session',
+  restoreAgentSession: 'restore_agent_session',
+  deleteAgentSession: 'delete_agent_session',
   getAutonomousRun: 'get_autonomous_run',
   startAgentTask: 'start_agent_task',
   sendAgentMessage: 'send_agent_message',
@@ -510,6 +516,8 @@ export interface CadenceDesktopAdapter {
   getAgentSession(request: GetAgentSessionRequestDto): Promise<AgentSessionDto | null>
   updateAgentSession(request: UpdateAgentSessionRequestDto): Promise<AgentSessionDto>
   archiveAgentSession(request: ArchiveAgentSessionRequestDto): Promise<AgentSessionDto>
+  restoreAgentSession(request: RestoreAgentSessionRequestDto): Promise<AgentSessionDto>
+  deleteAgentSession(request: DeleteAgentSessionRequestDto): Promise<void>
   getAutonomousRun(projectId: string, agentSessionId: string): Promise<AutonomousRunStateDto>
   startAgentTask?(
     projectId: string,
@@ -1172,6 +1180,18 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     return invokeTyped(COMMANDS.archiveAgentSession, agentSessionSchema, {
       request: parsed,
     })
+  },
+
+  restoreAgentSession(request) {
+    const parsed = restoreAgentSessionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.restoreAgentSession, agentSessionSchema, {
+      request: parsed,
+    })
+  },
+
+  async deleteAgentSession(request) {
+    const parsed = deleteAgentSessionRequestSchema.parse(request)
+    await invokeRaw(COMMANDS.deleteAgentSession, { request: parsed })
   },
 
   getAutonomousRun(projectId, agentSessionId) {

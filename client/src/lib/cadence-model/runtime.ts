@@ -270,6 +270,10 @@ export const updateAgentSessionRequestSchema = z
 
 export const archiveAgentSessionRequestSchema = getAgentSessionRequestSchema
 
+export const restoreAgentSessionRequestSchema = getAgentSessionRequestSchema
+
+export const deleteAgentSessionRequestSchema = getAgentSessionRequestSchema
+
 export const listAgentSessionsResponseSchema = z
   .object({
     sessions: z.array(agentSessionSchema),
@@ -393,6 +397,8 @@ export type ListAgentSessionsRequestDto = z.infer<typeof listAgentSessionsReques
 export type GetAgentSessionRequestDto = z.infer<typeof getAgentSessionRequestSchema>
 export type UpdateAgentSessionRequestDto = z.infer<typeof updateAgentSessionRequestSchema>
 export type ArchiveAgentSessionRequestDto = z.infer<typeof archiveAgentSessionRequestSchema>
+export type RestoreAgentSessionRequestDto = z.infer<typeof restoreAgentSessionRequestSchema>
+export type DeleteAgentSessionRequestDto = z.infer<typeof deleteAgentSessionRequestSchema>
 export type ListAgentSessionsResponseDto = z.infer<typeof listAgentSessionsResponseSchema>
 export type RuntimeRunDto = z.infer<typeof runtimeRunSchema>
 export type RuntimeRunUpdatedPayloadDto = z.infer<typeof runtimeRunUpdatedPayloadSchema>

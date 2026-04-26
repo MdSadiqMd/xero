@@ -1266,6 +1266,8 @@ export function useCadenceDesktopState(
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
+    restoreAgentSession,
+    deleteAgentSession,
     renameAgentSession,
   } = useCadenceDesktopMutations({
     adapter,
@@ -1814,6 +1816,8 @@ export function useCadenceDesktopState(
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
+    restoreAgentSession,
+    deleteAgentSession,
     renameAgentSession,
   }
 }

@@ -510,5 +510,7 @@ export interface UseCadenceDesktopStateResult {
   }) => Promise<ProjectDetailView | null>
   selectAgentSession: (agentSessionId: string) => Promise<ProjectDetailView | null>
   archiveAgentSession: (agentSessionId: string) => Promise<ProjectDetailView | null>
+  restoreAgentSession: (agentSessionId: string) => Promise<ProjectDetailView | null>
+  deleteAgentSession: (agentSessionId: string) => Promise<ProjectDetailView | null>
   renameAgentSession: (agentSessionId: string, title: string) => Promise<ProjectDetailView | null>
 }

@@ -71,6 +71,8 @@ export function useCadenceDesktopMutations(
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
+    restoreAgentSession,
+    deleteAgentSession,
     renameAgentSession,
   } = useAgentSessionMutations(args)
 
@@ -124,6 +126,8 @@ export function useCadenceDesktopMutations(
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
+    restoreAgentSession,
+    deleteAgentSession,
     renameAgentSession,
   }
 }

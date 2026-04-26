@@ -75,7 +75,7 @@ interface CadenceShellProps {
 type WindowAction = "close" | "minimize" | "toggle-maximize"
 
 const NAV_ITEMS: { id: View; label: string }[] = [
-  { id: "phases", label: "Workflow" },
+  { id: "phases", label: "Auto" },
   { id: "agent", label: "Agent" },
   { id: "execution", label: "Editor" },
 ]
@@ -562,23 +562,33 @@ export function CadenceShell({
   let titlebar: React.ReactNode
 
   if (platform === "macos") {
-    // macOS: [traffic-lights] [logo] [|] [sidebar-toggle] ← drag zone → [nav] [|] [games] [settings]
+    // macOS: [traffic-lights] [sidebar-toggle] [|] [logo] ··· (centered nav) ··· [vcs] [ios] [android] [browser] [solana] [games] [settings]
     titlebar = (
-      <header className="flex h-11 items-center border-b border-border bg-sidebar shrink-0 pl-3 pr-3">
+      <header className="relative flex h-11 items-center border-b border-border bg-sidebar shrink-0 pl-3 pr-3">
         {TrafficLights}
-        {Logo}
         {!chromeOnly ? (
           <div
-            className="titlebar-no-drag ml-3 flex items-center gap-3 shrink-0"
+            className="titlebar-no-drag mr-3 flex items-center gap-3 shrink-0"
             data-titlebar-no-drag="true"
             onDoubleClick={stopTitlebarMouseEventPropagation}
             onMouseDown={stopTitlebarMouseEventPropagation}
           >
-            {Divider}
             {SidebarToggleBtn}
+            {Divider}
           </div>
         ) : null}
+        {Logo}
         {DragSpacer}
+        {!chromeOnly ? (
+          <div
+            className="titlebar-no-drag pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center"
+            data-titlebar-no-drag="true"
+            onDoubleClick={stopTitlebarMouseEventPropagation}
+            onMouseDown={stopTitlebarMouseEventPropagation}
+          >
+            <div className="pointer-events-auto">{NavButtons}</div>
+          </div>
+        ) : null}
         {!chromeOnly ? (
           <div
             className="titlebar-no-drag flex items-center gap-2 shrink-0"
@@ -586,8 +596,6 @@ export function CadenceShell({
             onDoubleClick={stopTitlebarMouseEventPropagation}
             onMouseDown={stopTitlebarMouseEventPropagation}
           >
-            {NavButtons}
-            <div className="mx-1.5 h-4 w-px bg-border" />
             {VcsBtn}
             {IosBtn}
             {AndroidBtn}

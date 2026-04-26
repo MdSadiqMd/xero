@@ -11,7 +11,7 @@ use super::{
 };
 
 pub const DEFAULT_AGENT_SESSION_ID: &str = "agent-session-main";
-pub const DEFAULT_AGENT_SESSION_TITLE: &str = "Main";
+pub const DEFAULT_AGENT_SESSION_TITLE: &str = "New Chat";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSessionStatus {
@@ -473,6 +473,108 @@ pub fn archive_agent_session(
 
     read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
         .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))
+}
+
+pub fn restore_agent_session(
+    repo_root: &Path,
+    project_id: &str,
+    agent_session_id: &str,
+) -> Result<AgentSessionRecord, CommandError> {
+    validate_non_empty_text(project_id, "projectId", "agent_session_request_invalid")?;
+    validate_non_empty_text(
+        agent_session_id,
+        "agentSessionId",
+        "agent_session_request_invalid",
+    )?;
+
+    let database_path = database_path_for_repo(repo_root);
+    let connection = open_runtime_database(repo_root, &database_path)?;
+    read_project_row(&connection, &database_path, repo_root, project_id)?;
+
+    let existing =
+        read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
+            .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))?;
+    if existing.status == AgentSessionStatus::Active {
+        return Ok(existing);
+    }
+
+    let now = now_timestamp();
+    connection
+        .execute(
+            r#"
+            UPDATE agent_sessions
+            SET status = 'active',
+                archived_at = NULL,
+                updated_at = ?3
+            WHERE project_id = ?1
+              AND agent_session_id = ?2
+              AND status = 'archived'
+            "#,
+            params![project_id, agent_session_id, now.as_str()],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_persist_failed",
+                format!(
+                    "Cadence could not restore agent session `{agent_session_id}` in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
+        .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))
+}
+
+pub fn delete_agent_session(
+    repo_root: &Path,
+    project_id: &str,
+    agent_session_id: &str,
+) -> Result<(), CommandError> {
+    validate_non_empty_text(project_id, "projectId", "agent_session_request_invalid")?;
+    validate_non_empty_text(
+        agent_session_id,
+        "agentSessionId",
+        "agent_session_request_invalid",
+    )?;
+
+    let database_path = database_path_for_repo(repo_root);
+    let connection = open_runtime_database(repo_root, &database_path)?;
+    read_project_row(&connection, &database_path, repo_root, project_id)?;
+
+    let existing =
+        read_agent_session_row(&connection, &database_path, project_id, agent_session_id)?
+            .ok_or_else(|| missing_agent_session_error(project_id, agent_session_id))?;
+    if existing.status != AgentSessionStatus::Archived {
+        return Err(CommandError::user_fixable(
+            "agent_session_not_archived",
+            format!(
+                "Cadence cannot permanently delete agent session `{agent_session_id}` for project `{project_id}` because it is not archived. Archive it first."
+            ),
+        ));
+    }
+
+    connection
+        .execute(
+            r#"
+            DELETE FROM agent_sessions
+            WHERE project_id = ?1
+              AND agent_session_id = ?2
+              AND status = 'archived'
+            "#,
+            params![project_id, agent_session_id],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_session_persist_failed",
+                format!(
+                    "Cadence could not delete agent session `{agent_session_id}` in {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+
+    Ok(())
 }
 
 pub(crate) fn ensure_agent_session_active(

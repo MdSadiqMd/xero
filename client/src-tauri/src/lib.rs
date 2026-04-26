@@ -73,6 +73,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::agent_session::get_agent_session,
             commands::agent_session::update_agent_session,
             commands::agent_session::archive_agent_session,
+            commands::agent_session::restore_agent_session,
+            commands::agent_session::delete_agent_session,
             commands::agent_task::start_agent_task,
             commands::agent_task::send_agent_message,
             commands::agent_task::cancel_agent_run,

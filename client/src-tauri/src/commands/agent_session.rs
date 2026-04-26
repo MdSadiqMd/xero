@@ -3,8 +3,9 @@ use tauri::{AppHandle, Runtime, State};
 use crate::{
     commands::{
         validate_non_empty, AgentSessionDto, AgentSessionStatusDto, ArchiveAgentSessionRequestDto,
-        CommandResult, CreateAgentSessionRequestDto, GetAgentSessionRequestDto,
-        ListAgentSessionsRequestDto, ListAgentSessionsResponseDto, UpdateAgentSessionRequestDto,
+        CommandResult, CreateAgentSessionRequestDto, DeleteAgentSessionRequestDto,
+        GetAgentSessionRequestDto, ListAgentSessionsRequestDto, ListAgentSessionsResponseDto,
+        RestoreAgentSessionRequestDto, UpdateAgentSessionRequestDto,
     },
     db::project_store::{
         self, AgentSessionCreateRecord, AgentSessionRecord, AgentSessionStatus,
@@ -118,6 +119,40 @@ pub fn archive_agent_session<R: Runtime>(
         &request.agent_session_id,
     )?;
     Ok(agent_session_dto(&session))
+}
+
+#[tauri::command]
+pub fn restore_agent_session<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: RestoreAgentSessionRequestDto,
+) -> CommandResult<AgentSessionDto> {
+    validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
+    let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
+    let session = project_store::restore_agent_session(
+        &repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+    )?;
+    Ok(agent_session_dto(&session))
+}
+
+#[tauri::command]
+pub fn delete_agent_session<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: DeleteAgentSessionRequestDto,
+) -> CommandResult<()> {
+    validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.agent_session_id, "agentSessionId")?;
+    let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
+    project_store::delete_agent_session(
+        &repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+    )?;
+    Ok(())
 }
 
 pub(crate) fn agent_session_dto(record: &AgentSessionRecord) -> AgentSessionDto {
