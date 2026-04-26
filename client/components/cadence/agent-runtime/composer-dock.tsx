@@ -1,4 +1,4 @@
-import { Activity, ArrowUp, LoaderCircle, Mic } from 'lucide-react'
+import { Activity, ArrowUp, Brain, LoaderCircle, Mic, ShieldCheck, Sparkles } from 'lucide-react'
 import type { KeyboardEvent, RefObject } from 'react'
 
 import type {
@@ -21,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
   Tooltip,
@@ -177,15 +176,20 @@ export function ComposerDock({
                       ))}
                     </SelectContent>
                   </Select>
-                  <span aria-hidden="true" className="h-3.5 w-px bg-border/60" />
                   <Select
                     disabled={!hasThinkingOptions || controlsDisabled}
                     value={composerThinkingLevel ?? ''}
                     onValueChange={(value) => onComposerThinkingLevelChange(value as ProviderModelThinkingEffortDto)}
                   >
-                    <SelectTrigger aria-label="Thinking level selector" className={composerInlineSelectTriggerClassName} size="sm">
-                      <SelectValue placeholder={composerThinkingPlaceholder} />
-                    </SelectTrigger>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <SelectTrigger aria-label="Thinking level selector" className={composerInlineSelectTriggerClassName} size="sm">
+                          <Brain aria-hidden="true" />
+                          <SelectValue placeholder={composerThinkingPlaceholder} />
+                        </SelectTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Thinking effort</TooltipContent>
+                    </Tooltip>
                     <SelectContent className={composerInlineSelectContentClassName}>
                       {composerThinkingOptions.map((option) => (
                         <SelectItem key={option.value} value={option.value}>
@@ -194,11 +198,16 @@ export function ComposerDock({
                       ))}
                     </SelectContent>
                   </Select>
-                  <span aria-hidden="true" className="h-3.5 w-px bg-border/60" />
                   <Select disabled={controlsDisabled} value={composerApprovalMode} onValueChange={(value) => onComposerApprovalModeChange(value as RuntimeRunApprovalModeDto)}>
-                    <SelectTrigger aria-label="Approval mode selector" className={composerInlineSelectTriggerClassName} size="sm">
-                      <SelectValue placeholder="Approval unavailable" />
-                    </SelectTrigger>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <SelectTrigger aria-label="Approval mode selector" className={composerInlineSelectTriggerClassName} size="sm">
+                          <ShieldCheck aria-hidden="true" />
+                          <SelectValue placeholder="Approval unavailable" />
+                        </SelectTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Approval mode</TooltipContent>
+                    </Tooltip>
                     <SelectContent className={composerInlineSelectContentClassName}>
                       {composerApprovalOptions.map((option) => (
                         <SelectItem key={option.value} value={option.value}>
@@ -207,27 +216,30 @@ export function ComposerDock({
                       ))}
                     </SelectContent>
                   </Select>
-                  <span aria-hidden="true" className="h-3.5 w-px bg-border/60" />
-                  <label className="flex h-7 shrink-0 items-center gap-2 rounded-md px-2 text-[12px] font-medium text-muted-foreground/90 transition-colors hover:bg-muted/60 hover:text-foreground">
-                    <Switch
-                      aria-label="Auto-compact before sending"
-                      checked={autoCompactEnabled}
-                      disabled={runtimeRunActionStatus === 'running'}
-                      onCheckedChange={onAutoCompactEnabledChange}
-                    />
-                    <span>Auto-compact</span>
-                  </label>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    aria-hidden="true"
-                    className="hidden items-center gap-1 text-[11px] font-medium text-muted-foreground/50 sm:inline-flex"
-                  >
-                    <kbd className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-sans text-[10px] leading-none text-muted-foreground/70">
-                      ⏎
-                    </kbd>
-                    <span>to send</span>
-                  </span>
+                <div className="flex items-center gap-1">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label="Auto-compact before sending"
+                        aria-pressed={autoCompactEnabled}
+                        className={cn(
+                          'h-8 w-8 rounded-md px-0 text-muted-foreground/70 hover:text-foreground',
+                          autoCompactEnabled ? 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary' : null,
+                        )}
+                        disabled={runtimeRunActionStatus === 'running'}
+                        onClick={() => onAutoCompactEnabledChange(!autoCompactEnabled)}
+                        size="icon-sm"
+                        type="button"
+                        variant="ghost"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" strokeWidth={2.5} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      Auto-compact before sending {autoCompactEnabled ? '· on' : '· off'}
+                    </TooltipContent>
+                  </Tooltip>
                   {dictation.isVisible ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -259,21 +271,31 @@ export function ComposerDock({
                       <TooltipContent side="top">{dictation.tooltip}</TooltipContent>
                     </Tooltip>
                   ) : null}
-                  <Button
-                    aria-label={sendButtonLabel}
-                    className="h-8 w-8 rounded-md px-0"
-                    disabled={isSendDisabled}
-                    onClick={onSubmitDraftPrompt}
-                    size="icon-sm"
-                    type="button"
-                    variant="secondary"
-                  >
-                    {isUpdatingControls || isStartingRun ? (
-                      <LoaderCircle className="h-3.5 w-3.5 animate-spin" strokeWidth={2.5} />
-                    ) : (
-                      <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
-                    )}
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        aria-label={sendButtonLabel}
+                        className="h-8 w-8 rounded-md px-0"
+                        disabled={isSendDisabled}
+                        onClick={onSubmitDraftPrompt}
+                        size="icon-sm"
+                        type="button"
+                        variant="secondary"
+                      >
+                        {isUpdatingControls || isStartingRun ? (
+                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" strokeWidth={2.5} />
+                        ) : (
+                          <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="flex items-center gap-1.5">
+                      <span>{sendButtonLabel}</span>
+                      <kbd className="rounded border border-background/30 bg-background/10 px-1 py-0.5 font-sans text-[10px] leading-none">
+                        ⏎
+                      </kbd>
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               </div>
               {runtimeRunActionError ? (

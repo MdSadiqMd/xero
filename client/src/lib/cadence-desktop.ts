@@ -232,13 +232,17 @@ import {
 } from '@/src/lib/cadence-model/runtime-stream'
 import {
   dictationEventSchema,
+  dictationSettingsSchema,
   dictationStartRequestSchema,
   dictationStartResponseSchema,
   dictationStatusSchema,
+  upsertDictationSettingsRequestSchema,
   type DictationEventDto,
+  type DictationSettingsDto,
   type DictationStartRequestInputDto,
   type DictationStartResponseDto,
   type DictationStatusDto,
+  type UpsertDictationSettingsRequestDto,
 } from '@/src/lib/cadence-model/dictation'
 import {
   compactSessionHistoryRequestSchema,
@@ -381,6 +385,8 @@ const COMMANDS = {
   submitNotificationReply: 'submit_notification_reply',
   syncNotificationAdapters: 'sync_notification_adapters',
   speechDictationStatus: 'speech_dictation_status',
+  speechDictationSettings: 'speech_dictation_settings',
+  speechDictationUpdateSettings: 'speech_dictation_update_settings',
   speechDictationStart: 'speech_dictation_start',
   speechDictationStop: 'speech_dictation_stop',
   speechDictationCancel: 'speech_dictation_cancel',
@@ -721,6 +727,10 @@ export interface CadenceDesktopAdapter {
   submitNotificationReply(request: SubmitNotificationReplyRequestDto): Promise<SubmitNotificationReplyResponseDto>
   syncNotificationAdapters(projectId: string): Promise<SyncNotificationAdaptersResponseDto>
   speechDictationStatus?(): Promise<DictationStatusDto>
+  speechDictationSettings?(): Promise<DictationSettingsDto>
+  speechDictationUpdateSettings?(
+    request: UpsertDictationSettingsRequestDto,
+  ): Promise<DictationSettingsDto>
   speechDictationStart?(
     request: DictationStartRequestInputDto,
     handler: (event: DictationEventDto) => void,
@@ -1933,6 +1943,17 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
 
   speechDictationStatus() {
     return invokeTyped(COMMANDS.speechDictationStatus, dictationStatusSchema)
+  },
+
+  speechDictationSettings() {
+    return invokeTyped(COMMANDS.speechDictationSettings, dictationSettingsSchema)
+  },
+
+  speechDictationUpdateSettings(request) {
+    const parsedRequest = upsertDictationSettingsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.speechDictationUpdateSettings, dictationSettingsSchema, {
+      request: parsedRequest,
+    })
   },
 
   speechDictationStart(request, handler, onError) {

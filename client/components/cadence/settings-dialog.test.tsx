@@ -16,6 +16,8 @@ import type {
   McpRegistryDto,
   CadenceDoctorReportDto,
   CadenceDiagnosticCheckDto,
+  DictationSettingsDto,
+  DictationStatusDto,
   ProviderProfileDiagnosticsDto,
   ProviderModelCatalogDto,
   ProviderProfileDto,
@@ -37,6 +39,63 @@ type UpsertPluginRootRequest = Parameters<NonNullable<SettingsDialogProps['onUps
 type RemovePluginRootRequest = Parameters<NonNullable<SettingsDialogProps['onRemovePluginRoot']>>[0]
 type SetPluginEnabledRequest = Parameters<NonNullable<SettingsDialogProps['onSetPluginEnabled']>>[0]
 type RemovePluginRequest = Parameters<NonNullable<SettingsDialogProps['onRemovePlugin']>>[0]
+
+function makeDictationStatus(overrides: Partial<DictationStatusDto> = {}): DictationStatusDto {
+  return {
+    platform: 'macos',
+    osVersion: '26.0.0',
+    defaultLocale: 'en_US',
+    supportedLocales: ['en_US', 'es_US'],
+    modern: {
+      available: false,
+      compiled: false,
+      runtimeSupported: false,
+      reason: 'modern_sdk_unavailable',
+    },
+    legacy: {
+      available: true,
+      compiled: true,
+      runtimeSupported: true,
+      reason: null,
+    },
+    modernAssets: {
+      status: 'unavailable',
+      locale: null,
+      reason: 'modern_sdk_unavailable',
+    },
+    microphonePermission: 'denied',
+    speechPermission: 'authorized',
+    activeSession: null,
+    ...overrides,
+  }
+}
+
+function makeDictationSettings(overrides: Partial<DictationSettingsDto> = {}): DictationSettingsDto {
+  return {
+    enginePreference: 'automatic',
+    privacyMode: 'on_device_preferred',
+    locale: null,
+    updatedAt: null,
+    ...overrides,
+  }
+}
+
+function makeDictationAdapter(
+  overrides: {
+    status?: DictationStatusDto
+    settings?: DictationSettingsDto
+  } = {},
+): NonNullable<SettingsDialogProps['dictationAdapter']> {
+  return {
+    isDesktopRuntime: vi.fn(() => true),
+    speechDictationStatus: vi.fn(async () => overrides.status ?? makeDictationStatus()),
+    speechDictationSettings: vi.fn(async () => overrides.settings ?? makeDictationSettings()),
+    speechDictationUpdateSettings: vi.fn(async (request) => ({
+      ...request,
+      updatedAt: '2026-04-26T12:30:00Z',
+    })),
+  }
+}
 
 function makeOpenAiProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
   return {
@@ -879,6 +938,43 @@ describe('SettingsDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Extended' }))
 
     await waitFor(() => expect(onRunDoctorReport).toHaveBeenCalledWith({ mode: 'extended_network' }))
+  })
+
+  it('loads macOS dictation settings and saves preference changes', async () => {
+    const dictationAdapter = makeDictationAdapter({
+      settings: makeDictationSettings({ locale: 'en_US' }),
+    })
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'dictation',
+          dictationAdapter,
+        })}
+      />,
+    )
+
+    expect(await screen.findByText('Availability')).toBeVisible()
+    expect(screen.getByText('Modern sdk unavailable')).toBeVisible()
+    expect(screen.getByText('Open System Settings > Privacy & Security and allow Cadence.')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Engine preference' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Legacy only' }))
+
+    await waitFor(() =>
+      expect(dictationAdapter.speechDictationUpdateSettings).toHaveBeenCalledWith({
+        enginePreference: 'legacy',
+        privacyMode: 'on_device_preferred',
+        locale: 'en_US',
+      }),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }))
+    await waitFor(() =>
+      expect(openUrlMock).toHaveBeenCalledWith(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
+      ),
+    )
   })
 
   it('refreshes app-local provider profiles on open and keeps notifications project-bound when no project is selected', async () => {

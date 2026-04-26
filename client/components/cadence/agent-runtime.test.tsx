@@ -985,7 +985,9 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
 function makeDictationStatus(overrides: Partial<DictationStatusDto> = {}): DictationStatusDto {
   return {
     platform: 'macos',
+    osVersion: '26.0.0',
     defaultLocale: 'en_US',
+    supportedLocales: ['en_US'],
     modern: {
       available: false,
       compiled: false,
@@ -997,6 +999,11 @@ function makeDictationStatus(overrides: Partial<DictationStatusDto> = {}): Dicta
       compiled: true,
       runtimeSupported: true,
       reason: null,
+    },
+    modernAssets: {
+      status: 'unavailable',
+      locale: null,
+      reason: 'modern_sdk_unavailable',
     },
     microphonePermission: 'authorized',
     speechPermission: 'authorized',
@@ -2597,7 +2604,7 @@ describe('AgentRuntime current UI', () => {
         prompt: 'Queue the next prompt.',
       }),
     )
-    expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('Approval · yolo')
+    expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('YOLO')
   })
 
   it('opts owned-agent continuations into auto-compact from the composer', async () => {
@@ -2618,7 +2625,7 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Auto-compact before sending' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-compact before sending' }))
     fireEvent.change(screen.getByLabelText('Agent input'), {
       target: { value: 'Continue after compacting old context.' },
     })
@@ -2648,6 +2655,58 @@ describe('AgentRuntime current UI', () => {
     )
 
     expect(screen.queryByRole('button', { name: 'Start dictation' })).not.toBeInTheDocument()
+  })
+
+  it('disables the dictation mic while the composer input is disabled', async () => {
+    const dictation = createDictationAdapter()
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeRunActionStatus: 'running',
+          pendingRuntimeRunAction: 'update_controls',
+        })}
+        desktopAdapter={dictation.adapter}
+        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    const micButton = await screen.findByRole('button', { name: 'Start dictation' })
+    expect(micButton).toBeDisabled()
+
+    fireEvent.click(micButton)
+    expect(dictation.adapter.speechDictationStart).not.toHaveBeenCalled()
+  })
+
+  it('keeps Enter-to-send behavior unchanged when dictation support is available', async () => {
+    const dictation = createDictationAdapter()
+    const onUpdateRuntimeRunControls = vi.fn(async () => makeRuntimeRun())
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+        })}
+        desktopAdapter={dictation.adapter}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    const input = screen.getByLabelText('Agent input')
+    fireEvent.change(input, { target: { value: 'Send from keyboard.' } })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(onUpdateRuntimeRunControls).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(onUpdateRuntimeRunControls).toHaveBeenCalledWith({
+        prompt: 'Send from keyboard.',
+      }),
+    )
   })
 
   it('streams dictated partials into the composer without duplicating revised fragments', async () => {

@@ -6,6 +6,11 @@ func cadenceDictationModernRuntimeSupported() -> Bool {
     false
 }
 
+func cadenceDictationModernAssetProbe(localeIdentifier: String) -> (status: String, localeIdentifier: String?, reason: String?) {
+    _ = localeIdentifier
+    return ("unavailable", nil, "modern_sdk_unavailable")
+}
+
 final class CadenceModernDictationEngine {
     init(
         sessionId: String,

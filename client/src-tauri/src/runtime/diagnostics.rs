@@ -24,6 +24,7 @@ pub const CADENCE_DOCTOR_REPORT_CONTRACT_VERSION: u32 = 1;
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum CadenceDiagnosticSubject {
+    Dictation,
     ProviderProfile,
     ModelCatalog,
     RuntimeBinding,
@@ -160,6 +161,8 @@ pub struct CadenceDoctorReport {
     pub versions: CadenceDoctorVersionInfo,
     pub summary: CadenceDoctorReportSummary,
     #[serde(default)]
+    pub dictation_checks: Vec<CadenceDiagnosticCheck>,
+    #[serde(default)]
     pub profile_checks: Vec<CadenceDiagnosticCheck>,
     #[serde(default)]
     pub model_catalog_checks: Vec<CadenceDiagnosticCheck>,
@@ -177,6 +180,7 @@ pub struct CadenceDoctorReportInput {
     pub generated_at: String,
     pub mode: CadenceDoctorReportMode,
     pub versions: CadenceDoctorVersionInfo,
+    pub dictation_checks: Vec<CadenceDiagnosticCheck>,
     pub profile_checks: Vec<CadenceDiagnosticCheck>,
     pub model_catalog_checks: Vec<CadenceDiagnosticCheck>,
     pub runtime_supervisor_checks: Vec<CadenceDiagnosticCheck>,
@@ -287,6 +291,7 @@ impl CadenceDoctorReport {
                 total: 0,
                 highest_severity: CadenceDiagnosticSeverity::Info,
             },
+            dictation_checks: sort_and_validate_checks(input.dictation_checks)?,
             profile_checks: sort_and_validate_checks(input.profile_checks)?,
             model_catalog_checks: sort_and_validate_checks(input.model_catalog_checks)?,
             runtime_supervisor_checks: sort_and_validate_checks(input.runtime_supervisor_checks)?,
@@ -298,8 +303,9 @@ impl CadenceDoctorReport {
     }
 
     pub fn all_checks(&self) -> Vec<&CadenceDiagnosticCheck> {
-        self.profile_checks
+        self.dictation_checks
             .iter()
+            .chain(self.profile_checks.iter())
             .chain(self.model_catalog_checks.iter())
             .chain(self.runtime_supervisor_checks.iter())
             .chain(self.mcp_dependency_checks.iter())
@@ -1236,6 +1242,7 @@ fn render_compact_human_report(report: &CadenceDoctorReport) -> String {
             report.summary.skipped
         ),
     ];
+    push_human_group(&mut lines, "Dictation", &report.dictation_checks);
     push_human_group(&mut lines, "Provider profiles", &report.profile_checks);
     push_human_group(&mut lines, "Model catalogs", &report.model_catalog_checks);
     push_human_group(

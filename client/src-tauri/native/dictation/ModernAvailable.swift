@@ -18,6 +18,50 @@ func cadenceDictationModernRuntimeSupported() -> Bool {
     return false
 }
 
+func cadenceDictationModernAssetProbe(localeIdentifier: String) -> (status: String, localeIdentifier: String?, reason: String?) {
+    guard #available(macOS 26.0, *) else {
+        return ("unavailable", nil, "runtime_too_old")
+    }
+
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: (status: String, localeIdentifier: String?, reason: String?) = ("unknown", nil, "asset_probe_timed_out")
+
+    Task {
+        result = await cadenceDictationModernAssetProbeAsync(localeIdentifier: localeIdentifier)
+        semaphore.signal()
+    }
+
+    if semaphore.wait(timeout: .now() + 2.0) == .timedOut {
+        return result
+    }
+
+    return result
+}
+
+@available(macOS 26.0, *)
+private func cadenceDictationModernAssetProbeAsync(localeIdentifier: String) async -> (status: String, localeIdentifier: String?, reason: String?) {
+    let requestedLocale = Locale(identifier: localeIdentifier)
+    guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: requestedLocale) else {
+        return ("unsupported_locale", nil, "modern_locale_unsupported")
+    }
+
+    let transcriber = DictationTranscriber(
+        locale: locale,
+        contentHints: [],
+        transcriptionOptions: [.punctuation],
+        reportingOptions: [.volatileResults, .frequentFinalization],
+        attributeOptions: []
+    )
+    let modules: [any SpeechModule] = [transcriber]
+
+    do {
+        let request = try await AssetInventory.assetInstallationRequest(supporting: modules)
+        return (request == nil ? "installed" : "not_installed", locale.identifier, nil)
+    } catch {
+        return ("unknown", locale.identifier, "asset_probe_failed")
+    }
+}
+
 @available(macOS 26.0, *)
 final class CadenceModernDictationEngine {
     private let sessionId: String

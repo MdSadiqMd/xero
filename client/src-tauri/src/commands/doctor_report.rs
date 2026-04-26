@@ -5,7 +5,10 @@ use tauri::{AppHandle, Runtime, State};
 use crate::{
     auth::now_timestamp,
     commands::{
-        provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult,
+        dictation::{load_dictation_settings, probe_dictation_status},
+        provider_profiles::load_provider_profiles_snapshot,
+        CommandError, CommandResult, DictationEnginePreferenceDto, DictationModernAssetStatusDto,
+        DictationPermissionStateDto, DictationPlatformDto, DictationStatusDto,
         RunDoctorReportRequestDto, RuntimeAuthPhase,
     },
     db::project_store::{self, RuntimeRunStatus, RuntimeRunTransportLiveness},
@@ -35,6 +38,7 @@ pub fn run_doctor_report<R: Runtime>(
     let mut checks = DoctorCheckBuckets::default();
 
     collect_app_path_checks(&app, state.inner(), &mut checks.settings_dependency_checks);
+    collect_dictation_checks(&app, state.inner(), &mut checks.dictation_checks);
     collect_provider_checks(&app, state.inner(), mode, &mut checks);
     collect_mcp_checks(&app, state.inner(), &mut checks.mcp_dependency_checks);
     collect_project_runtime_checks(&app, state.inner(), &mut checks);
@@ -51,6 +55,7 @@ pub fn run_doctor_report<R: Runtime>(
                 crate::runtime::protocol::SUPERVISOR_PROTOCOL_VERSION
             )),
         },
+        dictation_checks: checks.dictation_checks,
         profile_checks: checks.profile_checks,
         model_catalog_checks: checks.model_catalog_checks,
         runtime_supervisor_checks: checks.runtime_supervisor_checks,
@@ -62,10 +67,431 @@ pub fn run_doctor_report<R: Runtime>(
 #[derive(Default)]
 struct DoctorCheckBuckets {
     profile_checks: Vec<CadenceDiagnosticCheck>,
+    dictation_checks: Vec<CadenceDiagnosticCheck>,
     model_catalog_checks: Vec<CadenceDiagnosticCheck>,
     runtime_supervisor_checks: Vec<CadenceDiagnosticCheck>,
     mcp_dependency_checks: Vec<CadenceDiagnosticCheck>,
     settings_dependency_checks: Vec<CadenceDiagnosticCheck>,
+}
+
+fn collect_dictation_checks<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+) {
+    let status = probe_dictation_status();
+    let settings = match load_dictation_settings(app, state) {
+        Ok(settings) => Some(settings),
+        Err(error) => {
+            push_check(
+                checks,
+                command_error_check(
+                    CadenceDiagnosticSubject::Dictation,
+                    "dictation_settings_unavailable",
+                    "Cadence could not load dictation settings while generating diagnostics.",
+                    error,
+                    "Open Dictation settings, resave the preferences, then run diagnostics again.",
+                ),
+            );
+            None
+        }
+    };
+
+    if status.platform != DictationPlatformDto::Macos {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::skipped(
+                CadenceDiagnosticSubject::Dictation,
+                "dictation_platform_unsupported",
+                "Native dictation is only available on macOS in this release.",
+                Some("Use Cadence on macOS to enable native dictation.".into()),
+            ),
+        );
+        return;
+    }
+
+    push_check(
+        checks,
+        CadenceDiagnosticCheck::passed(
+            CadenceDiagnosticSubject::Dictation,
+            "dictation_macos_runtime_detected",
+            format!(
+                "macOS {} is available for native dictation.",
+                status.os_version.as_deref().unwrap_or("unknown")
+            ),
+        ),
+    );
+
+    if status.modern.compiled {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::passed(
+                CadenceDiagnosticSubject::Dictation,
+                "dictation_modern_sdk_compiled",
+                "Cadence was built with the macOS 26 dictation SDK.",
+            ),
+        );
+    } else if status.legacy.available {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+                subject: CadenceDiagnosticSubject::Dictation,
+                status: CadenceDiagnosticStatus::Warning,
+                severity: CadenceDiagnosticSeverity::Warning,
+                retryable: false,
+                code: "dictation_modern_sdk_unavailable_legacy_available".into(),
+                message: "Cadence was built without macOS 26 SpeechAnalyzer support, but legacy dictation is available.".into(),
+                affected_profile_id: None,
+                affected_provider_id: None,
+                endpoint: None,
+                remediation: Some(
+                    "Use Automatic or Legacy only in Dictation settings, or rebuild Cadence with the macOS 26 SDK.".into(),
+                ),
+            }),
+        );
+    } else {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+                subject: CadenceDiagnosticSubject::Dictation,
+                status: CadenceDiagnosticStatus::Failed,
+                severity: CadenceDiagnosticSeverity::Error,
+                retryable: false,
+                code: "dictation_no_native_engine_available".into(),
+                message: "Cadence could not find an available native macOS dictation engine.".into(),
+                affected_profile_id: None,
+                affected_provider_id: None,
+                endpoint: None,
+                remediation: Some(
+                    "Update macOS, enable Apple Speech Recognition support, or rebuild Cadence with the macOS 26 SDK.".into(),
+                ),
+            }),
+        );
+    }
+
+    push_permission_check(
+        checks,
+        "microphone",
+        status.microphone_permission,
+        "Open System Settings > Privacy & Security > Microphone and allow Cadence.",
+    );
+    push_permission_check(
+        checks,
+        "speech",
+        status.speech_permission,
+        "Open System Settings > Privacy & Security > Speech Recognition and allow Cadence.",
+    );
+
+    if let Some(settings) = settings {
+        push_selected_engine_check(checks, settings.engine_preference, &status);
+        push_selected_locale_check(checks, settings.locale.as_deref(), &status);
+    }
+
+    push_modern_asset_check(checks, &status);
+}
+
+fn push_selected_engine_check(
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+    preference: DictationEnginePreferenceDto,
+    status: &DictationStatusDto,
+) {
+    let (check_status, severity, retryable, code, message, remediation) = match preference {
+        DictationEnginePreferenceDto::Modern if status.modern.available => (
+            CadenceDiagnosticStatus::Passed,
+            CadenceDiagnosticSeverity::Info,
+            false,
+            "dictation_selected_engine_available",
+            "The selected modern dictation engine is available.".to_string(),
+            None,
+        ),
+        DictationEnginePreferenceDto::Legacy if status.legacy.available => (
+            CadenceDiagnosticStatus::Passed,
+            CadenceDiagnosticSeverity::Info,
+            false,
+            "dictation_selected_engine_available",
+            "The selected legacy dictation engine is available.".to_string(),
+            None,
+        ),
+        DictationEnginePreferenceDto::Automatic if status.modern.available && status.legacy.available => (
+            CadenceDiagnosticStatus::Passed,
+            CadenceDiagnosticSeverity::Info,
+            false,
+            "dictation_automatic_modern_with_legacy_fallback",
+            "Automatic dictation can use modern dictation with legacy fallback.".to_string(),
+            None,
+        ),
+        DictationEnginePreferenceDto::Automatic if status.modern.available => (
+            CadenceDiagnosticStatus::Passed,
+            CadenceDiagnosticSeverity::Info,
+            false,
+            "dictation_automatic_modern_available",
+            "Automatic dictation can use the modern dictation engine.".to_string(),
+            None,
+        ),
+        DictationEnginePreferenceDto::Automatic if status.legacy.available => (
+            CadenceDiagnosticStatus::Warning,
+            CadenceDiagnosticSeverity::Warning,
+            false,
+            "dictation_modern_unavailable_legacy_available",
+            "Automatic dictation will use legacy dictation because modern dictation is unavailable.".to_string(),
+            Some(
+                "This is usable. Rebuild with the macOS 26 SDK or update macOS to enable the modern engine.".to_string(),
+            ),
+        ),
+        DictationEnginePreferenceDto::Modern => (
+            CadenceDiagnosticStatus::Failed,
+            CadenceDiagnosticSeverity::Error,
+            false,
+            "dictation_selected_modern_unavailable",
+            "Dictation is set to prefer the modern engine, but modern dictation is unavailable.".to_string(),
+            Some("Choose Automatic or Legacy only in Dictation settings.".to_string()),
+        ),
+        DictationEnginePreferenceDto::Legacy => (
+            CadenceDiagnosticStatus::Failed,
+            CadenceDiagnosticSeverity::Error,
+            false,
+            "dictation_selected_legacy_unavailable",
+            "Dictation is set to Legacy only, but legacy dictation is unavailable.".to_string(),
+            Some("Choose Automatic in Dictation settings or update macOS Speech Recognition support.".to_string()),
+        ),
+        DictationEnginePreferenceDto::Automatic => (
+            CadenceDiagnosticStatus::Failed,
+            CadenceDiagnosticSeverity::Error,
+            true,
+            "dictation_automatic_no_engine_available",
+            "Automatic dictation could not find any available native dictation engine.".to_string(),
+            Some("Update macOS or check Apple Speech Recognition availability, then run diagnostics again.".to_string()),
+        ),
+    };
+
+    push_check(
+        checks,
+        CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::Dictation,
+            status: check_status,
+            severity,
+            retryable,
+            code: code.into(),
+            message,
+            affected_profile_id: None,
+            affected_provider_id: None,
+            endpoint: None,
+            remediation,
+        }),
+    );
+}
+
+fn push_permission_check(
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+    permission: &'static str,
+    state: DictationPermissionStateDto,
+    denied_remediation: &'static str,
+) {
+    let (status, severity, retryable, code, message, remediation) = match state {
+        DictationPermissionStateDto::Authorized => (
+            CadenceDiagnosticStatus::Passed,
+            CadenceDiagnosticSeverity::Info,
+            false,
+            format!("dictation_{permission}_permission_authorized"),
+            format!("Cadence has {permission} permission for dictation."),
+            None,
+        ),
+        DictationPermissionStateDto::NotDetermined => (
+            CadenceDiagnosticStatus::Warning,
+            CadenceDiagnosticSeverity::Warning,
+            true,
+            format!("dictation_{permission}_permission_not_determined"),
+            format!("Cadence has not requested {permission} permission yet."),
+            Some("Start dictation once to trigger the macOS permission prompt.".to_string()),
+        ),
+        DictationPermissionStateDto::Denied | DictationPermissionStateDto::Restricted => (
+            CadenceDiagnosticStatus::Failed,
+            CadenceDiagnosticSeverity::Error,
+            false,
+            format!("dictation_{permission}_permission_denied"),
+            format!("Cadence cannot use dictation because {permission} permission is {state:?}."),
+            Some(denied_remediation.to_string()),
+        ),
+        DictationPermissionStateDto::Unsupported | DictationPermissionStateDto::Unknown => (
+            CadenceDiagnosticStatus::Warning,
+            CadenceDiagnosticSeverity::Warning,
+            true,
+            format!("dictation_{permission}_permission_unknown"),
+            format!("Cadence could not determine {permission} permission state."),
+            Some(
+                "Open System Settings privacy permissions, then run diagnostics again.".to_string(),
+            ),
+        ),
+    };
+
+    push_check(
+        checks,
+        CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::Dictation,
+            status,
+            severity,
+            retryable,
+            code,
+            message,
+            affected_profile_id: None,
+            affected_provider_id: None,
+            endpoint: None,
+            remediation,
+        }),
+    );
+}
+
+fn push_selected_locale_check(
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+    selected_locale: Option<&str>,
+    status: &DictationStatusDto,
+) {
+    let locale = selected_locale
+        .or(status.default_locale.as_deref())
+        .map(str::trim)
+        .filter(|locale| !locale.is_empty());
+
+    let Some(locale) = locale else {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::skipped(
+                CadenceDiagnosticSubject::Dictation,
+                "dictation_locale_unselected",
+                "No dictation locale is selected and macOS did not report a system default locale.",
+                Some("Choose a locale in Dictation settings.".into()),
+            ),
+        );
+        return;
+    };
+
+    if status.supported_locales.is_empty() {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::skipped(
+                CadenceDiagnosticSubject::Dictation,
+                "dictation_supported_locale_list_unavailable",
+                format!("Cadence could not verify selected dictation locale `{locale}` because macOS did not report supported locales."),
+                Some("Start dictation or run diagnostics again after Speech Recognition becomes available.".into()),
+            ),
+        );
+        return;
+    }
+
+    if locale_supported(locale, &status.supported_locales) {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::passed(
+                CadenceDiagnosticSubject::Dictation,
+                "dictation_selected_locale_supported",
+                format!("Selected dictation locale `{locale}` is supported."),
+            ),
+        );
+    } else {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+                subject: CadenceDiagnosticSubject::Dictation,
+                status: CadenceDiagnosticStatus::Failed,
+                severity: CadenceDiagnosticSeverity::Error,
+                retryable: false,
+                code: "dictation_selected_locale_unsupported".into(),
+                message: format!("Selected dictation locale `{locale}` is not in the backend-supported locale list."),
+                affected_profile_id: None,
+                affected_provider_id: None,
+                endpoint: None,
+                remediation: Some("Choose a supported locale in Dictation settings or use System default.".into()),
+            }),
+        );
+    }
+}
+
+fn push_modern_asset_check(checks: &mut Vec<CadenceDiagnosticCheck>, status: &DictationStatusDto) {
+    if !status.modern.available {
+        push_check(
+            checks,
+            CadenceDiagnosticCheck::skipped(
+                CadenceDiagnosticSubject::Dictation,
+                "dictation_modern_assets_not_applicable",
+                "Modern dictation assets were not checked because the modern engine is unavailable.",
+                Some("Use Automatic or Legacy only, or enable modern dictation support before checking assets.".into()),
+            ),
+        );
+        return;
+    }
+
+    let locale = status
+        .modern_assets
+        .locale
+        .as_deref()
+        .or(status.default_locale.as_deref())
+        .unwrap_or("system locale");
+
+    match status.modern_assets.status {
+        DictationModernAssetStatusDto::Installed => push_check(
+            checks,
+            CadenceDiagnosticCheck::passed(
+                CadenceDiagnosticSubject::Dictation,
+                "dictation_modern_assets_installed",
+                format!("Modern Apple speech assets are installed for `{locale}`."),
+            ),
+        ),
+        DictationModernAssetStatusDto::NotInstalled => push_check(
+            checks,
+            CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+                subject: CadenceDiagnosticSubject::Dictation,
+                status: CadenceDiagnosticStatus::Warning,
+                severity: CadenceDiagnosticSeverity::Warning,
+                retryable: true,
+                code: "dictation_modern_assets_not_installed".into(),
+                message: format!("Modern Apple speech assets are not installed for `{locale}`."),
+                affected_profile_id: None,
+                affected_provider_id: None,
+                endpoint: None,
+                remediation: Some("Start dictation for this locale to let macOS install Apple speech assets.".into()),
+            }),
+        ),
+        DictationModernAssetStatusDto::UnsupportedLocale => push_check(
+            checks,
+            CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+                subject: CadenceDiagnosticSubject::Dictation,
+                status: CadenceDiagnosticStatus::Failed,
+                severity: CadenceDiagnosticSeverity::Error,
+                retryable: false,
+                code: "dictation_modern_assets_locale_unsupported".into(),
+                message: format!("Modern dictation does not support assets for `{locale}`."),
+                affected_profile_id: None,
+                affected_provider_id: None,
+                endpoint: None,
+                remediation: Some("Choose a supported locale in Dictation settings or switch to Legacy only.".into()),
+            }),
+        ),
+        DictationModernAssetStatusDto::Unavailable | DictationModernAssetStatusDto::Unknown => push_check(
+            checks,
+            CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+                subject: CadenceDiagnosticSubject::Dictation,
+                status: CadenceDiagnosticStatus::Warning,
+                severity: CadenceDiagnosticSeverity::Warning,
+                retryable: true,
+                code: "dictation_modern_assets_unknown".into(),
+                message: "Cadence could not determine whether modern Apple speech assets are installed.".into(),
+                affected_profile_id: None,
+                affected_provider_id: None,
+                endpoint: None,
+                remediation: Some("Start dictation once or run diagnostics again after Apple Speech assets finish installing.".into()),
+            }),
+        ),
+    }
+}
+
+fn locale_supported(locale: &str, supported_locales: &[String]) -> bool {
+    let normalized = normalize_locale_for_compare(locale);
+    supported_locales
+        .iter()
+        .any(|candidate| normalize_locale_for_compare(candidate) == normalized)
+}
+
+fn normalize_locale_for_compare(locale: &str) -> String {
+    locale.trim().replace('-', "_").to_ascii_lowercase()
 }
 
 fn collect_provider_checks<R: Runtime>(

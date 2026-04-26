@@ -3371,10 +3371,10 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh notification routes' }))
 
     await waitFor(() => expect(screen.getByTestId('route-load-status')).toHaveTextContent('ready'))
+    await waitFor(() => expect(screen.getByTestId('trust-projection-error')).not.toHaveTextContent('none'))
     expect(screen.getByTestId('trust-state')).toHaveTextContent('degraded')
     expect(screen.getByTestId('trust-ready-credential-count')).toHaveTextContent('1')
     expect(screen.getByTestId('trust-missing-credential-count')).toHaveTextContent('1')
-    expect(screen.getByTestId('trust-projection-error')).not.toHaveTextContent('none')
   })
 
   it('runs notification adapter sync during selected-project refreshes and exposes one-reply-wins cycle counts', async () => {

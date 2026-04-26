@@ -35,6 +35,7 @@ interface DiagnosticsSectionProps {
 }
 
 type CheckGroupKey =
+  | "dictationChecks"
   | "profileChecks"
   | "modelCatalogChecks"
   | "runtimeSupervisorChecks"
@@ -42,6 +43,7 @@ type CheckGroupKey =
   | "settingsDependencyChecks"
 
 const CHECK_GROUPS: Array<{ key: CheckGroupKey; label: string }> = [
+  { key: "dictationChecks", label: "Dictation" },
   { key: "profileChecks", label: "Provider profiles" },
   { key: "modelCatalogChecks", label: "Model catalogs" },
   { key: "runtimeSupervisorChecks", label: "Runtime supervisor" },

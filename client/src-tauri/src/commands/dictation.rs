@@ -1,6 +1,7 @@
 use std::{
     ffi::{c_char, c_void, CStr, CString},
-    fmt,
+    fmt, fs,
+    path::Path,
     ptr::NonNull,
     str::FromStr,
     sync::{
@@ -19,12 +20,15 @@ use tauri::{
 use crate::commands::{
     ActiveDictationSessionDto, CommandError, CommandResult, DictationEngineDto,
     DictationEnginePreferenceDto, DictationEngineStatusDto, DictationEventDto,
-    DictationPermissionStateDto, DictationPlatformDto, DictationPrivacyModeDto,
-    DictationStartRequestDto, DictationStartResponseDto, DictationStatusDto,
-    DictationStopReasonDto,
+    DictationModernAssetStatusDto, DictationModernAssetsDto, DictationPermissionStateDto,
+    DictationPlatformDto, DictationPrivacyModeDto, DictationSettingsDto, DictationStartRequestDto,
+    DictationStartResponseDto, DictationStatusDto, DictationStopReasonDto,
+    UpsertDictationSettingsRequestDto,
 };
+use crate::state::DesktopState;
 
 static DICTATION_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+const DICTATION_SETTINGS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone)]
 pub struct DictationCancellationHandle {
@@ -97,6 +101,16 @@ struct DictationStateInner {
 #[derive(Debug, Clone, Default)]
 pub struct DictationState {
     inner: Arc<Mutex<DictationStateInner>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DictationSettingsFile {
+    schema_version: u32,
+    engine_preference: DictationEnginePreferenceDto,
+    privacy_mode: DictationPrivacyModeDto,
+    locale: Option<String>,
+    updated_at: String,
 }
 
 impl DictationState {
@@ -211,6 +225,26 @@ pub fn speech_dictation_status(
     let mut status = probe_dictation_status();
     status.active_session = state.active_session();
     Ok(status)
+}
+
+#[tauri::command]
+pub fn speech_dictation_settings<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+) -> CommandResult<DictationSettingsDto> {
+    load_dictation_settings(&app, state.inner())
+}
+
+#[tauri::command]
+pub fn speech_dictation_update_settings<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: UpsertDictationSettingsRequestDto,
+) -> CommandResult<DictationSettingsDto> {
+    let path = state.dictation_settings_file(&app)?;
+    let next = dictation_settings_file_from_request(request)?;
+    persist_dictation_settings_file(&path, &next)?;
+    Ok(next.into_dto())
 }
 
 #[tauri::command]
@@ -377,6 +411,127 @@ fn normalize_start_request(request: DictationStartRequestDto) -> NormalizedDicta
     }
 }
 
+pub(crate) fn load_dictation_settings<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+) -> CommandResult<DictationSettingsDto> {
+    load_dictation_settings_from_path(&state.dictation_settings_file(app)?)
+}
+
+fn load_dictation_settings_from_path(path: &Path) -> CommandResult<DictationSettingsDto> {
+    if !path.exists() {
+        return Ok(default_dictation_settings());
+    }
+
+    let contents = fs::read_to_string(path).map_err(|error| {
+        CommandError::retryable(
+            "dictation_settings_read_failed",
+            format!(
+                "Cadence could not read the app-local dictation settings file at {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+
+    let parsed = serde_json::from_str::<DictationSettingsFile>(&contents).map_err(|error| {
+        CommandError::user_fixable(
+            "dictation_settings_decode_failed",
+            format!(
+                "Cadence could not decode the app-local dictation settings file at {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+
+    validate_dictation_settings_file(parsed, "dictation_settings_decode_failed")
+        .map(DictationSettingsFile::into_dto)
+}
+
+fn persist_dictation_settings_file(
+    path: &Path,
+    settings: &DictationSettingsFile,
+) -> CommandResult<()> {
+    let json = serde_json::to_vec_pretty(settings).map_err(|error| {
+        CommandError::system_fault(
+            "dictation_settings_serialize_failed",
+            format!("Cadence could not serialize dictation settings: {error}"),
+        )
+    })?;
+
+    crate::commands::get_runtime_settings::write_json_file_atomically(
+        path,
+        &json,
+        "dictation_settings",
+    )
+}
+
+fn dictation_settings_file_from_request(
+    request: UpsertDictationSettingsRequestDto,
+) -> CommandResult<DictationSettingsFile> {
+    validate_dictation_settings_file(
+        DictationSettingsFile {
+            schema_version: DICTATION_SETTINGS_SCHEMA_VERSION,
+            engine_preference: request.engine_preference,
+            privacy_mode: request.privacy_mode,
+            locale: normalize_optional_text(request.locale),
+            updated_at: crate::auth::now_timestamp(),
+        },
+        "dictation_settings_request_invalid",
+    )
+}
+
+fn validate_dictation_settings_file(
+    file: DictationSettingsFile,
+    error_code: &'static str,
+) -> CommandResult<DictationSettingsFile> {
+    if file.schema_version != DICTATION_SETTINGS_SCHEMA_VERSION {
+        return Err(CommandError::user_fixable(
+            error_code,
+            format!(
+                "Cadence rejected dictation settings version `{}` because only version `{DICTATION_SETTINGS_SCHEMA_VERSION}` is supported.",
+                file.schema_version
+            ),
+        ));
+    }
+
+    Ok(DictationSettingsFile {
+        schema_version: DICTATION_SETTINGS_SCHEMA_VERSION,
+        engine_preference: file.engine_preference,
+        privacy_mode: file.privacy_mode,
+        locale: normalize_optional_text(file.locale),
+        updated_at: normalize_timestamp(file.updated_at),
+    })
+}
+
+fn default_dictation_settings() -> DictationSettingsDto {
+    DictationSettingsDto {
+        engine_preference: DictationEnginePreferenceDto::Automatic,
+        privacy_mode: DictationPrivacyModeDto::OnDevicePreferred,
+        locale: None,
+        updated_at: None,
+    }
+}
+
+fn normalize_timestamp(value: String) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        crate::auth::now_timestamp()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+impl DictationSettingsFile {
+    fn into_dto(self) -> DictationSettingsDto {
+        DictationSettingsDto {
+            engine_preference: self.engine_preference,
+            privacy_mode: self.privacy_mode,
+            locale: self.locale,
+            updated_at: Some(self.updated_at),
+        }
+    }
+}
+
 fn ensure_macos_platform(status: &DictationStatusDto) -> CommandResult<()> {
     if status.platform == DictationPlatformDto::Macos {
         return Ok(());
@@ -471,9 +626,12 @@ fn next_session_id() -> String {
 #[derive(Debug, Clone)]
 struct DictationProbe {
     platform: DictationPlatformDto,
+    os_version: Option<String>,
     default_locale: Option<String>,
+    supported_locales: Vec<String>,
     modern_compiled: bool,
     modern_runtime_supported: bool,
+    modern_assets: DictationModernAssetsDto,
     legacy_runtime_supported: bool,
     legacy_recognizer_available: bool,
     microphone_permission: DictationPermissionStateDto,
@@ -485,9 +643,14 @@ struct DictationProbe {
 #[serde(rename_all = "camelCase")]
 struct NativeDictationProbe {
     platform: Option<String>,
+    os_version: Option<String>,
     default_locale: Option<String>,
+    supported_locales: Option<Vec<String>>,
     modern_compiled: Option<bool>,
     modern_runtime_supported: Option<bool>,
+    modern_assets_status: Option<String>,
+    modern_asset_locale: Option<String>,
+    modern_assets_reason: Option<String>,
     legacy_runtime_supported: Option<bool>,
     legacy_recognizer_available: Option<bool>,
     microphone_permission: Option<String>,
@@ -522,7 +685,9 @@ impl DictationProbe {
 
         DictationStatusDto {
             platform: self.platform,
+            os_version: self.os_version,
             default_locale: self.default_locale,
+            supported_locales: self.supported_locales,
             modern: DictationEngineStatusDto {
                 available: self.modern_compiled && self.modern_runtime_supported,
                 compiled: self.modern_compiled,
@@ -535,6 +700,7 @@ impl DictationProbe {
                 runtime_supported: self.legacy_runtime_supported,
                 reason: legacy_reason,
             },
+            modern_assets: self.modern_assets,
             microphone_permission: self.microphone_permission,
             speech_permission: self.speech_permission,
             active_session: None,
@@ -542,7 +708,7 @@ impl DictationProbe {
     }
 }
 
-fn probe_dictation_status() -> DictationStatusDto {
+pub(crate) fn probe_dictation_status() -> DictationStatusDto {
     native_probe().unwrap_or_else(fallback_probe).into_status()
 }
 
@@ -556,9 +722,16 @@ fn native_probe() -> Result<DictationProbe, String> {
             Some("macos") => DictationPlatformDto::Macos,
             _ => DictationPlatformDto::Unsupported,
         },
+        os_version: normalize_optional_text(probe.os_version),
         default_locale: normalize_optional_text(probe.default_locale),
+        supported_locales: normalize_locale_list(probe.supported_locales.unwrap_or_default()),
         modern_compiled: probe.modern_compiled.unwrap_or(false),
         modern_runtime_supported: probe.modern_runtime_supported.unwrap_or(false),
+        modern_assets: DictationModernAssetsDto {
+            status: modern_asset_status(probe.modern_assets_status.as_deref()),
+            locale: normalize_optional_text(probe.modern_asset_locale),
+            reason: normalize_optional_text(probe.modern_assets_reason),
+        },
         legacy_runtime_supported: probe.legacy_runtime_supported.unwrap_or(false),
         legacy_recognizer_available: probe.legacy_recognizer_available.unwrap_or(false),
         microphone_permission: permission_state(probe.microphone_permission.as_deref()),
@@ -570,9 +743,16 @@ fn native_probe() -> Result<DictationProbe, String> {
 fn fallback_probe(reason: String) -> DictationProbe {
     DictationProbe {
         platform: fallback_platform(),
+        os_version: None,
         default_locale: None,
+        supported_locales: Vec::new(),
         modern_compiled: option_env!("CADENCE_DICTATION_MODERN_COMPILED") == Some("1"),
         modern_runtime_supported: false,
+        modern_assets: DictationModernAssetsDto {
+            status: DictationModernAssetStatusDto::Unavailable,
+            locale: None,
+            reason: Some(reason.clone()),
+        },
         legacy_runtime_supported: false,
         legacy_recognizer_available: false,
         microphone_permission: fallback_permission(),
@@ -606,6 +786,26 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
+}
+
+fn normalize_locale_list(locales: Vec<String>) -> Vec<String> {
+    let mut locales = locales
+        .into_iter()
+        .filter_map(|locale| normalize_optional_text(Some(locale)))
+        .collect::<Vec<_>>();
+    locales.sort();
+    locales.dedup();
+    locales
+}
+
+fn modern_asset_status(value: Option<&str>) -> DictationModernAssetStatusDto {
+    match value {
+        Some("installed") => DictationModernAssetStatusDto::Installed,
+        Some("not_installed") => DictationModernAssetStatusDto::NotInstalled,
+        Some("unavailable") => DictationModernAssetStatusDto::Unavailable,
+        Some("unsupported_locale") => DictationModernAssetStatusDto::UnsupportedLocale,
+        _ => DictationModernAssetStatusDto::Unknown,
+    }
 }
 
 fn permission_state(value: Option<&str>) -> DictationPermissionStateDto {
@@ -1084,7 +1284,9 @@ mod tests {
     fn available_status() -> DictationStatusDto {
         DictationStatusDto {
             platform: DictationPlatformDto::Macos,
+            os_version: Some("26.0.0".into()),
             default_locale: Some("en_US".into()),
+            supported_locales: vec!["en_US".into()],
             modern: DictationEngineStatusDto {
                 available: false,
                 compiled: false,
@@ -1096,6 +1298,11 @@ mod tests {
                 compiled: true,
                 runtime_supported: true,
                 reason: None,
+            },
+            modern_assets: DictationModernAssetsDto {
+                status: DictationModernAssetStatusDto::Unavailable,
+                locale: None,
+                reason: Some("modern_sdk_unavailable".into()),
             },
             microphone_permission: DictationPermissionStateDto::NotDetermined,
             speech_permission: DictationPermissionStateDto::NotDetermined,
@@ -1218,6 +1425,37 @@ mod tests {
     }
 
     #[test]
+    fn engine_selection_covers_automatic_and_unavailable_matrix() {
+        let mut status = available_status();
+        status.modern = DictationEngineStatusDto {
+            available: true,
+            compiled: true,
+            runtime_supported: true,
+            reason: None,
+        };
+
+        assert_eq!(
+            select_engine(&status, DictationEnginePreferenceDto::Automatic).unwrap(),
+            DictationEngineDto::Modern
+        );
+        assert_eq!(
+            select_engine(&status, DictationEnginePreferenceDto::Legacy).unwrap(),
+            DictationEngineDto::Legacy
+        );
+
+        status.modern.available = false;
+        status.legacy.available = false;
+
+        let error = select_engine(&status, DictationEnginePreferenceDto::Automatic)
+            .expect_err("automatic should fail when no engine is available");
+        assert_eq!(error.code, "dictation_engine_unavailable");
+
+        let error = select_engine(&status, DictationEnginePreferenceDto::Legacy)
+            .expect_err("legacy should report a targeted failure");
+        assert_eq!(error.code, "dictation_legacy_unavailable");
+    }
+
+    #[test]
     fn automatic_mode_falls_back_only_for_modern_startup_failures() {
         let mut status = available_status();
         status.modern = DictationEngineStatusDto {
@@ -1285,6 +1523,35 @@ mod tests {
             .into_dto("session-1")
             .expect_err("mismatched session should fail");
         assert_eq!(error.code, "dictation_native_session_mismatch");
+    }
+
+    #[test]
+    fn channel_delivery_failure_clears_and_cancels_active_session() {
+        let state = DictationState::default();
+        let cancel = DictationCancellationHandle::default();
+        state
+            .begin_session(
+                "session-1".into(),
+                DictationEngineDto::Legacy,
+                cancel.clone(),
+            )
+            .expect("session should start");
+
+        let channel = tauri::ipc::Channel::<DictationEventDto>::new(move |_body| {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "channel dropped").into())
+        });
+        let context = NativeCallbackContext {
+            session_id: "session-1".into(),
+            state: state.clone(),
+            channel,
+        };
+
+        context.handle_payload(
+            r#"{"kind":"partial","sessionId":"session-1","text":"hello","sequence":1}"#,
+        );
+
+        assert_eq!(state.active_session(), None);
+        assert!(cancel.is_cancelled());
     }
 
     #[test]

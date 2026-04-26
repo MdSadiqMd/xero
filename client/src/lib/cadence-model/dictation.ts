@@ -25,6 +25,13 @@ export const dictationStopReasonSchema = z.enum([
   'channel_closed',
   'app_closing',
 ])
+export const dictationModernAssetStatusSchema = z.enum([
+  'installed',
+  'not_installed',
+  'unavailable',
+  'unsupported_locale',
+  'unknown',
+])
 
 const normalizedOptionalTextSchema = z
   .string()
@@ -41,6 +48,14 @@ export const dictationEngineStatusSchema = z
   })
   .strict()
 
+export const dictationModernAssetsSchema = z
+  .object({
+    status: dictationModernAssetStatusSchema,
+    locale: normalizedOptionalTextSchema,
+    reason: normalizedOptionalTextSchema,
+  })
+  .strict()
+
 export const activeDictationSessionSchema = z
   .object({
     sessionId: z.string().trim().min(1),
@@ -51,12 +66,34 @@ export const activeDictationSessionSchema = z
 export const dictationStatusSchema = z
   .object({
     platform: dictationPlatformSchema,
+    osVersion: normalizedOptionalTextSchema,
     defaultLocale: normalizedOptionalTextSchema,
+    supportedLocales: z.array(z.string().trim().min(1)).optional().default([]),
     modern: dictationEngineStatusSchema,
     legacy: dictationEngineStatusSchema,
+    modernAssets: dictationModernAssetsSchema
+      .optional()
+      .default({ status: 'unknown', locale: null, reason: null }),
     microphonePermission: dictationPermissionStateSchema,
     speechPermission: dictationPermissionStateSchema,
     activeSession: activeDictationSessionSchema.nullable().optional().transform((value) => value ?? null),
+  })
+  .strict()
+
+export const dictationSettingsSchema = z
+  .object({
+    enginePreference: dictationEnginePreferenceSchema,
+    privacyMode: dictationPrivacyModeSchema,
+    locale: normalizedOptionalTextSchema,
+    updatedAt: normalizedOptionalTextSchema,
+  })
+  .strict()
+
+export const upsertDictationSettingsRequestSchema = z
+  .object({
+    enginePreference: dictationEnginePreferenceSchema,
+    privacyMode: dictationPrivacyModeSchema,
+    locale: normalizedOptionalTextSchema,
   })
   .strict()
 
@@ -144,9 +181,13 @@ export type DictationEnginePreferenceDto = z.infer<typeof dictationEnginePrefere
 export type DictationPrivacyModeDto = z.infer<typeof dictationPrivacyModeSchema>
 export type DictationPermissionStateDto = z.infer<typeof dictationPermissionStateSchema>
 export type DictationStopReasonDto = z.infer<typeof dictationStopReasonSchema>
+export type DictationModernAssetStatusDto = z.infer<typeof dictationModernAssetStatusSchema>
 export type DictationEngineStatusDto = z.infer<typeof dictationEngineStatusSchema>
+export type DictationModernAssetsDto = z.infer<typeof dictationModernAssetsSchema>
 export type ActiveDictationSessionDto = z.infer<typeof activeDictationSessionSchema>
 export type DictationStatusDto = z.infer<typeof dictationStatusSchema>
+export type DictationSettingsDto = z.infer<typeof dictationSettingsSchema>
+export type UpsertDictationSettingsRequestDto = z.infer<typeof upsertDictationSettingsRequestSchema>
 export type DictationStartRequestInputDto = z.input<typeof dictationStartRequestSchema>
 export type DictationStartRequestDto = z.infer<typeof dictationStartRequestSchema>
 export type DictationStartResponseDto = z.infer<typeof dictationStartResponseSchema>

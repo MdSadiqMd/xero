@@ -838,6 +838,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         doctorReportStatus={doctorReportStatus}
         doctorReportError={doctorReportError}
         onRunDoctorReport={(request) => runDoctorReport(request)}
+        dictationAdapter={resolvedAdapter}
         onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
         onSetActiveProviderProfile={(profileId) => setActiveProviderProfile(profileId)}
         onStartLogin={() => startOpenAiLogin()}

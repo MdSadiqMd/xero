@@ -164,6 +164,7 @@ describe('diagnostics contract', () => {
         total: 1,
         highestSeverity: 'error',
       },
+      dictationChecks: [],
       profileChecks: [],
       modelCatalogChecks: [],
       runtimeSupervisorChecks: [],

@@ -24,6 +24,7 @@ export type SpeechDictationAdapter = Pick<
   CadenceDesktopAdapter,
   | 'isDesktopRuntime'
   | 'speechDictationStatus'
+  | 'speechDictationSettings'
   | 'speechDictationStart'
   | 'speechDictationStop'
   | 'speechDictationCancel'
@@ -92,15 +93,41 @@ function toDictationError(error: unknown, fallback: string): OperatorActionError
     code?: unknown
     retryable?: unknown
   } | null
+  const code =
+    typeof maybeDesktopError?.code === 'string' && maybeDesktopError.code.trim().length > 0
+      ? maybeDesktopError.code
+      : 'dictation_failed'
 
   return {
-    code:
-      typeof maybeDesktopError?.code === 'string' && maybeDesktopError.code.trim().length > 0
-        ? maybeDesktopError.code
-        : 'dictation_failed',
-    message: getUnknownErrorMessage(error, fallback),
+    code,
+    message: getRecoveryMessage(code, getUnknownErrorMessage(error, fallback)),
     retryable: typeof maybeDesktopError?.retryable === 'boolean' ? maybeDesktopError.retryable : false,
   }
+}
+
+function getRecoveryMessage(code: string, message: string): string {
+  const recovery = (() => {
+    switch (code) {
+      case 'dictation_microphone_permission_denied':
+        return 'Open System Settings > Privacy & Security > Microphone and allow Cadence.'
+      case 'dictation_speech_permission_denied':
+        return 'Open System Settings > Privacy & Security > Speech Recognition and allow Cadence.'
+      case 'dictation_modern_locale_unsupported':
+      case 'dictation_legacy_locale_unsupported':
+        return 'Choose a supported locale in Dictation settings.'
+      case 'dictation_legacy_network_recognition_required':
+      case 'dictation_legacy_on_device_unavailable':
+        return 'Allow Apple server recognition in Dictation settings or choose a locale with on-device recognition.'
+      default:
+        return null
+    }
+  })()
+
+  if (!recovery || message.includes(recovery)) {
+    return message
+  }
+
+  return `${message} ${recovery}`
 }
 
 function isDictationAvailable(status: DictationStatusDto | null): boolean {
@@ -299,8 +326,12 @@ export function useSpeechDictation({
     updatePhase('requesting')
 
     try {
+      const settings = await currentAdapter.speechDictationSettings?.().catch(() => null)
       const session = await currentAdapter.speechDictationStart(
         {
+          enginePreference: settings?.enginePreference,
+          privacyMode: settings?.privacyMode,
+          locale: settings?.locale,
           contextualPhrases: DEFAULT_CONTEXTUAL_PHRASES,
         },
         handleDictationEvent,

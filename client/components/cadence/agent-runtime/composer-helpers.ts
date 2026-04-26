@@ -141,14 +141,14 @@ export function getComposerThinkingOptions(
 
   return model.thinkingEffortOptions.map((effort) => ({
     value: effort,
-    label: `Thinking · ${getProviderModelThinkingEffortLabel(effort).toLowerCase()}`,
+    label: getProviderModelThinkingEffortLabel(effort),
   }))
 }
 
 export function getComposerApprovalOptions(): ComposerApprovalOption[] {
   return composerApprovalModes.map((mode) => ({
     value: mode,
-    label: `Approval · ${getRuntimeRunApprovalModeLabel(mode).toLowerCase()}`,
+    label: getRuntimeRunApprovalModeLabel(mode),
   }))
 }
 

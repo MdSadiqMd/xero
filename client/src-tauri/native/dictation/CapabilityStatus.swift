@@ -5,9 +5,14 @@ import Speech
 
 struct CadenceDictationCapabilityStatus: Encodable {
     let platform: String
+    let osVersion: String
     let defaultLocale: String?
+    let supportedLocales: [String]
     let modernCompiled: Bool
     let modernRuntimeSupported: Bool
+    let modernAssetsStatus: String
+    let modernAssetLocale: String?
+    let modernAssetsReason: String?
     let legacyRuntimeSupported: Bool
     let legacyRecognizerAvailable: Bool
     let microphonePermission: String
@@ -18,11 +23,17 @@ struct CadenceDictationCapabilityStatus: Encodable {
 public func cadenceDictationCapabilityStatusJson() -> UnsafeMutablePointer<CChar>? {
     let localeIdentifier = Locale.current.identifier
     let legacy = legacySpeechAvailability(localeIdentifier: localeIdentifier)
+    let modernAssets = cadenceDictationModernAssetProbe(localeIdentifier: localeIdentifier)
     let status = CadenceDictationCapabilityStatus(
         platform: "macos",
+        osVersion: operatingSystemVersionString(),
         defaultLocale: localeIdentifier,
+        supportedLocales: supportedSpeechLocaleIdentifiers(),
         modernCompiled: cadenceDictationModernCompiled(),
         modernRuntimeSupported: cadenceDictationModernRuntimeSupported(),
+        modernAssetsStatus: modernAssets.status,
+        modernAssetLocale: modernAssets.localeIdentifier,
+        modernAssetsReason: modernAssets.reason,
         legacyRuntimeSupported: legacy.runtimeSupported,
         legacyRecognizerAvailable: legacy.recognizerAvailable,
         microphonePermission: microphonePermissionState(),
@@ -31,7 +42,7 @@ public func cadenceDictationCapabilityStatusJson() -> UnsafeMutablePointer<CChar
 
     guard let data = try? JSONEncoder().encode(status),
           let json = String(data: data, encoding: .utf8) else {
-        return duplicateCString(#"{"platform":"macos","modernCompiled":false,"modernRuntimeSupported":false,"legacyRuntimeSupported":false,"legacyRecognizerAvailable":false,"microphonePermission":"unknown","speechPermission":"unknown"}"#)
+        return duplicateCString(#"{"platform":"macos","modernCompiled":false,"modernRuntimeSupported":false,"modernAssetsStatus":"unknown","legacyRuntimeSupported":false,"legacyRecognizerAvailable":false,"microphonePermission":"unknown","speechPermission":"unknown"}"#)
     }
 
     return duplicateCString(json)
@@ -86,6 +97,21 @@ func speechPermissionState() -> String {
     }
 
     return "unsupported"
+}
+
+func operatingSystemVersionString() -> String {
+    let version = ProcessInfo.processInfo.operatingSystemVersion
+    return "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+}
+
+func supportedSpeechLocaleIdentifiers() -> [String] {
+    if #available(macOS 10.15, *) {
+        return SFSpeechRecognizer.supportedLocales()
+            .map(\.identifier)
+            .sorted()
+    }
+
+    return []
 }
 
 func legacySpeechAvailability(localeIdentifier: String) -> (runtimeSupported: Bool, recognizerAvailable: Bool) {

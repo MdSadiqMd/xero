@@ -58,7 +58,9 @@ describe('CadenceDesktopAdapter dictation', () => {
 
     await expect(CadenceDesktopAdapter.speechDictationStatus?.()).resolves.toEqual({
       platform: 'macos',
+      osVersion: null,
       defaultLocale: 'en_US',
+      supportedLocales: [],
       modern: {
         available: false,
         compiled: false,
@@ -71,11 +73,61 @@ describe('CadenceDesktopAdapter dictation', () => {
         runtimeSupported: true,
         reason: null,
       },
+      modernAssets: {
+        status: 'unknown',
+        locale: null,
+        reason: null,
+      },
       microphonePermission: 'not_determined',
       speechPermission: 'authorized',
       activeSession: null,
     })
     expect(mocks.invoke).toHaveBeenCalledWith('speech_dictation_status', undefined)
+  })
+
+  it('loads and updates dictation settings through the adapter contract', async () => {
+    const { CadenceDesktopAdapter } = await import('./cadence-desktop')
+
+    mocks.invoke.mockResolvedValueOnce({
+      enginePreference: 'automatic',
+      privacyMode: 'on_device_preferred',
+      locale: ' en_US ',
+      updatedAt: '2026-04-26T12:00:00Z',
+    })
+
+    await expect(CadenceDesktopAdapter.speechDictationSettings?.()).resolves.toEqual({
+      enginePreference: 'automatic',
+      privacyMode: 'on_device_preferred',
+      locale: 'en_US',
+      updatedAt: '2026-04-26T12:00:00Z',
+    })
+    expect(mocks.invoke).toHaveBeenCalledWith('speech_dictation_settings', undefined)
+
+    mocks.invoke.mockResolvedValueOnce({
+      enginePreference: 'legacy',
+      privacyMode: 'allow_network',
+      locale: null,
+      updatedAt: '2026-04-26T12:01:00Z',
+    })
+
+    await expect(
+      CadenceDesktopAdapter.speechDictationUpdateSettings?.({
+        enginePreference: 'legacy',
+        privacyMode: 'allow_network',
+        locale: null,
+      }),
+    ).resolves.toMatchObject({
+      enginePreference: 'legacy',
+      privacyMode: 'allow_network',
+      locale: null,
+    })
+    expect(mocks.invoke).toHaveBeenLastCalledWith('speech_dictation_update_settings', {
+      request: {
+        enginePreference: 'legacy',
+        privacyMode: 'allow_network',
+        locale: null,
+      },
+    })
   })
 
   it('starts dictation with a typed channel and normalizes streamed events', async () => {

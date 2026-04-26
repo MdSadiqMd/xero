@@ -162,6 +162,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::submit_notification_reply::submit_notification_reply,
             commands::sync_notification_adapters::sync_notification_adapters,
             commands::dictation::speech_dictation_status,
+            commands::dictation::speech_dictation_settings,
+            commands::dictation::speech_dictation_update_settings,
             commands::dictation::speech_dictation_start,
             commands::dictation::speech_dictation_stop,
             commands::dictation::speech_dictation_cancel,

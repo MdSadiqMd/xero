@@ -3524,8 +3524,8 @@ describe('CadenceApp current UI', () => {
     await waitFor(() =>
       expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('openai_codex'),
     )
-    expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toHaveTextContent('Thinking · medium')
-    expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('Approval · suggest')
+    expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toHaveTextContent('Medium')
+    expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('Suggest')
 
     fireEvent.change(await screen.findByLabelText('Agent input'), {
       target: { value: 'Start the authenticated run.' },
@@ -3562,7 +3562,7 @@ describe('CadenceApp current UI', () => {
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toBeEnabled())
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Approval mode selector' }), { key: 'ArrowDown' })
-    fireEvent.click(await screen.findByRole('option', { name: 'Approval · yolo' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'YOLO' }))
 
     await waitFor(() =>
       expect(setup.updateRuntimeRunControls).toHaveBeenNthCalledWith(1, {
@@ -3680,7 +3680,7 @@ describe('CadenceApp current UI', () => {
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toBeEnabled())
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Approval mode selector' }), { key: 'ArrowDown' })
-    fireEvent.click(await screen.findByRole('option', { name: 'Approval · yolo' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'YOLO' }))
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled())
     expect(screen.queryByText('Approval pending · YOLO')).not.toBeInTheDocument()

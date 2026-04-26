@@ -21,6 +21,7 @@ use crate::{
 
 pub const REGISTRY_FILE_NAME: &str = "project-registry.json";
 pub const RUNTIME_SETTINGS_FILE_NAME: &str = "runtime-settings.json";
+pub const DICTATION_SETTINGS_FILE_NAME: &str = "dictation-settings.json";
 pub const MCP_REGISTRY_FILE_NAME: &str = "mcp-registry.json";
 pub const SKILL_SOURCE_SETTINGS_FILE_NAME: &str = "skill-sources.json";
 pub const OPENROUTER_CREDENTIAL_FILE_NAME: &str = "openrouter-credentials.json";
@@ -49,6 +50,7 @@ pub struct DesktopState {
     provider_profile_credential_store_file_override: Option<PathBuf>,
     provider_model_catalog_cache_file_override: Option<PathBuf>,
     runtime_settings_file_override: Option<PathBuf>,
+    dictation_settings_file_override: Option<PathBuf>,
     mcp_registry_file_override: Option<PathBuf>,
     skill_source_settings_file_override: Option<PathBuf>,
     openrouter_credential_file_override: Option<PathBuf>,
@@ -102,6 +104,11 @@ impl DesktopState {
 
     pub fn with_runtime_settings_file_override(mut self, path: PathBuf) -> Self {
         self.runtime_settings_file_override = Some(path);
+        self
+    }
+
+    pub fn with_dictation_settings_file_override(mut self, path: PathBuf) -> Self {
+        self.dictation_settings_file_override = Some(path);
         self
     }
 
@@ -306,6 +313,17 @@ impl DesktopState {
         }
 
         Ok(self.app_data_dir(app)?.join(RUNTIME_SETTINGS_FILE_NAME))
+    }
+
+    pub fn dictation_settings_file<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> Result<PathBuf, CommandError> {
+        if let Some(path) = &self.dictation_settings_file_override {
+            return Ok(path.clone());
+        }
+
+        Ok(self.app_data_dir(app)?.join(DICTATION_SETTINGS_FILE_NAME))
     }
 
     pub fn mcp_registry_file<R: Runtime>(

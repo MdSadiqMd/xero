@@ -7,6 +7,7 @@ export const CADENCE_DIAGNOSTIC_CONTRACT_VERSION = 1
 export const CADENCE_DOCTOR_REPORT_CONTRACT_VERSION = 1
 
 export const cadenceDiagnosticSubjectSchema = z.enum([
+  'dictation',
   'provider_profile',
   'model_catalog',
   'runtime_binding',
@@ -159,6 +160,7 @@ export const cadenceDoctorReportSchema = z
     mode: cadenceDoctorReportModeSchema,
     versions: cadenceDoctorVersionInfoSchema,
     summary: cadenceDoctorReportSummarySchema,
+    dictationChecks: z.array(cadenceDiagnosticCheckSchema).default([]),
     profileChecks: z.array(cadenceDiagnosticCheckSchema).default([]),
     modelCatalogChecks: z.array(cadenceDiagnosticCheckSchema).default([]),
     runtimeSupervisorChecks: z.array(cadenceDiagnosticCheckSchema).default([]),
@@ -264,6 +266,7 @@ export interface CadenceDoctorReportInput {
   mode: CadenceDoctorReportModeDto
   versions: CadenceDoctorVersionInfoDto
   profileChecks?: CadenceDiagnosticCheckDto[]
+  dictationChecks?: CadenceDiagnosticCheckDto[]
   modelCatalogChecks?: CadenceDiagnosticCheckDto[]
   runtimeSupervisorChecks?: CadenceDiagnosticCheckDto[]
   mcpDependencyChecks?: CadenceDiagnosticCheckDto[]
@@ -321,6 +324,7 @@ export function createCadenceDoctorReport(input: CadenceDoctorReportInput): Cade
       total: 0,
       highestSeverity: 'info' as const,
     },
+    dictationChecks: sanitizeAndSortDiagnosticChecks(input.dictationChecks ?? []),
     profileChecks: sanitizeAndSortDiagnosticChecks(input.profileChecks ?? []),
     modelCatalogChecks: sanitizeAndSortDiagnosticChecks(input.modelCatalogChecks ?? []),
     runtimeSupervisorChecks: sanitizeAndSortDiagnosticChecks(input.runtimeSupervisorChecks ?? []),
@@ -348,6 +352,7 @@ export function renderCadenceDoctorReport(
     `Summary: ${sanitized.summary.passed} passed, ${sanitized.summary.warnings} warning(s), ${sanitized.summary.failed} failed, ${sanitized.summary.skipped} skipped`,
   ]
   pushHumanGroup(lines, 'Provider profiles', sanitized.profileChecks)
+  pushHumanGroup(lines, 'Dictation', sanitized.dictationChecks)
   pushHumanGroup(lines, 'Model catalogs', sanitized.modelCatalogChecks)
   pushHumanGroup(lines, 'Runtime supervisor', sanitized.runtimeSupervisorChecks)
   pushHumanGroup(lines, 'MCP dependencies', sanitized.mcpDependencyChecks)
@@ -511,8 +516,9 @@ function sanitizeEndpointUrl(value: string): {
   }
 }
 
-function collectDoctorChecks(report: Pick<CadenceDoctorReportDto, 'profileChecks' | 'modelCatalogChecks' | 'runtimeSupervisorChecks' | 'mcpDependencyChecks' | 'settingsDependencyChecks'>): CadenceDiagnosticCheckDto[] {
+function collectDoctorChecks(report: Pick<CadenceDoctorReportDto, 'dictationChecks' | 'profileChecks' | 'modelCatalogChecks' | 'runtimeSupervisorChecks' | 'mcpDependencyChecks' | 'settingsDependencyChecks'>): CadenceDiagnosticCheckDto[] {
   return [
+    ...report.dictationChecks,
     ...report.profileChecks,
     ...report.modelCatalogChecks,
     ...report.runtimeSupervisorChecks,

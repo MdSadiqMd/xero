@@ -13,6 +13,7 @@ import type {
   SkillRegistryLoadStatus,
   SkillRegistryMutationStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
+import type { DictationSettingsAdapter } from "@/components/cadence/settings-dialog/dictation-section"
 import type {
   ImportMcpServersResponseDto,
   CadenceDoctorReportDto,
@@ -40,7 +41,7 @@ import type {
   UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import type { PlatformVariant } from "@/components/cadence/shell"
-import { Activity, Bell, Code2, Globe, KeyRound, Palette, Plug, PlugZap, WandSparkles } from "lucide-react"
+import { Activity, Bell, Code2, Globe, KeyRound, Mic, Palette, Plug, PlugZap, WandSparkles } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -50,6 +51,7 @@ import {
 import { cn } from "@/lib/utils"
 import { BrowserSection } from "@/components/cadence/settings-dialog/browser-section"
 import { DevelopmentSection } from "@/components/cadence/settings-dialog/development-section"
+import { DictationSection } from "@/components/cadence/settings-dialog/dictation-section"
 import { DiagnosticsSection } from "@/components/cadence/settings-dialog/diagnostics-section"
 import { McpSection } from "@/components/cadence/settings-dialog/mcp-section"
 import { NotificationsSection } from "@/components/cadence/settings-dialog/notifications-section"
@@ -61,6 +63,7 @@ import { ThemesSection } from "@/components/cadence/settings-dialog/themes-secti
 export type SettingsSection =
   | "providers"
   | "diagnostics"
+  | "dictation"
   | "notifications"
   | "mcp"
   | "skills"
@@ -87,6 +90,7 @@ const WORKSPACE_GROUP: NavGroup = {
   items: [
     { id: "providers", label: "Providers", icon: KeyRound },
     { id: "diagnostics", label: "Diagnostics", icon: Activity },
+    { id: "dictation", label: "Dictation", icon: Mic },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "mcp", label: "MCP", icon: PlugZap },
     { id: "skills", label: "Skills", icon: WandSparkles },
@@ -137,6 +141,7 @@ export interface SettingsDialogProps {
   doctorReportStatus?: DoctorReportRunStatus
   doctorReportError?: OperatorActionErrorView | null
   onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<CadenceDoctorReportDto>
+  dictationAdapter?: DictationSettingsAdapter
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
   onStartLogin?: () => Promise<RuntimeSessionView | null>
@@ -197,6 +202,7 @@ export function SettingsDialog({
   doctorReportStatus = "idle",
   doctorReportError = null,
   onRunDoctorReport,
+  dictationAdapter,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
   onStartLogin,
@@ -355,6 +361,8 @@ export function SettingsDialog({
                   doctorReportError={doctorReportError}
                   onRunDoctorReport={onRunDoctorReport}
                 />
+              ) : section === "dictation" ? (
+                <DictationSection adapter={dictationAdapter} />
               ) : section === "notifications" ? (
                 agent ? (
                   <NotificationsSection

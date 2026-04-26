@@ -435,8 +435,10 @@ describe('ExecutionView', () => {
 
     fireEvent.keyDown(separator, { key: 'ArrowRight' })
 
-    const after = Number.parseInt(explorer.style.width, 10)
-    expect(after).toBeGreaterThan(before)
+    await waitFor(() =>
+      expect(Number.parseInt(separator.getAttribute('aria-valuenow') ?? '', 10)).toBeGreaterThan(before),
+    )
+    const after = Number.parseInt(separator.getAttribute('aria-valuenow') ?? '', 10)
     expect(window.localStorage.getItem('cadence.editor.explorer.width')).toBe(String(after))
   })
 
