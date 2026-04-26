@@ -543,20 +543,23 @@ Outcome: Cadence can produce an OpenClaude-style doctor report from the desktop 
 
 Outcome: Cadence can recommend a usable profile path for common local/cloud setups and help users configure OpenAI-compatible endpoints without guessing.
 
-- [ ] Slice 3.3.1: Add provider recommendation logic.
+- [x] Slice 3.3.1: Add provider recommendation logic.
   - Scope: inspect saved profiles, credential readiness, local Ollama reachability, configured OpenAI-compatible endpoints, and ambient Bedrock/Vertex readiness to recommend a default profile path.
   - Acceptance: recommendations distinguish fastest-ready profile, best local profile, missing-key cloud profile, and unsupported/incomplete profile; recommendations never activate or mutate profiles without user action.
   - Verification: pure tests cover no profiles, OpenAI Codex ready, OpenRouter ready, Ollama reachable, local OpenAI-compatible endpoint, Bedrock/Vertex ambient ready, and multiple competing ready profiles.
+  - Completed: 2026-04-26. Implementation: added typed provider recommendation contracts and pure ranking logic for ready cloud profiles, local profiles, missing-key cloud setup, and incomplete repair paths. Verification evidence: `pnpm --dir client exec vitest run src/lib/cadence-model/provider-setup.test.ts components/cadence/settings-dialog.test.tsx` passed 2 test files and 35 tests, including no-profile, OpenAI Codex, OpenRouter, Ollama, local OpenAI-compatible, Bedrock/Vertex, and competing-ready-profile recommendation cases.
 
-- [ ] Slice 3.3.2: Add OpenAI-compatible and LiteLLM setup recipes.
+- [x] Slice 3.3.2: Add OpenAI-compatible and LiteLLM setup recipes.
   - Scope: add structured recipe metadata for common OpenAI-compatible setups, including LiteLLM, LM Studio, Groq, Together, DeepSeek, and custom `/v1` gateways; map each recipe to provider profile fields, auth mode, model catalog expectations, and repair suggestions.
   - Acceptance: users can choose a recipe that pre-fills label/base URL/API-key expectations while still saving through the existing provider-profile contract.
   - Verification: TypeScript tests cover recipe validation, generated upsert requests, required-field prompts, local endpoint no-key behavior, and catalog/manual-model expectations.
+  - Completed: 2026-04-26. Implementation: added structured recipes for LiteLLM, LM Studio, Groq, Together AI, DeepSeek, and custom `/v1` gateways with auth/key mode, model-catalog expectations, profile defaults, guidance, repair copy, required-field prompts, and generated upsert requests. Verification evidence: `pnpm --dir client exec vitest run src/lib/cadence-model/provider-setup.test.ts components/cadence/settings-dialog.test.tsx` passed recipe validation, generated request, missing-field, optional key, and local no-key assertions.
 
-- [ ] Slice 3.3.3: Present setup guidance in Providers Settings.
+- [x] Slice 3.3.3: Present setup guidance in Providers Settings.
   - Scope: add a ShadCN recipe picker and compact guidance inside the existing Providers section, without replacing the current provider cards.
   - Acceptance: recipes make the setup path clearer for LiteLLM/OpenAI-compatible/local gateways, and they feed into the same save/check connection flow as first-class presets.
   - Verification: React tests cover recipe selection, prefilled fields, required key/base URL messaging, save flow, check connection handoff, and no temporary debug controls.
+  - Completed: 2026-04-26. Implementation: added a ShadCN/Radix recipe picker, a compact recommendation panel, recipe guidance inside the existing provider editor, hosted API-key validation, and local OpenAI-compatible no-key save behavior that still uses the existing provider-profile save and connection-check path. Verification evidence: `pnpm --dir client exec vitest run src/lib/cadence-model/provider-setup.test.ts components/cadence/settings-dialog.test.tsx` passed 35 tests; `pnpm --dir client exec tsc --noEmit` passed; `pnpm --dir client exec eslint src/lib/cadence-model/provider-setup.ts src/lib/cadence-model/provider-setup.test.ts components/cadence/provider-profiles/provider-profile-form.tsx components/cadence/settings-dialog.test.tsx` passed; `pnpm --dir client build` passed with the existing Vite large-chunk warning.
 
 ##### Phase 4: Fill Missing Provider Preset Parity
 

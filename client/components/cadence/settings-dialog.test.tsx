@@ -1789,6 +1789,178 @@ describe('SettingsDialog', () => {
     expect(screen.queryByText(secret)).not.toBeInTheDocument()
   })
 
+  it('applies the LM Studio recipe with local no-key behavior', async () => {
+    let nextProviderProfiles = makeProviderProfiles({
+      activeProfileId: 'openai_codex-default',
+      profiles: [makeOpenAiProfile({ active: true }), makeOpenRouterProfile({ active: false })],
+    })
+
+    const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
+      nextProviderProfiles = makeProviderProfiles({
+        activeProfileId: 'openai_codex-default',
+        profiles: [
+          makeOpenAiProfile({ active: true }),
+          makeOpenRouterProfile({ active: false }),
+          makeOpenAiApiProfile({
+            active: false,
+            label: request.label,
+            modelId: request.modelId,
+            baseUrl: request.baseUrl,
+            apiVersion: request.apiVersion,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'local',
+              proofUpdatedAt: '2026-04-26T12:00:00Z',
+            },
+          }),
+        ],
+      })
+
+      return nextProviderProfiles
+    })
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: nextProviderProfiles,
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    const recipeSelect = screen.getByLabelText('Setup recipe')
+    fireEvent.keyDown(recipeSelect, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'LM Studio' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply recipe' }))
+
+    expect(screen.getByLabelText('Profile label')).toHaveValue('LM Studio')
+    expect(screen.getByLabelText('Model')).toHaveTextContent('local-model')
+    expect(screen.getByLabelText('Base URL')).toHaveValue('http://127.0.0.1:1234/v1')
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+    expect(screen.getByText('No app-local API key is stored for LM Studio')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'openai_api-default',
+        providerId: 'openai_api',
+        runtimeKind: 'openai_compatible',
+        label: 'LM Studio',
+        modelId: 'local-model',
+        presetId: 'openai_api',
+        baseUrl: 'http://127.0.0.1:1234/v1',
+        apiVersion: null,
+        region: null,
+        projectId: null,
+        apiKey: null,
+        activate: false,
+      }),
+    )
+  })
+
+  it('applies hosted OpenAI-compatible recipes and hands saved profiles to connection checks', async () => {
+    const secret = 'gsk-test-secret'
+    let nextProviderProfiles = makeProviderProfiles({
+      activeProfileId: 'openai_codex-default',
+      profiles: [makeOpenAiProfile({ active: true }), makeOpenRouterProfile({ active: false })],
+    })
+
+    const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
+      nextProviderProfiles = makeProviderProfiles({
+        activeProfileId: 'openai_codex-default',
+        profiles: [
+          makeOpenAiProfile({ active: true }),
+          makeOpenRouterProfile({ active: false }),
+          makeOpenAiApiProfile({
+            active: false,
+            label: request.label,
+            modelId: request.modelId,
+            baseUrl: request.baseUrl,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'stored_secret',
+              proofUpdatedAt: '2026-04-26T12:00:00Z',
+            },
+          }),
+        ],
+      })
+
+      return nextProviderProfiles
+    })
+    const onCheckProviderProfile = vi.fn(async (profileId: string) =>
+      makeProviderProfileDiagnostics({
+        profileId,
+        providerId: 'openai_api',
+        validationChecks: [],
+        reachabilityChecks: [],
+      }),
+    )
+
+    const { rerender } = render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: nextProviderProfiles,
+          onUpsertProviderProfile,
+          onCheckProviderProfile,
+        })}
+      />,
+    )
+
+    const recipeSelect = screen.getByLabelText('Setup recipe')
+    fireEvent.keyDown(recipeSelect, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'Groq' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply recipe' }))
+
+    expect(screen.getByText('Use a Groq API key and a Groq model id supported by the OpenAI-compatible endpoint.')).toBeVisible()
+    expect(screen.getByLabelText('Profile label')).toHaveValue('Groq')
+    expect(screen.getByLabelText('Model')).toHaveTextContent('llama-3.3-70b-versatile')
+    expect(screen.getByLabelText('Base URL')).toHaveValue('https://api.groq.com/openai/v1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('Groq requires an API key.')).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: secret } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'openai_api-default',
+        providerId: 'openai_api',
+        runtimeKind: 'openai_compatible',
+        label: 'Groq',
+        modelId: 'llama-3.3-70b-versatile',
+        presetId: 'openai_api',
+        baseUrl: 'https://api.groq.com/openai/v1',
+        apiVersion: null,
+        region: null,
+        projectId: null,
+        apiKey: secret,
+        activate: false,
+      }),
+    )
+
+    rerender(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: nextProviderProfiles,
+          onUpsertProviderProfile,
+          onCheckProviderProfile,
+        })}
+      />,
+    )
+
+    const checkConnectionButtons = screen.getAllByRole('button', { name: /check connection/i })
+    fireEvent.click(checkConnectionButtons[checkConnectionButtons.length - 1])
+    await waitFor(() =>
+      expect(onCheckProviderProfile).toHaveBeenCalledWith('openai_api-default', {
+        includeNetwork: true,
+      }),
+    )
+  })
+
   it('limits OpenAI auth controls to the selected profile and keeps typed auth failures inline', async () => {
     const onStartLogin = vi.fn(async () => {
       throw new Error(

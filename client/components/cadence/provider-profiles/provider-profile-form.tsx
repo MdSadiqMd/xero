@@ -1,4 +1,4 @@
-import { useEffect, useState, type ElementType } from "react"
+import { useEffect, useMemo, useState, type ElementType } from "react"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   Activity,
@@ -10,6 +10,7 @@ import {
   LogIn,
   LogOut,
   Server,
+  Sparkles,
 } from "lucide-react"
 import {
   AnthropicIcon,
@@ -47,12 +48,21 @@ import type { CloudProviderPreset } from "@/src/lib/cadence-model/provider-prese
 import {
   getActiveProviderProfile,
   getProviderModelCatalogFetchedAt,
+  getProviderSetupRecipe,
+  getProviderSetupRecipeDraftDefaults,
+  isLocalOpenAiCompatibleBaseUrl,
+  listProviderSetupRecipes,
+  recommendProviderSetup,
   type CadenceDiagnosticCheckDto,
   type ProviderModelCatalogDto,
   type ProviderModelDto,
   type ProviderProfileDiagnosticsDto,
   type ProviderProfilesDto,
   type ProviderProfileDto,
+  type ProviderRecommendationDto,
+  type ProviderSetupRecipeApiKeyModeDto,
+  type ProviderSetupRecipeDto,
+  type ProviderSetupRecipeIdDto,
   type RuntimeSessionView,
   type UpsertProviderProfileRequestDto,
   upsertProviderProfileRequestSchema,
@@ -114,6 +124,7 @@ interface ProviderModelCatalogState {
 }
 
 type ProviderProfileDiagnosticStatus = "idle" | "loading" | "ready" | "error"
+type ProviderProfileApiKeyRequirement = ProviderSetupRecipeApiKeyModeDto
 
 const PROVIDER_ICON_BY_ID: Record<SupportedProviderId, ElementType> = {
   openai_codex: OpenAIIcon,
@@ -340,6 +351,56 @@ function getMissingConnectionFieldLabels(card: ProviderProfileCard, draft: Provi
   return missing
 }
 
+function getDraftApiKeyRequirement(
+  card: ProviderProfileCard,
+  draft: ProviderDraft,
+  recipe: ProviderSetupRecipeDto | null,
+): ProviderProfileApiKeyRequirement {
+  if (card.preset.authMode !== "api_key") {
+    return "none"
+  }
+
+  if (recipe) {
+    return recipe.apiKeyMode
+  }
+
+  if (card.preset.providerId === "openai_api" && isLocalOpenAiCompatibleBaseUrl(draft.baseUrl)) {
+    return "none"
+  }
+
+  return "required"
+}
+
+function getApiKeyHelpCopy(options: {
+  card: ProviderProfileCard
+  draft: ProviderDraft
+  requirement: ProviderProfileApiKeyRequirement
+  recipe: ProviderSetupRecipeDto | null
+  hasSavedApiKey: boolean
+}): string {
+  if (options.requirement === "none") {
+    return options.hasSavedApiKey
+      ? "Saved key will be removed when this local endpoint is saved"
+      : `No app-local API key is stored for ${options.recipe?.label ?? options.card.preset.label}`
+  }
+
+  if (options.draft.clearApiKey) {
+    return "Saved key will be removed"
+  }
+
+  if (options.hasSavedApiKey) {
+    return "Blank keeps the current key"
+  }
+
+  if (options.requirement === "optional") {
+    return options.recipe
+      ? `Optional for ${options.recipe.label}`
+      : `Optional for ${options.card.preset.label}`
+  }
+
+  return `Required for ${options.card.preset.label}`
+}
+
 function isCardSelected(providerProfiles: ProviderProfilesDto | null, card: ProviderProfileCard): boolean {
   const activeProfileId = providerProfiles?.activeProfileId?.trim() ?? ""
   if (activeProfileId.length === 0) return false
@@ -350,6 +411,7 @@ function buildUpsertRequest(
   card: ProviderProfileCard,
   draft: ProviderDraft,
   activate: boolean,
+  apiKeyRequirement: ProviderProfileApiKeyRequirement,
 ): UpsertProviderProfileRequestDto {
   const baseUrl = card.preset.baseUrlMode === "none" ? null : normalizeOptionalText(draft.baseUrl)
   const apiVersion =
@@ -361,6 +423,17 @@ function buildUpsertRequest(
   const region = card.preset.regionMode === "none" ? null : normalizeOptionalText(draft.region)
   const projectId =
     card.preset.projectIdMode === "none" ? null : normalizeOptionalText(draft.projectId)
+
+  const apiKey =
+    card.preset.authMode !== "api_key"
+      ? null
+      : apiKeyRequirement === "none"
+        ? hasSavedApiKeyCredential(card)
+          ? ""
+          : null
+        : draft.clearApiKey
+          ? ""
+          : normalizeOptionalText(draft.apiKey)
 
   return {
     profileId: getProfileId(card),
@@ -376,12 +449,7 @@ function buildUpsertRequest(
     apiVersion,
     region,
     projectId,
-    apiKey:
-      card.preset.authMode === "api_key"
-        ? draft.clearApiKey
-          ? ""
-          : normalizeOptionalText(draft.apiKey)
-        : null,
+    apiKey,
     activate,
   }
 }
@@ -655,8 +723,15 @@ export function ProviderProfileForm({
   const [profileDiagnosticStatuses, setProfileDiagnosticStatuses] =
     useState<Record<string, ProviderProfileDiagnosticStatus>>({})
   const [profileDiagnosticErrors, setProfileDiagnosticErrors] = useState<Record<string, string | null>>({})
+  const recipes = useMemo(() => listProviderSetupRecipes(), [])
+  const [selectedRecipeId, setSelectedRecipeId] = useState<ProviderSetupRecipeIdDto>(
+    recipes[0]?.recipeId ?? "custom_openai_compatible",
+  )
+  const [appliedRecipeIds, setAppliedRecipeIds] = useState<Record<string, ProviderSetupRecipeIdDto>>({})
 
   const cards = getProfileCards(providerProfiles)
+  const recommendationSet = useMemo(() => recommendProviderSetup(providerProfiles), [providerProfiles])
+  const selectedRecipe = getProviderSetupRecipe(selectedRecipeId) ?? recipes[0] ?? null
   const isRefreshing = providerProfilesLoadStatus === "loading"
   const isSaving = providerProfilesSaveStatus === "running"
   const isMutationDisabled = isSaving || !onUpsertProviderProfile
@@ -705,6 +780,10 @@ export function ProviderProfileForm({
     }))
   }
 
+  function getAppliedRecipe(card: ProviderProfileCard): ProviderSetupRecipeDto | null {
+    return getProviderSetupRecipe(appliedRecipeIds[card.key] ?? null)
+  }
+
   function openEditor(card: ProviderProfileCard) {
     setEditingCardKey(card.key)
     setDrafts((current) => ({
@@ -715,10 +794,48 @@ export function ProviderProfileForm({
     setAuthError(null)
   }
 
+  function applyRecipe(recipe: ProviderSetupRecipeDto) {
+    const openAiCompatibleCard =
+      cards.find((card) => card.preset.providerId === "openai_api" && !card.profile) ??
+      cards.find((card) => card.preset.providerId === "openai_api") ??
+      null
+
+    if (!openAiCompatibleCard) {
+      setFormError("Cadence could not find the OpenAI-compatible provider card.")
+      return
+    }
+
+    const defaults = getProviderSetupRecipeDraftDefaults(recipe.recipeId)
+    setEditingCardKey(openAiCompatibleCard.key)
+    setDrafts((current) => ({
+      ...current,
+      [openAiCompatibleCard.key]: {
+        ...createDraft(openAiCompatibleCard),
+        label: defaults.label,
+        modelId: defaults.modelId,
+        baseUrl: defaults.baseUrl,
+        apiVersion: defaults.apiVersion,
+        apiKey: "",
+        clearApiKey: false,
+      },
+    }))
+    setAppliedRecipeIds((current) => ({
+      ...current,
+      [openAiCompatibleCard.key]: recipe.recipeId,
+    }))
+    setFormError(null)
+    setAuthError(null)
+  }
+
   function closeEditor(cardKey: string) {
     setEditingCardKey((current) => (current === cardKey ? null : current))
     setFormError(null)
     setDrafts((current) => {
+      const next = { ...current }
+      delete next[cardKey]
+      return next
+    })
+    setAppliedRecipeIds((current) => {
       const next = { ...current }
       delete next[cardKey]
       return next
@@ -760,10 +877,13 @@ export function ProviderProfileForm({
       return
     }
 
-    if (card.preset.authMode === "api_key") {
+    const appliedRecipe = getAppliedRecipe(card)
+    const apiKeyRequirement = getDraftApiKeyRequirement(card, draft, appliedRecipe)
+
+    if (apiKeyRequirement === "required") {
       const hasSavedKey = hasSavedApiKeyCredential(card)
       if (!hasSavedKey && !draft.clearApiKey && !draft.apiKey.trim()) {
-        setFormError(`${card.preset.label} requires an API key.`)
+        setFormError(`${appliedRecipe?.label ?? card.preset.label} requires an API key.`)
         return
       }
     }
@@ -772,7 +892,7 @@ export function ProviderProfileForm({
       ? providerProfiles.activeProfileId === getProfileId(card)
       : card.profile?.active ?? false
     const parsedRequest = upsertProviderProfileRequestSchema.safeParse(
-      buildUpsertRequest(card, draft, activate),
+      buildUpsertRequest(card, draft, activate, apiKeyRequirement),
     )
 
     if (!parsedRequest.success) {
@@ -816,8 +936,14 @@ export function ProviderProfileForm({
         return
       }
 
+      const activationDraft = createDraft(card)
       const parsedRequest = upsertProviderProfileRequestSchema.safeParse(
-        buildUpsertRequest(card, createDraft(card), true),
+        buildUpsertRequest(
+          card,
+          activationDraft,
+          true,
+          getDraftApiKeyRequirement(card, activationDraft, null),
+        ),
       )
       if (!parsedRequest.success) {
         openEditor(card)
@@ -829,6 +955,32 @@ export function ProviderProfileForm({
     } catch {
       // Hook state surfaces the typed save error while the last truthful snapshot remains visible.
     }
+  }
+
+  async function handleRecommendationAction(recommendation: ProviderRecommendationDto) {
+    setFormError(null)
+    setAuthError(null)
+
+    if (recommendation.action === "apply_recipe") {
+      const recipe = getProviderSetupRecipe(recommendation.recipeId)
+      if (recipe) {
+        applyRecipe(recipe)
+      }
+      return
+    }
+
+    const card = cards.find((candidate) => candidate.profile?.profileId === recommendation.profileId) ?? null
+    if (!card) {
+      setFormError("Cadence could not find the recommended provider profile.")
+      return
+    }
+
+    if (recommendation.action === "activate_profile") {
+      await handleActivate(card)
+      return
+    }
+
+    openEditor(card)
   }
 
   async function handleRefreshCatalog(card: ProviderProfileCard) {
@@ -974,11 +1126,116 @@ export function ProviderProfileForm({
       ) : null}
 
       <div className="grid gap-3">
+        {recommendationSet.primary ? (
+          <div className="rounded-md border border-primary/20 bg-primary/[0.035] px-3.5 py-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Sparkles className="h-3.5 w-3.5 text-primary" />
+                  <p className="text-[12.5px] font-semibold text-foreground">
+                    {recommendationSet.primary.title}
+                  </p>
+                  <Badge variant="secondary" className="text-[10.5px]">
+                    {recommendationSet.primary.kind === "best_local_profile"
+                      ? "Local"
+                      : recommendationSet.primary.kind === "fastest_ready_profile"
+                        ? "Ready path"
+                        : recommendationSet.primary.kind === "missing_key_cloud_profile"
+                          ? "Setup"
+                          : "Repair"}
+                  </Badge>
+                </div>
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                  {recommendationSet.primary.message}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 shrink-0 text-[12px]"
+                disabled={
+                  recommendationSet.primary.action === "activate_profile" &&
+                  !onSetActiveProviderProfile &&
+                  !onUpsertProviderProfile
+                }
+                onClick={() => void handleRecommendationAction(recommendationSet.primary as ProviderRecommendationDto)}
+              >
+                {recommendationSet.primary.actionLabel}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        {selectedRecipe ? (
+          <div className="rounded-md border border-border/70 bg-muted/20 px-3.5 py-3">
+            <div className="grid gap-3 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_auto] md:items-end">
+              <div className="space-y-2">
+                <Label htmlFor="provider-setup-recipe" className="text-[12px]">
+                  Setup recipe
+                </Label>
+                <Select
+                  value={selectedRecipeId}
+                  onValueChange={(value) => setSelectedRecipeId(value as ProviderSetupRecipeIdDto)}
+                >
+                  <SelectTrigger id="provider-setup-recipe" className="h-9 w-full text-[13px]" size="sm">
+                    <SelectValue placeholder="Choose recipe" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>OpenAI-compatible</SelectLabel>
+                      {recipes.map((recipe) => (
+                        <SelectItem key={recipe.recipeId} value={recipe.recipeId}>
+                          {recipe.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="secondary" className="text-[10.5px]">
+                    {selectedRecipe.apiKeyMode === "none"
+                      ? "No key"
+                      : selectedRecipe.apiKeyMode === "optional"
+                        ? "Optional key"
+                        : "API key"}
+                  </Badge>
+                  <Badge variant="outline" className="text-[10.5px]">
+                    {selectedRecipe.modelCatalogExpectation === "live"
+                      ? "Live catalog"
+                      : selectedRecipe.modelCatalogExpectation === "manual"
+                        ? "Manual model"
+                        : "Catalog or manual"}
+                  </Badge>
+                </div>
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                  {selectedRecipe.description}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 gap-1.5 text-[12px]"
+                onClick={() => applyRecipe(selectedRecipe)}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Apply recipe
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid gap-3">
         {cards.map((card) => {
           const draft = getDraft(card)
+          const appliedRecipe = getAppliedRecipe(card)
+          const apiKeyRequirement = getDraftApiKeyRequirement(card, draft, appliedRecipe)
           const Icon = PROVIDER_ICON_BY_ID[card.preset.providerId]
           const isEditing = editingCardKey === card.key
-          const isApiKeyProvider = card.preset.authMode === "api_key"
+          const isApiKeyProvider = apiKeyRequirement !== "none"
           const isOpenAi = card.preset.providerId === "openai_codex"
           const isSelected = isCardSelected(providerProfiles, card)
           const readinessBadge = getProviderReadinessBadge(card.profile)
@@ -1042,6 +1299,13 @@ export function ProviderProfileForm({
             : []
           const isCheckingConnection = profileDiagnosticStatus === "loading"
           const canCheckConnection = Boolean(onCheckProviderProfile && card.profile)
+          const apiKeyHelpCopy = getApiKeyHelpCopy({
+            card,
+            draft,
+            requirement: apiKeyRequirement,
+            recipe: appliedRecipe,
+            hasSavedApiKey,
+          })
 
           const statusBadge = isOpenAi && isOpenAiConnected
             ? { label: "Connected", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" }
@@ -1254,6 +1518,29 @@ export function ProviderProfileForm({
 
               {isEditing ? (
                 <div className="mt-3.5 grid gap-3.5 rounded-md border border-dashed border-border/80 bg-background/80 p-3.5">
+                  {appliedRecipe ? (
+                    <div className="rounded-md border border-primary/20 bg-primary/[0.035] px-3.5 py-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[10.5px]">
+                          {appliedRecipe.label}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10.5px]">
+                          {appliedRecipe.apiKeyMode === "none"
+                            ? "No key"
+                            : appliedRecipe.apiKeyMode === "optional"
+                              ? "Optional key"
+                              : "API key"}
+                        </Badge>
+                      </div>
+                      <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                        {appliedRecipe.guidance}
+                      </p>
+                      <p className="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+                        {appliedRecipe.repairSuggestion}
+                      </p>
+                    </div>
+                  ) : null}
+
                   <div className="space-y-2">
                     <Label htmlFor={`${card.key}-label`} className="text-[12px]">
                       Profile label
@@ -1341,7 +1628,7 @@ export function ProviderProfileForm({
                             modelId: event.target.value,
                           })
                         }
-                        placeholder={card.preset.defaultModelId || "provider/model-id"}
+                        placeholder={appliedRecipe?.modelPlaceholder ?? card.preset.defaultModelId ?? "provider/model-id"}
                         value={draft.modelId}
                       />
                     ) : (
@@ -1383,11 +1670,12 @@ export function ProviderProfileForm({
                               })
                             }
                             placeholder={
-                              card.preset.providerId === "ollama"
+                              appliedRecipe?.baseUrlPlaceholder ??
+                              (card.preset.providerId === "ollama"
                                 ? "http://127.0.0.1:11434/v1"
                                 : card.preset.baseUrlMode === "required"
                                   ? "https://example-resource.openai.azure.com/openai/deployments/work"
-                                  : "https://api.openai.com/v1"
+                                  : "https://api.openai.com/v1")
                             }
                             value={draft.baseUrl}
                           />
@@ -1491,9 +1779,10 @@ export function ProviderProfileForm({
                           placeholder={
                             hasSavedApiKey
                               ? "Leave blank to keep current key"
-                              : card.preset.providerId === "github_models"
-                                ? "Paste GitHub token"
-                                : "Paste API key"
+                              : appliedRecipe?.apiKeyPlaceholder ??
+                                (card.preset.providerId === "github_models"
+                                  ? "Paste GitHub token"
+                                  : "Paste API key")
                           }
                           value={draft.apiKey}
                         />
@@ -1519,17 +1808,15 @@ export function ProviderProfileForm({
                       <p
                         className={cn(
                           "text-[11px]",
-                          draft.clearApiKey
-                            ? "text-destructive/80"
-                            : "text-muted-foreground",
+                          draft.clearApiKey ? "text-destructive/80" : "text-muted-foreground",
                         )}
                       >
-                        {draft.clearApiKey
-                          ? "Saved key will be removed"
-                          : hasSavedApiKey
-                            ? "Blank keeps the current key"
-                            : `Required for ${card.preset.label}`}
+                        {apiKeyHelpCopy}
                       </p>
+                    </div>
+                  ) : card.preset.authMode === "api_key" && apiKeyRequirement === "none" ? (
+                    <div className="rounded-md border border-sky-500/20 bg-sky-500/5 px-3.5 py-3 text-[12px] text-sky-700 dark:text-sky-200">
+                      {apiKeyHelpCopy}
                     </div>
                   ) : card.preset.authMode === "local" ? (
                     <div className="rounded-md border border-sky-500/20 bg-sky-500/5 px-3.5 py-3 text-[12px] text-sky-700 dark:text-sky-200">
