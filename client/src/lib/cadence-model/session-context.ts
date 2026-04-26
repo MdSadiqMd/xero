@@ -701,17 +701,20 @@ export function createPublicSessionContextRedaction(): SessionContextRedactionDt
 export function createRedactedSessionContextText(
   value: string,
 ): { value: string; redaction: SessionContextRedactionDto } {
-  const reason = sensitiveSessionContextReason(value)
-  if (!reason) {
+  const classification = sensitiveSessionContextClassification(value)
+  if (!classification) {
     return { value, redaction: createPublicSessionContextRedaction() }
   }
 
   return {
-    value: 'Cadence redacted sensitive session-context text.',
+    value:
+      classification.redactionClass === 'local_path'
+        ? '[redacted-path]'
+        : 'Cadence redacted sensitive session-context text.',
     redaction: {
-      redactionClass: reason === 'tool raw payload data' ? 'raw_payload' : 'secret',
+      redactionClass: classification.redactionClass,
       redacted: true,
-      reason,
+      reason: classification.reason,
     },
   }
 }
@@ -758,25 +761,125 @@ function addMismatch(ctx: z.RefinementCtx, path: (string | number)[], label: str
   })
 }
 
-function sensitiveSessionContextReason(value: string): string | null {
+function sensitiveSessionContextClassification(value: string): {
+  reason: string
+  redactionClass: SessionContextRedactionClassDto
+} | null {
   const normalized = value.toLowerCase()
+  if (looksLikePromptInjectionText(normalized)) {
+    return { reason: 'prompt-injection-shaped memory text', redactionClass: 'transcript' }
+  }
+  if (looksLikeEndpointCredential(value)) {
+    return { reason: 'endpoint credential material', redactionClass: 'secret' }
+  }
   if (
     normalized.includes('sk-') ||
     normalized.includes('bearer ') ||
+    normalized.includes('bearer:') ||
+    normalized.includes('authorization=') ||
+    normalized.includes('authorization:') ||
     normalized.includes('access_token') ||
     normalized.includes('refresh_token') ||
     normalized.includes('api_key') ||
+    normalized.includes('anthropic_api_key') ||
+    normalized.includes('aws_secret_access_key') ||
+    normalized.includes('aws_session_token') ||
     normalized.includes('client_secret') ||
+    normalized.includes('github_token') ||
+    normalized.includes('google_oauth_access_token') ||
+    normalized.includes('openai_api_key') ||
+    normalized.includes('session_id=') ||
     normalized.includes('session_token') ||
+    normalized.includes('token=') ||
+    normalized.includes('token:') ||
+    normalized.includes('"token"') ||
     normalized.includes('github_pat_') ||
     normalized.includes('ghp_') ||
     normalized.includes('xoxb-') ||
     normalized.includes('ya29.')
   ) {
-    return 'OAuth or API token material'
+    return { reason: 'OAuth or API token material', redactionClass: 'secret' }
   }
   if (normalized.includes('tool_payload') || normalized.includes('raw payload')) {
-    return 'tool raw payload data'
+    return { reason: 'tool raw payload data', redactionClass: 'raw_payload' }
+  }
+  if (looksLikeSecretBearingPath(value)) {
+    return { reason: 'local secret-bearing path', redactionClass: 'local_path' }
   }
   return null
+}
+
+function looksLikePromptInjectionText(normalized: string): boolean {
+  return [
+    'ignore previous instructions',
+    'ignore all previous instructions',
+    'disregard previous instructions',
+    'override the system prompt',
+    'override system instructions',
+    'reveal the system prompt',
+    'reveal hidden instructions',
+    'treat this memory as higher priority',
+    'developer message override',
+    'system message override',
+  ].some((marker) => normalized.includes(marker))
+}
+
+function looksLikeEndpointCredential(value: string): boolean {
+  return value.split(/\s+/).some((word) => {
+    const token = word.replace(/^[,;()[\]"'`]+|[,;()[\]"'`]+$/g, '')
+    const schemeIndex = token.indexOf('://')
+    if (schemeIndex < 0) {
+      return false
+    }
+    const rest = token.slice(schemeIndex + 3)
+    const authority = rest.split(/[/?#]/)[0] ?? ''
+    if (authority.includes('@')) {
+      return true
+    }
+    const query = token.includes('?') ? token.slice(token.indexOf('?') + 1) : ''
+    return query
+      .split('&')
+      .map((pair) => pair.split('='))
+      .some(([key, secret]) => Boolean(secret) && isSensitiveContextName(key ?? ''))
+  })
+}
+
+function isSensitiveContextName(value: string): boolean {
+  const normalized = value.trim().replace(/^-+/, '').toLowerCase().replace(/-/g, '_')
+  return [
+    'access_token',
+    'api_key',
+    'apikey',
+    'anthropic_api_key',
+    'authorization',
+    'aws_access_key_id',
+    'aws_secret_access_key',
+    'aws_session_token',
+    'auth_token',
+    'bearer',
+    'client_secret',
+    'github_token',
+    'google_oauth_access_token',
+    'openai_api_key',
+    'password',
+    'private_key',
+    'refresh_token',
+    'secret',
+    'session_id',
+    'session_token',
+    'token',
+    'x_api_key',
+  ].includes(normalized)
+}
+
+function looksLikeSecretBearingPath(value: string): boolean {
+  const normalized = value.toLowerCase()
+  return (
+    normalized.includes('/.ssh/') ||
+    normalized.includes('/.aws/') ||
+    normalized.includes('/.config/') ||
+    normalized.includes('.env') ||
+    normalized.includes('credentials') ||
+    normalized.includes('keychain')
+  )
 }

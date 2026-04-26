@@ -456,10 +456,8 @@ pub fn update_session_memory<R: Runtime>(
             project_store::get_agent_memory(&repo_root, &request.project_id, &request.memory_id)?;
         let (_text, redaction) = redact_session_context_text(&existing.text);
         if redaction.redacted {
-            return Err(CommandError::user_fixable(
-                "session_memory_secret_blocked",
-                "Cadence will not approve memory text that looks secret-bearing.",
-            ));
+            let (code, message) = memory_context_blocked_error(&redaction);
+            return Err(CommandError::user_fixable(code, message));
         }
     }
     let record = project_store::update_agent_memory(
@@ -1127,10 +1125,8 @@ fn prepare_new_memory_candidate(
     }
     let (_redacted_text, redaction) = redact_session_context_text(&text);
     if redaction.redacted {
-        return Err(session_memory_diagnostic_dto(
-            "session_memory_candidate_secret",
-            "Cadence skipped a memory candidate because its text looked secret-bearing.",
-        ));
+        let (code, message) = memory_candidate_blocked_diagnostic(&redaction);
+        return Err(session_memory_diagnostic_dto(code, message));
     }
     let mut source_item_ids = candidate
         .source_item_ids
@@ -1159,6 +1155,46 @@ fn prepare_new_memory_candidate(
         diagnostic: None,
         created_at: created_at.into(),
     })
+}
+
+fn memory_context_blocked_error(
+    redaction: &SessionContextRedactionDto,
+) -> (&'static str, &'static str) {
+    if redaction
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("prompt-injection"))
+    {
+        (
+            "session_memory_integrity_blocked",
+            "Cadence will not approve memory text that tries to override system, developer, or tool instructions.",
+        )
+    } else {
+        (
+            "session_memory_secret_blocked",
+            "Cadence will not approve memory text that looks secret-bearing.",
+        )
+    }
+}
+
+fn memory_candidate_blocked_diagnostic(
+    redaction: &SessionContextRedactionDto,
+) -> (&'static str, &'static str) {
+    if redaction
+        .reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("prompt-injection"))
+    {
+        (
+            "session_memory_candidate_integrity",
+            "Cadence skipped a memory candidate because it looked like an instruction-override attempt.",
+        )
+    } else {
+        (
+            "session_memory_candidate_secret",
+            "Cadence skipped a memory candidate because its text looked secret-bearing.",
+        )
+    }
 }
 
 fn agent_memory_scope_from_provider(value: &str) -> Option<AgentMemoryScope> {

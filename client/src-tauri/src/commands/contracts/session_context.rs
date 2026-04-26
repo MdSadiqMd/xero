@@ -1888,7 +1888,7 @@ fn payload_string(payload: &JsonValue, key: &str) -> Option<String> {
 
 fn sanitize_context_text(value: &str) -> (String, SessionContextRedactionDto) {
     if let Some(reason) = find_session_context_sensitive_content(value) {
-        let class = if reason.contains("transcript") {
+        let class = if reason.contains("prompt-injection") || reason.contains("transcript") {
             SessionContextRedactionClassDto::Transcript
         } else if reason.contains("payload") {
             SessionContextRedactionClassDto::RawPayload
@@ -1949,27 +1949,51 @@ fn looks_like_secret_bearing_path(value: &str) -> bool {
 fn find_session_context_sensitive_content(value: &str) -> Option<&'static str> {
     let normalized = value.to_ascii_lowercase();
 
+    if looks_like_prompt_injection_text(&normalized) {
+        return Some("prompt-injection-shaped memory text");
+    }
+
+    if looks_like_endpoint_credential(value) {
+        return Some("endpoint credential material");
+    }
+
     if normalized.contains("access_token")
         || normalized.contains("refresh_token")
         || normalized.contains("api_key")
         || normalized.contains("api-key")
         || normalized.contains("apikey")
         || normalized.contains("api key")
+        || normalized.contains("anthropic_api_key")
+        || normalized.contains("authorization=")
         || normalized.contains("auth token")
         || normalized.contains("authtoken")
+        || normalized.contains("aws_access_key_id")
+        || normalized.contains("aws_secret_access_key")
+        || normalized.contains("aws_session_token")
         || normalized.contains("_auth")
         || normalized.contains("authorization:")
+        || normalized.contains("\"authorization\"")
         || normalized.contains("bearer ")
+        || normalized.contains("bearer:")
+        || normalized.contains("bearer=")
         || normalized.contains("client_secret")
         || normalized.contains("client-secret")
+        || normalized.contains("github_token")
+        || normalized.contains("google_oauth_access_token")
         || normalized.contains("oauth")
+        || normalized.contains("openai_api_key")
         || normalized.contains("password")
         || normalized.contains("private key")
         || normalized.contains("private_key")
         || normalized.contains("private-key")
         || normalized.contains("secret")
+        || normalized.contains("session_id=")
+        || normalized.contains("session_id\":\"")
         || normalized.contains("session_token")
         || normalized.contains("session-token")
+        || normalized.contains("token=")
+        || normalized.contains("token:")
+        || normalized.contains("\"token\"")
         || normalized.contains("sk-")
         || normalized.contains("-----begin")
         || normalized.contains("ghp_")
@@ -2001,6 +2025,83 @@ fn find_session_context_sensitive_content(value: &str) -> Option<&'static str> {
     }
 
     None
+}
+
+fn looks_like_prompt_injection_text(normalized: &str) -> bool {
+    normalized.contains("ignore previous instructions")
+        || normalized.contains("ignore all previous instructions")
+        || normalized.contains("disregard previous instructions")
+        || normalized.contains("override the system prompt")
+        || normalized.contains("override system instructions")
+        || normalized.contains("reveal the system prompt")
+        || normalized.contains("reveal hidden instructions")
+        || normalized.contains("treat this memory as higher priority")
+        || normalized.contains("developer message override")
+        || normalized.contains("system message override")
+}
+
+fn looks_like_endpoint_credential(value: &str) -> bool {
+    for token in value.split_whitespace() {
+        let token = token.trim_matches(|character: char| {
+            matches!(
+                character,
+                ',' | ';' | ')' | '(' | '[' | ']' | '"' | '\'' | '`'
+            )
+        });
+        let Some(scheme_index) = token.find("://") else {
+            continue;
+        };
+        let rest = &token[scheme_index + 3..];
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        if authority.contains('@') {
+            return true;
+        }
+        let query = token
+            .split_once('?')
+            .map(|(_, query)| query)
+            .unwrap_or_default();
+        if query
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .any(|(key, value)| !value.is_empty() && is_sensitive_context_name(key))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_sensitive_context_name(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .trim_start_matches('-')
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    matches!(
+        normalized.as_str(),
+        "access_token"
+            | "api_key"
+            | "apikey"
+            | "anthropic_api_key"
+            | "authorization"
+            | "aws_access_key_id"
+            | "aws_secret_access_key"
+            | "aws_session_token"
+            | "auth_token"
+            | "bearer"
+            | "client_secret"
+            | "github_token"
+            | "google_oauth_access_token"
+            | "openai_api_key"
+            | "password"
+            | "private_key"
+            | "refresh_token"
+            | "secret"
+            | "session_id"
+            | "session_token"
+            | "token"
+            | "x_api_key"
+    )
 }
 
 fn strongest_redaction(
@@ -2170,16 +2271,25 @@ fn find_serialized_secret_marker(value: &str) -> Option<&'static str> {
     let normalized = value.to_ascii_lowercase();
     if normalized.contains("sk-")
         || normalized.contains("bearer ")
+        || normalized.contains("bearer:")
+        || normalized.contains("authorization=")
+        || normalized.contains("authorization:")
         || normalized.contains("access_token=")
         || normalized.contains("access_token\":\"")
         || normalized.contains("refresh_token=")
         || normalized.contains("refresh_token\":\"")
         || normalized.contains("api_key=")
         || normalized.contains("api_key\":\"")
+        || normalized.contains("aws_secret_access_key=")
+        || normalized.contains("aws_secret_access_key\":\"")
         || normalized.contains("client_secret=")
         || normalized.contains("client_secret\":\"")
+        || normalized.contains("session_id=")
+        || normalized.contains("session_id\":\"")
         || normalized.contains("session_token=")
         || normalized.contains("session_token\":\"")
+        || normalized.contains("token=")
+        || normalized.contains("token\":\"")
         || normalized.contains("ghp_")
         || normalized.contains("gho_")
         || normalized.contains("ghu_")

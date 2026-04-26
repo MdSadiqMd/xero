@@ -622,6 +622,8 @@ Outcome: Priority 3 is safe enough to call complete and useful for both users an
 
 ### Priority 4: Add Session Memory And Context Management
 
+Status: completed on 2026-04-26. Cadence now has searchable/exportable session history, context visualization, manual compact, compaction-aware replay, reviewed memory extraction/injection, branch/rewind, opt-in auto-compact, privacy/integrity hardening, and user-facing workflow documentation. Verification evidence is recorded under Phase 6.
+
 Cadence persists runs well, but OpenClaude has richer working-memory features:
 
 - Context visualization.
@@ -631,7 +633,7 @@ Cadence persists runs well, but OpenClaude has richer working-memory features:
 - Project instruction/memory file management.
 - Cross-session resume search and rename/branch/rewind equivalents.
 
-Current code footing: Cadence already has durable `agent_sessions`, `agent_runs`, `agent_messages`, `agent_events`, `agent_tool_calls`, `agent_file_changes`, `agent_checkpoints`, `agent_action_requests`, and `agent_usage` records. The owned-agent loop rebuilds provider replay state from the full persisted message history, while the system prompt currently reads only `AGENTS.md` plus tool descriptors. The desktop UI already exposes active/archived sessions and a run-scoped feed, but search, export, compaction, memory review, and branch/rewind workflows are not yet first-class.
+Current code footing: Cadence has durable `agent_sessions`, `agent_runs`, `agent_messages`, `agent_events`, `agent_tool_calls`, `agent_file_changes`, `agent_checkpoints`, `agent_action_requests`, `agent_usage`, compaction, memory, and lineage records. The owned-agent loop rebuilds provider replay state from persisted history, active compaction summaries, and reviewed memory. The desktop UI exposes active/archived sessions, run-scoped feed/history, search, export, context visualization, compaction, memory review, branch, rewind, and auto-compact controls.
 
 #### Priority 4 Implementation Plan
 
@@ -785,20 +787,31 @@ Outcome: users can recover and explore from prior conversation points without de
 
 Outcome: Priority 4 is safe enough to call complete and useful for both users and future implementation agents.
 
-- [ ] Slice 4.6.1: Add privacy and integrity hardening for session context.
+- [x] Slice 4.6.1: Add privacy and integrity hardening for session context.
   - Scope: audit transcript projections, exports, search snippets, context visualization, compaction summaries, memory candidates, approved memories, and branch/rewind metadata for secret leakage and source-integrity issues.
   - Acceptance: copied/exported/model-visible surfaces redact API keys, OAuth tokens, bearer headers, credential paths, and secret-bearing tool results while preserving enough context to be useful.
   - Verification: Rust and TypeScript tests cover nested JSON redaction, large tool results, prompt-injection-shaped memory text, secret-bearing paths, exported Markdown, exported JSON, search snippets, and compaction summaries.
+  - Completed: 2026-04-26. Implementation: widened the shared session-context redaction contract for endpoint credentials, compact bearer headers, cloud credential names, generic token assignments, nested JSON token keys, secret-bearing local credential paths, and prompt-injection-shaped memory text. Memory extraction now reports instruction-override candidates separately, approval blocks unsafe memory text, and legacy unsafe approved memory is redacted before context injection. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_context_contract` passed 9 tests, including token/path/endpoint/instruction-override redaction; `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_history_commands` passed 8 tests, including transcript, Markdown export, JSON export, search snippet, compaction summary, and memory-review privacy hardening; `pnpm --dir client exec vitest run src/lib/cadence-model/session-context.test.ts` passed 7 TypeScript schema/helper tests.
 
-- [ ] Slice 4.6.2: Document session memory and context workflows.
+- [x] Slice 4.6.2: Document session memory and context workflows.
   - Scope: document search, export, context visualization, manual compact, auto-compact, memory review, instruction files, branch, rewind, and privacy guarantees.
   - Acceptance: a fresh user can understand when to compact, what memory becomes model-visible, how to export a session, and how branch/rewind differ from destructive history edits.
   - Verification: docs review confirms the workflow is user-facing, accurate to the implemented commands/UI, and contains no executable examples requiring separate test coverage.
+  - Completed: 2026-04-26. Implementation: added `docs/session-memory-and-context.md` covering preserved history, search, export, context visualization, manual compact, auto-compact, memory review, instruction files, branch, rewind, privacy guarantees, and support triage; linked it from the README. Verification evidence: docs review confirmed the workflow is user-facing, matches the implemented command/UI behavior, and contains no executable examples requiring separate test coverage.
 
-- [ ] Slice 4.6.3: Declare Priority 4 complete.
+- [x] Slice 4.6.3: Declare Priority 4 complete.
   - Scope: run focused Rust tests for session projection/search/export, context policy, compaction, memory store/extraction, branch/rewind, and provider replay; run focused React tests for agent/session UI; run typecheck/build.
   - Acceptance: the report can mark Priority 4 complete only after search, export, context visualization, manual compact, reviewed memory, branch/rewind, auto-compact policy, docs, and privacy hardening all have passing verification.
   - Verification: record the exact commands and passing results in the completion note, using one Cargo command at a time.
+  - Completed: 2026-04-26. Verification evidence:
+    - `cargo fmt --manifest-path client/src-tauri/Cargo.toml` passed.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_context_contract` passed 9 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_history_commands` passed 8 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test agent_core_runtime` passed 32 tests, including compaction-aware replay and auto-compact continuations.
+    - `pnpm --dir client exec vitest run src/lib/cadence-model/runtime.test.ts src/lib/cadence-model/agent.test.ts src/lib/cadence-model/session-context.test.ts components/cadence/agent-runtime.test.tsx components/cadence/agent-sessions-sidebar.test.tsx` passed 5 files and 62 tests.
+    - `pnpm --dir client exec eslint src/lib/cadence-model/session-context.ts src/lib/cadence-model/session-context.test.ts` passed.
+    - `pnpm --dir client exec tsc --noEmit` passed.
+    - `pnpm --dir client build` passed with the existing Vite large-chunk warning.
 
 ### Priority 5: Add External Integration Surfaces Only If Needed
 
@@ -828,8 +841,8 @@ Cadence should not blindly copy OpenClaude in these areas because it already has
 
 1. [x] Agent parity foundation: MCP invocation, subagents, todo/task tools, tool search, LSP, notebook editing, and PowerShell are now in the owned-agent runtime.
 2. [x] Skills and plugins: make skills first-class in the UI and model tool list, then add plugin source/trust/reload mechanics.
-3. [ ] Provider and diagnostics: add doctor reports, provider repair, profile recommendation, and missing provider presets.
-4. [ ] Memory and sessions: add compact/export/search/resume/rename/branch-style user flows.
+3. [x] Provider and diagnostics: add doctor reports, provider repair, profile recommendation, and missing provider presets.
+4. [x] Memory and sessions: add compact/export/search/resume/rename/branch-style user flows.
 5. [ ] External surfaces: add headless API and editor/remote integrations if Cadence is meant to be used outside the desktop app.
 
 ## Cold-Read Check

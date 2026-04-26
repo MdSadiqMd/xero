@@ -219,6 +219,12 @@ OpenAI-compatible setup recipes cover LiteLLM, LM Studio, Mistral, Groq, Togethe
 
 ---
 
+## Session Memory And Context
+
+Cadence supports session transcript search, Markdown/JSON export, context visualization, manual compact, opt-in auto-compact, reviewed memory, branch, and rewind workflows. See `docs/session-memory-and-context.md` for the user workflow, privacy guarantees, and support triage guidance.
+
+---
+
 ## Tauri Command Surface (High-Level)
 
 Backend commands are registered in `client/src-tauri/src/lib.rs` and grouped under modules in `client/src-tauri/src/commands/`.
