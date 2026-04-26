@@ -508,6 +508,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
                 onExportSessionTranscript={resolvedAdapter.exportSessionTranscript?.bind(resolvedAdapter)}
                 onSaveSessionTranscriptExport={resolvedAdapter.saveSessionTranscriptExport?.bind(resolvedAdapter)}
                 onLoadSessionContextSnapshot={resolvedAdapter.getSessionContextSnapshot?.bind(resolvedAdapter)}
+                onCompactSessionHistory={resolvedAdapter.compactSessionHistory?.bind(resolvedAdapter)}
               />
             </div>
           ) : null}

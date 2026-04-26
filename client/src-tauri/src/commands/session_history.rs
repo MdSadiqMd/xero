@@ -1,6 +1,13 @@
-use std::{collections::HashMap, fs, path::Path, path::PathBuf};
+use std::{
+    collections::{BTreeSet, HashMap},
+    fs,
+    path::Path,
+    path::PathBuf,
+};
 
+use rand::RngCore;
 use rusqlite::{params, Connection};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Runtime, State};
 
 use crate::{
@@ -8,35 +15,49 @@ use crate::{
     commands::{
         context_budget_with_source, estimate_tokens, evaluate_compaction_policy,
         provider_context_budget_tokens, redact_session_context_text,
-        run_transcript_from_agent_snapshot, session_transcript_from_runs,
-        usage_totals_from_agent_usage, validate_context_snapshot_contract,
-        validate_export_payload_contract, validate_session_transcript_contract, CommandError,
-        CommandResult, ExportSessionTranscriptRequestDto, GetSessionContextSnapshotRequestDto,
-        GetSessionTranscriptRequestDto, SaveSessionTranscriptExportRequestDto,
-        SearchSessionTranscriptsRequestDto, SearchSessionTranscriptsResponseDto,
-        SessionCompactionPolicyInput, SessionContextContributorDto,
-        SessionContextContributorKindDto, SessionContextRedactionClassDto,
-        SessionContextRedactionDto, SessionContextSnapshotDto, SessionTranscriptDto,
-        SessionTranscriptExportFormatDto, SessionTranscriptExportPayloadDto,
+        run_transcript_from_agent_snapshot, session_compaction_record_dto,
+        session_transcript_from_runs, usage_totals_from_agent_usage,
+        validate_context_snapshot_contract, validate_export_payload_contract,
+        validate_session_compaction_record_contract, validate_session_transcript_contract,
+        CommandError, CommandResult, CompactSessionHistoryRequestDto,
+        CompactSessionHistoryResponseDto, ExportSessionTranscriptRequestDto,
+        GetSessionContextSnapshotRequestDto, GetSessionTranscriptRequestDto,
+        SaveSessionTranscriptExportRequestDto, SearchSessionTranscriptsRequestDto,
+        SearchSessionTranscriptsResponseDto, SessionCompactionPolicyInput,
+        SessionContextContributorDto, SessionContextContributorKindDto,
+        SessionContextRedactionClassDto, SessionContextRedactionDto, SessionContextSnapshotDto,
+        SessionTranscriptDto, SessionTranscriptExportFormatDto, SessionTranscriptExportPayloadDto,
         SessionTranscriptExportResponseDto, SessionTranscriptItemDto, SessionTranscriptScopeDto,
         SessionTranscriptSearchResultSnippetDto, SessionUsageSourceDto, SessionUsageTotalsDto,
         CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
     },
-    db::project_store::{self, AgentMessageRole, AgentRunSnapshotRecord, AgentSessionRecord},
+    db::project_store::{
+        self, AgentCompactionTrigger, AgentMessageRecord, AgentMessageRole, AgentRunSnapshotRecord,
+        AgentSessionRecord, NewAgentCompactionRecord,
+    },
     runtime::{
-        agent_core::{runtime_controls_from_request, tool_registry_for_snapshot},
+        agent_core::{
+            create_provider_adapter, runtime_controls_from_request, tool_registry_for_snapshot,
+            ProviderAdapter, ProviderCompactionRequest,
+        },
         AgentToolDescriptor,
     },
     state::DesktopState,
 };
 
-use super::{runtime_support::resolve_project_root, validate_non_empty};
+use super::{
+    runtime_support::{resolve_owned_agent_provider_config, resolve_project_root},
+    validate_non_empty,
+};
 
 const DEFAULT_SEARCH_LIMIT: usize = 25;
 const MAX_SEARCH_LIMIT: usize = 100;
 const MAX_FALLBACK_SNIPPET_CHARS: usize = 220;
 const CONTEXT_PREVIEW_CHARS: usize = 600;
 const UNAVAILABLE_CONTEXT_ID: &str = "unavailable";
+const DEFAULT_RAW_TAIL_MESSAGE_COUNT: u32 = 8;
+const MAX_RAW_TAIL_MESSAGE_COUNT: u32 = 24;
+const MAX_COMPACTION_SUMMARY_TOKENS: u64 = 1_500;
 
 #[tauri::command]
 pub fn get_session_transcript<R: Runtime>(
@@ -232,6 +253,50 @@ pub fn get_session_context_snapshot<R: Runtime>(
     )
 }
 
+#[tauri::command]
+pub fn compact_session_history<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: CompactSessionHistoryRequestDto,
+) -> CommandResult<CompactSessionHistoryResponseDto> {
+    validate_transcript_request(
+        &request.project_id,
+        &request.agent_session_id,
+        request.run_id.as_deref(),
+    )?;
+    let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
+    let provider_config = resolve_owned_agent_provider_config(&app, state.inner(), None)?;
+    let provider = create_provider_adapter(provider_config)?;
+    let compaction = compact_session_history_with_provider(
+        &repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+        request.run_id.as_deref(),
+        request.raw_tail_message_count,
+        provider.as_ref(),
+    )?;
+    let context_snapshot = build_session_context_snapshot(
+        &repo_root,
+        &request.project_id,
+        &request.agent_session_id,
+        request.run_id.as_deref(),
+        Some(provider.provider_id()),
+        Some(provider.model_id()),
+        None,
+    )?;
+    let response = CompactSessionHistoryResponseDto {
+        compaction,
+        context_snapshot,
+    };
+    validate_session_compaction_record_contract(&response.compaction).map_err(|details| {
+        CommandError::system_fault(
+            "session_compaction_invalid",
+            format!("Cadence generated an invalid session compaction record: {details}"),
+        )
+    })?;
+    Ok(response)
+}
+
 fn validate_transcript_request(
     project_id: &str,
     agent_session_id: &str,
@@ -342,7 +407,26 @@ fn build_session_context_snapshot(
             snapshot,
         )?;
     }
-    append_history_contributors(&mut contributors, project_id, agent_session_id, &snapshots);
+    let active_compaction =
+        project_store::load_active_agent_compaction(repo_root, project_id, agent_session_id)?
+            .filter(|compaction| {
+                run_id
+                    .map(|run_id| compaction.covers_run(run_id))
+                    .unwrap_or(true)
+            });
+    append_compaction_summary_contributor(
+        &mut contributors,
+        project_id,
+        agent_session_id,
+        active_compaction.as_ref(),
+    );
+    append_history_contributors(
+        &mut contributors,
+        project_id,
+        agent_session_id,
+        &snapshots,
+        active_compaction.as_ref(),
+    );
     append_usage_contributors(&mut contributors, project_id, agent_session_id, &snapshots);
     append_pending_prompt_contributor(
         &mut contributors,
@@ -371,8 +455,8 @@ fn build_session_context_snapshot(
     let policy_decisions = vec![evaluate_compaction_policy(SessionCompactionPolicyInput {
         manual_requested: false,
         auto_enabled: false,
-        provider_supports_compaction: false,
-        active_compaction_present: false,
+        provider_supports_compaction: true,
+        active_compaction_present: active_compaction.is_some(),
         estimated_tokens,
         budget_tokens,
         threshold_percent: Some(80),
@@ -412,6 +496,330 @@ fn build_session_context_snapshot(
         )
     })?;
     Ok(snapshot)
+}
+
+fn compact_session_history_with_provider(
+    repo_root: &Path,
+    project_id: &str,
+    agent_session_id: &str,
+    run_id: Option<&str>,
+    raw_tail_message_count: Option<u32>,
+    provider: &dyn ProviderAdapter,
+) -> CommandResult<crate::commands::SessionCompactionRecordDto> {
+    let session = project_store::get_agent_session(repo_root, project_id, agent_session_id)?
+        .ok_or_else(|| missing_session_error(project_id, agent_session_id))?;
+    let snapshots = load_context_snapshots(repo_root, project_id, agent_session_id, run_id)?;
+    if snapshots.is_empty() {
+        return Err(CommandError::user_fixable(
+            "session_compaction_no_runs",
+            format!(
+                "Cadence cannot compact session `{}` because it does not have any owned-agent runs yet.",
+                session.agent_session_id
+            ),
+        ));
+    }
+
+    let latest_snapshot = snapshots
+        .iter()
+        .map(|(snapshot, _)| snapshot)
+        .max_by(|left, right| {
+            left.run
+                .started_at
+                .cmp(&right.run.started_at)
+                .then_with(|| left.run.run_id.cmp(&right.run.run_id))
+        })
+        .expect("snapshots is non-empty");
+    if provider.provider_id() != latest_snapshot.run.provider_id
+        || provider.model_id() != latest_snapshot.run.model_id
+    {
+        return Err(CommandError::user_fixable(
+            "session_compaction_provider_mismatch",
+            format!(
+                "Cadence cannot compact session `{agent_session_id}` with `{}/{}` because the selected run uses `{}/{}`.",
+                provider.provider_id(),
+                provider.model_id(),
+                latest_snapshot.run.provider_id,
+                latest_snapshot.run.model_id
+            ),
+        ));
+    }
+
+    let raw_tail_message_count = raw_tail_message_count
+        .unwrap_or(DEFAULT_RAW_TAIL_MESSAGE_COUNT)
+        .clamp(2, MAX_RAW_TAIL_MESSAGE_COUNT);
+    let source = build_compaction_source(&snapshots, raw_tail_message_count)?;
+    if source.covered_messages.is_empty() {
+        return Err(CommandError::user_fixable(
+            "session_compaction_not_needed",
+            "Cadence needs more recorded conversation before a manual compaction would reduce replay context.",
+        ));
+    }
+
+    let input_tokens = estimate_tokens(&source.transcript);
+    let request = ProviderCompactionRequest {
+        project_id: project_id.into(),
+        agent_session_id: agent_session_id.into(),
+        run_id: run_id.map(ToOwned::to_owned),
+        provider_id: provider.provider_id().into(),
+        model_id: provider.model_id().into(),
+        transcript: source.transcript.clone(),
+        max_summary_tokens: MAX_COMPACTION_SUMMARY_TOKENS,
+    };
+    let mut ignored_stream_event = |_event| Ok(());
+    let outcome = provider.compact_transcript(&request, &mut ignored_stream_event)?;
+    let (summary, summary_redaction) = redact_session_context_text(&outcome.summary);
+    if summary.trim().is_empty() {
+        return Err(CommandError::retryable(
+            "session_compaction_empty_summary",
+            "The provider returned an empty compaction summary. Try again or use a different provider profile.",
+        ));
+    }
+    if summary_redaction.redacted {
+        return Err(CommandError::retryable(
+            "session_compaction_summary_redacted",
+            "The provider returned a compaction summary that looked secret-bearing, so Cadence refused to save it.",
+        ));
+    }
+
+    let now = now_timestamp();
+    let compaction_id = format!(
+        "session-compact:{}:{}:{}:{}",
+        agent_session_id,
+        now,
+        source.source_hash.chars().take(12).collect::<String>(),
+        random_hex_suffix()
+    );
+    let record = project_store::insert_agent_compaction(
+        repo_root,
+        &NewAgentCompactionRecord {
+            compaction_id,
+            project_id: project_id.into(),
+            agent_session_id: agent_session_id.into(),
+            source_run_id: latest_snapshot.run.run_id.clone(),
+            provider_id: provider.provider_id().into(),
+            model_id: provider.model_id().into(),
+            summary: summary.clone(),
+            covered_run_ids: source.covered_run_ids.clone(),
+            covered_message_start_id: source.covered_message_start_id,
+            covered_message_end_id: source.covered_message_end_id,
+            covered_event_start_id: source.covered_event_start_id,
+            covered_event_end_id: source.covered_event_end_id,
+            source_hash: source.source_hash.clone(),
+            input_tokens,
+            summary_tokens: estimate_tokens(&summary),
+            raw_tail_message_count,
+            policy_reason: "manual_compact_requested".into(),
+            trigger: AgentCompactionTrigger::Manual,
+            diagnostic: None,
+            created_at: now.clone(),
+        },
+    )?;
+
+    Ok(session_compaction_record_dto(&record))
+}
+
+struct CompactionSource<'a> {
+    transcript: String,
+    covered_messages: Vec<&'a AgentMessageRecord>,
+    covered_run_ids: Vec<String>,
+    covered_message_start_id: Option<i64>,
+    covered_message_end_id: Option<i64>,
+    covered_event_start_id: Option<i64>,
+    covered_event_end_id: Option<i64>,
+    source_hash: String,
+}
+
+fn build_compaction_source(
+    snapshots: &[(
+        AgentRunSnapshotRecord,
+        Option<project_store::AgentUsageRecord>,
+    )],
+    raw_tail_message_count: u32,
+) -> CommandResult<CompactionSource<'_>> {
+    let mut messages = snapshots
+        .iter()
+        .flat_map(|(snapshot, _)| snapshot.messages.iter())
+        .filter(|message| message.role != AgentMessageRole::System)
+        .collect::<Vec<_>>();
+    messages.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let tail_start = compaction_tail_start_index(&messages, raw_tail_message_count as usize);
+    let covered_messages = messages.into_iter().take(tail_start).collect::<Vec<_>>();
+    let covered_run_ids = covered_messages
+        .iter()
+        .map(|message| message.run_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let covered_run_id_set = covered_run_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let covered_message_start_id = covered_messages.iter().map(|message| message.id).min();
+    let covered_message_end_id = covered_messages.iter().map(|message| message.id).max();
+
+    let mut covered_events = snapshots
+        .iter()
+        .flat_map(|(snapshot, _)| snapshot.events.iter())
+        .filter(|event| covered_run_id_set.contains(&event.run_id))
+        .collect::<Vec<_>>();
+    covered_events.sort_by(|left, right| left.id.cmp(&right.id));
+    let covered_event_start_id = covered_events.iter().map(|event| event.id).min();
+    let covered_event_end_id = covered_events.iter().map(|event| event.id).max();
+    let transcript =
+        render_compaction_transcript(snapshots, &covered_run_id_set, &covered_messages)?;
+    let source_hash = compaction_source_hash(
+        snapshots,
+        &covered_run_id_set,
+        &covered_messages,
+        &covered_events,
+    )?;
+
+    Ok(CompactionSource {
+        transcript,
+        covered_messages,
+        covered_run_ids,
+        covered_message_start_id,
+        covered_message_end_id,
+        covered_event_start_id,
+        covered_event_end_id,
+        source_hash,
+    })
+}
+
+fn compaction_tail_start_index(messages: &[&AgentMessageRecord], raw_tail_count: usize) -> usize {
+    if messages.len() <= raw_tail_count {
+        return messages.len();
+    }
+    let mut start = messages.len().saturating_sub(raw_tail_count);
+    while start > 0 && messages[start].role == AgentMessageRole::Tool {
+        start = start.saturating_sub(1);
+    }
+    start
+}
+
+fn render_compaction_transcript(
+    snapshots: &[(
+        AgentRunSnapshotRecord,
+        Option<project_store::AgentUsageRecord>,
+    )],
+    covered_run_ids: &BTreeSet<String>,
+    covered_messages: &[&AgentMessageRecord],
+) -> CommandResult<String> {
+    let mut output = String::new();
+    output.push_str("Compact the following Cadence session history for replay.\n");
+    output.push_str("Raw transcript rows stay durable; unresolved actions remain unresolved.\n\n");
+    for (snapshot, usage) in snapshots {
+        if !covered_run_ids.contains(&snapshot.run.run_id) {
+            continue;
+        }
+        output.push_str(&format!(
+            "Run {} provider={} model={} status={:?}\n",
+            snapshot.run.run_id,
+            snapshot.run.provider_id,
+            snapshot.run.model_id,
+            snapshot.run.status
+        ));
+        if let Some(usage) = usage {
+            output.push_str(&format!(
+                "Usage: {} input + {} output = {} total tokens.\n",
+                usage.input_tokens, usage.output_tokens, usage.total_tokens
+            ));
+        }
+        for message in covered_messages
+            .iter()
+            .filter(|message| message.run_id == snapshot.run.run_id)
+        {
+            let (text, _) = redact_session_context_text(&message.content);
+            output.push_str(&format!(
+                "- {} message {}: {}\n",
+                message_role_label(&message.role),
+                message.id,
+                preview_context_text(&text)
+            ));
+        }
+        for tool_call in &snapshot.tool_calls {
+            let (input, _) = redact_session_context_text(&tool_call.input_json);
+            let result = tool_call
+                .result_json
+                .as_deref()
+                .map(redact_session_context_text)
+                .map(|(value, _)| preview_context_text(&value))
+                .unwrap_or_else(|| "(no result recorded)".into());
+            output.push_str(&format!(
+                "- Tool {} {} state={:?} input={} result={}\n",
+                tool_call.tool_name,
+                tool_call.tool_call_id,
+                tool_call.state,
+                preview_context_text(&input),
+                result
+            ));
+        }
+        for action in &snapshot.action_requests {
+            let (detail, _) = redact_session_context_text(&action.detail);
+            output.push_str(&format!(
+                "- Action {} type={} status={} detail={}\n",
+                action.action_id,
+                action.action_type,
+                action.status,
+                preview_context_text(&detail)
+            ));
+        }
+        for checkpoint in &snapshot.checkpoints {
+            let (summary, _) = redact_session_context_text(&checkpoint.summary);
+            output.push_str(&format!(
+                "- Checkpoint {}: {}\n",
+                checkpoint.checkpoint_kind,
+                preview_context_text(&summary)
+            ));
+        }
+        for file_change in &snapshot.file_changes {
+            let (path, _) = redact_session_context_text(&file_change.path);
+            output.push_str(&format!(
+                "- File change {}: {}\n",
+                file_change.operation,
+                preview_context_text(&path)
+            ));
+        }
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+fn compaction_source_hash(
+    snapshots: &[(
+        AgentRunSnapshotRecord,
+        Option<project_store::AgentUsageRecord>,
+    )],
+    covered_run_ids: &BTreeSet<String>,
+    covered_messages: &[&AgentMessageRecord],
+    covered_events: &[&project_store::AgentEventRecord],
+) -> CommandResult<String> {
+    let mut hasher = Sha256::new();
+    for (snapshot, _usage) in snapshots {
+        if !covered_run_ids.contains(&snapshot.run.run_id) {
+            continue;
+        }
+        hasher.update(snapshot.run.run_id.as_bytes());
+        hasher.update(snapshot.run.provider_id.as_bytes());
+        hasher.update(snapshot.run.model_id.as_bytes());
+        hasher.update(snapshot.run.prompt.as_bytes());
+        for message in covered_messages
+            .iter()
+            .filter(|message| message.run_id == snapshot.run.run_id)
+        {
+            hasher.update(message.id.to_string().as_bytes());
+            hasher.update(format!("{:?}", message.role).as_bytes());
+            hasher.update(message.content.as_bytes());
+        }
+    }
+    for event in covered_events {
+        hasher.update(event.id.to_string().as_bytes());
+        hasher.update(event.run_id.as_bytes());
+        hasher.update(format!("{:?}", event.event_kind).as_bytes());
+        hasher.update(event.payload_json.as_bytes());
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn load_context_snapshots(
@@ -553,6 +961,7 @@ fn append_history_contributors(
         AgentRunSnapshotRecord,
         Option<project_store::AgentUsageRecord>,
     )],
+    active_compaction: Option<&project_store::AgentCompactionRecord>,
 ) {
     let mut sorted = snapshots
         .iter()
@@ -571,6 +980,7 @@ fn append_history_contributors(
             project_id,
             agent_session_id,
             snapshot,
+            active_compaction,
         );
         let mut messages = snapshot.messages.iter().collect::<Vec<_>>();
         messages.sort_by(|left, right| {
@@ -579,6 +989,11 @@ fn append_history_contributors(
                 .then_with(|| left.id.cmp(&right.id))
         });
         for message in messages {
+            if active_compaction.is_some_and(|compaction| {
+                compaction.covers_run(&message.run_id) && compaction.covers_message_id(message.id)
+            }) {
+                continue;
+            }
             match message.role {
                 AgentMessageRole::System => {}
                 AgentMessageRole::Tool => {
@@ -629,13 +1044,44 @@ fn append_history_contributors(
     }
 }
 
+fn append_compaction_summary_contributor(
+    contributors: &mut Vec<SessionContextContributorDto>,
+    project_id: &str,
+    agent_session_id: &str,
+    active_compaction: Option<&project_store::AgentCompactionRecord>,
+) {
+    let Some(compaction) = active_compaction else {
+        return;
+    };
+    append_context_contributor(
+        contributors,
+        ContextContributorParts {
+            contributor_id: format!("compaction_summary:{}", compaction.compaction_id),
+            kind: SessionContextContributorKindDto::CompactionSummary,
+            label: "Compacted history summary".into(),
+            project_id: Some(project_id),
+            agent_session_id: Some(agent_session_id),
+            run_id: Some(compaction.source_run_id.as_str()),
+            source_id: Some(compaction.compaction_id.as_str()),
+            raw_text: Some(compaction.summary.as_str()),
+            estimate_text: Some(compaction.summary.as_str()),
+            included: true,
+            model_visible: true,
+        },
+    );
+}
+
 fn append_run_prompt_contributor_if_needed(
     contributors: &mut Vec<SessionContextContributorDto>,
     project_id: &str,
     agent_session_id: &str,
     snapshot: &AgentRunSnapshotRecord,
+    active_compaction: Option<&project_store::AgentCompactionRecord>,
 ) {
     if snapshot.run.prompt.trim().is_empty() {
+        return;
+    }
+    if active_compaction.is_some_and(|compaction| compaction.covers_run(&snapshot.run.run_id)) {
         return;
     }
     let prompt_in_messages = snapshot.messages.iter().any(|message| {
@@ -852,6 +1298,15 @@ fn preview_context_text(value: &str) -> String {
         .collect::<String>();
     preview.push_str("...");
     preview
+}
+
+fn random_hex_suffix() -> String {
+    let mut bytes = [0_u8; 4];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
 }
 
 fn strongest_context_redaction<'a>(

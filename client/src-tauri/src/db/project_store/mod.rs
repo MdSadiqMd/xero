@@ -1,3 +1,4 @@
+mod agent_context;
 mod agent_core;
 mod agent_session;
 mod autonomous;
@@ -11,6 +12,7 @@ mod runtime_boundary;
 mod skills;
 pub(crate) mod workflow;
 
+pub use agent_context::*;
 pub use agent_core::*;
 pub use agent_session::*;
 pub(crate) use agent_session::{ensure_agent_session_active, touch_agent_session_runtime_run};

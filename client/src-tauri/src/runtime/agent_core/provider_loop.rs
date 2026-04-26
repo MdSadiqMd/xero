@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha256};
+
 use super::*;
 
 #[expect(
@@ -251,8 +253,46 @@ fn record_provider_stream_event(
 }
 
 pub(crate) fn provider_messages_from_snapshot(
+    repo_root: &Path,
     snapshot: &AgentRunSnapshotRecord,
 ) -> CommandResult<Vec<ProviderMessage>> {
+    let active_compaction = project_store::load_active_agent_compaction(
+        repo_root,
+        &snapshot.run.project_id,
+        &snapshot.run.agent_session_id,
+    )?
+    .filter(|compaction| {
+        compaction.covered_run_ids.len() == 1 && compaction.covers_run(&snapshot.run.run_id)
+    });
+    if let Some(compaction) = active_compaction.as_ref() {
+        if compaction.provider_id != snapshot.run.provider_id
+            || compaction.model_id != snapshot.run.model_id
+        {
+            return Err(CommandError::user_fixable(
+                "agent_compaction_provider_mismatch",
+                format!(
+                    "Cadence cannot replay compaction `{}` for run `{}` because it was created with `{}/{}` but the run uses `{}/{}`.",
+                    compaction.compaction_id,
+                    snapshot.run.run_id,
+                    compaction.provider_id,
+                    compaction.model_id,
+                    snapshot.run.provider_id,
+                    snapshot.run.model_id
+                ),
+            ));
+        }
+        let current_hash = replay_compaction_source_hash(snapshot, compaction)?;
+        if current_hash != compaction.source_hash {
+            return Err(CommandError::user_fixable(
+                "agent_compaction_source_mismatch",
+                format!(
+                    "Cadence cannot replay compaction `{}` because the covered transcript changed after compaction. Refresh the Context panel and compact again before continuing.",
+                    compaction.compaction_id
+                ),
+            ));
+        }
+    }
+
     let superseded_tool_message_ids = superseded_tool_message_ids(&snapshot.messages)?;
     let tool_calls_by_id = snapshot
         .tool_calls
@@ -279,7 +319,21 @@ pub(crate) fn provider_messages_from_snapshot(
         .collect::<CommandResult<BTreeMap<_, _>>>()?;
 
     let mut messages = Vec::new();
+    if let Some(compaction) = active_compaction.as_ref() {
+        messages.push(ProviderMessage::User {
+            content: format!(
+                "Compacted prior session context from Cadence. Raw transcript rows are still durable for search/export, but replay should use this summary plus the raw tail below.\n\n{}",
+                compaction.summary
+            ),
+        });
+    }
     for message in &snapshot.messages {
+        if active_compaction
+            .as_ref()
+            .is_some_and(|compaction| compaction.covers_message_id(message.id))
+        {
+            continue;
+        }
         match &message.role {
             AgentMessageRole::System => {}
             AgentMessageRole::Developer | AgentMessageRole::User => {
@@ -332,6 +386,42 @@ pub(crate) fn provider_messages_from_snapshot(
     }
 
     Ok(messages)
+}
+
+fn replay_compaction_source_hash(
+    snapshot: &AgentRunSnapshotRecord,
+    compaction: &project_store::AgentCompactionRecord,
+) -> CommandResult<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(snapshot.run.run_id.as_bytes());
+    hasher.update(snapshot.run.provider_id.as_bytes());
+    hasher.update(snapshot.run.model_id.as_bytes());
+    hasher.update(snapshot.run.prompt.as_bytes());
+    for message in snapshot
+        .messages
+        .iter()
+        .filter(|message| compaction.covers_message_id(message.id))
+    {
+        hasher.update(message.id.to_string().as_bytes());
+        hasher.update(format!("{:?}", message.role).as_bytes());
+        hasher.update(message.content.as_bytes());
+    }
+    if let (Some(start), Some(end)) = (
+        compaction.covered_event_start_id,
+        compaction.covered_event_end_id,
+    ) {
+        for event in snapshot
+            .events
+            .iter()
+            .filter(|event| event.id >= start && event.id <= end)
+        {
+            hasher.update(event.id.to_string().as_bytes());
+            hasher.update(event.run_id.as_bytes());
+            hasher.update(format!("{:?}", event.event_kind).as_bytes());
+            hasher.update(event.payload_json.as_bytes());
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub(crate) fn tool_registry_for_snapshot(

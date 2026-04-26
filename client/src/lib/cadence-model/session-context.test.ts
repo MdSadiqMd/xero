@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
+  compactSessionHistoryRequestSchema,
+  compactSessionHistoryResponseSchema,
   createContextBudget,
   createPublicSessionContextRedaction,
   createRedactedSessionContextText,
@@ -11,6 +13,7 @@ import {
   saveSessionTranscriptExportRequestSchema,
   searchSessionTranscriptsRequestSchema,
   searchSessionTranscriptsResponseSchema,
+  sessionCompactionRecordSchema,
   sessionContextContributorSchema,
   sessionContextPolicyDecisionSchema,
   sessionContextSnapshotSchema,
@@ -298,6 +301,82 @@ describe('session context contract', () => {
         truncated: false,
       }).results[0].snippet,
     ).toContain('validation')
+  })
+
+  it('validates manual compaction request and response DTOs', () => {
+    const compaction = sessionCompactionRecordSchema.parse({
+      contractVersion: CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
+      compactionId: 'compact-1',
+      projectId,
+      agentSessionId,
+      sourceRunId: runId,
+      providerId,
+      modelId,
+      summary: 'Earlier session history was compacted without deleting raw transcript rows.',
+      coveredRunIds: [runId],
+      coveredMessageStartId: 1,
+      coveredMessageEndId: 4,
+      coveredEventStartId: 1,
+      coveredEventEndId: 3,
+      sourceHash: 'a'.repeat(64),
+      inputTokens: 1000,
+      summaryTokens: 80,
+      rawTailMessageCount: 8,
+      policyReason: 'manual_compact_requested',
+      trigger: 'manual',
+      active: true,
+      diagnostic: null,
+      createdAt,
+      supersededAt: null,
+      redaction: createPublicSessionContextRedaction(),
+    })
+
+    expect(
+      compactSessionHistoryRequestSchema.parse({
+        projectId,
+        agentSessionId,
+        runId,
+        rawTailMessageCount: 8,
+      }),
+    ).toEqual({ projectId, agentSessionId, runId, rawTailMessageCount: 8 })
+    expect(() =>
+      compactSessionHistoryRequestSchema.parse({
+        projectId,
+        agentSessionId,
+        runId,
+        rawTailMessageCount: 30,
+      }),
+    ).toThrow(/less than or equal/)
+    expect(() =>
+      sessionCompactionRecordSchema.parse({
+        ...compaction,
+        coveredMessageStartId: 4,
+        coveredMessageEndId: 1,
+      }),
+    ).toThrow(/ordered/)
+
+    const snapshot = sessionContextSnapshotSchema.parse({
+      contractVersion: CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
+      snapshotId: 'context-snapshot-compacted',
+      projectId,
+      agentSessionId,
+      runId,
+      providerId,
+      modelId,
+      generatedAt: '2026-04-26T10:10:00Z',
+      budget: createContextBudget(480, 1000),
+      contributors: [
+        makeContributor('compaction_summary:compact-1', 1, {
+          kind: 'compaction_summary',
+          label: 'Compacted history summary',
+          text: compaction.summary,
+        }),
+      ],
+      policyDecisions: [],
+      usageTotals: null,
+      redaction: createPublicSessionContextRedaction(),
+    })
+    expect(compactSessionHistoryResponseSchema.parse({ compaction, contextSnapshot: snapshot }).compaction.active).toBe(true)
   })
 })
 

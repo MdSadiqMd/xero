@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::db::project_store::{
-    agent_run_status_sql_value, AgentRunEventKind, AgentRunRecord, AgentRunSnapshotRecord,
-    AgentRunStatus, AgentSessionRecord, AgentSessionStatus, AgentToolCallState, AgentUsageRecord,
+    agent_run_status_sql_value, AgentCompactionRecord, AgentCompactionTrigger, AgentRunEventKind,
+    AgentRunRecord, AgentRunSnapshotRecord, AgentRunStatus, AgentSessionRecord, AgentSessionStatus,
+    AgentToolCallState, AgentUsageRecord,
 };
 
 use super::runtime::{RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeToolCallState};
@@ -346,6 +347,17 @@ pub struct GetSessionContextSnapshotRequestDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompactSessionHistoryRequestDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_tail_message_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionContextContributorKindDto {
     SystemPrompt,
@@ -421,6 +433,56 @@ pub struct SessionContextSnapshotDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_totals: Option<SessionUsageTotalsDto>,
     pub redaction: SessionContextRedactionDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionCompactionDiagnosticDto {
+    pub code: String,
+    pub message: String,
+    pub redaction: SessionContextRedactionDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionCompactionRecordDto {
+    pub contract_version: u32,
+    pub compaction_id: String,
+    pub project_id: String,
+    pub agent_session_id: String,
+    pub source_run_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub summary: String,
+    pub covered_run_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_message_start_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_message_end_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_event_start_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covered_event_end_id: Option<i64>,
+    pub source_hash: String,
+    pub input_tokens: u64,
+    pub summary_tokens: u64,
+    pub raw_tail_message_count: u32,
+    pub policy_reason: String,
+    pub trigger: SessionCompactionTriggerDto,
+    pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<SessionCompactionDiagnosticDto>,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_at: Option<String>,
+    pub redaction: SessionContextRedactionDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompactSessionHistoryResponseDto {
+    pub compaction: SessionCompactionRecordDto,
+    pub context_snapshot: SessionContextSnapshotDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -536,6 +598,51 @@ pub fn usage_totals_from_agent_usage(record: &AgentUsageRecord) -> SessionUsageT
         estimated_cost_micros: record.estimated_cost_micros,
         source: SessionUsageSourceDto::Provider,
         updated_at: record.updated_at.clone(),
+    }
+}
+
+pub fn session_compaction_record_dto(record: &AgentCompactionRecord) -> SessionCompactionRecordDto {
+    let (summary, summary_redaction) = sanitize_context_text(&record.summary);
+    let diagnostic = record.diagnostic.as_ref().map(|diagnostic| {
+        let (message, message_redaction) = sanitize_context_text(&diagnostic.message);
+        SessionCompactionDiagnosticDto {
+            code: diagnostic.code.clone(),
+            message,
+            redaction: message_redaction,
+        }
+    });
+    let diagnostic_redaction = diagnostic
+        .as_ref()
+        .map(|diagnostic| diagnostic.redaction.clone())
+        .unwrap_or_else(SessionContextRedactionDto::public);
+    SessionCompactionRecordDto {
+        contract_version: CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
+        compaction_id: record.compaction_id.clone(),
+        project_id: record.project_id.clone(),
+        agent_session_id: record.agent_session_id.clone(),
+        source_run_id: record.source_run_id.clone(),
+        provider_id: record.provider_id.clone(),
+        model_id: record.model_id.clone(),
+        summary,
+        covered_run_ids: record.covered_run_ids.clone(),
+        covered_message_start_id: record.covered_message_start_id,
+        covered_message_end_id: record.covered_message_end_id,
+        covered_event_start_id: record.covered_event_start_id,
+        covered_event_end_id: record.covered_event_end_id,
+        source_hash: record.source_hash.clone(),
+        input_tokens: record.input_tokens,
+        summary_tokens: record.summary_tokens,
+        raw_tail_message_count: record.raw_tail_message_count,
+        policy_reason: record.policy_reason.clone(),
+        trigger: match record.trigger {
+            AgentCompactionTrigger::Manual => SessionCompactionTriggerDto::Manual,
+            AgentCompactionTrigger::Auto => SessionCompactionTriggerDto::Auto,
+        },
+        active: record.active,
+        diagnostic,
+        created_at: record.created_at.clone(),
+        superseded_at: record.superseded_at.clone(),
+        redaction: strongest_redaction(&summary_redaction, &diagnostic_redaction),
     }
 }
 
@@ -1274,6 +1381,42 @@ pub fn validate_context_snapshot_contract(
         }
     }
     ensure_secret_free_json(snapshot)
+}
+
+pub fn validate_session_compaction_record_contract(
+    compaction: &SessionCompactionRecordDto,
+) -> Result<(), String> {
+    if compaction.contract_version != CADENCE_SESSION_CONTEXT_CONTRACT_VERSION {
+        return Err("session compaction contract version is unsupported".into());
+    }
+    if compaction.covered_run_ids.is_empty() {
+        return Err("session compaction records must cover at least one run".into());
+    }
+    if let (Some(start), Some(end)) = (
+        compaction.covered_message_start_id,
+        compaction.covered_message_end_id,
+    ) {
+        if start <= 0 || start > end {
+            return Err("session compaction message range is invalid".into());
+        }
+    }
+    if let (Some(start), Some(end)) = (
+        compaction.covered_event_start_id,
+        compaction.covered_event_end_id,
+    ) {
+        if start <= 0 || start > end {
+            return Err("session compaction event range is invalid".into());
+        }
+    }
+    if compaction.source_hash.len() != 64
+        || !compaction
+            .source_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("session compaction source hash must be lowercase SHA-256".into());
+    }
+    ensure_secret_free_json(compaction)
 }
 
 struct TimelineCandidate {

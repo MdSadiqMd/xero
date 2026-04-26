@@ -207,6 +207,43 @@ pub trait ProviderAdapter {
         request: &ProviderTurnRequest,
         emit: &mut dyn FnMut(ProviderStreamEvent) -> CommandResult<()>,
     ) -> CommandResult<ProviderTurnOutcome>;
+
+    fn compact_transcript(
+        &self,
+        request: &ProviderCompactionRequest,
+        emit: &mut dyn FnMut(ProviderStreamEvent) -> CommandResult<()>,
+    ) -> CommandResult<ProviderCompactionOutcome> {
+        let turn = ProviderTurnRequest {
+            system_prompt: "You compact long coding-agent transcripts for future replay. Return a concise, factual summary that preserves user intent, decisions, unresolved work, pending approvals, tool outcomes, and important file or command evidence. Do not invent completed work. Do not include secrets.".into(),
+            messages: vec![ProviderMessage::User {
+                content: request.transcript.clone(),
+            }],
+            tools: Vec::new(),
+            turn_index: 0,
+            controls: RuntimeRunControlStateDto {
+                active: RuntimeRunActiveControlSnapshotDto {
+                    model_id: request.model_id.clone(),
+                    thinking_effort: None,
+                    approval_mode: RuntimeRunApprovalModeDto::Yolo,
+                    plan_mode_required: false,
+                    revision: 1,
+                    applied_at: crate::auth::now_timestamp(),
+                },
+                pending: None,
+            },
+        };
+
+        match self.stream_turn(&turn, emit)? {
+            ProviderTurnOutcome::Complete { message, usage } => Ok(ProviderCompactionOutcome {
+                summary: message,
+                usage,
+            }),
+            ProviderTurnOutcome::ToolCalls { .. } => Err(CommandError::user_fixable(
+                "session_compaction_provider_requested_tools",
+                "Cadence asked the provider to compact session history, but the provider requested tool calls instead of returning a summary.",
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -241,6 +278,23 @@ pub struct ProviderUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCompactionRequest {
+    pub project_id: String,
+    pub agent_session_id: String,
+    pub run_id: Option<String>,
+    pub provider_id: String,
+    pub model_id: String,
+    pub transcript: String,
+    pub max_summary_tokens: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCompactionOutcome {
+    pub summary: String,
+    pub usage: Option<ProviderUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,5 +370,51 @@ impl ProviderAdapter for FakeProviderAdapter {
                 usage: Some(ProviderUsage::default()),
             })
         }
+    }
+
+    fn compact_transcript(
+        &self,
+        request: &ProviderCompactionRequest,
+        emit: &mut dyn FnMut(ProviderStreamEvent) -> CommandResult<()>,
+    ) -> CommandResult<ProviderCompactionOutcome> {
+        emit(ProviderStreamEvent::ReasoningSummary(
+            "Fake provider generated a deterministic compaction summary.".into(),
+        ))?;
+        let pending_note = if request.transcript.contains("status=pending") {
+            " Pending action requests are still unresolved and must not be treated as completed."
+        } else {
+            ""
+        };
+        let sanitized = request
+            .transcript
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .take(12)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let summary = format!(
+            "Compacted session summary for {} using {}: {}{}",
+            request
+                .run_id
+                .as_deref()
+                .unwrap_or(request.agent_session_id.as_str()),
+            request.model_id,
+            sanitized,
+            pending_note
+        );
+        emit(ProviderStreamEvent::MessageDelta(summary.clone()))?;
+        Ok(ProviderCompactionOutcome {
+            summary,
+            usage: Some(ProviderUsage {
+                input_tokens: request
+                    .max_summary_tokens
+                    .min(estimate_tokens(&request.transcript)),
+                output_tokens: estimate_tokens(&sanitized),
+                total_tokens: request
+                    .max_summary_tokens
+                    .min(estimate_tokens(&request.transcript))
+                    .saturating_add(estimate_tokens(&sanitized)),
+            }),
+        })
     }
 }

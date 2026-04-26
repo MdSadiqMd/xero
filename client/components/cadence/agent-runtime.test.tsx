@@ -35,10 +35,12 @@ import { AgentRuntime } from '@/components/cadence/agent-runtime'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
   AgentSessionView,
+  CompactSessionHistoryResponseDto,
   ProjectDetailView,
   RuntimeRunView,
   RuntimeSessionView,
   RuntimeStreamView,
+  SessionCompactionRecordDto,
   SessionContextSnapshotDto,
   SessionTranscriptDto,
   SessionTranscriptExportResponseDto,
@@ -374,6 +376,86 @@ function makeContextSnapshot(overrides: Partial<SessionContextSnapshotDto> = {})
       updatedAt: '2026-04-26T12:00:00Z',
     },
     redaction,
+    ...overrides,
+  }
+}
+
+function makeCompactedContextSnapshot(
+  overrides: Partial<SessionContextSnapshotDto> = {},
+): SessionContextSnapshotDto {
+  const snapshot = makeContextSnapshot()
+  const compactionSummary: SessionContextSnapshotDto['contributors'][number] = {
+    ...snapshot.contributors[0],
+    contributorId: 'compaction_summary:compact-1',
+    kind: 'compaction_summary',
+    label: 'Compacted history summary',
+    sourceId: 'compact-1',
+    sequence: 4,
+    estimatedTokens: 90,
+    estimatedChars: 360,
+    text: 'Earlier user intent, tool outcomes, and open decisions were summarized for replay.',
+  }
+
+  return {
+    ...snapshot,
+    contributors: [
+      snapshot.contributors[0],
+      snapshot.contributors[1],
+      snapshot.contributors[2],
+      compactionSummary,
+      ...snapshot.contributors.slice(3).map((contributor, index) => ({
+        ...contributor,
+        sequence: index + 5,
+      })),
+    ],
+    ...overrides,
+  }
+}
+
+function makeSessionCompactionRecord(
+  overrides: Partial<SessionCompactionRecordDto> = {},
+): SessionCompactionRecordDto {
+  const redaction = {
+    redactionClass: 'public' as const,
+    redacted: false,
+    reason: null,
+  }
+
+  return {
+    contractVersion: 1,
+    compactionId: 'compact-1',
+    projectId: 'project-1',
+    agentSessionId: 'agent-session-main',
+    sourceRunId: 'run-1',
+    providerId: 'openai_codex',
+    modelId: 'openai_codex',
+    summary: 'Earlier user intent, tool outcomes, and open decisions were summarized for replay.',
+    coveredRunIds: ['run-1'],
+    coveredMessageStartId: 1,
+    coveredMessageEndId: 3,
+    coveredEventStartId: 1,
+    coveredEventEndId: 4,
+    sourceHash: 'a'.repeat(64),
+    inputTokens: 1200,
+    summaryTokens: 90,
+    rawTailMessageCount: 8,
+    policyReason: 'manual_compact_requested',
+    trigger: 'manual',
+    active: true,
+    diagnostic: null,
+    createdAt: '2026-04-26T12:05:00Z',
+    supersededAt: null,
+    redaction,
+    ...overrides,
+  }
+}
+
+function makeCompactSessionHistoryResponse(
+  overrides: Partial<CompactSessionHistoryResponseDto> = {},
+): CompactSessionHistoryResponseDto {
+  return {
+    compaction: makeSessionCompactionRecord(),
+    contextSnapshot: makeCompactedContextSnapshot(),
     ...overrides,
   }
 }
@@ -2542,5 +2624,97 @@ describe('AgentRuntime current UI', () => {
         pendingPrompt: 'Continue with the largest remaining task.',
       }),
     )
+  })
+
+  it('compacts the selected run and shows the compacted replay state', async () => {
+    const onLoadSessionContextSnapshot = vi.fn(async () => makeContextSnapshot())
+    const onCompactSessionHistory = vi.fn(async () => makeCompactSessionHistoryResponse())
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          project: makeProject({
+            agentSessions: [makeAgentSession({ lastRunId: 'run-1' })],
+            selectedAgentSession: makeAgentSession({ lastRunId: 'run-1' }),
+            selectedAgentSessionId: 'agent-session-main',
+          }),
+        })}
+        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
+        onCompactSessionHistory={onCompactSessionHistory}
+        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
+      />,
+    )
+
+    expect(await screen.findByText('Context')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+
+    await waitFor(() =>
+      expect(onCompactSessionHistory).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        agentSessionId: 'agent-session-main',
+        runId: 'run-1',
+        rawTailMessageCount: 8,
+      }),
+    )
+    expect(await screen.findByText('Session compacted')).toBeVisible()
+    expect(screen.getByText(/messages 1-3 across 1 run/)).toBeVisible()
+    expect(screen.getByText('Compacted replay')).toBeVisible()
+    expect(screen.getByText('Compacted history summary')).toBeVisible()
+  })
+
+  it('disables manual compact when the selected session has no run yet', async () => {
+    const onLoadSessionContextSnapshot = vi.fn(async () => makeContextSnapshot({ runId: null }))
+    const onCompactSessionHistory = vi.fn(async () => makeCompactSessionHistoryResponse())
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          project: makeProject({
+            agentSessions: [makeAgentSession({ lastRunId: null })],
+            selectedAgentSession: makeAgentSession({ lastRunId: null }),
+            selectedAgentSessionId: 'agent-session-main',
+          }),
+        })}
+        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
+        onCompactSessionHistory={onCompactSessionHistory}
+        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
+      />,
+    )
+
+    expect(await screen.findByText('Context')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Compact' })).toBeDisabled()
+    expect(onCompactSessionHistory).not.toHaveBeenCalled()
+  })
+
+  it('shows provider compaction failures without changing the loaded snapshot', async () => {
+    const onLoadSessionContextSnapshot = vi.fn(async () => makeContextSnapshot())
+    const onCompactSessionHistory = vi.fn(async () => {
+      throw new Error('Provider refused to summarize pending tool work.')
+    })
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          project: makeProject({
+            agentSessions: [makeAgentSession({ lastRunId: 'run-1' })],
+            selectedAgentSession: makeAgentSession({ lastRunId: 'run-1' }),
+            selectedAgentSessionId: 'agent-session-main',
+          }),
+        })}
+        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
+        onCompactSessionHistory={onCompactSessionHistory}
+        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
+      />,
+    )
+
+    expect(await screen.findByText('Raw history replay')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+
+    expect(await screen.findByText('Compact failed')).toBeVisible()
+    expect(screen.getByText('Provider refused to summarize pending tool work.')).toBeVisible()
+    expect(screen.getByText('Raw history replay')).toBeVisible()
   })
 })

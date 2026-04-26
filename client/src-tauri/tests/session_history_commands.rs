@@ -5,12 +5,13 @@ use std::{
 
 use cadence_desktop_lib::{
     commands::{
-        export_session_transcript, get_session_context_snapshot, get_session_transcript,
-        save_session_transcript_export, search_session_transcripts,
+        compact_session_history, export_session_transcript, get_session_context_snapshot,
+        get_session_transcript, save_session_transcript_export, search_session_transcripts,
         validate_context_snapshot_contract, validate_export_payload_contract,
-        validate_session_transcript_contract, ExportSessionTranscriptRequestDto,
-        GetSessionContextSnapshotRequestDto, GetSessionTranscriptRequestDto,
-        SaveSessionTranscriptExportRequestDto, SearchSessionTranscriptsRequestDto,
+        validate_session_transcript_contract, CompactSessionHistoryRequestDto,
+        ExportSessionTranscriptRequestDto, GetSessionContextSnapshotRequestDto,
+        GetSessionTranscriptRequestDto, SaveSessionTranscriptExportRequestDto,
+        SearchSessionTranscriptsRequestDto, SessionCompactionTriggerDto,
         SessionContextContributorKindDto, SessionTranscriptExportFormatDto,
         SessionTranscriptExportPayloadDto, SessionTranscriptScopeDto, SessionUsageSourceDto,
     },
@@ -18,6 +19,7 @@ use cadence_desktop_lib::{
     db::{self, project_store},
     git::repository::{ensure_cadence_excluded, CanonicalRepository},
     registry::{self, RegistryProjectRecord},
+    runtime::AgentProviderConfig,
     state::DesktopState,
 };
 use git2::{IndexAddOption, Repository, Signature};
@@ -27,6 +29,8 @@ use tempfile::TempDir;
 
 const PROVIDER_ID: &str = "openrouter";
 const MODEL_ID: &str = "openai/gpt-5.4";
+const FAKE_PROVIDER_ID: &str = "openai_codex";
+const FAKE_MODEL_ID: &str = "openai_codex";
 const SESSION_ID: &str = project_store::DEFAULT_AGENT_SESSION_ID;
 
 fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::MockRuntime> {
@@ -38,6 +42,10 @@ fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::MockRuntime> {
 fn create_state(root: &TempDir) -> DesktopState {
     DesktopState::default()
         .with_registry_file_override(root.path().join("app-data").join("project-registry.json"))
+}
+
+fn create_fake_provider_state(root: &TempDir) -> DesktopState {
+    create_state(root).with_owned_agent_provider_config_override(AgentProviderConfig::Fake)
 }
 
 fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (String, PathBuf) {
@@ -532,6 +540,115 @@ fn context_snapshot_handles_sessions_without_runs() {
     }));
 }
 
+#[test]
+fn manual_compact_persists_supersedes_and_preserves_raw_history() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_fake_provider_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    seed_history_run_with_provider(
+        &repo_root,
+        &project_id,
+        FAKE_PROVIDER_ID,
+        FAKE_MODEL_ID,
+        "run-compact-1",
+        "2026-04-26T12:00:00Z",
+        "Compact the durable replay path.",
+        None,
+    );
+    let transcript_before = get_session_transcript(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetSessionTranscriptRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: SESSION_ID.into(),
+            run_id: Some("run-compact-1".into()),
+        },
+    )
+    .expect("transcript before compact");
+
+    let response = compact_session_history(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CompactSessionHistoryRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: SESSION_ID.into(),
+            run_id: Some("run-compact-1".into()),
+            raw_tail_message_count: Some(2),
+        },
+    )
+    .expect("manual compact");
+
+    assert_eq!(
+        response.compaction.trigger,
+        SessionCompactionTriggerDto::Manual
+    );
+    assert!(response.compaction.active);
+    assert_eq!(response.compaction.raw_tail_message_count, 2);
+    assert_eq!(response.compaction.source_hash.len(), 64);
+    assert_eq!(
+        response.compaction.covered_run_ids,
+        vec!["run-compact-1".to_string()]
+    );
+    assert!(response.compaction.covered_message_start_id.is_some());
+    assert!(response.compaction.covered_message_end_id.is_some());
+    assert!(response
+        .compaction
+        .summary
+        .contains("Pending action requests are still unresolved"));
+    assert!(!response.compaction.summary.contains("sk-history-secret"));
+    assert!(response
+        .context_snapshot
+        .contributors
+        .iter()
+        .any(|contributor| {
+            contributor.kind == SessionContextContributorKindDto::CompactionSummary
+                && contributor.label == "Compacted history summary"
+        }));
+
+    let transcript_after = get_session_transcript(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetSessionTranscriptRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: SESSION_ID.into(),
+            run_id: Some("run-compact-1".into()),
+        },
+    )
+    .expect("transcript after compact");
+    assert_eq!(transcript_after.items.len(), transcript_before.items.len());
+    let raw_snapshot = project_store::load_agent_run(&repo_root, &project_id, "run-compact-1")
+        .expect("load raw compacted run");
+    assert!(raw_snapshot
+        .messages
+        .iter()
+        .any(|message| message.content.contains("sk-history-secret")));
+
+    let second = compact_session_history(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CompactSessionHistoryRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: SESSION_ID.into(),
+            run_id: Some("run-compact-1".into()),
+            raw_tail_message_count: Some(2),
+        },
+    )
+    .expect("second manual compact supersedes first");
+    assert_ne!(
+        second.compaction.compaction_id,
+        response.compaction.compaction_id
+    );
+    let compactions = project_store::list_agent_compactions(&repo_root, &project_id, SESSION_ID)
+        .expect("list compactions");
+    assert_eq!(compactions.len(), 2);
+    assert_eq!(compactions.iter().filter(|record| record.active).count(), 1);
+    assert!(compactions.iter().any(|record| {
+        record.compaction_id == response.compaction.compaction_id
+            && !record.active
+            && record.superseded_at.is_some()
+    }));
+}
+
 fn seed_history_run(
     repo_root: &Path,
     project_id: &str,
@@ -540,8 +657,37 @@ fn seed_history_run(
     prompt: &str,
     usage: Option<project_store::AgentUsageRecord>,
 ) {
-    seed_minimal_run(
-        repo_root, project_id, SESSION_ID, run_id, started_at, prompt,
+    seed_history_run_with_provider(
+        repo_root,
+        project_id,
+        PROVIDER_ID,
+        MODEL_ID,
+        run_id,
+        started_at,
+        prompt,
+        usage,
+    );
+}
+
+fn seed_history_run_with_provider(
+    repo_root: &Path,
+    project_id: &str,
+    provider_id: &str,
+    model_id: &str,
+    run_id: &str,
+    started_at: &str,
+    prompt: &str,
+    usage: Option<project_store::AgentUsageRecord>,
+) {
+    seed_minimal_run_with_provider(
+        repo_root,
+        project_id,
+        SESSION_ID,
+        provider_id,
+        model_id,
+        run_id,
+        started_at,
+        prompt,
     );
     project_store::append_agent_message(
         repo_root,
@@ -687,14 +833,36 @@ fn seed_minimal_run(
     started_at: &str,
     prompt: &str,
 ) {
+    seed_minimal_run_with_provider(
+        repo_root,
+        project_id,
+        agent_session_id,
+        PROVIDER_ID,
+        MODEL_ID,
+        run_id,
+        started_at,
+        prompt,
+    );
+}
+
+fn seed_minimal_run_with_provider(
+    repo_root: &Path,
+    project_id: &str,
+    agent_session_id: &str,
+    provider_id: &str,
+    model_id: &str,
+    run_id: &str,
+    started_at: &str,
+    prompt: &str,
+) {
     project_store::insert_agent_run(
         repo_root,
         &project_store::NewAgentRunRecord {
             project_id: project_id.into(),
             agent_session_id: agent_session_id.into(),
             run_id: run_id.into(),
-            provider_id: PROVIDER_ID.into(),
-            model_id: MODEL_ID.into(),
+            provider_id: provider_id.into(),
+            model_id: model_id.into(),
             prompt: prompt.into(),
             system_prompt: "You are Cadence.".into(),
             now: started_at.into(),

@@ -707,25 +707,29 @@ Outcome: users can see what Cadence will send to the model and when a conversati
 
 Outcome: long sessions can continue with a compacted context while raw history stays durable, searchable, and exportable.
 
-- [ ] Slice 4.3.1: Persist compaction records.
+- [x] Slice 4.3.1: Persist compaction records.
   - Scope: add project-store records for compaction summaries, covered message/event ranges, source hashes, provider/model metadata, token estimates, policy reason, active/inactive state, and diagnostics.
   - Acceptance: compaction records are append-only by default, can be superseded without deleting raw rows, and can be loaded by project/session/run scope.
   - Verification: migration/store tests cover insert, load active, supersede, range validation, source-hash mismatch, archived sessions, and invalid JSON rejection.
+  - Completed: 2026-04-26. Implementation: added repo-local `agent_compactions` storage with active/superseded records, coverage ranges, provider/model metadata, source hashes, token estimates, policy reason, trigger kind, diagnostics, and project-store load/list/supersede helpers. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_history_commands` passed 4 tests including manual compact persistence, supersession, active-record loading, redaction, raw transcript preservation, and context-summary projection.
 
-- [ ] Slice 4.3.2: Implement manual compact generation.
+- [x] Slice 4.3.2: Implement manual compact generation.
   - Scope: add a backend command that compacts selected session history through the active provider adapter or a fake test adapter, records the summary, and preserves a recent raw tail for replay.
   - Acceptance: manual compact handles multi-turn tool conversations, does not summarize pending action requests as completed work, emits typed diagnostics on provider failure, and leaves raw transcript export unchanged.
   - Verification: owned-agent runtime tests cover successful compact, provider failure, cancellation, pending action requests, tool-call-heavy transcripts, redaction, and raw transcript preservation.
+  - Completed: 2026-04-26. Implementation: added the `compact_session_history` Tauri command, provider adapter compaction hook, fake-provider deterministic summaries, raw-tail preservation, pending-action wording, summary redaction rejection, and secret-bearing file path redaction in compaction transcripts. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_history_commands` passed 4 tests; `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_context_contract` passed 8 tests.
 
-- [ ] Slice 4.3.3: Make provider replay compaction-aware.
+- [x] Slice 4.3.3: Make provider replay compaction-aware.
   - Scope: update `provider_messages_from_snapshot` and continuation assembly so the next provider turn uses active compaction summaries plus a recent raw tail instead of the full message history when compaction is active.
   - Acceptance: replay never splits assistant/tool-call pairs incorrectly, tool result supersession still works, plan-mode behavior remains intact, and users can continue a compacted run successfully.
   - Verification: agent-core tests cover compacted replay, assistant/tool-call pairing, superseded tool messages, follow-up user messages, plan-mode action requests, and provider mismatch errors.
+  - Completed: 2026-04-26. Implementation: made owned-agent provider replay prepend active compaction summaries, skip covered raw messages, preserve raw tail/tool-result pairing, reject provider/model mismatches, and recompute a covered-source hash before continuation. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test agent_core_runtime` passed 30 tests including compacted replay continuation and covered-source mismatch rejection.
 
-- [ ] Slice 4.3.4: Add manual compact UI.
+- [x] Slice 4.3.4: Add manual compact UI.
   - Scope: add a user-facing compact action to the context panel or session actions with progress, success, failure, and compacted-history display states.
   - Acceptance: users can manually compact the selected session, see what range was compacted, continue after compaction, and inspect any diagnostic without temporary debug UI.
   - Verification: React tests cover action availability, confirmation/progress, success rendering, provider-failure diagnostics, disabled states for no-run sessions, and continuation after compact.
+  - Completed: 2026-04-26. Implementation: added a ShadCN compact action to the Context panel with loading, disabled, success, failure, compacted-range copy, and compacted replay display states wired through the desktop adapter. Verification evidence: `pnpm --dir client exec vitest run src/lib/cadence-model/session-context.test.ts components/cadence/agent-runtime.test.tsx` passed 2 files and 45 tests; `pnpm --dir client exec tsc --noEmit` passed; targeted `pnpm --dir client exec eslint ...` passed; `pnpm --dir client build` passed with the existing Vite large-chunk warning.
 
 ##### Phase 4: Add Memory Extraction And Project Instruction Management
 

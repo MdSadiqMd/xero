@@ -5,6 +5,8 @@ import { useMemo } from 'react'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
   ExportSessionTranscriptRequestDto,
+  CompactSessionHistoryRequestDto,
+  CompactSessionHistoryResponseDto,
   GetSessionContextSnapshotRequestDto,
   GetSessionTranscriptRequestDto,
   RuntimeRunView,
@@ -93,6 +95,9 @@ interface AgentRuntimeProps {
   onLoadSessionContextSnapshot?: (
     request: GetSessionContextSnapshotRequestDto,
   ) => Promise<SessionContextSnapshotDto>
+  onCompactSessionHistory?: (
+    request: CompactSessionHistoryRequestDto,
+  ) => Promise<CompactSessionHistoryResponseDto>
 }
 
 const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItems']> = []
@@ -113,6 +118,7 @@ export function AgentRuntime({
   onExportSessionTranscript,
   onSaveSessionTranscriptExport,
   onLoadSessionContextSnapshot,
+  onCompactSessionHistory,
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
   const runtimeRun = agent.runtimeRun ?? null
@@ -307,6 +313,7 @@ export function AgentRuntime({
                 modelId={selectedModelId}
                 pendingPrompt={contextPendingPrompt}
                 onLoadContextSnapshot={onLoadSessionContextSnapshot}
+                onCompactSessionHistory={onCompactSessionHistory}
               />
               {hasAgentFeedSurface ? (
                 <AgentFeedSection

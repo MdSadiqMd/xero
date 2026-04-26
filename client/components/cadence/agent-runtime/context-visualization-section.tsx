@@ -17,6 +17,9 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import type { AgentSessionView } from '@/src/lib/cadence-model'
 import type {
+  CompactSessionHistoryRequestDto,
+  CompactSessionHistoryResponseDto,
+  SessionCompactionRecordDto,
   GetSessionContextSnapshotRequestDto,
   SessionContextContributorDto,
   SessionContextSnapshotDto,
@@ -32,9 +35,13 @@ interface ContextVisualizationSectionProps {
   onLoadContextSnapshot?: (
     request: GetSessionContextSnapshotRequestDto,
   ) => Promise<SessionContextSnapshotDto>
+  onCompactSessionHistory?: (
+    request: CompactSessionHistoryRequestDto,
+  ) => Promise<CompactSessionHistoryResponseDto>
 }
 
 type LoadStatus = 'idle' | 'loading' | 'ready' | 'error'
+type CompactStatus = 'idle' | 'running' | 'success' | 'error'
 
 const PRESSURE_META = {
   unknown: {
@@ -72,11 +79,14 @@ export function ContextVisualizationSection({
   modelId,
   pendingPrompt,
   onLoadContextSnapshot,
+  onCompactSessionHistory,
 }: ContextVisualizationSectionProps) {
   const targetSessionId = selectedSession?.agentSessionId ?? null
   const [snapshot, setSnapshot] = useState<SessionContextSnapshotDto | null>(null)
   const [status, setStatus] = useState<LoadStatus>('idle')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [compactStatus, setCompactStatus] = useState<CompactStatus>('idle')
+  const [compactMessage, setCompactMessage] = useState<string | null>(null)
 
   const canLoad = Boolean(projectId && targetSessionId && onLoadContextSnapshot)
   const loadSnapshot = useCallback(async () => {
@@ -107,6 +117,28 @@ export function ContextVisualizationSection({
     runId,
     targetSessionId,
   ])
+
+  const canCompact = Boolean(projectId && targetSessionId && runId && onCompactSessionHistory)
+  const handleCompact = useCallback(async () => {
+    if (!projectId || !targetSessionId || !runId || !onCompactSessionHistory) return
+    setCompactStatus('running')
+    setCompactMessage(null)
+    try {
+      const response = await onCompactSessionHistory({
+        projectId,
+        agentSessionId: targetSessionId,
+        runId,
+        rawTailMessageCount: 8,
+      })
+      setSnapshot(response.contextSnapshot)
+      setStatus('ready')
+      setCompactStatus('success')
+      setCompactMessage(formatCompactionSuccess(response.compaction))
+    } catch (error) {
+      setCompactStatus('error')
+      setCompactMessage(error instanceof Error ? error.message : 'Cadence could not compact this session.')
+    }
+  }, [onCompactSessionHistory, projectId, runId, targetSessionId])
 
   useEffect(() => {
     if (!canLoad) {
@@ -197,6 +229,22 @@ export function ContextVisualizationSection({
             )}
             Refresh
           </Button>
+          {onCompactSessionHistory ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!canCompact || compactStatus === 'running' || status === 'loading'}
+              onClick={() => void handleCompact()}
+            >
+              {compactStatus === 'running' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <DatabaseZap className="h-3.5 w-3.5" />
+              )}
+              Compact
+            </Button>
+          ) : null}
         </div>
 
         {status === 'error' ? (
@@ -204,6 +252,22 @@ export function ContextVisualizationSection({
             <AlertTriangle className="h-4 w-4" />
             <AlertTitle>Context unavailable</AlertTitle>
             <AlertDescription>{errorMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        {compactStatus === 'success' && compactMessage ? (
+          <Alert>
+            <DatabaseZap className="h-4 w-4" />
+            <AlertTitle>Session compacted</AlertTitle>
+            <AlertDescription>{compactMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        {compactStatus === 'error' && compactMessage ? (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Compact failed</AlertTitle>
+            <AlertDescription>{compactMessage}</AlertDescription>
           </Alert>
         ) : null}
 
@@ -336,4 +400,15 @@ function formatUsageSource(value: SessionContextSnapshotDto['budget']['estimatio
     case 'unavailable':
       return 'Unavailable'
   }
+}
+
+function formatCompactionSuccess(compaction: SessionCompactionRecordDto): string {
+  const runCount = compaction.coveredRunIds.length
+  const runLabel = runCount === 1 ? '1 run' : `${runCount.toLocaleString()} runs`
+  const messageRange =
+    compaction.coveredMessageStartId && compaction.coveredMessageEndId
+      ? `messages ${compaction.coveredMessageStartId}-${compaction.coveredMessageEndId}`
+      : 'older messages'
+
+  return `Cadence compacted ${messageRange} across ${runLabel} and preserved the latest ${compaction.rawTailMessageCount.toLocaleString()} raw messages for replay.`
 }

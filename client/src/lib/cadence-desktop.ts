@@ -231,6 +231,8 @@ import {
   type SubscribeRuntimeStreamResponseDto,
 } from '@/src/lib/cadence-model/runtime-stream'
 import {
+  compactSessionHistoryRequestSchema,
+  compactSessionHistoryResponseSchema,
   exportSessionTranscriptRequestSchema,
   getSessionContextSnapshotRequestSchema,
   getSessionTranscriptRequestSchema,
@@ -241,6 +243,8 @@ import {
   sessionTranscriptExportResponseSchema,
   sessionTranscriptSchema,
   type ExportSessionTranscriptRequestDto,
+  type CompactSessionHistoryRequestDto,
+  type CompactSessionHistoryResponseDto,
   type GetSessionContextSnapshotRequestDto,
   type GetSessionTranscriptRequestDto,
   type SaveSessionTranscriptExportRequestDto,
@@ -294,6 +298,7 @@ const COMMANDS = {
   saveSessionTranscriptExport: 'save_session_transcript_export',
   searchSessionTranscripts: 'search_session_transcripts',
   getSessionContextSnapshot: 'get_session_context_snapshot',
+  compactSessionHistory: 'compact_session_history',
   getRuntimeRun: 'get_runtime_run',
   getRuntimeSession: 'get_runtime_session',
   getRuntimeSettings: 'get_runtime_settings',
@@ -566,6 +571,9 @@ export interface CadenceDesktopAdapter {
   getSessionContextSnapshot?(
     request: GetSessionContextSnapshotRequestDto,
   ): Promise<SessionContextSnapshotDto>
+  compactSessionHistory?(
+    request: CompactSessionHistoryRequestDto,
+  ): Promise<CompactSessionHistoryResponseDto>
   getRuntimeRun(projectId: string, agentSessionId: string): Promise<RuntimeRunDto | null>
   getRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
   getRuntimeSettings(): Promise<RuntimeSettingsDto>
@@ -1329,6 +1337,13 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
   getSessionContextSnapshot(request) {
     const parsed = getSessionContextSnapshotRequestSchema.parse(request)
     return invokeTyped(COMMANDS.getSessionContextSnapshot, sessionContextSnapshotSchema, {
+      request: parsed,
+    })
+  },
+
+  compactSessionHistory(request) {
+    const parsed = compactSessionHistoryRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.compactSessionHistory, compactSessionHistoryResponseSchema, {
       request: parsed,
     })
   },

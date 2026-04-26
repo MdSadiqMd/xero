@@ -233,6 +233,15 @@ export const getSessionContextSnapshotRequestSchema = getSessionTranscriptReques
   })
   .strict()
 
+export const compactSessionHistoryRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    runId: nonEmptyOptionalTextSchema,
+    rawTailMessageCount: z.number().int().min(2).max(24).optional(),
+  })
+  .strict()
+
 export const exportSessionTranscriptRequestSchema = getSessionTranscriptRequestSchema
   .extend({
     format: sessionTranscriptExportFormatSchema,
@@ -381,6 +390,74 @@ export const sessionContextSnapshotSchema = z
     validateStrictSequence(snapshot.contributors, ctx, ['contributors'])
   })
 
+export const sessionCompactionDiagnosticSchema = z
+  .object({
+    code: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+    redaction: sessionContextRedactionSchema,
+  })
+  .strict()
+
+export const sessionCompactionRecordSchema = z
+  .object({
+    contractVersion: z.literal(CADENCE_SESSION_CONTEXT_CONTRACT_VERSION),
+    compactionId: z.string().trim().min(1),
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    sourceRunId: z.string().trim().min(1),
+    providerId: z.string().trim().min(1),
+    modelId: z.string().trim().min(1),
+    summary: z.string().trim().min(1),
+    coveredRunIds: z.array(z.string().trim().min(1)).min(1),
+    coveredMessageStartId: z.number().int().positive().nullable().optional(),
+    coveredMessageEndId: z.number().int().positive().nullable().optional(),
+    coveredEventStartId: z.number().int().positive().nullable().optional(),
+    coveredEventEndId: z.number().int().positive().nullable().optional(),
+    sourceHash: z.string().regex(/^[0-9a-f]{64}$/),
+    inputTokens: z.number().int().nonnegative(),
+    summaryTokens: z.number().int().nonnegative(),
+    rawTailMessageCount: z.number().int().nonnegative(),
+    policyReason: z.string().trim().min(1),
+    trigger: sessionCompactionTriggerSchema,
+    active: z.boolean(),
+    diagnostic: sessionCompactionDiagnosticSchema.nullable().optional(),
+    createdAt: isoTimestampSchema,
+    supersededAt: isoTimestampSchema.nullable().optional(),
+    redaction: sessionContextRedactionSchema,
+  })
+  .strict()
+  .superRefine((compaction, ctx) => {
+    if (
+      compaction.coveredMessageStartId &&
+      compaction.coveredMessageEndId &&
+      compaction.coveredMessageStartId > compaction.coveredMessageEndId
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['coveredMessageEndId'],
+        message: 'Compaction message range must be ordered.',
+      })
+    }
+    if (
+      compaction.coveredEventStartId &&
+      compaction.coveredEventEndId &&
+      compaction.coveredEventStartId > compaction.coveredEventEndId
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['coveredEventEndId'],
+        message: 'Compaction event range must be ordered.',
+      })
+    }
+  })
+
+export const compactSessionHistoryResponseSchema = z
+  .object({
+    compaction: sessionCompactionRecordSchema,
+    contextSnapshot: sessionContextSnapshotSchema,
+  })
+  .strict()
+
 export const sessionMemoryScopeSchema = z.enum(['project', 'session'])
 export const sessionMemoryKindSchema = z.enum([
   'project_fact',
@@ -428,6 +505,7 @@ export type SessionTranscriptExportPayloadDto = z.infer<typeof sessionTranscript
 export type SessionTranscriptSearchResultSnippetDto = z.infer<typeof sessionTranscriptSearchResultSnippetSchema>
 export type GetSessionTranscriptRequestDto = z.infer<typeof getSessionTranscriptRequestSchema>
 export type GetSessionContextSnapshotRequestDto = z.infer<typeof getSessionContextSnapshotRequestSchema>
+export type CompactSessionHistoryRequestDto = z.infer<typeof compactSessionHistoryRequestSchema>
 export type ExportSessionTranscriptRequestDto = z.infer<typeof exportSessionTranscriptRequestSchema>
 export type SessionTranscriptExportResponseDto = z.infer<typeof sessionTranscriptExportResponseSchema>
 export type SaveSessionTranscriptExportRequestDto = z.infer<typeof saveSessionTranscriptExportRequestSchema>
@@ -442,6 +520,9 @@ export type SessionContextPolicyActionDto = z.infer<typeof sessionContextPolicyA
 export type SessionCompactionTriggerDto = z.infer<typeof sessionCompactionTriggerSchema>
 export type SessionContextPolicyDecisionDto = z.infer<typeof sessionContextPolicyDecisionSchema>
 export type SessionContextSnapshotDto = z.infer<typeof sessionContextSnapshotSchema>
+export type SessionCompactionDiagnosticDto = z.infer<typeof sessionCompactionDiagnosticSchema>
+export type SessionCompactionRecordDto = z.infer<typeof sessionCompactionRecordSchema>
+export type CompactSessionHistoryResponseDto = z.infer<typeof compactSessionHistoryResponseSchema>
 export type SessionMemoryScopeDto = z.infer<typeof sessionMemoryScopeSchema>
 export type SessionMemoryKindDto = z.infer<typeof sessionMemoryKindSchema>
 export type SessionMemoryReviewStateDto = z.infer<typeof sessionMemoryReviewStateSchema>

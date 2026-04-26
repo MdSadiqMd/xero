@@ -1620,6 +1620,77 @@ pub fn migrations() -> &'static Migrations<'static> {
                     ON installed_plugin_records(root_id, plugin_id);
                 "#,
             ),
+            M::up(
+                r#"
+                CREATE TABLE IF NOT EXISTS agent_compactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    compaction_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    agent_session_id TEXT NOT NULL,
+                    source_run_id TEXT NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    covered_run_ids_json TEXT NOT NULL,
+                    covered_message_start_id INTEGER,
+                    covered_message_end_id INTEGER,
+                    covered_event_start_id INTEGER,
+                    covered_event_end_id INTEGER,
+                    source_hash TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+                    summary_tokens INTEGER NOT NULL DEFAULT 0 CHECK (summary_tokens >= 0),
+                    raw_tail_message_count INTEGER NOT NULL DEFAULT 0 CHECK (raw_tail_message_count >= 0),
+                    policy_reason TEXT NOT NULL,
+                    trigger_kind TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+                    diagnostic_json TEXT,
+                    created_at TEXT NOT NULL,
+                    superseded_at TEXT,
+                    CHECK (compaction_id <> ''),
+                    CHECK (agent_session_id <> ''),
+                    CHECK (source_run_id <> ''),
+                    CHECK (provider_id <> ''),
+                    CHECK (model_id <> ''),
+                    CHECK (summary <> ''),
+                    CHECK (covered_run_ids_json <> '' AND json_valid(covered_run_ids_json)),
+                    CHECK (
+                        (covered_message_start_id IS NULL AND covered_message_end_id IS NULL)
+                        OR (
+                            covered_message_start_id IS NOT NULL
+                            AND covered_message_end_id IS NOT NULL
+                            AND covered_message_start_id <= covered_message_end_id
+                        )
+                    ),
+                    CHECK (
+                        (covered_event_start_id IS NULL AND covered_event_end_id IS NULL)
+                        OR (
+                            covered_event_start_id IS NOT NULL
+                            AND covered_event_end_id IS NOT NULL
+                            AND covered_event_start_id <= covered_event_end_id
+                        )
+                    ),
+                    CHECK (length(source_hash) = 64),
+                    CHECK (source_hash NOT GLOB '*[^0-9a-f]*'),
+                    CHECK (policy_reason <> ''),
+                    CHECK (trigger_kind IN ('manual', 'auto')),
+                    CHECK (diagnostic_json IS NULL OR (diagnostic_json <> '' AND json_valid(diagnostic_json))),
+                    CHECK (superseded_at IS NULL OR superseded_at <> ''),
+                    UNIQUE (project_id, compaction_id),
+                    FOREIGN KEY (project_id, agent_session_id)
+                        REFERENCES agent_sessions(project_id, agent_session_id) ON DELETE CASCADE,
+                    FOREIGN KEY (project_id, source_run_id)
+                        REFERENCES agent_runs(project_id, run_id) ON DELETE CASCADE
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_compactions_one_active
+                    ON agent_compactions(project_id, agent_session_id)
+                    WHERE active = 1;
+                CREATE INDEX IF NOT EXISTS idx_agent_compactions_session_created
+                    ON agent_compactions(project_id, agent_session_id, created_at DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_compactions_source_run
+                    ON agent_compactions(project_id, source_run_id, active);
+                "#,
+            ),
         ])
     });
 

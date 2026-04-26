@@ -24,6 +24,91 @@ const providerProfilePresetIdSchema = z.enum([
 
 const optionalUrlSchema = z.string().url().nullable().optional()
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeObjectAliases(
+  value: unknown,
+  aliases: Record<string, readonly string[]>,
+): unknown {
+  if (!isRecord(value)) {
+    return value
+  }
+
+  const consumedKeys = new Set<string>()
+  const normalized: Record<string, unknown> = {}
+
+  for (const [normalizedKey, candidateKeys] of Object.entries(aliases)) {
+    for (const key of candidateKeys) {
+      consumedKeys.add(key)
+    }
+
+    const matchedKey = candidateKeys.find((key) => Object.prototype.hasOwnProperty.call(value, key))
+    if (matchedKey) {
+      normalized[normalizedKey] = value[matchedKey]
+    }
+  }
+
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (!consumedKeys.has(key)) {
+      normalized[key] = fieldValue
+    }
+  }
+
+  return normalized
+}
+
+function normalizeProviderProfileReadinessPayload(value: unknown): unknown {
+  return normalizeObjectAliases(value, {
+    ready: ['ready'],
+    status: ['status'],
+    proof: ['proof'],
+    proofUpdatedAt: ['proofUpdatedAt', 'proof_updated_at'],
+  })
+}
+
+function normalizeProviderProfilePayload(value: unknown): unknown {
+  return normalizeObjectAliases(value, {
+    profileId: ['profileId', 'profile_id'],
+    providerId: ['providerId', 'provider_id'],
+    runtimeKind: ['runtimeKind', 'runtime_kind'],
+    label: ['label'],
+    modelId: ['modelId', 'model_id'],
+    presetId: ['presetId', 'preset_id'],
+    baseUrl: ['baseUrl', 'base_url'],
+    apiVersion: ['apiVersion', 'api_version'],
+    region: ['region'],
+    projectId: ['projectId', 'project_id'],
+    active: ['active'],
+    readiness: ['readiness'],
+    migratedFromLegacy: ['migratedFromLegacy', 'migrated_from_legacy'],
+    migratedAt: ['migratedAt', 'migrated_at'],
+  })
+}
+
+function normalizeProviderProfilesMigrationPayload(value: unknown): unknown {
+  return normalizeObjectAliases(value, {
+    source: ['source'],
+    migratedAt: ['migratedAt', 'migrated_at'],
+    runtimeSettingsUpdatedAt: ['runtimeSettingsUpdatedAt', 'runtime_settings_updated_at'],
+    openrouterCredentialsUpdatedAt: [
+      'openrouterCredentialsUpdatedAt',
+      'openrouter_credentials_updated_at',
+    ],
+    openaiAuthUpdatedAt: ['openaiAuthUpdatedAt', 'openai_auth_updated_at'],
+    openrouterModelInferred: ['openrouterModelInferred', 'openrouter_model_inferred'],
+  })
+}
+
+function normalizeProviderProfilesPayload(value: unknown): unknown {
+  return normalizeObjectAliases(value, {
+    activeProfileId: ['activeProfileId', 'active_profile_id'],
+    profiles: ['profiles'],
+    migration: ['migration'],
+  })
+}
+
 function expectedRuntimeKindForProvider(providerId: z.infer<typeof runtimeProviderIdSchema>): z.infer<typeof providerProfileRuntimeKindSchema> {
   switch (providerId) {
     case 'openai_codex':
@@ -269,13 +354,17 @@ export const providerProfileReadinessStatusSchema = z.enum(['ready', 'missing', 
 export const providerProfileReadinessProofSchema = z.enum(['oauth_session', 'stored_secret', 'local', 'ambient'])
 
 export const providerProfileReadinessSchema = z
-  .object({
-    ready: z.boolean(),
-    status: providerProfileReadinessStatusSchema,
-    proof: providerProfileReadinessProofSchema.nullable().optional(),
-    proofUpdatedAt: optionalIsoTimestampSchema,
-  })
-  .strict()
+  .preprocess(
+    normalizeProviderProfileReadinessPayload,
+    z
+      .object({
+        ready: z.boolean(),
+        status: providerProfileReadinessStatusSchema,
+        proof: providerProfileReadinessProofSchema.nullable().optional(),
+        proofUpdatedAt: optionalIsoTimestampSchema,
+      })
+      .strict(),
+  )
   .superRefine((readiness, ctx) => {
     if (readiness.status === 'ready') {
       if (!readiness.ready) {
@@ -339,23 +428,27 @@ export const providerProfileReadinessSchema = z
   })
 
 export const providerProfileSchema = z
-  .object({
-    profileId: z.string().trim().min(1),
-    providerId: runtimeProviderIdSchema,
-    runtimeKind: providerProfileRuntimeKindSchema,
-    label: z.string().trim().min(1),
-    modelId: z.string().trim().min(1),
-    presetId: providerProfilePresetIdSchema.nullable().optional(),
-    baseUrl: optionalUrlSchema,
-    apiVersion: z.string().trim().min(1).nullable().optional(),
-    region: z.string().trim().min(1).nullable().optional(),
-    projectId: z.string().trim().min(1).nullable().optional(),
-    active: z.boolean(),
-    readiness: providerProfileReadinessSchema,
-    migratedFromLegacy: z.boolean(),
-    migratedAt: optionalIsoTimestampSchema,
-  })
-  .strict()
+  .preprocess(
+    normalizeProviderProfilePayload,
+    z
+      .object({
+        profileId: z.string().trim().min(1),
+        providerId: runtimeProviderIdSchema,
+        runtimeKind: providerProfileRuntimeKindSchema,
+        label: z.string().trim().min(1),
+        modelId: z.string().trim().min(1),
+        presetId: providerProfilePresetIdSchema.nullable().optional(),
+        baseUrl: optionalUrlSchema,
+        apiVersion: z.string().trim().min(1).nullable().optional(),
+        region: z.string().trim().min(1).nullable().optional(),
+        projectId: z.string().trim().min(1).nullable().optional(),
+        active: z.boolean(),
+        readiness: providerProfileReadinessSchema,
+        migratedFromLegacy: z.boolean(),
+        migratedAt: optionalIsoTimestampSchema,
+      })
+      .strict(),
+  )
   .superRefine((profile, ctx) => {
     validateRuntimeProviderModel(
       {
@@ -395,24 +488,31 @@ export const providerProfileSchema = z
     }
   })
 
-export const providerProfilesMigrationSchema = z
-  .object({
-    source: z.string().trim().min(1),
-    migratedAt: isoTimestampSchema,
-    runtimeSettingsUpdatedAt: optionalIsoTimestampSchema,
-    openrouterCredentialsUpdatedAt: optionalIsoTimestampSchema,
-    openaiAuthUpdatedAt: optionalIsoTimestampSchema,
-    openrouterModelInferred: z.boolean().nullable().optional(),
-  })
-  .strict()
+export const providerProfilesMigrationSchema = z.preprocess(
+  normalizeProviderProfilesMigrationPayload,
+  z
+    .object({
+      source: z.string().trim().min(1),
+      migratedAt: isoTimestampSchema,
+      runtimeSettingsUpdatedAt: optionalIsoTimestampSchema,
+      openrouterCredentialsUpdatedAt: optionalIsoTimestampSchema,
+      openaiAuthUpdatedAt: optionalIsoTimestampSchema,
+      openrouterModelInferred: z.boolean().nullable().optional(),
+    })
+    .strict(),
+)
 
 export const providerProfilesSchema = z
-  .object({
-    activeProfileId: z.string().trim().min(1),
-    profiles: z.array(providerProfileSchema),
-    migration: providerProfilesMigrationSchema.nullable().optional(),
-  })
-  .strict()
+  .preprocess(
+    normalizeProviderProfilesPayload,
+    z
+      .object({
+        activeProfileId: z.string().trim().min(1),
+        profiles: z.array(providerProfileSchema),
+        migration: providerProfilesMigrationSchema.nullable().optional(),
+      })
+      .strict(),
+  )
   .superRefine((payload, ctx) => {
     const profileIds = new Set<string>()
     let activeFlagCount = 0

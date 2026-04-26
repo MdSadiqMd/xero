@@ -2510,6 +2510,54 @@ describe('cadence-model', () => {
   it('accepts strict redacted provider-profile payloads and rejects malformed profile contracts', () => {
     expect(() => providerProfilesSchema.parse(makeProviderProfiles())).not.toThrow()
 
+    expect(
+      providerProfilesSchema.parse({
+        active_profile_id: 'openrouter-default',
+        profiles: [
+          {
+            profile_id: 'openrouter-default',
+            provider_id: 'openrouter',
+            runtime_kind: 'openrouter',
+            label: 'OpenRouter',
+            model_id: 'openai/gpt-4.1-mini',
+            preset_id: 'openrouter',
+            active: true,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'stored_secret',
+              proof_updated_at: '2026-04-16T14:05:00Z',
+            },
+            migrated_from_legacy: true,
+            migrated_at: '2026-04-16T14:00:00Z',
+          },
+        ],
+        migration: {
+          source: 'legacy_runtime_settings_v1',
+          migrated_at: '2026-04-16T14:00:00Z',
+          runtime_settings_updated_at: '2026-04-16T13:59:00Z',
+          openrouter_credentials_updated_at: '2026-04-16T13:59:05Z',
+          openai_auth_updated_at: null,
+          openrouter_model_inferred: false,
+        },
+      }),
+    ).toMatchObject({
+      activeProfileId: 'openrouter-default',
+      profiles: [
+        {
+          profileId: 'openrouter-default',
+          readiness: {
+            proofUpdatedAt: '2026-04-16T14:05:00Z',
+          },
+          migratedFromLegacy: true,
+        },
+      ],
+      migration: {
+        migratedAt: '2026-04-16T14:00:00Z',
+        runtimeSettingsUpdatedAt: '2026-04-16T13:59:00Z',
+      },
+    })
+
     expect(() =>
       providerProfilesSchema.parse({
         ...makeProviderProfiles(),

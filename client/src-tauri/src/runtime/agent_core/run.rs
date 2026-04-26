@@ -132,7 +132,7 @@ pub fn drive_owned_agent_run(
         request.provider_config.clone(),
         cancellation.clone(),
     );
-    let messages = provider_messages_from_snapshot(&snapshot)?;
+    let messages = provider_messages_from_snapshot(&request.repo_root, &snapshot)?;
 
     match drive_provider_loop(
         provider.as_ref(),
@@ -332,7 +332,7 @@ fn ensure_context_budget_allows_continuation(
         request.tool_runtime.skill_tool_enabled(),
     )?;
     let system_prompt = assemble_system_prompt(&request.repo_root, tool_registry.descriptors())?;
-    let provider_messages = provider_messages_from_snapshot(snapshot)?;
+    let provider_messages = provider_messages_from_snapshot(&request.repo_root, snapshot)?;
     let message_tokens = provider_messages.iter().try_fold(0_u64, |total, message| {
         let serialized = serde_json::to_string(message).map_err(|error| {
             CommandError::system_fault(
@@ -422,7 +422,7 @@ pub fn drive_owned_agent_continuation(
     }
     let snapshot =
         project_store::load_agent_run(&request.repo_root, &request.project_id, &request.run_id)?;
-    let messages = provider_messages_from_snapshot(&snapshot)?;
+    let messages = provider_messages_from_snapshot(&request.repo_root, &snapshot)?;
     let controls = runtime_controls_from_request(request.controls.as_ref());
     let skill_tool_enabled = request.tool_runtime.skill_tool_enabled();
     let base_tool_runtime = request

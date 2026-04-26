@@ -8,10 +8,11 @@ use std::{
 
 use cadence_desktop_lib::{
     commands::{
-        cancel_agent_run, start_agent_task, start_runtime_run, update_runtime_run_controls,
-        CancelAgentRunRequestDto, RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
-        RuntimeRunControlInputDto, RuntimeRunControlStateDto, StartAgentTaskRequestDto,
-        StartRuntimeRunRequestDto, UpdateRuntimeRunControlsRequestDto,
+        cancel_agent_run, compact_session_history, start_agent_task, start_runtime_run,
+        update_runtime_run_controls, CancelAgentRunRequestDto, CompactSessionHistoryRequestDto,
+        RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto,
+        RuntimeRunControlStateDto, StartAgentTaskRequestDto, StartRuntimeRunRequestDto,
+        UpdateRuntimeRunControlsRequestDto,
     },
     configure_builder_with_state, db,
     git::repository::{ensure_cadence_excluded, CanonicalRepository},
@@ -27,6 +28,7 @@ use cadence_desktop_lib::{
     state::DesktopState,
 };
 use git2::{IndexAddOption, Repository, Signature};
+use rusqlite::{params, Connection};
 use serde_json::json;
 use tauri::Manager;
 use tempfile::TempDir;
@@ -738,6 +740,160 @@ fn owned_agent_continuation_rejects_over_budget_prompt_without_mutating_history(
         .iter()
         .any(|message| message.content == huge_prompt));
     assert_eq!(after.run.status, before.run.status);
+}
+
+#[test]
+fn owned_agent_continuation_replays_compacted_history_with_raw_tail() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let run_id = "owned-run-compacted-replay-1";
+    let tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+    let initial = run_owned_agent_task(OwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+        run_id: run_id.into(),
+        prompt: "Inspect before compact.\ntool:read src/tracked.txt".into(),
+        controls: None,
+        tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+    })
+    .expect("initial owned-agent run");
+    assert_eq!(
+        initial.run.status,
+        db::project_store::AgentRunStatus::Completed
+    );
+
+    let compacted = compact_session_history(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CompactSessionHistoryRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: Some(run_id.into()),
+            raw_tail_message_count: Some(2),
+        },
+    )
+    .expect("compact owned-agent run");
+    assert!(compacted
+        .context_snapshot
+        .contributors
+        .iter()
+        .any(|contributor| contributor.kind
+            == cadence_desktop_lib::commands::SessionContextContributorKindDto::CompactionSummary));
+
+    let continue_tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime for compacted continuation");
+    let continued = continue_owned_agent_run(ContinueOwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        run_id: run_id.into(),
+        prompt: "Continue after compaction.".into(),
+        controls: None,
+        tool_runtime: continue_tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+        answer_pending_actions: false,
+    })
+    .expect("continue compacted owned-agent run");
+
+    assert_eq!(
+        continued.run.status,
+        db::project_store::AgentRunStatus::Completed
+    );
+    assert!(continued.messages.iter().any(|message| {
+        message.role == db::project_store::AgentMessageRole::User
+            && message.content == "Continue after compaction."
+    }));
+}
+
+#[test]
+fn owned_agent_compacted_replay_rejects_changed_covered_source() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    let (project_id, repo_root) = seed_project(&root, &app);
+    let run_id = "owned-run-compacted-mismatch-1";
+    let tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime");
+    run_owned_agent_task(OwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+        run_id: run_id.into(),
+        prompt: "Inspect before tamper.\ntool:read src/tracked.txt".into(),
+        controls: None,
+        tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+    })
+    .expect("initial owned-agent run");
+    let compacted = compact_session_history(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CompactSessionHistoryRequestDto {
+            project_id: project_id.clone(),
+            agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: Some(run_id.into()),
+            raw_tail_message_count: Some(2),
+        },
+    )
+    .expect("compact owned-agent run");
+    let covered_message_id = compacted
+        .compaction
+        .covered_message_start_id
+        .expect("covered message id");
+    let connection =
+        Connection::open(db::database_path_for_repo(&repo_root)).expect("open runtime db");
+    connection
+        .execute(
+            r#"
+            UPDATE agent_messages
+            SET content = content || ' tampered'
+            WHERE project_id = ?1
+              AND run_id = ?2
+              AND id = ?3
+            "#,
+            params![project_id, run_id, covered_message_id],
+        )
+        .expect("tamper covered message");
+
+    let continue_tool_runtime = AutonomousToolRuntime::for_project(
+        &app.handle().clone(),
+        app.state::<DesktopState>().inner(),
+        &project_id,
+    )
+    .expect("build autonomous tool runtime for tampered continuation");
+    let error = continue_owned_agent_run(ContinueOwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        run_id: run_id.into(),
+        prompt: "Continue after tamper.".into(),
+        controls: None,
+        tool_runtime: continue_tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+        answer_pending_actions: false,
+    })
+    .expect_err("covered transcript mutation should reject compacted replay");
+
+    assert_eq!(error.code, "agent_compaction_source_mismatch");
+    let snapshot = db::project_store::load_agent_run(&repo_root, &project_id, run_id)
+        .expect("load tampered run");
+    assert!(!snapshot
+        .messages
+        .iter()
+        .any(|message| message.content == "Continue after tamper."));
 }
 
 #[test]
