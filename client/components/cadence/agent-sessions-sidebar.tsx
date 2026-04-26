@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, MessageSquare, MoreHorizontal, Plus, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
@@ -35,6 +35,13 @@ interface AgentSessionsSidebarProps {
   collapsed?: boolean
 }
 
+type SessionEntryState = 'entering' | 'visible' | 'exiting'
+
+interface SessionEntry {
+  session: AgentSessionView
+  state: SessionEntryState
+}
+
 export function AgentSessionsSidebar({
   projectLabel,
   sessions,
@@ -46,7 +53,67 @@ export function AgentSessionsSidebar({
   isCreating,
   collapsed = false,
 }: AgentSessionsSidebarProps) {
-  const activeSessions = sessions.filter((session) => session.isActive)
+  const activeSessions = useMemo(
+    () => sessions.filter((session) => session.isActive),
+    [sessions],
+  )
+
+  const isFirstSyncRef = useRef(true)
+  const [entries, setEntries] = useState<SessionEntry[]>(() =>
+    activeSessions.map((session) => ({ session, state: 'visible' as const })),
+  )
+
+  useEffect(() => {
+    const isFirst = isFirstSyncRef.current
+    isFirstSyncRef.current = false
+
+    setEntries((prevEntries) => {
+      const activeBySessionId = new Map(
+        activeSessions.map((session) => [session.agentSessionId, session]),
+      )
+      const seenIds = new Set<string>()
+
+      const next: SessionEntry[] = prevEntries.map((entry) => {
+        const id = entry.session.agentSessionId
+        seenIds.add(id)
+        const fresh = activeBySessionId.get(id)
+        if (fresh) {
+          if (entry.state === 'exiting') {
+            return { session: fresh, state: 'entering' }
+          }
+          return { session: fresh, state: entry.state }
+        }
+        return entry.state === 'exiting' ? entry : { ...entry, state: 'exiting' }
+      })
+
+      for (const session of activeSessions) {
+        if (!seenIds.has(session.agentSessionId)) {
+          next.push({ session, state: isFirst ? 'visible' : 'entering' })
+        }
+      }
+
+      return next
+    })
+  }, [activeSessions])
+
+  const handleEnterAnimationEnd = useCallback((agentSessionId: string) => {
+    setEntries((prev) =>
+      prev.map((entry) =>
+        entry.session.agentSessionId === agentSessionId && entry.state === 'entering'
+          ? { ...entry, state: 'visible' }
+          : entry,
+      ),
+    )
+  }, [])
+
+  const handleExitAnimationEnd = useCallback((agentSessionId: string) => {
+    setEntries((prev) =>
+      prev.filter(
+        (entry) =>
+          !(entry.session.agentSessionId === agentSessionId && entry.state === 'exiting'),
+      ),
+    )
+  }, [])
 
   return (
     <aside
@@ -85,21 +152,37 @@ export function AgentSessionsSidebar({
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {activeSessions.length === 0 ? (
+        {entries.length === 0 ? (
           <div className="px-3 py-5 text-center text-[11px] leading-relaxed text-muted-foreground/80">
             No sessions yet. Start a new chat to begin.
           </div>
         ) : (
           <ul className="flex flex-col px-1.5 py-1.5">
-            {activeSessions.map((session) => (
-              <li key={session.agentSessionId}>
+            {entries.map((entry) => (
+              <li
+                key={entry.session.agentSessionId}
+                className={cn(
+                  entry.state === 'entering' &&
+                    'motion-standard animate-in fade-in-0 slide-in-from-top-1',
+                  entry.state === 'exiting' &&
+                    'motion-standard animate-out fade-out-0 slide-out-to-top-1 fill-mode-forwards pointer-events-none',
+                )}
+                onAnimationEnd={(event) => {
+                  if (event.target !== event.currentTarget) return
+                  if (entry.state === 'entering') {
+                    handleEnterAnimationEnd(entry.session.agentSessionId)
+                  } else if (entry.state === 'exiting') {
+                    handleExitAnimationEnd(entry.session.agentSessionId)
+                  }
+                }}
+              >
                 <AgentSessionsSidebarItem
-                  session={session}
-                  isActive={session.agentSessionId === selectedSessionId}
-                  isPending={session.agentSessionId === pendingSessionId}
+                  session={entry.session}
+                  isActive={entry.session.agentSessionId === selectedSessionId}
+                  isPending={entry.session.agentSessionId === pendingSessionId}
                   onSelectSession={onSelectSession}
                   onArchiveSession={onArchiveSession}
-                  canArchive={activeSessions.length > 1}
+                  canArchive={activeSessions.length > 1 && entry.state !== 'exiting'}
                 />
               </li>
             ))}

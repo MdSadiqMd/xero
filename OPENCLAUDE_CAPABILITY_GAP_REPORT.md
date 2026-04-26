@@ -565,25 +565,29 @@ Outcome: Cadence can recommend a usable profile path for common local/cloud setu
 
 Outcome: Cadence covers OpenClaude's missing provider setup surface either as first-class presets or as documented OpenAI-compatible recipes.
 
-- [ ] Slice 3.4.1: Add direct Mistral provider support or a first-class Mistral recipe.
+- [x] Slice 3.4.1: Add direct Mistral provider support or a first-class Mistral recipe.
   - Scope: decide whether Mistral should be a dedicated provider id or a locked OpenAI-compatible recipe; implement the selected path through provider presets, runtime provider identity, endpoint resolution, model catalog behavior, and settings UI.
   - Acceptance: users can save a Mistral-backed profile, validate it, refresh or manually specify models according to the chosen transport, and launch a runtime without secret leakage.
   - Verification: Rust and React tests cover profile save, endpoint resolution, catalog behavior, runtime binding, stale binding, settings rendering, and diagnostics.
+  - Completed: 2026-04-26. Implementation: added a first-class Mistral OpenAI-compatible recipe using the existing `openai_api` provider profile path, preserving provider-profile validation, model catalog probing/manual fallback, runtime launch binding, stale binding checks, and redacted diagnostics through the shared OpenAI-compatible runtime. Verification evidence: `pnpm --dir client exec vitest run src/lib/cadence-model/provider-setup.test.ts components/cadence/settings-dialog.test.tsx` passed 2 files and 39 tests; `cargo test --manifest-path client/src-tauri/Cargo.toml --test provider_diagnostics_contract` passed 5 tests; `cargo test --manifest-path client/src-tauri/Cargo.toml --test runtime_session_bridge` passed 41 tests.
 
-- [ ] Slice 3.4.2: Add NVIDIA NIM, MiniMax, and Foundry recipes.
+- [x] Slice 3.4.2: Add NVIDIA NIM, MiniMax, and Foundry recipes.
   - Scope: add recipe metadata and validation for NVIDIA NIM, MiniMax, and Foundry-compatible endpoints using the existing OpenAI-compatible profile path unless a direct provider is required.
   - Acceptance: each recipe has clear required fields, default endpoint guidance, catalog/manual-model behavior, and provider-specific repair text.
   - Verification: TypeScript recipe tests and provider-profile form tests cover generated requests, invalid/missing fields, catalog expectations, and repair text.
+  - Completed: 2026-04-26. Implementation: added NVIDIA NIM, MiniMax, and Azure AI Foundry setup recipes with provider-specific labels, default endpoint guidance, required fields, catalog expectations, and repair copy. Azure AI Foundry stays on the OpenAI-compatible endpoint route and explicitly points deployment-level `api-version` users to the existing Azure OpenAI preset. Verification evidence: `pnpm --dir client exec vitest run src/lib/cadence-model/provider-setup.test.ts components/cadence/settings-dialog.test.tsx` passed recipe validation, generated request, required-field, settings rendering, and repair-copy coverage; `pnpm --dir client exec eslint src/lib/cadence-model/provider-setup.ts src/lib/cadence-model/provider-setup.test.ts components/cadence/provider-profiles/provider-profile-form.tsx components/cadence/settings-dialog.test.tsx` passed.
 
-- [ ] Slice 3.4.3: Add Atomic Chat local setup support.
+- [x] Slice 3.4.3: Add Atomic Chat local setup support.
   - Scope: add a local recipe or provider preset for Atomic Chat with no fake key requirement, local endpoint reachability, and manual-model fallback when catalog discovery is unavailable.
   - Acceptance: users can configure Atomic Chat as a local model backend, see local readiness state, and run connection checks without storing placeholder secrets.
   - Verification: Rust tests cover local readiness and endpoint resolution; React tests cover setup, missing local service, manual model fallback, and runtime launch handoff.
+  - Completed: 2026-04-26. Implementation: added an Atomic Chat local recipe that saves through `openai_api` with local auth, no placeholder key, editable local endpoint, manual model entry, and shared connection checks. The provider form now enforces recipe-level required base URL/model fields before saving. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test provider_model_catalog_bridge` passed 26 tests including Atomic Chat local no-key reachability; `pnpm --dir client exec vitest run src/lib/cadence-model/provider-setup.test.ts components/cadence/settings-dialog.test.tsx` passed Atomic Chat local setup/no-secret assertions.
 
-- [ ] Slice 3.4.4: Add GitHub Models device onboarding only if it fits Cadence auth.
+- [x] Slice 3.4.4: Add GitHub Models device onboarding only if it fits Cadence auth.
   - Scope: evaluate and implement a GitHub Models device-flow path only if it can share Cadence's existing provider-profile credential store and redaction rules; otherwise document API-token setup as the supported path and keep device onboarding out of scope.
   - Acceptance: the chosen path is explicit in the report/docs; if implemented, device onboarding saves a redacted app-local token link and reuses profile readiness/catalog diagnostics.
   - Verification: auth-flow tests cover successful device flow or documented non-support, cancellation, stale flow rejection, token redaction, profile readiness, and catalog discovery.
+  - Completed: 2026-04-26. Decision: GitHub Models device onboarding stays out of scope for this phase because it needs a dedicated auth flow, cancellation/stale-flow handling, app-local token-link storage, and redaction coverage. Cadence supports GitHub Models through saved app-local tokens, existing profile readiness, catalog diagnostics, runtime binding, and stale-binding checks. Documentation now records the token-based path and non-support decision. Verification evidence: `docs/provider-setup-and-diagnostics.md` documents the supported path; `cargo test --manifest-path client/src-tauri/Cargo.toml --test runtime_session_bridge` passed GitHub Models token binding and stale-token coverage; `pnpm --dir client build` passed.
 
 ##### Phase 5: Documentation And Completion Criteria
 

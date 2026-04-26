@@ -333,6 +333,18 @@ fn provider_profile_validation_accepts_supported_provider_metadata_shapes() {
             credential: CredentialKind::ApiKey,
         },
         Case {
+            profile_id: "mistral-recipe-work",
+            provider_id: "openai_api",
+            runtime_kind: "openai_compatible",
+            model_id: "mistral-large-latest",
+            preset_id: Some("openai_api"),
+            base_url: Some("https://api.mistral.ai/v1"),
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::ApiKey,
+        },
+        Case {
             profile_id: "ollama-work",
             provider_id: "ollama",
             runtime_kind: "openai_compatible",

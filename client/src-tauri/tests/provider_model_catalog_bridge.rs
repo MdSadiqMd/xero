@@ -1061,6 +1061,64 @@ fn get_provider_model_catalog_discovers_localhost_openai_compatible_profile_with
 }
 
 #[test]
+fn atomic_chat_recipe_path_uses_local_openai_compatible_endpoint_without_api_key() {
+    let base_url = format!(
+        "{}/v1",
+        spawn_static_http_server(
+            200,
+            r#"{"data":[{"id":"local-model","display_name":"Atomic Chat Local"}]}"#,
+        )
+    );
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    seed_openai_compatible_profile(
+        &app,
+        "atomic-chat-local",
+        "openai_api",
+        "openai_compatible",
+        "local-model",
+        Some("openai_api"),
+        Some(&base_url),
+        None,
+        None,
+    );
+
+    let report = check_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CheckProviderProfileRequestDto {
+            profile_id: "atomic-chat-local".into(),
+            include_network: true,
+        },
+    )
+    .expect("check atomic-chat local openai-compatible profile");
+
+    assert!(report.validation_checks.iter().any(|check| {
+        check.code == "provider_profile_ready" && check.status == CadenceDiagnosticStatus::Passed
+    }));
+    assert!(report.reachability_checks.iter().any(|check| {
+        check.code == "provider_model_catalog_ready"
+            && check.status == CadenceDiagnosticStatus::Passed
+            && !check.message.contains("API key")
+    }));
+    assert_eq!(
+        report
+            .model_catalog
+            .as_ref()
+            .map(|catalog| catalog.source.clone()),
+        Some(ProviderModelCatalogSourceDto::Live)
+    );
+    assert_eq!(
+        report
+            .model_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.models.first())
+            .map(|model| model.model_id.as_str()),
+        Some("local-model")
+    );
+}
+
+#[test]
 fn get_provider_model_catalog_returns_typed_unreachable_error_for_ollama_without_api_key_copy() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));

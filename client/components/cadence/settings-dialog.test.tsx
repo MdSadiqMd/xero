@@ -1860,6 +1860,77 @@ describe('SettingsDialog', () => {
     )
   })
 
+  it('applies the Atomic Chat local recipe without storing placeholder secrets', async () => {
+    let nextProviderProfiles = makeProviderProfiles({
+      activeProfileId: 'openai_codex-default',
+      profiles: [makeOpenAiProfile({ active: true }), makeOpenRouterProfile({ active: false })],
+    })
+
+    const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
+      nextProviderProfiles = makeProviderProfiles({
+        activeProfileId: 'openai_codex-default',
+        profiles: [
+          makeOpenAiProfile({ active: true }),
+          makeOpenRouterProfile({ active: false }),
+          makeOpenAiApiProfile({
+            active: false,
+            label: request.label,
+            modelId: request.modelId,
+            baseUrl: request.baseUrl,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'local',
+              proofUpdatedAt: '2026-04-26T12:00:00Z',
+            },
+          }),
+        ],
+      })
+
+      return nextProviderProfiles
+    })
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: nextProviderProfiles,
+          onUpsertProviderProfile,
+        })}
+      />,
+    )
+
+    const recipeSelect = screen.getByLabelText('Setup recipe')
+    fireEvent.keyDown(recipeSelect, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'Atomic Chat local' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply recipe' }))
+
+    expect(screen.getByText('Start Atomic Chat with its local server enabled, then choose the loaded model id.')).toBeVisible()
+    expect(screen.getByLabelText('Profile label')).toHaveValue('Atomic Chat')
+    expect(screen.getByLabelText('Model')).toHaveTextContent('local-model')
+    expect(screen.getByLabelText('Base URL')).toHaveValue('http://127.0.0.1:1337/v1')
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
+    expect(screen.getByText('No app-local API key is stored for Atomic Chat local')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
+        profileId: 'openai_api-default',
+        providerId: 'openai_api',
+        runtimeKind: 'openai_compatible',
+        label: 'Atomic Chat',
+        modelId: 'local-model',
+        presetId: 'openai_api',
+        baseUrl: 'http://127.0.0.1:1337/v1',
+        apiVersion: null,
+        region: null,
+        projectId: null,
+        apiKey: null,
+        activate: false,
+      }),
+    )
+  })
+
   it('applies hosted OpenAI-compatible recipes and hands saved profiles to connection checks', async () => {
     const secret = 'gsk-test-secret'
     let nextProviderProfiles = makeProviderProfiles({
@@ -1959,6 +2030,35 @@ describe('SettingsDialog', () => {
         includeNetwork: true,
       }),
     )
+  })
+
+  it('surfaces Mistral, NVIDIA NIM, MiniMax, and Azure AI Foundry recipe guidance', async () => {
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: makeProviderProfiles({
+            activeProfileId: 'openai_codex-default',
+            profiles: [makeOpenAiProfile({ active: true }), makeOpenRouterProfile({ active: false })],
+          }),
+        })}
+      />,
+    )
+
+    const recipeSelect = screen.getByLabelText('Setup recipe')
+    fireEvent.keyDown(recipeSelect, { key: 'ArrowDown' })
+    expect(await screen.findByRole('option', { name: 'Mistral' })).toBeVisible()
+    expect(screen.getByRole('option', { name: 'NVIDIA NIM' })).toBeVisible()
+    expect(screen.getByRole('option', { name: 'MiniMax' })).toBeVisible()
+    fireEvent.click(screen.getByRole('option', { name: 'Azure AI Foundry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply recipe' }))
+
+    expect(screen.getByText('Use the Azure AI Foundry OpenAI-compatible endpoint and set Model to the deployment name.')).toBeVisible()
+    expect(screen.getByText(/Use the Azure OpenAI preset instead for deployment URLs that require api-version metadata/)).toBeVisible()
+    expect(screen.getByLabelText('Profile label')).toHaveValue('Azure AI Foundry')
+    expect(screen.getByLabelText('Model')).toHaveTextContent('deployment-name')
+    expect(screen.getByLabelText('Base URL')).toHaveValue('')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText('Azure AI Foundry requires a base URL.')).toBeVisible()
   })
 
   it('limits OpenAI auth controls to the selected profile and keeps typed auth failures inline', async () => {

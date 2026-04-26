@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   createProviderSetupRecipeUpsertRequest,
+  getProviderSetupRecipe,
+  getProviderSetupRecipeDraftDefaults,
   getProviderSetupRecipeMissingFields,
   listProviderSetupRecipes,
   providerSetupRecipeSchema,
@@ -59,9 +61,14 @@ describe('provider setup recipes', () => {
     expect(recipes.map((recipe) => recipe.recipeId)).toEqual([
       'litellm',
       'lm_studio',
+      'mistral',
       'groq',
       'together',
       'deepseek',
+      'nvidia_nim',
+      'minimax',
+      'azure_ai_foundry',
+      'atomic_chat',
       'custom_openai_compatible',
     ])
     expect(recipes.every((recipe) => providerSetupRecipeSchema.safeParse(recipe).success)).toBe(true)
@@ -111,6 +118,83 @@ describe('provider setup recipes', () => {
       label: 'LiteLLM',
       baseUrl: 'http://127.0.0.1:4000/v1',
       apiKey: null,
+    })
+
+    expect(createProviderSetupRecipeUpsertRequest('atomic_chat')).toMatchObject({
+      providerId: 'openai_api',
+      label: 'Atomic Chat',
+      baseUrl: 'http://127.0.0.1:1337/v1',
+      apiKey: null,
+    })
+  })
+
+  it('adds priority-3 provider parity recipes through the OpenAI-compatible profile path', () => {
+    expect(createProviderSetupRecipeUpsertRequest('mistral', {
+      apiKey: 'mistral-secret',
+      activate: true,
+    })).toMatchObject({
+      profileId: 'openai_api-mistral',
+      providerId: 'openai_api',
+      runtimeKind: 'openai_compatible',
+      label: 'Mistral',
+      modelId: 'mistral-large-latest',
+      presetId: 'openai_api',
+      baseUrl: 'https://api.mistral.ai/v1',
+      apiKey: 'mistral-secret',
+      activate: true,
+    })
+
+    expect(createProviderSetupRecipeUpsertRequest('nvidia_nim', {
+      apiKey: 'nvapi-secret',
+    })).toMatchObject({
+      label: 'NVIDIA NIM',
+      modelId: 'meta/llama-3.1-70b-instruct',
+      baseUrl: 'https://integrate.api.nvidia.com/v1',
+      apiKey: 'nvapi-secret',
+    })
+
+    expect(createProviderSetupRecipeUpsertRequest('minimax', {
+      apiKey: 'minimax-secret',
+    })).toMatchObject({
+      label: 'MiniMax',
+      modelId: 'MiniMax-M2.7',
+      baseUrl: 'https://api.minimax.io/v1',
+      apiKey: 'minimax-secret',
+    })
+  })
+
+  it('keeps Azure AI Foundry explicit about deployment endpoints and manual model truth', () => {
+    const foundry = getProviderSetupRecipe('azure_ai_foundry')
+    expect(foundry).toMatchObject({
+      label: 'Azure AI Foundry',
+      modelCatalogExpectation: 'manual',
+      defaultBaseUrl: null,
+    })
+    expect(getProviderSetupRecipeDraftDefaults('azure_ai_foundry')).toMatchObject({
+      label: 'Azure AI Foundry',
+      modelId: 'deployment-name',
+      baseUrl: '',
+    })
+    expect(getProviderSetupRecipeMissingFields('azure_ai_foundry', {
+      apiKey: 'foundry-secret',
+      modelId: 'deployment-name',
+    })).toEqual([
+      {
+        field: 'baseUrl',
+        label: 'Base URL',
+        message: 'Azure AI Foundry requires Base URL.',
+      },
+    ])
+    expect(createProviderSetupRecipeUpsertRequest('azure_ai_foundry', {
+      baseUrl: 'https://foundry-resource.openai.azure.com/openai/v1',
+      apiKey: 'foundry-secret',
+      modelId: 'deepseek-v3-0324',
+    })).toMatchObject({
+      profileId: 'openai_api-azure_ai_foundry',
+      label: 'Azure AI Foundry',
+      modelId: 'deepseek-v3-0324',
+      baseUrl: 'https://foundry-resource.openai.azure.com/openai/v1',
+      apiKey: 'foundry-secret',
     })
   })
 })

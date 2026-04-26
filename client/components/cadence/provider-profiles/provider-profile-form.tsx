@@ -878,6 +878,15 @@ export function ProviderProfileForm({
     }
 
     const appliedRecipe = getAppliedRecipe(card)
+    if (appliedRecipe?.requiredFields.includes("baseUrl") && !draft.baseUrl.trim()) {
+      setFormError(`${appliedRecipe.label} requires a base URL.`)
+      return
+    }
+    if (appliedRecipe?.requiredFields.includes("modelId") && !draft.modelId.trim()) {
+      setFormError(`${appliedRecipe.label} requires a model ID.`)
+      return
+    }
+
     const apiKeyRequirement = getDraftApiKeyRequirement(card, draft, appliedRecipe)
 
     if (apiKeyRequirement === "required") {

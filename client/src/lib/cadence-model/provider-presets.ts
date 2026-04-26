@@ -97,7 +97,7 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     projectIdMode: 'none',
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
-    connectionHint: 'Uses the built-in GitHub Models inference endpoint.',
+    connectionHint: 'Uses the built-in GitHub Models inference endpoint with an app-local token. GitHub device-flow onboarding is intentionally not enabled in Cadence yet.',
   },
   {
     providerId: 'openai_api',
