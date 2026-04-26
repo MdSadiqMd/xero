@@ -17,6 +17,10 @@ export type FooterRuntimeState = "idle" | "running" | "paused"
 export interface StatusFooterProps {
   git?: {
     branch?: string | null
+    upstream?: {
+      ahead?: number | null
+      behind?: number | null
+    } | null
     hasChanges?: boolean
     changedFiles?: number
     lastCommit?: {
@@ -31,23 +35,13 @@ export interface StatusFooterProps {
   } | null
 }
 
+type FooterGitUpstream = NonNullable<NonNullable<StatusFooterProps["git"]>["upstream"]>
+
 // ---------------------------------------------------------------------------
-// Mock data — live surfaces override only the parts already backed by state.
+// Placeholder data for footer surfaces that do not have backend projections yet.
 // ---------------------------------------------------------------------------
 
-const MOCK_FOOTER = {
-  branch: "main",
-  upstream: { ahead: 2, behind: 0 },
-  workingTree: { dirty: true, changedFiles: 1 },
-  lastCommit: {
-    shortSha: "b114b71",
-    message: "feat: Added durable-denial guardrails and shipped-path YOLO safety proof",
-    relativeTime: "12m ago",
-  },
-  project: {
-    name: "joe",
-    phase: "Phase 7 · Status footer",
-  },
+const FOOTER_PLACEHOLDERS = {
   runtime: {
     provider: "OpenAI Codex",
     state: "idle" as FooterRuntimeState,
@@ -68,35 +62,34 @@ export function StatusFooter({ git = null, runtime = null }: StatusFooterProps) 
   const liveLastCommitSha = formatShortSha(liveLastCommit?.sha)
   const liveLastCommitMessage = normalizeOptionalFooterText(liveLastCommit?.message)
   const liveLastCommitRelativeTime = formatRelativeCommitTime(liveLastCommit?.committedAt)
+  const upstream = normalizeUpstream(git?.upstream)
 
   const footer = {
-    ...MOCK_FOOTER,
-    branch: normalizeFooterText(git?.branch, MOCK_FOOTER.branch),
+    ...FOOTER_PLACEHOLDERS,
+    branch: normalizeFooterText(git?.branch, "No branch"),
     workingTree: {
-      dirty: git?.hasChanges ?? MOCK_FOOTER.workingTree.dirty,
-      changedFiles: git?.changedFiles ?? MOCK_FOOTER.workingTree.changedFiles,
+      dirty: git?.hasChanges ?? false,
+      changedFiles: git?.changedFiles ?? 0,
     },
     lastCommit:
       liveLastCommitSha && liveLastCommitMessage
         ? {
             shortSha: liveLastCommitSha,
             message: liveLastCommitMessage,
-            relativeTime: liveLastCommitRelativeTime ?? MOCK_FOOTER.lastCommit.relativeTime,
+            relativeTime: liveLastCommitRelativeTime ?? "",
           }
-        : git
-          ? {
-              shortSha: "—",
-              message: "No commits yet",
-              relativeTime: "",
-            }
-          : MOCK_FOOTER.lastCommit,
+        : {
+            shortSha: "—",
+            message: "No commits yet",
+            relativeTime: "",
+          },
     runtime: {
-      provider: normalizeFooterText(runtime?.provider, MOCK_FOOTER.runtime.provider),
-      state: runtime?.state ?? MOCK_FOOTER.runtime.state,
+      provider: normalizeFooterText(runtime?.provider, FOOTER_PLACEHOLDERS.runtime.provider),
+      state: runtime?.state ?? FOOTER_PLACEHOLDERS.runtime.state,
     },
   }
 
-  const { branch, upstream, workingTree, lastCommit, runtime: runtimeStatus, spend, notifications } = footer
+  const { branch, workingTree, lastCommit, runtime: runtimeStatus, spend, notifications } = footer
 
   const truncatedCommit =
     lastCommit.message.length > 46 ? `${lastCommit.message.slice(0, 46)}…` : lastCommit.message
@@ -111,9 +104,11 @@ export function StatusFooter({ git = null, runtime = null }: StatusFooterProps) 
         <span className="flex items-center gap-1.5">
           <GitBranch className="h-3 w-3" />
           <span className="font-medium text-foreground/80">{branch}</span>
-          <span className="text-muted-foreground/70">
-            ↑{upstream.ahead} ↓{upstream.behind}
-          </span>
+          {upstream ? (
+            <span className="text-muted-foreground/70">
+              ↑{upstream.ahead} ↓{upstream.behind}
+            </span>
+          ) : null}
         </span>
 
         <Divider />
@@ -208,6 +203,23 @@ function formatShortSha(value: string | null | undefined): string | null {
   }
 
   return trimmed.slice(0, 7)
+}
+
+function normalizeUpstream(
+  value: FooterGitUpstream | null | undefined,
+): { ahead: number; behind: number } | null {
+  if (!value) {
+    return null
+  }
+
+  return {
+    ahead: normalizeCount(value.ahead),
+    behind: normalizeCount(value.behind),
+  }
+}
+
+function normalizeCount(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 }
 
 function formatRelativeCommitTime(value: string | null | undefined): string | null {

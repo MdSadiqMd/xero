@@ -424,6 +424,22 @@ describe('ExecutionView', () => {
     expect(screen.getByTestId('file:/README.md')).toHaveTextContent('clean')
   })
 
+  it('resizes the editor explorer from the separator and persists the width', async () => {
+    const { container } = renderExecutionView()
+
+    expect(await screen.findByTestId('file:/README.md')).toBeVisible()
+
+    const explorer = container.querySelector('aside') as HTMLElement
+    const separator = screen.getByRole('separator', { name: 'Resize explorer sidebar' })
+    const before = Number.parseInt(explorer.style.width, 10)
+
+    fireEvent.keyDown(separator, { key: 'ArrowRight' })
+
+    const after = Number.parseInt(explorer.style.width, 10)
+    expect(after).toBeGreaterThan(before)
+    expect(window.localStorage.getItem('cadence.editor.explorer.width')).toBe(String(after))
+  })
+
   it('keeps tabs, dirty markers, expanded folders, cached contents, and active paths in sync across create rename delete flows', async () => {
     const workspace = createWorkspaceHarness({
       root: folder('root', '/', [folder('src', '/src', [file('main.tsx', '/src/main.tsx')])]),

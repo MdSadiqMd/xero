@@ -140,6 +140,47 @@ fn current_head_sha(repository: &Repository) -> Option<String> {
         .and_then(|head| head.target().map(|oid| oid.to_string()))
 }
 
+fn configure_origin_upstream(repository: &Repository, remote_url: &str, branch_name: &str) {
+    repository
+        .remote("origin", remote_url)
+        .expect("create origin remote");
+    let mut remote = repository.find_remote("origin").expect("find origin");
+    remote
+        .push(
+            &[format!("refs/heads/{branch_name}:refs/heads/{branch_name}")],
+            None,
+        )
+        .expect("push initial branch");
+
+    let mut config = repository.config().expect("repo config");
+    config
+        .set_str(&format!("branch.{branch_name}.remote"), "origin")
+        .expect("set branch remote");
+    config
+        .set_str(
+            &format!("branch.{branch_name}.merge"),
+            &format!("refs/heads/{branch_name}"),
+        )
+        .expect("set branch merge target");
+}
+
+fn push_origin_branch(repository: &Repository, branch_name: &str) {
+    let mut remote = repository.find_remote("origin").expect("find origin");
+    remote
+        .push(
+            &[format!("refs/heads/{branch_name}:refs/heads/{branch_name}")],
+            None,
+        )
+        .expect("push branch");
+}
+
+fn fetch_origin_branch(repository: &Repository, branch_name: &str) {
+    let mut remote = repository.find_remote("origin").expect("find origin");
+    remote
+        .fetch(&[branch_name], None, None)
+        .expect("fetch branch");
+}
+
 fn assert_status_matches_root(repository_root: &Path, status: &RepositoryStatusResponseDto) {
     let root_status =
         load_repository_status_from_root(repository_root).expect("load root git status projection");
@@ -294,6 +335,48 @@ fn repository_status_and_diffs_surface_real_staged_unstaged_and_untracked_truth(
         &worktree_diff,
         RepositoryDiffScope::Worktree,
     );
+}
+
+#[test]
+fn repository_status_surfaces_real_upstream_ahead_behind_counts() {
+    let registry_root = tempfile::tempdir().expect("registry temp dir");
+    let repository_root = init_git_repo();
+    let remote_root = tempfile::tempdir().expect("remote temp dir");
+    let remote_repository = Repository::init_bare(remote_root.path()).expect("bare git repo");
+    let repository = Repository::open(repository_root.path()).expect("open repository");
+    let branch_name = current_branch_name(&repository).expect("current branch");
+    let remote_url = remote_root.path().to_string_lossy().into_owned();
+
+    configure_origin_upstream(&repository, &remote_url, &branch_name);
+    remote_repository
+        .set_head(&format!("refs/heads/{branch_name}"))
+        .expect("point bare HEAD at pushed branch");
+
+    fs::write(repository_root.path().join("local.txt"), "local change\n")
+        .expect("write local fixture");
+    commit_all(&repository, "local commit");
+
+    let remote_worktree = tempfile::tempdir().expect("remote worktree temp dir");
+    let remote_clone =
+        Repository::clone(&remote_url, remote_worktree.path()).expect("clone remote");
+    fs::write(remote_worktree.path().join("remote.txt"), "remote change\n")
+        .expect("write remote fixture");
+    commit_all(&remote_clone, "remote commit");
+    push_origin_branch(&remote_clone, &branch_name);
+
+    fetch_origin_branch(&repository, &branch_name);
+
+    let app = build_mock_app(create_state(&registry_root));
+    let imported = import_with_app(&app, repository_root.path()).expect("import succeeds");
+    let status = get_status_with_app(&app, &imported.project.id).expect("status succeeds");
+    let branch = status.branch.as_ref().expect("branch summary");
+    let upstream = branch.upstream.as_ref().expect("upstream summary");
+
+    assert_eq!(branch.name, branch_name);
+    assert_eq!(upstream.name, format!("origin/{branch_name}"));
+    assert_eq!(upstream.ahead, 1);
+    assert_eq!(upstream.behind, 1);
+    assert_status_matches_root(repository_root.path(), &status);
 }
 
 #[test]

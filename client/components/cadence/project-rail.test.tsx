@@ -75,8 +75,34 @@ describe('ProjectRail', () => {
     expect(screen.getByText('0%')).toBeVisible()
   })
 
-  it('keeps a compact monogram rail when collapsed', () => {
+  it('resizes the expanded rail from the separator and persists the width', () => {
     render(
+      <ProjectRail
+        activeProjectId="project-1"
+        errorMessage={null}
+        isImporting={false}
+        isLoading={false}
+        onImportProject={() => undefined}
+        onRemoveProject={() => undefined}
+        onSelectProject={() => undefined}
+        pendingProjectRemovalId={null}
+        projectRemovalStatus="idle"
+        projects={projects}
+      />,
+    )
+
+    const separator = screen.getByRole('separator', { name: 'Resize projects sidebar' })
+    const before = Number(separator.getAttribute('aria-valuenow'))
+
+    fireEvent.keyDown(separator, { key: 'ArrowRight' })
+
+    const after = Number(separator.getAttribute('aria-valuenow'))
+    expect(after).toBeGreaterThan(before)
+    expect(window.localStorage.getItem('cadence.projectRail.width')).toBe(String(after))
+  })
+
+  it('keeps a compact monogram rail when collapsed', () => {
+    const { container } = render(
       <ProjectRail
         activeProjectId="project-1"
         collapsed
@@ -93,11 +119,15 @@ describe('ProjectRail', () => {
     )
 
     const rail = screen.getByRole('complementary')
+    const projectButton = screen.getByRole('button', { name: 'mesh-lang' })
 
     expect(screen.getByRole('button', { name: 'Import repository' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'mesh-lang' })).toBeVisible()
+    expect(projectButton).toBeVisible()
+    expect(projectButton).not.toHaveClass('bg-primary/10')
     expect(screen.getByText('M')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Project actions for mesh-lang' })).not.toBeInTheDocument()
+    expect(container.querySelector('button[aria-label="Project actions for mesh-lang"]')).toBeNull()
+    expect(screen.queryByRole('separator', { name: 'Resize projects sidebar' })).not.toBeInTheDocument()
     expect(rail).toHaveAttribute('data-collapsed', 'true')
     expect(rail).toHaveClass('w-11')
   })

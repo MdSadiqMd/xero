@@ -35,7 +35,7 @@ export function AppShell({ children, activeView, onViewChange }: AppShellProps) 
             <div className="w-5 h-5 rounded bg-primary flex items-center justify-center">
               <span className="text-xs font-bold text-primary-foreground">C</span>
             </div>
-            <span className="text-sm font-semibold text-foreground">Cadence</span>
+            <span className="text-sm font-semibold text-foreground">Xero</span>
           </div>
         </div>
         

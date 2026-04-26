@@ -117,6 +117,14 @@ export const branchSummarySchema = z.object({
   name: z.string().min(1),
   headSha: nullableTextSchema,
   detached: z.boolean(),
+  upstream: z
+    .object({
+      name: z.string().min(1),
+      ahead: z.number().int().nonnegative(),
+      behind: z.number().int().nonnegative(),
+    })
+    .nullable()
+    .optional(),
 })
 
 export const repositoryStatusEntrySchema = z.object({
@@ -403,11 +411,18 @@ export interface RepositoryLastCommitView {
   committedAt: string | null
 }
 
+export interface RepositoryUpstreamView {
+  name: string
+  ahead: number
+  behind: number
+}
+
 export interface RepositoryStatusView {
   projectId: string
   repositoryId: string
   branchLabel: string
   headShaLabel: string
+  upstream?: RepositoryUpstreamView | null
   lastCommit: RepositoryLastCommitView | null
   stagedCount: number
   unstagedCount: number
@@ -505,6 +520,13 @@ export function mapRepositoryStatus(status: RepositoryStatusResponseDto): Reposi
     repositoryId: status.repository.id,
     branchLabel: branchName ?? 'No branch',
     headShaLabel: headSha ?? 'No HEAD',
+    upstream: status.branch?.upstream
+      ? {
+          name: status.branch.upstream.name,
+          ahead: status.branch.upstream.ahead,
+          behind: status.branch.upstream.behind,
+        }
+      : null,
     lastCommit:
       lastCommitSha && lastCommitSummary
         ? {

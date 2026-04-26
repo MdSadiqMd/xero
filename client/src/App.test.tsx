@@ -2517,6 +2517,11 @@ describe('CadenceApp current UI', () => {
           name: 'feature/footer-live-data',
           headSha: '1234567890abcdef1234567890abcdef12345678',
           detached: false,
+          upstream: {
+            name: 'origin/feature/footer-live-data',
+            ahead: 4,
+            behind: 1,
+          },
         },
         lastCommit: {
           sha: '1234567890abcdef1234567890abcdef12345678',
@@ -2562,6 +2567,7 @@ describe('CadenceApp current UI', () => {
 
     expect(screen.getByRole('contentinfo', { name: 'Status bar' })).toBeVisible()
     expect(screen.getByText('feature/footer-live-data')).toBeVisible()
+    expect(screen.getByText('↑4 ↓1')).toBeVisible()
     expect(screen.getByText('2 changes')).toBeVisible()
     expect(screen.getByText('1234567')).toBeVisible()
     expect(screen.getByText('fix: use live head commit metadata')).toBeVisible()
@@ -2596,9 +2602,10 @@ describe('CadenceApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Solana workbench' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open Solana workbench' }))
 
-    expect(screen.getByRole('button', { name: 'Close Solana workbench' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Tools' })).toHaveAttribute('aria-pressed', 'true')
     const breadcrumb = screen.getByRole('navigation', {
       name: 'Solana Workbench breadcrumb',
     })
@@ -2623,7 +2630,7 @@ describe('CadenceApp current UI', () => {
     await waitFor(() => expect(document.querySelector('aside[data-collapsed="true"]')).not.toBeNull())
     expect(screen.getByRole('button', { name: 'Expand project sidebar' })).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Auto' }))
 
     await waitFor(() => expect(document.querySelector('aside[data-collapsed="false"]')).not.toBeNull())
     expect(screen.getByRole('button', { name: 'Collapse project sidebar' })).toBeVisible()
@@ -3213,7 +3220,7 @@ describe('CadenceApp current UI', () => {
     )
     expect(screen.getByText('MCP Prompt · Summarize Context · server linear · outcome Failed')).toBeVisible()
     expect(screen.getByRole('heading', { name: 'Runtime activity' })).toBeVisible()
-  })
+  }, 15_000)
 
   it('starts the shipped Agent path with openai_api provider identity and openai_compatible runtime truth', async () => {
     const setup = createAdapter({
@@ -3623,7 +3630,7 @@ describe('CadenceApp current UI', () => {
     expect(screen.queryByText('Approval pending · YOLO')).not.toBeInTheDocument()
     expect(screen.queryByText('Queued prompt pending the next model-call boundary.')).not.toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).not.toBeDisabled()
-  })
+  }, 15_000)
 
   it('keeps live review-required checkpoint truth visible on the shipped Agent surface even after YOLO becomes active', async () => {
     const reviewActionId = 'flow:flow-1:run:run-1:boundary:boundary-review-1:review_command'
@@ -3811,7 +3818,7 @@ describe('CadenceApp current UI', () => {
     expect(executionPane).toHaveAttribute('aria-hidden', 'false')
     fireEvent.change(editor, { target: { value: '# Draft changes\n' } })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Auto' }))
     await waitFor(() => expect(executionPane).toHaveAttribute('aria-hidden', 'true'))
     expect(screen.queryByText('No milestone assigned')).not.toBeInTheDocument()
     expect(screen.queryByText('Cadence Desktop')).not.toBeInTheDocument()

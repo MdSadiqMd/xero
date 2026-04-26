@@ -544,6 +544,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                 name: "main".into(),
                 head_sha: Some("abc123".into()),
                 detached: false,
+                upstream: None,
             }),
             last_commit: None,
             entries: vec![RepositoryStatusEntryDto {

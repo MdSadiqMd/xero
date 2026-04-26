@@ -3,14 +3,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use git2::{DiffOptions, Repository, Status, StatusOptions};
+use git2::{BranchType, DiffOptions, Repository, Status, StatusOptions};
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::{
     commands::{
-        BranchSummaryDto, ChangeKind, CommandError, CommandResult, LastCommitSummaryDto,
-        RepositoryStatusEntryDto, RepositoryStatusResponseDto, RepositorySummaryDto,
+        BranchSummaryDto, BranchUpstreamSummaryDto, ChangeKind, CommandError, CommandResult,
+        LastCommitSummaryDto, RepositoryStatusEntryDto, RepositoryStatusResponseDto,
+        RepositorySummaryDto,
     },
     state::ImportFailpoints,
 };
@@ -284,10 +285,16 @@ fn read_head_details(repository: &Repository) -> HeadDetails {
     let branch_name = head.shorthand().map(ToOwned::to_owned);
     let detached = repository.head_detached().unwrap_or(false);
     let commit = head.peel_to_commit().ok();
-    let head_sha = commit
+    let head_oid = commit
         .as_ref()
-        .map(|commit| commit.id().to_string())
-        .or_else(|| head.target().map(|oid| oid.to_string()));
+        .map(|commit| commit.id())
+        .or_else(|| head.target());
+    let head_sha = head_oid.map(|oid| oid.to_string());
+    let upstream = if detached {
+        None
+    } else {
+        read_branch_upstream(repository, branch_name.as_deref(), head_oid)
+    };
     let branch = branch_name
         .as_ref()
         .or(head_sha.as_ref())
@@ -295,6 +302,7 @@ fn read_head_details(repository: &Repository) -> HeadDetails {
             name: branch_name.clone().unwrap_or_else(|| "HEAD".into()),
             head_sha: head_sha.clone(),
             detached,
+            upstream,
         });
 
     HeadDetails {
@@ -303,6 +311,34 @@ fn read_head_details(repository: &Repository) -> HeadDetails {
         head_sha,
         last_commit: commit.as_ref().and_then(map_last_commit),
     }
+}
+
+fn read_branch_upstream(
+    repository: &Repository,
+    branch_name: Option<&str>,
+    head_oid: Option<git2::Oid>,
+) -> Option<BranchUpstreamSummaryDto> {
+    let branch_name = branch_name?;
+    let head_oid = head_oid?;
+    let branch = repository
+        .find_branch(branch_name, BranchType::Local)
+        .ok()?;
+    let upstream = branch.upstream().ok()?;
+    let upstream_name = upstream.name().ok().flatten()?.to_owned();
+    let upstream_oid = upstream.get().target().or_else(|| {
+        upstream
+            .get()
+            .peel_to_commit()
+            .ok()
+            .map(|commit| commit.id())
+    })?;
+    let (ahead, behind) = repository.graph_ahead_behind(head_oid, upstream_oid).ok()?;
+
+    Some(BranchUpstreamSummaryDto {
+        name: upstream_name,
+        ahead: u32::try_from(ahead).unwrap_or(u32::MAX),
+        behind: u32::try_from(behind).unwrap_or(u32::MAX),
+    })
 }
 
 fn map_last_commit(commit: &git2::Commit<'_>) -> Option<LastCommitSummaryDto> {

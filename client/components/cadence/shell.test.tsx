@@ -74,6 +74,23 @@ describe('CadenceShell', () => {
     expect(screen.getByRole('navigation')).toBeVisible()
   })
 
+  it('places macOS tabs in the left titlebar slot and centers the logo', () => {
+    render(
+      <CadenceShell
+        activeView="phases"
+        onViewChange={() => undefined}
+        platformOverride="macos"
+      >
+        <div>Body</div>
+      </CadenceShell>,
+    )
+
+    const nav = screen.getByRole('navigation')
+    const logo = screen.getByText('Xero')
+    expect(nav.compareDocumentPosition(logo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(logo.parentElement?.parentElement).toHaveClass('absolute', 'left-1/2')
+  })
+
   it.each(['macos', 'windows'] as const)('toggles the arcade from the %s titlebar', (platform) => {
     const onToggleGames = vi.fn()
 
@@ -107,7 +124,7 @@ describe('CadenceShell', () => {
     expect(onToggleGames).toHaveBeenCalledTimes(2)
   })
 
-  it.each(['macos', 'windows'] as const)('toggles the Android emulator from the %s titlebar', (platform) => {
+  it.each(['macos', 'windows'] as const)('toggles the Android emulator from the %s tools menu', (platform) => {
     const onToggleAndroid = vi.fn()
 
     const { rerender } = render(
@@ -121,7 +138,8 @@ describe('CadenceShell', () => {
       </CadenceShell>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Android emulator' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open Android emulator' }))
     expect(onToggleAndroid).toHaveBeenCalledTimes(1)
 
     rerender(
@@ -136,11 +154,12 @@ describe('CadenceShell', () => {
       </CadenceShell>,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close Android emulator' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Close Android emulator' }))
     expect(onToggleAndroid).toHaveBeenCalledTimes(2)
   })
 
-  it('flips the iOS button to an Install Xcode CTA when Xcode is missing', async () => {
+  it('flips the iOS menu item to an Install Xcode CTA when Xcode is missing', async () => {
     isTauriMock.mockReturnValue(true)
     invokeMock.mockResolvedValue({
       android: { present: true },
@@ -159,18 +178,19 @@ describe('CadenceShell', () => {
       </CadenceShell>,
     )
 
-    const ctaBtn = await screen.findByRole('button', { name: 'Install Xcode' })
-    fireEvent.click(ctaBtn)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
+    const ctaItem = await screen.findByRole('menuitem', { name: 'Install Xcode' })
+    fireEvent.click(ctaItem)
     await waitFor(() =>
       expect(openUrlMock).toHaveBeenCalledWith('https://apps.apple.com/app/xcode/id497799835'),
     )
     // Clicking the CTA never toggles the iOS sidebar — opening an
     // empty panel would just repeat the same "Install Xcode" message.
     expect(onToggleIos).not.toHaveBeenCalled()
-    expect(screen.queryByRole('button', { name: /Open iOS simulator/ })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: /Open iOS simulator/ })).toBeNull()
   })
 
-  it('tints the Android button amber when the SDK is absent', async () => {
+  it('surfaces Android SDK setup context from the tools menu', async () => {
     isTauriMock.mockReturnValue(true)
     invokeMock.mockResolvedValue({
       android: { present: false },
@@ -188,13 +208,14 @@ describe('CadenceShell', () => {
       </CadenceShell>,
     )
 
-    const btn = await screen.findByRole('button', { name: 'Open Android emulator' })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
+    const item = await screen.findByRole('menuitem', { name: 'Open Android emulator' })
     await waitFor(() =>
-      expect(btn.getAttribute('title')).toMatch(/Android SDK not installed/),
+      expect(item.getAttribute('title')).toMatch(/Android SDK not installed/),
     )
   })
 
-  it('renders the iOS button only on macOS', () => {
+  it('renders the iOS menu item only on macOS', () => {
     const onToggleIos = vi.fn()
 
     const { rerender } = render(
@@ -208,8 +229,9 @@ describe('CadenceShell', () => {
       </CadenceShell>,
     )
 
-    expect(screen.getByRole('button', { name: 'Open iOS simulator' })).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Open iOS simulator' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
+    expect(screen.getByRole('menuitem', { name: 'Open iOS simulator' })).toBeVisible()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open iOS simulator' }))
     expect(onToggleIos).toHaveBeenCalledTimes(1)
 
     for (const platform of ['windows', 'linux'] as const) {
@@ -223,12 +245,13 @@ describe('CadenceShell', () => {
           <div>Body</div>
         </CadenceShell>,
       )
-      expect(screen.queryByRole('button', { name: /iOS simulator/ })).toBeNull()
+      expect(screen.queryByRole('menuitem', { name: /iOS simulator/ })).toBeNull()
     }
   })
 
   it.each(['macos', 'windows'] as const)('keeps titlebar controls out of the drag strip in %s', (platform) => {
     isTauriMock.mockReturnValue(true)
+    invokeMock.mockReturnValue(new Promise(() => undefined))
 
     const { container } = render(
       <CadenceShell activeView="phases" onOpenSettings={() => undefined} onViewChange={() => undefined} platformOverride={platform}>
@@ -247,6 +270,7 @@ describe('CadenceShell', () => {
 
   it.each(['macos', 'windows'] as const)('preserves drag strip gestures in %s', async (platform) => {
     isTauriMock.mockReturnValue(true)
+    invokeMock.mockReturnValue(new Promise(() => undefined))
 
     const { container } = render(
       <CadenceShell activeView="phases" onViewChange={() => undefined} platformOverride={platform}>

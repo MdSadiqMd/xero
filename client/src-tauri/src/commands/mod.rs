@@ -150,8 +150,8 @@ pub use upsert_notification_route_credentials::upsert_notification_route_credent
 pub use upsert_runtime_settings::upsert_runtime_settings;
 
 pub use contracts::{
-    agent::*, autonomous::*, error::*, mcp::*, notifications::*, runtime::*, skills::*, surface::*,
-    workflow::*,
+    agent::*, autonomous::*, error::*, mcp::*, notifications::*, runtime::*, session_context::*,
+    skills::*, surface::*, workflow::*,
 };
 
 pub(crate) use contracts::{

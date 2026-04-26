@@ -1,9 +1,23 @@
-import type { ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+} from 'react'
 import { ChevronRight, FilePlus, FolderPlus, RotateCcw, Search, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { FileSystemNode } from '@/src/lib/file-system-tree'
 import { FileTree } from '../file-tree'
+
+const MIN_WIDTH = 220
+const DEFAULT_WIDTH = 260
+const MAX_WIDTH = 560
+const RIGHT_PADDING = 360
+const STORAGE_KEY = 'cadence.editor.explorer.width'
 
 interface ExplorerPaneProps {
   projectLabel: string
@@ -27,6 +41,37 @@ interface ExplorerPaneProps {
   onReload: () => void
 }
 
+function viewportMaxWidth() {
+  if (typeof window === 'undefined') return MAX_WIDTH
+  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - RIGHT_PADDING))
+}
+
+function clampWidth(width: number, maxWidth = viewportMaxWidth()) {
+  return Math.max(MIN_WIDTH, Math.min(maxWidth, width))
+}
+
+function readPersistedWidth(): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage?.getItem?.(STORAGE_KEY)
+    if (!raw) return null
+    const parsed = Number.parseInt(raw, 10)
+    if (!Number.isFinite(parsed) || parsed < MIN_WIDTH) return null
+    return clampWidth(parsed)
+  } catch {
+    return null
+  }
+}
+
+function writePersistedWidth(width: number): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage?.setItem?.(STORAGE_KEY, String(Math.round(width)))
+  } catch {
+    /* storage unavailable — default next session */
+  }
+}
+
 export function ExplorerPane({
   projectLabel,
   subtitle,
@@ -48,8 +93,96 @@ export function ExplorerPane({
   onCollapseAll,
   onReload,
 }: ExplorerPaneProps) {
+  const [width, setWidth] = useState(() => readPersistedWidth() ?? DEFAULT_WIDTH)
+  const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
+  const [isResizing, setIsResizing] = useState(false)
+  const widthRef = useRef(width)
+  widthRef.current = width
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleResize = () => {
+      const nextMax = viewportMaxWidth()
+      setMaxWidth(nextMax)
+      setWidth((current) => clampWidth(current, nextMax))
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  useEffect(() => {
+    writePersistedWidth(width)
+  }, [width])
+
+  const handleResizeStart = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = widthRef.current
+    const ceiling = viewportMaxWidth()
+    setMaxWidth(ceiling)
+    setIsResizing(true)
+
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const handleMove = (ev: globalThis.PointerEvent) => {
+      const delta = ev.clientX - startX
+      setWidth(clampWidth(startWidth + delta, ceiling))
+    }
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      window.removeEventListener('pointercancel', handleUp)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+      setIsResizing(false)
+    }
+
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    window.addEventListener('pointercancel', handleUp)
+  }, [])
+
+  const handleResizeKey = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const step = event.shiftKey ? 32 : 8
+    const ceiling = viewportMaxWidth()
+    setMaxWidth(ceiling)
+    setWidth((current) => {
+      const delta = event.key === 'ArrowRight' ? step : -step
+      return clampWidth(current + delta, ceiling)
+    })
+  }, [])
+
   return (
-    <aside className="motion-layout-island flex w-[260px] shrink-0 flex-col border-r border-border bg-sidebar">
+    <aside
+      className={cn(
+        'motion-layout-island relative flex shrink-0 flex-col border-r border-border bg-sidebar',
+        !isResizing && 'transition-[width] motion-panel',
+      )}
+      style={{ width }}
+    >
+      <div
+        aria-label="Resize explorer sidebar"
+        aria-orientation="vertical"
+        aria-valuemax={maxWidth}
+        aria-valuemin={MIN_WIDTH}
+        aria-valuenow={width}
+        className={cn(
+          'absolute inset-y-0 -right-[3px] z-10 w-[6px] cursor-col-resize bg-transparent transition-colors',
+          'hover:bg-primary/30',
+          isResizing && 'bg-primary/40',
+        )}
+        onKeyDown={handleResizeKey}
+        onPointerDown={handleResizeStart}
+        role="separator"
+        tabIndex={0}
+      />
+
       <div className="flex shrink-0 items-start justify-between gap-2 px-3 pt-2.5 pb-2">
         <div className="min-w-0">
           <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">

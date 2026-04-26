@@ -249,17 +249,23 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const shouldRestoreSidebarFromAutoCollapseRef = useRef(false)
   const previousViewRef = useRef<View>(activeView)
 
+  const footerRepositoryStatus = repositoryStatus ?? activeProject?.repositoryStatus ?? null
+  const footerLastCommit = footerRepositoryStatus?.lastCommit ?? null
   const statusFooter: StatusFooterProps = {
     git: activeProject
       ? {
-          branch: repositoryStatus?.branchLabel ?? activeProject.repository?.branchLabel ?? activeProject.branchLabel,
-          hasChanges: repositoryStatus?.hasChanges ?? activeProject.repositoryStatus?.hasChanges ?? false,
-          changedFiles: repositoryStatus?.statusCount ?? activeProject.repositoryStatus?.statusCount ?? 0,
-          lastCommit: (repositoryStatus?.lastCommit ?? activeProject.repositoryStatus?.lastCommit)
+          branch:
+            footerRepositoryStatus?.branchLabel ??
+            activeProject.repository?.branchLabel ??
+            activeProject.branchLabel,
+          upstream: footerRepositoryStatus?.upstream ?? null,
+          hasChanges: footerRepositoryStatus?.hasChanges ?? false,
+          changedFiles: footerRepositoryStatus?.statusCount ?? 0,
+          lastCommit: footerLastCommit
             ? {
-                sha: (repositoryStatus?.lastCommit ?? activeProject.repositoryStatus?.lastCommit)?.sha,
-                message: (repositoryStatus?.lastCommit ?? activeProject.repositoryStatus?.lastCommit)?.summary,
-                committedAt: (repositoryStatus?.lastCommit ?? activeProject.repositoryStatus?.lastCommit)?.committedAt,
+                sha: footerLastCommit.sha,
+                message: footerLastCommit.summary,
+                committedAt: footerLastCommit.committedAt,
               }
             : null,
         }
@@ -486,7 +492,8 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         path: activeProject.repository?.rootPath ?? activeProject.name,
       }
     : null
-  const showOnboarding = onboardingOpen && !onboardingDismissed && !isLoading
+  const shouldAutoOpenOnboarding = !onboardingDismissed && !isLoading && projects.length === 0
+  const showOnboarding = (onboardingOpen || shouldAutoOpenOnboarding) && !onboardingDismissed && !isLoading
 
   if (showOnboarding) {
     return (

@@ -1,6 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+} from 'react'
 import {
   Archive,
   Loader2,
@@ -37,6 +45,11 @@ interface AgentSessionsSidebarProps {
 }
 
 const PINNED_SESSIONS_STORAGE_PREFIX = 'cadence:pinned-sessions:'
+const MIN_WIDTH = 220
+const DEFAULT_WIDTH = 260
+const MAX_WIDTH = 560
+const RIGHT_PADDING = 360
+const WIDTH_STORAGE_KEY = 'cadence.agentSessions.width'
 
 function readPinnedSessionIds(projectId: string | null): Set<string> {
   if (!projectId || typeof window === 'undefined') return new Set()
@@ -60,6 +73,37 @@ function writePinnedSessionIds(projectId: string | null, ids: Set<string>) {
     )
   } catch {
     // ignore storage failures (private mode, quota, etc.)
+  }
+}
+
+function viewportMaxWidth() {
+  if (typeof window === 'undefined') return MAX_WIDTH
+  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - RIGHT_PADDING))
+}
+
+function clampWidth(width: number, maxWidth = viewportMaxWidth()) {
+  return Math.max(MIN_WIDTH, Math.min(maxWidth, width))
+}
+
+function readPersistedWidth(): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage?.getItem?.(WIDTH_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = Number.parseInt(raw, 10)
+    if (!Number.isFinite(parsed) || parsed < MIN_WIDTH) return null
+    return clampWidth(parsed)
+  } catch {
+    return null
+  }
+}
+
+function writePersistedWidth(width: number): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage?.setItem?.(WIDTH_STORAGE_KEY, String(Math.round(width)))
+  } catch {
+    /* storage unavailable — default next session */
   }
 }
 
@@ -89,10 +133,74 @@ export function AgentSessionsSidebar({
   )
 
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => readPinnedSessionIds(projectId))
+  const [width, setWidth] = useState(() => readPersistedWidth() ?? DEFAULT_WIDTH)
+  const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
+  const [isResizing, setIsResizing] = useState(false)
+  const widthRef = useRef(width)
+  widthRef.current = width
 
   useEffect(() => {
     setPinnedIds(readPinnedSessionIds(projectId))
   }, [projectId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleResize = () => {
+      const nextMax = viewportMaxWidth()
+      setMaxWidth(nextMax)
+      setWidth((current) => clampWidth(current, nextMax))
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  useEffect(() => {
+    writePersistedWidth(width)
+  }, [width])
+
+  const handleResizeStart = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (collapsed || event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = widthRef.current
+    const ceiling = viewportMaxWidth()
+    setMaxWidth(ceiling)
+    setIsResizing(true)
+
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const handleMove = (ev: globalThis.PointerEvent) => {
+      const delta = ev.clientX - startX
+      setWidth(clampWidth(startWidth + delta, ceiling))
+    }
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      window.removeEventListener('pointercancel', handleUp)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+      setIsResizing(false)
+    }
+
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    window.addEventListener('pointercancel', handleUp)
+  }, [collapsed])
+
+  const handleResizeKey = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (collapsed || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return
+    event.preventDefault()
+    const step = event.shiftKey ? 32 : 8
+    const ceiling = viewportMaxWidth()
+    setMaxWidth(ceiling)
+    setWidth((current) => {
+      const delta = event.key === 'ArrowRight' ? step : -step
+      return clampWidth(current + delta, ceiling)
+    })
+  }, [collapsed])
 
   const togglePinSession = useCallback(
     (agentSessionId: string) => {
@@ -211,11 +319,33 @@ export function AgentSessionsSidebar({
     <aside
       aria-hidden={collapsed}
       className={cn(
-        'motion-layout-island flex shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar transition-[width,border-color] motion-panel',
-        collapsed ? 'w-0 border-r-transparent' : 'w-[260px]',
+        'motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar',
+        !isResizing && 'transition-[width,border-color] motion-panel',
+        collapsed && 'w-0 border-r-transparent',
       )}
+      inert={collapsed ? true : undefined}
+      style={{ width: collapsed ? 0 : width }}
     >
-      <div className="flex w-[260px] shrink-0 flex-col h-full">
+      {!collapsed ? (
+        <div
+          aria-label="Resize sessions sidebar"
+          aria-orientation="vertical"
+          aria-valuemax={maxWidth}
+          aria-valuemin={MIN_WIDTH}
+          aria-valuenow={width}
+          className={cn(
+            'absolute inset-y-0 -right-[3px] z-10 w-[6px] cursor-col-resize bg-transparent transition-colors',
+            'hover:bg-primary/30',
+            isResizing && 'bg-primary/40',
+          )}
+          onKeyDown={handleResizeKey}
+          onPointerDown={handleResizeStart}
+          role="separator"
+          tabIndex={0}
+        />
+      ) : null}
+
+      <div className="flex h-full shrink-0 flex-col" style={{ width }}>
         <div className="flex shrink-0 items-start justify-between gap-2 px-3 pt-2.5 pb-2">
           <div className="min-w-0">
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">

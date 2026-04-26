@@ -631,6 +631,157 @@ Cadence persists runs well, but OpenClaude has richer working-memory features:
 - Project instruction/memory file management.
 - Cross-session resume search and rename/branch/rewind equivalents.
 
+Current code footing: Cadence already has durable `agent_sessions`, `agent_runs`, `agent_messages`, `agent_events`, `agent_tool_calls`, `agent_file_changes`, `agent_checkpoints`, `agent_action_requests`, and `agent_usage` records. The owned-agent loop rebuilds provider replay state from the full persisted message history, while the system prompt currently reads only `AGENTS.md` plus tool descriptors. The desktop UI already exposes active/archived sessions and a run-scoped feed, but search, export, compaction, memory review, and branch/rewind workflows are not yet first-class.
+
+#### Priority 4 Implementation Plan
+
+Reader and action for this plan: a future implementation agent should be able to claim one slice, complete it without needing extra product context, and leave tests proving the slice works. Each slice should stay aligned with the existing Tauri command contracts, repo-local SQLite project store, owned-agent provider loop, ShadCN/Radix UI patterns, and the no-temporary-debug-UI rule.
+
+##### Phase 0: Define The Session Context Contract
+
+Outcome: Cadence has one vocabulary for transcripts, context budgets, compaction records, memory candidates, exports, and branch/rewind lineage before storage or UI surfaces diverge.
+
+- [x] Slice 4.0.1: Define transcript and context snapshot contracts.
+  - Scope: specify stable DTOs for run transcript items, session transcript items, context snapshots, context contributors, usage totals, export payloads, and search result snippets across owned-agent runs and supervised runtime stream items.
+  - Acceptance: the contract maps existing `agent_messages`, `agent_events`, `agent_tool_calls`, `agent_file_changes`, `agent_checkpoints`, `agent_usage`, and runtime-stream transcript/tool/activity records without losing ordering, run id, session id, provider, model, or redaction metadata.
+  - Verification: Rust and TypeScript schema tests cover valid payloads, malformed payload rejection, stable ordering, empty sessions, archived sessions, and secret-free serialization.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_context_contract` passed 7 tests covering owned-agent transcript projection, runtime-stream transcript projection, stable ordering, malformed payload rejection, archived empty sessions, context snapshots, search/export-adjacent DTOs, usage totals, and secret-free serialization; `pnpm --dir client exec vitest run src/lib/cadence-model/session-context.test.ts` passed 4 TypeScript schema tests.
+
+- [x] Slice 4.0.2: Define compaction and memory policy semantics.
+  - Scope: decide how manual compact, auto-compact, memory extraction, approved memory injection, disabled memory, and project instruction files interact with the provider replay path.
+  - Acceptance: compaction is non-destructive, raw transcript rows remain searchable/exportable, approved memory is injected deterministically, unapproved memory is never model-visible, and policy decisions can be explained in the UI.
+  - Verification: pure Rust tests cover threshold decisions, manual-vs-auto policy results, disabled/unapproved memory filtering, deterministic contributor ordering, and redaction of memory diagnostics.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_context_contract` passed 7 tests including manual-vs-auto compaction policy, threshold decisions, disabled auto-compact handling, approved-only memory contributor filtering, deterministic memory ordering, model-visible contributor integrity, and redaction of secret-bearing memory text.
+
+##### Phase 1: Make Session History Searchable And Exportable
+
+Outcome: users can find, inspect, and export prior work without reopening raw database state or relying on the live feed.
+
+- [ ] Slice 4.1.1: Add a redacted transcript projection command.
+  - Scope: add backend commands that project one run or one agent session into a chronological transcript containing user/assistant messages, reasoning summaries, tool summaries, file changes, checkpoints, action requests, and usage totals.
+  - Acceptance: projections work for active and archived sessions, preserve event/message order, summarize large tool payloads safely, and never expose secrets beyond what the current transcript already permits.
+  - Verification: Rust project-store tests cover multi-run sessions, tool-call ordering, checkpoint/file-change ordering, archived-session access, malformed JSON recovery, large payload summarization, and redaction.
+
+- [ ] Slice 4.1.2: Add transcript export in Markdown and JSON.
+  - Scope: expose export commands and adapter methods for selected run/session exports in readable Markdown and structured JSON, including enough metadata for support/debugging but excluding raw secret-bearing values.
+  - Acceptance: users can export the selected session or a specific run from the agent UI; exported JSON round-trips through the schema; Markdown is readable and includes run boundaries, prompts, assistant responses, tool summaries, checkpoints, and file changes.
+  - Verification: Rust serialization tests and React tests cover run export, session export, archived-session export, copy/save action states, failed export diagnostics, and redacted payloads.
+
+- [ ] Slice 4.1.3: Add session and transcript search.
+  - Scope: add SQLite-backed search over session titles/summaries, prompts, assistant messages, tool summaries, file changes, and checkpoints, with project/session/run scopes and an archived-session toggle.
+  - Acceptance: users can search across sessions, jump to the matching run/session, see safe snippets, and distinguish active vs archived results.
+  - Verification: migration/store tests cover FTS or equivalent indexing, ranking, snippets, archived filtering, deleted-session cleanup, and redaction; React tests cover query input, empty state, result navigation, loading, and error states.
+
+- [ ] Slice 4.1.4: Surface rename and run navigation.
+  - Scope: connect the existing rename mutation to ShadCN session actions and add a compact run history view for the selected session.
+  - Acceptance: users can rename a session, inspect its prior runs, reopen a historical run transcript, and start a follow-up from the correct selected session.
+  - Verification: React tests cover rename validation, rename failure recovery, run list ordering, selected-run navigation, and no temporary debug controls.
+
+##### Phase 2: Add Context Visualization And Budget Awareness
+
+Outcome: users can see what Cadence will send to the model and when a conversation is approaching context pressure.
+
+- [ ] Slice 4.2.1: Compute context contributors and usage rollups.
+  - Scope: derive context contributors from the active system prompt, `AGENTS.md`, selected tool descriptors, approved memory, conversation tail, compacted summaries, tool results, and provider usage records.
+  - Acceptance: Cadence can report per-run and per-session token/character estimates, known provider usage totals, largest contributors, and whether estimates came from provider data or local approximation.
+  - Verification: Rust tests cover empty runs, long transcripts, tool-heavy runs, existing `agent_usage` records, missing usage records, and deterministic contributor ordering.
+
+- [ ] Slice 4.2.2: Add a context visualization panel.
+  - Scope: build a ShadCN-based panel in the agent experience that shows context contributors, approximate budget pressure, compacted vs raw history, approved memory, instruction-file sources, and the next-turn replay shape.
+  - Acceptance: users can understand what will enter the next provider call without reading logs, and the panel remains useful for sessions with no runs, short runs, and long runs.
+  - Verification: React tests cover no-run state, normal context, over-budget warning, compacted summary display, memory contributors, instruction-file contributors, and responsive layout.
+
+- [ ] Slice 4.2.3: Warn before over-budget continuations.
+  - Scope: integrate context pressure checks into `send_agent_message`/owned-agent continuation preparation and surface actionable warnings in the agent UI before a continuation is likely to exceed the provider context budget.
+  - Acceptance: warnings do not block short sessions, do not mutate history, point users to manual compact when available, and classify unknown-provider-budget cases separately from known over-budget cases.
+  - Verification: Rust continuation tests cover below-threshold, near-threshold, over-threshold, unknown-budget, and already-compacted sessions; React tests cover warning rendering and continuation retry after compaction.
+
+##### Phase 3: Add Manual Compact And Compaction-Aware Replay
+
+Outcome: long sessions can continue with a compacted context while raw history stays durable, searchable, and exportable.
+
+- [ ] Slice 4.3.1: Persist compaction records.
+  - Scope: add project-store records for compaction summaries, covered message/event ranges, source hashes, provider/model metadata, token estimates, policy reason, active/inactive state, and diagnostics.
+  - Acceptance: compaction records are append-only by default, can be superseded without deleting raw rows, and can be loaded by project/session/run scope.
+  - Verification: migration/store tests cover insert, load active, supersede, range validation, source-hash mismatch, archived sessions, and invalid JSON rejection.
+
+- [ ] Slice 4.3.2: Implement manual compact generation.
+  - Scope: add a backend command that compacts selected session history through the active provider adapter or a fake test adapter, records the summary, and preserves a recent raw tail for replay.
+  - Acceptance: manual compact handles multi-turn tool conversations, does not summarize pending action requests as completed work, emits typed diagnostics on provider failure, and leaves raw transcript export unchanged.
+  - Verification: owned-agent runtime tests cover successful compact, provider failure, cancellation, pending action requests, tool-call-heavy transcripts, redaction, and raw transcript preservation.
+
+- [ ] Slice 4.3.3: Make provider replay compaction-aware.
+  - Scope: update `provider_messages_from_snapshot` and continuation assembly so the next provider turn uses active compaction summaries plus a recent raw tail instead of the full message history when compaction is active.
+  - Acceptance: replay never splits assistant/tool-call pairs incorrectly, tool result supersession still works, plan-mode behavior remains intact, and users can continue a compacted run successfully.
+  - Verification: agent-core tests cover compacted replay, assistant/tool-call pairing, superseded tool messages, follow-up user messages, plan-mode action requests, and provider mismatch errors.
+
+- [ ] Slice 4.3.4: Add manual compact UI.
+  - Scope: add a user-facing compact action to the context panel or session actions with progress, success, failure, and compacted-history display states.
+  - Acceptance: users can manually compact the selected session, see what range was compacted, continue after compaction, and inspect any diagnostic without temporary debug UI.
+  - Verification: React tests cover action availability, confirmation/progress, success rendering, provider-failure diagnostics, disabled states for no-run sessions, and continuation after compact.
+
+##### Phase 4: Add Memory Extraction And Project Instruction Management
+
+Outcome: useful durable context can survive individual runs, but users remain in control of what becomes model-visible memory.
+
+- [ ] Slice 4.4.1: Add a reviewed memory store.
+  - Scope: persist memory candidates and approved memories with project/session scope, kind, text, source run/message references, confidence, review state, enabled state, timestamps, and diagnostics.
+  - Acceptance: unreviewed candidates are not injected into model context, approved memories are queryable by scope, disabled memories remain visible to users but unavailable to replay, and deleted source sessions do not leave broken references.
+  - Verification: migration/store tests cover candidate creation, approve, disable, re-enable, delete, source-reference cleanup, project vs session scope, and redacted diagnostics.
+
+- [ ] Slice 4.4.2: Extract memory candidates from completed runs.
+  - Scope: add a command or post-run job that proposes memories from completed transcripts, file changes, user preferences, project decisions, and durable troubleshooting facts without auto-approving them.
+  - Acceptance: candidates cite their source run/session, avoid duplicating existing approved memory, and distinguish project facts from session summaries and user preferences.
+  - Verification: fake-provider tests cover candidate extraction, duplicate merging, low-confidence rejection, source citation, no-auto-approval behavior, and secret redaction.
+
+- [ ] Slice 4.4.3: Add memory review UI.
+  - Scope: build a ShadCN-based Memory surface in Settings or the agent context panel for reviewing, approving, disabling, deleting, filtering, and inspecting memory provenance.
+  - Acceptance: users can understand and control every model-visible memory item, and memory diagnostics are actionable without exposing secret-bearing paths or raw credentials.
+  - Verification: React tests cover empty state, candidate list, approve/disable/delete, filtering by scope/kind, provenance display, failed action diagnostics, and responsive layout.
+
+- [ ] Slice 4.4.4: Inject approved memory and instruction files into the system prompt.
+  - Scope: extend `assemble_system_prompt` to include deterministic, redacted approved memory plus supported project instruction files such as `AGENTS.md` and any Cadence-supported memory file contract.
+  - Acceptance: injected memory appears in the context visualization panel, ordering is stable, disabled/unreviewed memory is excluded, and missing or malformed instruction files produce diagnostics rather than provider-call failure.
+  - Verification: Rust tests cover approved memory injection, disabled candidate exclusion, project vs session scope ordering, instruction-file detection, malformed file diagnostics, and unchanged behavior when no memory exists.
+
+##### Phase 5: Add Branch, Rewind, And Auto-Compact Workflows
+
+Outcome: users can recover and explore from prior conversation points without destructive transcript edits, and long-running sessions can compact themselves when policy allows.
+
+- [ ] Slice 4.5.1: Branch a session from a historical run.
+  - Scope: add branch lineage records and commands that create a new active session from a selected source session/run, carrying the relevant compacted context and transcript references without mutating the source session.
+  - Acceptance: users can branch from a search result or run history row, the new session is selected, source lineage is visible, and continuing the branch does not append to the original session.
+  - Verification: store tests cover branch creation, lineage loading, archived source sessions, duplicate titles, and source deletion behavior; React tests cover branch action, selected-session switch, and lineage display.
+
+- [ ] Slice 4.5.2: Rewind by branching from a checkpoint or message boundary.
+  - Scope: add a safe rewind workflow that creates a branch from a selected checkpoint/message boundary and replays only the selected context prefix plus any active compaction summary.
+  - Acceptance: rewind never deletes the original run, clearly identifies file rollback limitations, and preserves enough checkpoint metadata to explain what changed before the branch point.
+  - Verification: Rust tests cover message-boundary rewind, checkpoint-boundary rewind, tool-call pair boundaries, file-change checkpoint metadata, invalid boundary rejection, and branch continuation.
+
+- [ ] Slice 4.5.3: Add auto-compact policy after manual compact is stable.
+  - Scope: add opt-in auto-compact behavior that triggers when context pressure crosses configured thresholds before a continuation, reusing the manual compact pipeline and producing the same diagnostics.
+  - Acceptance: auto-compact can be disabled, never runs without a provider/profile capable of summarization, preserves raw history, and reports whether compaction happened before the next provider turn.
+  - Verification: policy tests cover disabled, enabled below-threshold, enabled above-threshold, provider unavailable, provider failure, cancellation, and successful continuation after auto-compact.
+
+##### Phase 6: Hardening, Docs, And Completion Criteria
+
+Outcome: Priority 4 is safe enough to call complete and useful for both users and future implementation agents.
+
+- [ ] Slice 4.6.1: Add privacy and integrity hardening for session context.
+  - Scope: audit transcript projections, exports, search snippets, context visualization, compaction summaries, memory candidates, approved memories, and branch/rewind metadata for secret leakage and source-integrity issues.
+  - Acceptance: copied/exported/model-visible surfaces redact API keys, OAuth tokens, bearer headers, credential paths, and secret-bearing tool results while preserving enough context to be useful.
+  - Verification: Rust and TypeScript tests cover nested JSON redaction, large tool results, prompt-injection-shaped memory text, secret-bearing paths, exported Markdown, exported JSON, search snippets, and compaction summaries.
+
+- [ ] Slice 4.6.2: Document session memory and context workflows.
+  - Scope: document search, export, context visualization, manual compact, auto-compact, memory review, instruction files, branch, rewind, and privacy guarantees.
+  - Acceptance: a fresh user can understand when to compact, what memory becomes model-visible, how to export a session, and how branch/rewind differ from destructive history edits.
+  - Verification: docs review confirms the workflow is user-facing, accurate to the implemented commands/UI, and contains no executable examples requiring separate test coverage.
+
+- [ ] Slice 4.6.3: Declare Priority 4 complete.
+  - Scope: run focused Rust tests for session projection/search/export, context policy, compaction, memory store/extraction, branch/rewind, and provider replay; run focused React tests for agent/session UI; run typecheck/build.
+  - Acceptance: the report can mark Priority 4 complete only after search, export, context visualization, manual compact, reviewed memory, branch/rewind, auto-compact policy, docs, and privacy hardening all have passing verification.
+  - Verification: record the exact commands and passing results in the completion note, using one Cargo command at a time.
+
 ### Priority 5: Add External Integration Surfaces Only If Needed
 
 These are valuable, but only after the agent engine and tooling are solid:

@@ -17,6 +17,7 @@ describe('StatusFooter', () => {
       <StatusFooter
         git={{
           branch: 'main',
+          upstream: { ahead: 0, behind: 3 },
           hasChanges: true,
           changedFiles: 1,
           lastCommit: {
@@ -33,7 +34,15 @@ describe('StatusFooter', () => {
     )
 
     expect(screen.getByText('c3e529f')).toBeVisible()
+    expect(screen.getByText('↑0 ↓3')).toBeVisible()
     expect(screen.getByText('feat: wire live commit metadata')).toBeVisible()
     expect(screen.getByText(/2 minutes ago/)).toBeVisible()
+  })
+
+  it('does not render the old mocked upstream counts when no upstream is provided', () => {
+    render(<StatusFooter git={{ branch: 'main', hasChanges: false, changedFiles: 0 }} />)
+
+    expect(screen.queryByText('↑2 ↓0')).not.toBeInTheDocument()
+    expect(screen.getByText('clean')).toBeVisible()
   })
 })

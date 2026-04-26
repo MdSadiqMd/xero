@@ -6,6 +6,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
+  ChevronDown,
   GitCompareArrows,
   Gamepad2,
   Globe,
@@ -14,9 +15,16 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  Wrench,
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { AndroidLogoIcon, AppleLogoIcon, SolanaLogoIcon } from "./brand-icons"
 import type { View } from "./data"
 import { StatusFooter, type StatusFooterProps } from "./status-footer"
@@ -232,7 +240,7 @@ export function CadenceShell({
         <path d="M4 14h6v6H4v-6Z" fill="currentColor" fillOpacity="0.25" />
         <path d="M14 14h6v6h-6v-6Z" fill="currentColor" />
       </svg>
-      <span className="text-[13px] font-semibold tracking-[-0.01em] text-foreground/90">Cadence</span>
+      <span className="text-[13px] font-semibold tracking-[-0.01em] text-foreground/90">Xero</span>
     </div>
   )
 
@@ -289,31 +297,14 @@ export function CadenceShell({
     </button>
   )
 
-  const BrowserBtn = (
-    <button
-      aria-label={browserOpen ? "Close browser" : "Open browser"}
-      aria-pressed={browserOpen}
-      className={cn(
-        "rounded-md p-1.5 transition-colors",
-        browserOpen
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-      )}
-      onClick={onToggleBrowser}
-      type="button"
-    >
-      <Globe className="h-4 w-4" />
-    </button>
-  )
-
   // iOS Simulator requires Xcode. We keep the titlebar slot stable on
   // macOS:
-  // - Xcode detected → normal toggle button.
+  // - Xcode detected → normal toggle menu item.
   // - Xcode missing → an amber-tinted CTA that opens the Xcode App Store
   //   listing. We deliberately don't let the user open the iOS sidebar
   //   in this state because every panel inside it would ship the same
   //   "Install Xcode" message.
-  // - Non-macOS → nothing (Xcode can't run there).
+  // - Non-macOS → no iOS item (Xcode can't run there).
   const handleInstallXcode = () => {
     if (!desktopRuntime) return
     void openUrl(XCODE_STORE_URL).catch(() => {
@@ -322,88 +313,110 @@ export function CadenceShell({
     })
   }
 
-  let IosBtn: React.ReactNode = null
-  if (platform === "macos") {
-    // Before the first probe completes we don't know whether Xcode is
-    // present — optimistically render the toggle. Once the probe
-    // resolves we flip to the CTA if Xcode is missing. The "supported"
-    // flag stays true on all macOS hosts per the backend contract.
-    const xcodeKnownMissing = desktopRuntime && emulatorSdk.ios.supported && !emulatorSdk.ios.xcodePresent
-    IosBtn = xcodeKnownMissing ? (
-      <button
-        aria-label="Install Xcode"
-        className={cn(
-          "rounded-md p-1.5 transition-colors",
-          "text-amber-300/80 hover:bg-amber-500/15 hover:text-amber-200",
-        )}
-        onClick={handleInstallXcode}
-        title="iOS Simulator needs Xcode. Click to install."
-        type="button"
-      >
-        <AppleLogoIcon className="h-4 w-4" />
-      </button>
-    ) : (
-      <button
-        aria-label={iosOpen ? "Close iOS simulator" : "Open iOS simulator"}
-        aria-pressed={iosOpen}
-        className={cn(
-          "rounded-md p-1.5 transition-colors",
-          iosOpen
-            ? "bg-primary/15 text-primary"
-            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-        )}
-        onClick={onToggleIos}
-        type="button"
-      >
-        <AppleLogoIcon className="h-4 w-4" />
-      </button>
-    )
-  }
-
   // Android button stays visible on every platform — even without an
   // SDK installed, clicking it opens the sidebar, which surfaces the
   // one-click provisioning flow. Setup-needed state is conveyed via the
-  // tooltip rather than an amber tint so the titlebar icons read as a
+  // tooltip rather than an amber tint so the tool menu reads as a
   // uniform set.
+  // Before the first probe completes we don't know whether Xcode is
+  // present — optimistically render the iOS toggle. Once the probe
+  // resolves we flip to the CTA if Xcode is missing. The "supported"
+  // flag stays true on all macOS hosts per the backend contract.
+  const xcodeKnownMissing =
+    platform === "macos" && desktopRuntime && emulatorSdk.ios.supported && !emulatorSdk.ios.xcodePresent
   const androidSetupNeeded =
     desktopRuntime && !emulatorSdk.androidPresent && !androidOpen
-  const AndroidBtn = (
-    <button
-      aria-label={androidOpen ? "Close Android emulator" : "Open Android emulator"}
-      aria-pressed={androidOpen}
-      className={cn(
-        "rounded-md p-1.5 transition-colors",
-        androidOpen
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-      )}
-      onClick={onToggleAndroid}
-      title={
-        androidSetupNeeded
-          ? "Android SDK not installed — click to set it up"
-          : undefined
-      }
-      type="button"
-    >
-      <AndroidLogoIcon className="h-4 w-4" />
-    </button>
-  )
+  const toolPanelOpen = iosOpen || androidOpen || browserOpen || solanaOpen
 
-  const SolanaBtn = (
-    <button
-      aria-label={solanaOpen ? "Close Solana workbench" : "Open Solana workbench"}
-      aria-pressed={solanaOpen}
-      className={cn(
-        "rounded-md p-1.5 transition-colors",
-        solanaOpen
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-      )}
-      onClick={onToggleSolana}
-      type="button"
-    >
-      <SolanaLogoIcon className="h-4 w-4" mono />
-    </button>
+  const toolItemClassName =
+    "min-w-44 cursor-pointer px-2.5 py-2 text-[13px]"
+  const activeToolItemClassName = "bg-primary/10 text-primary focus:bg-primary/15 focus:text-primary"
+  const ToolActiveDot = (
+    <span
+      aria-hidden="true"
+      className="ml-auto h-1.5 w-1.5 rounded-full bg-primary"
+    />
+  )
+  const ToolsMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          aria-label="Tools"
+          aria-pressed={toolPanelOpen}
+          className={cn(
+            "flex items-center gap-1 rounded-md px-1.5 py-1.5 transition-colors data-[state=open]:bg-secondary/70 data-[state=open]:text-foreground",
+            toolPanelOpen
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+          )}
+          title="Tools"
+          type="button"
+        >
+          <Wrench className="h-4 w-4" />
+          <ChevronDown className="h-3 w-3 opacity-70" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={8}>
+        {platform === "macos" ? (
+          xcodeKnownMissing ? (
+            <DropdownMenuItem
+              aria-label="Install Xcode"
+              className={cn(
+                toolItemClassName,
+                "text-amber-300/90 focus:bg-amber-500/15 focus:text-amber-200",
+              )}
+              onSelect={handleInstallXcode}
+              title="iOS Simulator needs Xcode. Click to install."
+            >
+              <AppleLogoIcon className="h-4 w-4" />
+              <span>Install Xcode</span>
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              aria-label={iosOpen ? "Close iOS simulator" : "Open iOS simulator"}
+              className={cn(toolItemClassName, iosOpen && activeToolItemClassName)}
+              onSelect={() => onToggleIos?.()}
+            >
+              <AppleLogoIcon className="h-4 w-4" />
+              <span>iOS Simulator</span>
+              {iosOpen ? ToolActiveDot : null}
+            </DropdownMenuItem>
+          )
+        ) : null}
+        <DropdownMenuItem
+          aria-label={androidOpen ? "Close Android emulator" : "Open Android emulator"}
+          className={cn(toolItemClassName, androidOpen && activeToolItemClassName)}
+          onSelect={() => onToggleAndroid?.()}
+          title={
+            androidSetupNeeded
+              ? "Android SDK not installed - click to set it up"
+              : undefined
+          }
+        >
+          <AndroidLogoIcon className="h-4 w-4" />
+          <span>Android Emulator</span>
+          {androidOpen ? ToolActiveDot : null}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          aria-label={browserOpen ? "Close browser" : "Open browser"}
+          className={cn(toolItemClassName, browserOpen && activeToolItemClassName)}
+          onSelect={() => onToggleBrowser?.()}
+        >
+          <Globe className="h-4 w-4" />
+          <span>Browser</span>
+          {browserOpen ? ToolActiveDot : null}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          aria-label={solanaOpen ? "Close Solana workbench" : "Open Solana workbench"}
+          className={cn(toolItemClassName, solanaOpen && activeToolItemClassName)}
+          onSelect={() => onToggleSolana?.()}
+        >
+          <SolanaLogoIcon className="h-4 w-4" mono />
+          <span>Solana Workbench</span>
+          {solanaOpen ? ToolActiveDot : null}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 
   const hasVcsLineChanges = vcsAdditions > 0 || vcsDeletions > 0
@@ -562,7 +575,7 @@ export function CadenceShell({
   let titlebar: React.ReactNode
 
   if (platform === "macos") {
-    // macOS: [traffic-lights] [sidebar-toggle] [|] [logo] ··· (centered nav) ··· [vcs] [ios] [android] [browser] [solana] [games] [settings]
+    // macOS: [traffic-lights] [sidebar-toggle] [|] [nav] ··· (centered logo) ··· [vcs] [tools] [games] [settings]
     titlebar = (
       <header className="relative flex h-11 items-center border-b border-border bg-sidebar shrink-0 pl-3 pr-3">
         {TrafficLights}
@@ -577,18 +590,11 @@ export function CadenceShell({
             {Divider}
           </div>
         ) : null}
-        {Logo}
+        {!chromeOnly ? NavButtons : null}
         {DragSpacer}
-        {!chromeOnly ? (
-          <div
-            className="titlebar-no-drag pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center"
-            data-titlebar-no-drag="true"
-            onDoubleClick={stopTitlebarMouseEventPropagation}
-            onMouseDown={stopTitlebarMouseEventPropagation}
-          >
-            <div className="pointer-events-auto">{NavButtons}</div>
-          </div>
-        ) : null}
+        <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center">
+          {Logo}
+        </div>
         {!chromeOnly ? (
           <div
             className="titlebar-no-drag flex items-center gap-2 shrink-0"
@@ -597,10 +603,7 @@ export function CadenceShell({
             onMouseDown={stopTitlebarMouseEventPropagation}
           >
             {VcsBtn}
-            {IosBtn}
-            {AndroidBtn}
-            {BrowserBtn}
-            {SolanaBtn}
+            {ToolsMenu}
             {GamesBtn}
             {SettingsBtn}
           </div>
@@ -637,10 +640,7 @@ export function CadenceShell({
           {!chromeOnly ? (
             <>
               {VcsBtn}
-              {IosBtn}
-              {AndroidBtn}
-              {BrowserBtn}
-              {SolanaBtn}
+              {ToolsMenu}
               {GamesBtn}
               {SettingsBtn}
               <div className="mx-2 h-4 w-px bg-border" />

@@ -1,5 +1,13 @@
-import { useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+} from 'react'
 import { Loader2, MoreHorizontal, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { motion, useReducedMotion, type Transition } from 'motion/react'
 
 import { cn } from '@/lib/utils'
 import {
@@ -21,6 +29,18 @@ import {
 } from '@/components/ui/dropdown-menu'
 import type { ProjectListItem } from '@/src/lib/cadence-model'
 
+const COLLAPSED_WIDTH = 44
+const MIN_WIDTH = 180
+const DEFAULT_WIDTH = 224
+const MAX_WIDTH = 480
+const RIGHT_PADDING = 360
+const STORAGE_KEY = 'cadence.projectRail.width'
+const RAIL_REVEAL_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1]
+const RAIL_WIDTH_SPRING: Transition = { type: 'spring', stiffness: 520, damping: 48, mass: 0.78 }
+const RAIL_LAYOUT_SPRING: Transition = { type: 'spring', stiffness: 620, damping: 52, mass: 0.82 }
+const RAIL_REVEAL_TRANSITION: Transition = { duration: 0.16, ease: RAIL_REVEAL_EASE }
+const INSTANT_TRANSITION: Transition = { duration: 0 }
+
 interface ProjectRailProps {
   projects: ProjectListItem[]
   activeProjectId: string | null
@@ -33,6 +53,37 @@ interface ProjectRailProps {
   onSelectProject: (projectId: string) => void
   onImportProject: () => void
   onRemoveProject: (projectId: string) => void
+}
+
+function viewportMaxWidth() {
+  if (typeof window === 'undefined') return MAX_WIDTH
+  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - RIGHT_PADDING))
+}
+
+function clampWidth(width: number, maxWidth = viewportMaxWidth()) {
+  return Math.max(MIN_WIDTH, Math.min(maxWidth, width))
+}
+
+function readPersistedWidth(): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage?.getItem?.(STORAGE_KEY)
+    if (!raw) return null
+    const parsed = Number.parseInt(raw, 10)
+    if (!Number.isFinite(parsed) || parsed < MIN_WIDTH) return null
+    return clampWidth(parsed)
+  } catch {
+    return null
+  }
+}
+
+function writePersistedWidth(width: number): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage?.setItem?.(STORAGE_KEY, String(Math.round(width)))
+  } catch {
+    /* storage unavailable — default next session */
+  }
 }
 
 export function ProjectRail({
@@ -50,26 +101,125 @@ export function ProjectRail({
 }: ProjectRailProps) {
   const isRemovingProject = projectRemovalStatus === 'running'
   const isBusy = isLoading || isImporting || isRemovingProject
+  const [width, setWidth] = useState(() => readPersistedWidth() ?? DEFAULT_WIDTH)
+  const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
+  const [isResizing, setIsResizing] = useState(false)
+  const shouldReduceMotion = useReducedMotion()
+  const targetWidth = collapsed ? COLLAPSED_WIDTH : width
+  const railWidthTransition = isResizing || shouldReduceMotion ? INSTANT_TRANSITION : RAIL_WIDTH_SPRING
+  const railLayoutTransition = shouldReduceMotion ? INSTANT_TRANSITION : RAIL_LAYOUT_SPRING
+  const railContentTransition = shouldReduceMotion ? INSTANT_TRANSITION : RAIL_REVEAL_TRANSITION
+  const widthRef = useRef(width)
+  widthRef.current = width
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleResize = () => {
+      const nextMax = viewportMaxWidth()
+      setMaxWidth(nextMax)
+      setWidth((current) => clampWidth(current, nextMax))
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  useEffect(() => {
+    writePersistedWidth(width)
+  }, [width])
+
+  const handleResizeStart = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (collapsed || event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = widthRef.current
+    const ceiling = viewportMaxWidth()
+    setMaxWidth(ceiling)
+    setIsResizing(true)
+
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    const handleMove = (ev: globalThis.PointerEvent) => {
+      const delta = ev.clientX - startX
+      setWidth(clampWidth(startWidth + delta, ceiling))
+    }
+    const handleUp = () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      window.removeEventListener('pointercancel', handleUp)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+      setIsResizing(false)
+    }
+
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    window.addEventListener('pointercancel', handleUp)
+  }, [collapsed])
+
+  const handleResizeKey = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (collapsed || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return
+    event.preventDefault()
+    const step = event.shiftKey ? 32 : 8
+    const ceiling = viewportMaxWidth()
+    setMaxWidth(ceiling)
+    setWidth((current) => {
+      const delta = event.key === 'ArrowRight' ? step : -step
+      return clampWidth(current + delta, ceiling)
+    })
+  }, [collapsed])
 
   return (
-    <aside
+    <motion.aside
+      animate={{ width: targetWidth }}
       className={cn(
-        'motion-layout-island flex shrink-0 flex-col overflow-hidden border-r border-border/80 bg-sidebar transition-[width] motion-panel',
-        collapsed ? 'w-11' : 'w-56',
+        'motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-r border-border/80 bg-sidebar will-change-[width]',
+        collapsed && 'w-11',
       )}
       data-collapsed={collapsed ? 'true' : 'false'}
+      initial={false}
+      style={{ width: targetWidth }}
+      transition={railWidthTransition}
     >
-      <div
+      {!collapsed ? (
+        <div
+          aria-label="Resize projects sidebar"
+          aria-orientation="vertical"
+          aria-valuemax={maxWidth}
+          aria-valuemin={MIN_WIDTH}
+          aria-valuenow={width}
+          className={cn(
+            'absolute inset-y-0 -right-[3px] z-10 w-[6px] cursor-col-resize bg-transparent transition-colors',
+            'hover:bg-primary/30',
+            isResizing && 'bg-primary/40',
+          )}
+          onKeyDown={handleResizeKey}
+          onPointerDown={handleResizeStart}
+          role="separator"
+          tabIndex={0}
+        />
+      ) : null}
+
+      <motion.div
         className={cn(
           'flex h-10 items-center border-b border-border/70 transition-[padding] motion-panel',
           collapsed ? 'justify-center px-1' : 'justify-between px-3',
         )}
+        layout="position"
+        transition={railLayoutTransition}
       >
-        <div
-          className={cn(
-            'flex items-center gap-1.5 overflow-hidden transition-[max-width,opacity] motion-standard',
-            collapsed ? 'max-w-0 opacity-0' : 'max-w-[10rem] opacity-100',
-          )}
+        <motion.div
+          animate={{
+            maxWidth: collapsed ? 0 : 160,
+            opacity: collapsed ? 0 : 1,
+            x: collapsed ? -4 : 0,
+          }}
+          aria-hidden={collapsed ? true : undefined}
+          className="flex items-center gap-1.5 overflow-hidden will-change-[max-width,opacity,transform]"
+          initial={false}
+          transition={railContentTransition}
         >
           <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
             Projects
@@ -79,7 +229,7 @@ export function ProjectRail({
               {projects.length}
             </span>
           ) : null}
-        </div>
+        </motion.div>
         <button
           aria-label="Import repository"
           className={cn(
@@ -92,7 +242,7 @@ export function ProjectRail({
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
-      </div>
+      </motion.div>
 
       {errorMessage ? (
         <div
@@ -122,43 +272,55 @@ export function ProjectRail({
             No projects imported yet.
           </div>
         ) : (
-          <ul className={cn('flex flex-col', collapsed ? 'gap-1.5 px-1.5' : '')}>
+          <motion.ul
+            className={cn('flex flex-col', collapsed ? 'gap-1.5 px-1.5' : '')}
+            layout
+            transition={railLayoutTransition}
+          >
             {projects.map((project) => (
-              <li key={project.id}>
+              <motion.li key={project.id} layout="position" transition={railLayoutTransition}>
                 <ProjectRailItem
                   collapsed={collapsed}
+                  contentTransition={railContentTransition}
                   project={project}
                   isActive={project.id === activeProjectId}
                   isRemovalPending={project.id === pendingProjectRemovalId}
                   isRemovalLocked={isRemovingProject}
+                  layoutTransition={railLayoutTransition}
                   onRemoveProject={onRemoveProject}
                   onSelectProject={onSelectProject}
                 />
-              </li>
+              </motion.li>
             ))}
-          </ul>
+          </motion.ul>
         )}
       </div>
 
       {isBusy && (
-        <div
+        <motion.div
           className={cn(
             'flex items-center border-t border-border/70 bg-sidebar text-[11px] text-muted-foreground transition-[padding,gap] motion-panel',
             collapsed ? 'justify-center gap-0 px-1.5 py-2.5' : 'gap-2 px-3 py-2.5',
           )}
+          layout="position"
+          transition={railLayoutTransition}
         >
           <RefreshCw className="h-3 w-3 animate-spin text-primary/80" />
-          <span
-            className={cn(
-              'overflow-hidden whitespace-nowrap transition-[max-width,opacity] motion-standard',
-              collapsed ? 'max-w-0 opacity-0' : 'max-w-24 opacity-100',
-            )}
+          <motion.span
+            animate={{
+              maxWidth: collapsed ? 0 : 96,
+              opacity: collapsed ? 0 : 1,
+              x: collapsed ? -4 : 0,
+            }}
+            className="overflow-hidden whitespace-nowrap will-change-[max-width,opacity,transform]"
+            initial={false}
+            transition={railContentTransition}
           >
             {isImporting ? 'Importing…' : isRemovingProject ? 'Removing…' : 'Refreshing…'}
-          </span>
-        </div>
+          </motion.span>
+        </motion.div>
       )}
-    </aside>
+    </motion.aside>
   )
 }
 
@@ -168,6 +330,8 @@ interface ProjectRailItemProps {
   isActive: boolean
   isRemovalPending: boolean
   isRemovalLocked: boolean
+  contentTransition: Transition
+  layoutTransition: Transition
   onSelectProject: (projectId: string) => void
   onRemoveProject: (projectId: string) => void
 }
@@ -175,9 +339,11 @@ interface ProjectRailItemProps {
 function ProjectRailItem({
   project,
   collapsed,
+  contentTransition,
   isActive,
   isRemovalPending,
   isRemovalLocked,
+  layoutTransition,
   onSelectProject,
   onRemoveProject,
 }: ProjectRailItemProps) {
@@ -187,41 +353,49 @@ function ProjectRailItem({
   return (
     <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
       <div className="group relative">
-        <button
+        <motion.button
           className={cn(
             'relative w-full transition-colors duration-150',
             collapsed
               ? cn(
                   'flex items-center justify-center rounded-md p-1',
-                  isActive ? 'bg-primary/10' : 'hover:bg-secondary/60',
+                  !isActive && 'hover:bg-secondary/60',
                 )
               : cn(
                   'flex items-center gap-2.5 px-3 py-3 text-left',
                   isActive ? 'bg-primary/[0.08]' : 'hover:bg-secondary/50',
                 ),
           )}
+          layout
           onClick={() => onSelectProject(project.id)}
           title={collapsed ? project.name : undefined}
+          transition={layoutTransition}
           type="button"
         >
-          <div
+          <motion.div
             className={cn(
               'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-[12px] font-semibold leading-none transition-colors duration-150',
               isActive
                 ? 'border-primary/45 bg-primary/15 text-primary'
                 : 'border-border/70 bg-secondary/70 text-muted-foreground group-hover:border-border group-hover:bg-secondary group-hover:text-foreground',
             )}
+            layout="position"
+            transition={layoutTransition}
           >
             <span aria-hidden="true">{projectInitial}</span>
             {collapsed ? <span className="sr-only">{project.name}</span> : null}
-          </div>
+          </motion.div>
 
-          <div
+          <motion.div
+            animate={{
+              maxWidth: collapsed ? 0 : 168,
+              opacity: collapsed ? 0 : 1,
+              x: collapsed ? -6 : 0,
+            }}
             aria-hidden={collapsed ? true : undefined}
-            className={cn(
-              'min-w-0 flex-1 overflow-hidden transition-[max-width,opacity] motion-standard',
-              collapsed ? 'max-w-0 opacity-0' : 'max-w-[10.5rem] opacity-100',
-            )}
+            className="min-w-0 flex-1 overflow-hidden will-change-[max-width,opacity,transform]"
+            initial={false}
+            transition={contentTransition}
           >
             <div className="flex items-center pr-6">
               <span
@@ -254,47 +428,45 @@ function ProjectRailItem({
                 {project.phaseProgressPercent}%
               </span>
             </div>
-          </div>
-        </button>
+          </motion.div>
+        </motion.button>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              aria-hidden={collapsed ? true : undefined}
-              aria-label={`Project actions for ${project.name}`}
-              className={cn(
-                'absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-[opacity,color,background-color] motion-fast',
-                'hover:bg-secondary hover:text-foreground disabled:opacity-50',
-                collapsed
-                  ? 'pointer-events-none opacity-0'
-                  : isActive || isRemovalPending
+        {!collapsed ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                aria-label={`Project actions for ${project.name}`}
+                className={cn(
+                  'absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-[opacity,color,background-color] motion-fast',
+                  'hover:bg-secondary hover:text-foreground disabled:opacity-50',
+                  isActive || isRemovalPending
                     ? 'opacity-100'
                     : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-              )}
-              disabled={collapsed || isRemovalLocked}
-              tabIndex={collapsed ? -1 : undefined}
-              type="button"
-            >
-              {isRemovalPending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              )}
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault()
-                setConfirmOpen(true)
-              }}
-              variant="destructive"
-            >
-              <Trash2 className="h-4 w-4" />
-              Remove
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+                )}
+                disabled={isRemovalLocked}
+                type="button"
+              >
+                {isRemovalPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault()
+                  setConfirmOpen(true)
+                }}
+                variant="destructive"
+              >
+                <Trash2 className="h-4 w-4" />
+                Remove
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
       </div>
 
       <AlertDialogContent>

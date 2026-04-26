@@ -278,10 +278,20 @@ pub struct RepositorySummaryDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BranchUpstreamSummaryDto {
+    pub name: String,
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BranchSummaryDto {
     pub name: String,
     pub head_sha: Option<String>,
     pub detached: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<BranchUpstreamSummaryDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
