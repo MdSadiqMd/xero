@@ -40,6 +40,7 @@ afterEach(() => {
 import { CadenceApp } from './App'
 import { CadenceDesktopError, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import {
+  createCadenceDoctorReport,
   projectRuntimeSettingsFromProviderProfiles,
   providerModelCatalogSchema,
   providerProfileSchema,
@@ -1714,6 +1715,17 @@ function createAdapter(options?: {
         modelCatalog,
       }
     },
+    runDoctorReport: async (request) =>
+      createCadenceDoctorReport({
+        reportId: 'doctor-test',
+        generatedAt: '2026-04-26T12:00:00Z',
+        mode: request?.mode ?? 'quick_local',
+        versions: {
+          appVersion: 'test',
+          runtimeSupervisorVersion: 'test',
+          runtimeProtocolVersion: 'supervisor-v1',
+        },
+      }),
     getProviderProfiles: async () => currentProviderProfiles,
     getRuntimeSession: async () => currentRuntimeSession,
     startOpenAiLogin: async (_projectId, _options) => {

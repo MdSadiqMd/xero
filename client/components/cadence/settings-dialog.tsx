@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import type {
   AgentPaneView,
+  DoctorReportRunStatus,
   McpRegistryLoadStatus,
   McpRegistryMutationStatus,
   OperatorActionErrorView,
@@ -14,12 +15,14 @@ import type {
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import type {
   ImportMcpServersResponseDto,
+  CadenceDoctorReportDto,
   McpImportDiagnosticDto,
   McpRegistryDto,
   ProviderModelCatalogDto,
   ProviderProfileDiagnosticsDto,
   ProviderProfilesDto,
   RuntimeSessionView,
+  RunDoctorReportRequestDto,
   ListSkillRegistryRequestDto,
   RemovePluginRequestDto,
   RemovePluginRootRequestDto,
@@ -37,7 +40,7 @@ import type {
   UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import type { PlatformVariant } from "@/components/cadence/shell"
-import { Bell, Code2, Globe, KeyRound, Palette, Plug, PlugZap, WandSparkles } from "lucide-react"
+import { Activity, Bell, Code2, Globe, KeyRound, Palette, Plug, PlugZap, WandSparkles } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -47,6 +50,7 @@ import {
 import { cn } from "@/lib/utils"
 import { BrowserSection } from "@/components/cadence/settings-dialog/browser-section"
 import { DevelopmentSection } from "@/components/cadence/settings-dialog/development-section"
+import { DiagnosticsSection } from "@/components/cadence/settings-dialog/diagnostics-section"
 import { McpSection } from "@/components/cadence/settings-dialog/mcp-section"
 import { NotificationsSection } from "@/components/cadence/settings-dialog/notifications-section"
 import { ProvidersSection } from "@/components/cadence/settings-dialog/providers-section"
@@ -54,7 +58,16 @@ import { PluginsSection } from "@/components/cadence/settings-dialog/plugins-sec
 import { SkillsSection } from "@/components/cadence/settings-dialog/skills-section"
 import { ThemesSection } from "@/components/cadence/settings-dialog/themes-section"
 
-type SettingsSection = "providers" | "notifications" | "mcp" | "skills" | "plugins" | "browser" | "themes" | "development"
+export type SettingsSection =
+  | "providers"
+  | "diagnostics"
+  | "notifications"
+  | "mcp"
+  | "skills"
+  | "plugins"
+  | "browser"
+  | "themes"
+  | "development"
 
 interface NavItem {
   id: SettingsSection
@@ -73,6 +86,7 @@ const WORKSPACE_GROUP: NavGroup = {
   label: "Workspace",
   items: [
     { id: "providers", label: "Providers", icon: KeyRound },
+    { id: "diagnostics", label: "Diagnostics", icon: Activity },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "mcp", label: "MCP", icon: PlugZap },
     { id: "skills", label: "Skills", icon: WandSparkles },
@@ -100,6 +114,7 @@ const NAV_GROUPS: NavGroup[] = import.meta.env.DEV
 export interface SettingsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  initialSection?: SettingsSection
   agent: AgentPaneView | null
   providerProfiles: ProviderProfilesDto | null
   providerProfilesLoadStatus: ProviderProfilesLoadStatus
@@ -118,6 +133,10 @@ export interface SettingsDialogProps {
     profileId: string,
     options?: { includeNetwork?: boolean },
   ) => Promise<ProviderProfileDiagnosticsDto>
+  doctorReport?: CadenceDoctorReportDto | null
+  doctorReportStatus?: DoctorReportRunStatus
+  doctorReportError?: OperatorActionErrorView | null
+  onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<CadenceDoctorReportDto>
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
   onStartLogin?: () => Promise<RuntimeSessionView | null>
@@ -161,6 +180,7 @@ export interface SettingsDialogProps {
 export function SettingsDialog({
   open,
   onOpenChange,
+  initialSection = "providers",
   agent,
   providerProfiles,
   providerProfilesLoadStatus,
@@ -173,6 +193,10 @@ export function SettingsDialog({
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
   onCheckProviderProfile,
+  doctorReport = null,
+  doctorReportStatus = "idle",
+  doctorReportError = null,
+  onRunDoctorReport,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
   onStartLogin,
@@ -220,8 +244,8 @@ export function SettingsDialog({
   })
 
   useEffect(() => {
-    if (open) setSection("providers")
-  }, [open])
+    if (open) setSection(initialSection)
+  }, [initialSection, open])
 
   useEffect(() => {
     refreshOnOpenCallbacksRef.current = {
@@ -272,7 +296,7 @@ export function SettingsDialog({
                         aria-current={active ? "page" : undefined}
                         onClick={() => setSection(id)}
                         className={cn(
-                          "group relative flex items-center gap-2 px-3 py-1.5 text-left text-[12.5px] leading-tight transition-colors",
+                          "group relative flex items-center gap-2 px-3 py-2 text-left text-[12.5px] leading-tight transition-colors",
                           active
                             ? "text-foreground"
                             : "text-muted-foreground hover:text-foreground",
@@ -323,6 +347,13 @@ export function SettingsDialog({
                   onSetActiveProviderProfile={onSetActiveProviderProfile}
                   onStartLogin={onStartLogin}
                   onLogout={onLogout}
+                />
+              ) : section === "diagnostics" ? (
+                <DiagnosticsSection
+                  doctorReport={doctorReport}
+                  doctorReportStatus={doctorReportStatus}
+                  doctorReportError={doctorReportError}
+                  onRunDoctorReport={onRunDoctorReport}
                 />
               ) : section === "notifications" ? (
                 agent ? (

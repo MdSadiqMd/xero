@@ -19,6 +19,7 @@ import {
   notificationRouteCredentialReadinessSchema,
   type CreateProjectEntryRequestDto,
   type CreateProjectEntryResponseDto,
+  type CadenceDoctorReportDto,
   type DeleteProjectEntryResponseDto,
   type ListProjectFilesResponseDto,
   type McpImportDiagnosticDto,
@@ -47,6 +48,7 @@ import {
   type RuntimeRunView,
   type RuntimeSessionView,
   type RuntimeSettingsDto,
+  type RunDoctorReportRequestDto,
   type RuntimeStreamActionRequiredItemView,
   type RuntimeStreamActivityItemView,
   type RuntimeStreamIssueView,
@@ -96,6 +98,7 @@ import type {
   AgentTrustSnapshotView,
   AutonomousRunActionKind,
   AutonomousRunActionStatus,
+  DoctorReportRunStatus,
   DiffScopeSummary,
   ExecutionPaneView,
   NotificationRouteMutationStatus,
@@ -129,6 +132,7 @@ export type {
   AgentTrustSnapshotView,
   AutonomousRunActionKind,
   AutonomousRunActionStatus,
+  DoctorReportRunStatus,
   DiffScopeSummary,
   ExecutionPaneView,
   NotificationChannelHealthView,
@@ -363,6 +367,9 @@ export function useCadenceDesktopState(
   const [providerModelCatalogLoadErrors, setProviderModelCatalogLoadErrors] = useState<
     Record<string, OperatorActionErrorView | null>
   >({})
+  const [doctorReport, setDoctorReport] = useState<CadenceDoctorReportDto | null>(null)
+  const [doctorReportStatus, setDoctorReportStatus] = useState<DoctorReportRunStatus>('idle')
+  const [doctorReportError, setDoctorReportError] = useState<OperatorActionErrorView | null>(null)
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettingsDto | null>(null)
   const [runtimeSettingsLoadStatus, setRuntimeSettingsLoadStatus] = useState<RuntimeSettingsLoadStatus>('idle')
   const [runtimeSettingsLoadError, setRuntimeSettingsLoadError] = useState<OperatorActionErrorView | null>(null)
@@ -874,6 +881,31 @@ export function useCadenceDesktopState(
       }
 
       return response
+    },
+    [adapter],
+  )
+
+  const runDoctorReport = useCallback(
+    async (request: Partial<RunDoctorReportRequestDto> = {}): Promise<CadenceDoctorReportDto> => {
+      setDoctorReportStatus('running')
+      setDoctorReportError(null)
+
+      try {
+        const report = await adapter.runDoctorReport({
+          mode: request.mode ?? 'quick_local',
+        })
+        setDoctorReport(report)
+        setDoctorReportStatus('ready')
+        return report
+      } catch (error) {
+        const nextError = getOperatorActionError(
+          error,
+          'Cadence could not generate the doctor report.',
+        )
+        setDoctorReportError(nextError)
+        setDoctorReportStatus('error')
+        throw error
+      }
     },
     [adapter],
   )
@@ -1694,6 +1726,9 @@ export function useCadenceDesktopState(
     activeProviderModelCatalog,
     activeProviderModelCatalogLoadStatus,
     activeProviderModelCatalogLoadError,
+    doctorReport,
+    doctorReportStatus,
+    doctorReportError,
     runtimeSettings,
     runtimeSettingsLoadStatus,
     runtimeSettingsLoadError,
@@ -1752,6 +1787,7 @@ export function useCadenceDesktopState(
     refreshProviderProfiles,
     refreshProviderModelCatalog,
     checkProviderProfile,
+    runDoctorReport,
     upsertProviderProfile,
     setActiveProviderProfile,
     refreshRuntimeSettings,

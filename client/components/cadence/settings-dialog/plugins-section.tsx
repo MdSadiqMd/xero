@@ -264,7 +264,7 @@ export function PluginsSection({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-7">
       <SectionHeader
         title="Plugins"
         description="Manage plugin sources that contribute skills and commands into the Cadence runtime."
@@ -287,21 +287,16 @@ export function PluginsSection({
       {skillRegistryMutationError ? <ErrorBanner message={skillRegistryMutationError.message} /> : null}
 
       {/* Plugin roots */}
-      <div className="rounded-lg border border-border bg-card px-5 py-4">
-        <div className="flex items-start gap-3.5">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/60">
-            <FolderPlus className="h-4 w-4 text-foreground/70" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[14px] font-medium text-foreground">Plugin roots</p>
-            <p className="mt-0.5 text-[12px] text-muted-foreground">
-              Directories Cadence scans for plugin manifests.
-              {pluginRoots.length > 0 ? ` ${pluginRoots.length} configured.` : ''}
-            </p>
-          </div>
-        </div>
+      <section className="flex flex-col gap-2.5">
+        <h4 className="text-[12.5px] font-semibold text-foreground">
+          Plugin roots
+          <span className="ml-1.5 font-normal text-muted-foreground">{pluginRoots.length}</span>
+        </h4>
+        <p className="-mt-1 text-[12px] text-muted-foreground">
+          Directories Cadence scans for plugin manifests.
+        </p>
 
-        <div className="mt-4 grid gap-2 sm:grid-cols-[0.7fr_1.4fr_auto_auto]">
+        <div className="grid gap-1.5 sm:grid-cols-[0.7fr_1.4fr_auto_auto]">
           <div>
             <Label htmlFor="plugin-root-id" className="sr-only">
               Plugin root id
@@ -310,7 +305,7 @@ export function PluginsSection({
               id="plugin-root-id"
               value={rootForm.rootId}
               onChange={(event) => setRootForm((current) => ({ ...current, rootId: event.target.value }))}
-              className="h-9 font-mono text-[12px]"
+              className="h-8 font-mono text-[12px]"
               placeholder="root-id"
               aria-invalid={Boolean(rootErrors.rootId)}
             />
@@ -324,13 +319,13 @@ export function PluginsSection({
               id="plugin-root-path"
               value={rootForm.path}
               onChange={(event) => setRootForm((current) => ({ ...current, path: event.target.value }))}
-              className="h-9 font-mono text-[12px]"
+              className="h-8 font-mono text-[12px]"
               placeholder="/absolute/path/to/plugins"
               aria-invalid={Boolean(rootErrors.path)}
             />
             {rootErrors.path ? <p className="mt-1 text-[11px] text-destructive">{rootErrors.path}</p> : null}
           </div>
-          <label className="flex h-9 items-center gap-2 px-1 text-[12px] text-muted-foreground">
+          <label className="flex h-8 items-center gap-2 px-1 text-[11.5px] text-muted-foreground">
             <Switch
               checked={rootForm.enabled}
               onCheckedChange={(enabled) => setRootForm((current) => ({ ...current, enabled }))}
@@ -341,7 +336,8 @@ export function PluginsSection({
           <Button
             type="button"
             size="sm"
-            className="h-9 gap-1.5 text-[12px]"
+            variant="outline"
+            className="h-8 gap-1.5 text-[12px]"
             disabled={mutating || !onUpsertPluginRoot}
             onClick={() => void handleAddRoot()}
           >
@@ -351,15 +347,15 @@ export function PluginsSection({
         </div>
 
         {pluginRoots.length > 0 ? (
-          <div className="mt-3.5 grid gap-0.5 border-t border-border pt-2.5">
+          <div className="overflow-hidden rounded-md border border-border/60 divide-y divide-border/40">
             {pluginRoots.map((root) => (
               <div
                 key={root.rootId}
-                className="-mx-1.5 flex items-center gap-2 rounded-md px-2.5 py-2 transition-colors hover:bg-secondary/30"
+                className="flex items-center gap-2 px-3 py-2"
               >
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium text-foreground">{root.rootId}</p>
-                  <p className="mt-0.5 truncate font-mono text-[11.5px] text-muted-foreground">{root.path}</p>
+                  <p className="truncate text-[12.5px] font-medium text-foreground">{root.rootId}</p>
+                  <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{root.path}</p>
                 </div>
                 {pendingSkillSourceId === root.rootId ? (
                   <LoaderCircle className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -393,87 +389,81 @@ export function PluginsSection({
             ))}
           </div>
         ) : null}
-      </div>
+      </section>
 
       {/* Plugins list */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <h4 className="text-[12.5px] font-semibold text-foreground">Plugins</h4>
-          <span className="text-[11.5px] text-muted-foreground">
-            {totalPlugins} {totalPlugins === 1 ? 'plugins' : 'plugins'} · {totalCommands} {totalCommands === 1 ? 'commands' : 'commands'}
+      <section className="flex flex-col gap-2.5">
+        <h4 className="text-[12.5px] font-semibold text-foreground">
+          Plugins
+          <span className="ml-1.5 font-normal text-muted-foreground">
+            {totalPlugins} · {totalCommands} {totalCommands === 1 ? 'command' : 'commands'}
           </span>
-        </div>
+        </h4>
 
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="h-9 pl-8 text-[12.5px]"
+            className="h-8 pl-8 text-[12.5px]"
             placeholder="Search plugins"
             aria-label="Search plugins"
           />
         </div>
 
-        <div className="rounded-lg border border-border bg-card">
-          {loading && !skillRegistry ? (
-            <div className="flex items-center justify-center gap-2 px-4 py-12 text-[12px] text-muted-foreground">
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-              Loading plugins
-            </div>
-          ) : filteredPlugins.length === 0 ? (
-            <div className="px-5 py-10 text-center">
-              <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-md border border-border/70 bg-secondary/40">
-                <Plug className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <p className="mt-3 text-[13px] font-medium text-foreground">No plugins found</p>
-              <p className="mt-1 text-[12px] text-muted-foreground">
-                {query ? 'Adjust the search query.' : 'Add a plugin root or reload configured roots.'}
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border/60">
-              {filteredPlugins.map((plugin) => (
-                <PluginRow
-                  key={plugin.pluginId}
-                  plugin={plugin}
-                  projectId={projectId}
-                  disabled={mutating}
-                  pending={pendingSkillSourceId === pluginPendingId(plugin.pluginId)}
-                  onSetPluginEnabled={onSetPluginEnabled}
-                  onRemovePlugin={onRemovePlugin}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+        {loading && !skillRegistry ? (
+          <div className="flex items-center justify-center gap-2 rounded-md border border-border/60 px-4 py-10 text-[12px] text-muted-foreground">
+            <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            Loading plugins
+          </div>
+        ) : filteredPlugins.length === 0 ? (
+          <div className="rounded-md border border-dashed border-border/60 bg-secondary/10 px-4 py-8 text-center">
+            <Plug className="mx-auto h-4 w-4 text-muted-foreground" />
+            <p className="mt-2 text-[12.5px] font-medium text-foreground">No plugins found</p>
+            <p className="mt-0.5 text-[11.5px] text-muted-foreground">
+              {query ? 'Adjust the search query.' : 'Add a plugin root or reload configured roots.'}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-md border border-border/60 divide-y divide-border/40">
+            {filteredPlugins.map((plugin) => (
+              <PluginRow
+                key={plugin.pluginId}
+                plugin={plugin}
+                projectId={projectId}
+                disabled={mutating}
+                pending={pendingSkillSourceId === pluginPendingId(plugin.pluginId)}
+                onSetPluginEnabled={onSetPluginEnabled}
+                onRemovePlugin={onRemovePlugin}
+              />
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Plugin commands */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <h4 className="text-[12.5px] font-semibold text-foreground">Plugin commands</h4>
-          <span className="text-[11.5px] text-muted-foreground">{totalCommands} projected</span>
-        </div>
+      <section className="flex flex-col gap-2.5">
+        <h4 className="text-[12.5px] font-semibold text-foreground">
+          Plugin commands
+          <span className="ml-1.5 font-normal text-muted-foreground">{totalCommands} projected</span>
+        </h4>
 
         {skillRegistry?.pluginCommands.length ? (
-          <div className="rounded-lg border border-border bg-card divide-y divide-border/60">
+          <div className="overflow-hidden rounded-md border border-border/60 divide-y divide-border/40">
             {skillRegistry.pluginCommands.map((command) => (
               <PluginCommandRow key={command.commandId} command={command} />
             ))}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed border-border/70 bg-card/40 px-5 py-10 text-center">
-            <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-md border border-border/70 bg-secondary/40">
-              <Plug className="h-4 w-4 text-muted-foreground" />
-            </div>
-            <p className="mt-3 text-[13px] font-medium text-foreground">No plugin commands</p>
-            <p className="mt-1 text-[12px] text-muted-foreground">
+          <div className="rounded-md border border-dashed border-border/60 bg-secondary/10 px-4 py-8 text-center">
+            <Plug className="mx-auto h-4 w-4 text-muted-foreground" />
+            <p className="mt-2 text-[12.5px] font-medium text-foreground">No plugin commands</p>
+            <p className="mt-0.5 text-[11.5px] text-muted-foreground">
               Enabled plugins with command contributions appear here.
             </p>
           </div>
         )}
-      </div>
+      </section>
     </div>
   )
 }
@@ -508,14 +498,12 @@ function PluginRow({
   const blocked = plugin.trust === 'blocked' || plugin.state === 'blocked'
 
   return (
-    <div className="px-4 py-3.5">
+    <div className="px-3.5 py-3">
       <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/60">
-          <Plug className="h-4 w-4 text-foreground/70" />
-        </div>
+        <Plug className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <p className="truncate text-[13.5px] font-medium text-foreground">{plugin.name}</p>
+            <p className="truncate text-[13px] font-medium text-foreground">{plugin.name}</p>
             <Pill tone="neutral">{plugin.version}</Pill>
             <Pill tone={stateTone(plugin.state)}>{getSkillSourceStateLabel(plugin.state)}</Pill>
             <Pill tone={trustTone(plugin.trust)}>{getSkillTrustStateLabel(plugin.trust)}</Pill>
@@ -576,34 +564,34 @@ function PluginRow({
         </div>
       </div>
 
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1">
-          <span className="text-muted-foreground/60">Plugin</span>
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <span>
+          <span className="text-muted-foreground/60">Plugin </span>
           <span className="font-mono text-foreground/80">{plugin.pluginId}</span>
         </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="text-muted-foreground/60">Skills</span>
+        <span>
+          <span className="text-muted-foreground/60">Skills </span>
           <span className="text-foreground/80">{plugin.skillCount}</span>
         </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="text-muted-foreground/60">Commands</span>
+        <span>
+          <span className="text-muted-foreground/60">Commands </span>
           <span className="text-foreground/80">{plugin.commandCount}</span>
         </span>
       </div>
 
       {plugin.lastDiagnostic ? (
-        <div className="mt-2.5 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/[0.06] px-2.5 py-1.5 text-[11.5px] text-destructive">
+        <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/[0.06] px-2.5 py-1.5 text-[11.5px] text-destructive">
           <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0">{plugin.lastDiagnostic.message}</span>
         </div>
       ) : null}
 
-      <details className="mt-2 group">
-        <summary className="inline-flex cursor-pointer select-none items-center gap-1 rounded-md text-[11.5px] font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden [&::marker]:hidden">
+      <details className="mt-1.5 group">
+        <summary className="inline-flex cursor-pointer select-none items-center gap-1 rounded-md text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden [&::marker]:hidden">
           <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
           Plugin metadata
         </summary>
-        <dl className="mt-2 grid gap-x-4 gap-y-1 rounded-md border border-border/70 bg-secondary/30 p-3 text-[11.5px] sm:grid-cols-[120px_1fr]">
+        <dl className="mt-1.5 grid gap-x-4 gap-y-1 rounded-md border border-border/50 bg-secondary/20 p-2.5 text-[11px] sm:grid-cols-[110px_1fr]">
           <div className="contents">
             <dt className="text-muted-foreground">Root id</dt>
             <dd className="min-w-0 break-words font-mono text-foreground/85">{plugin.rootId}</dd>
@@ -632,12 +620,12 @@ function PluginRow({
       </details>
 
       {plugin.skills.length || plugin.commands.length ? (
-        <details className="mt-2 group">
-          <summary className="inline-flex cursor-pointer select-none items-center gap-1 rounded-md text-[11.5px] font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden [&::marker]:hidden">
+        <details className="mt-1.5 group">
+          <summary className="inline-flex cursor-pointer select-none items-center gap-1 rounded-md text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden [&::marker]:hidden">
             <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
             Contributions
           </summary>
-          <div className="mt-2 grid gap-2 lg:grid-cols-2">
+          <div className="mt-1.5 grid gap-1.5 lg:grid-cols-2">
             <ContributionList
               title="Skills"
               emptyLabel="No skill contributions"
@@ -671,10 +659,10 @@ interface ContributionListProps {
 
 function ContributionList({ title, emptyLabel, rows }: ContributionListProps) {
   return (
-    <div className="rounded-md border border-border/70 bg-secondary/30 p-2.5 text-[11.5px]">
-      <p className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">{title}</p>
+    <div className="rounded-md border border-border/50 bg-secondary/20 p-2.5 text-[11px]">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">{title}</p>
       {rows.length ? (
-        <div className="mt-2 space-y-1.5">
+        <div className="mt-1.5 space-y-1.5">
           {rows.map((row) => (
             <div key={row.id} className="min-w-0">
               <p className="truncate font-medium text-foreground/90">{row.label}</p>
@@ -683,7 +671,7 @@ function ContributionList({ title, emptyLabel, rows }: ContributionListProps) {
           ))}
         </div>
       ) : (
-        <p className="mt-2 text-muted-foreground">{emptyLabel}</p>
+        <p className="mt-1.5 text-muted-foreground">{emptyLabel}</p>
       )}
     </div>
   )
@@ -691,25 +679,25 @@ function ContributionList({ title, emptyLabel, rows }: ContributionListProps) {
 
 function PluginCommandRow({ command }: { command: PluginCommandContributionDto }) {
   return (
-    <div className="px-4 py-3">
+    <div className="px-3.5 py-2.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <p className="text-[13px] font-medium text-foreground">{command.label}</p>
+        <p className="text-[12.5px] font-medium text-foreground">{command.label}</p>
         <Pill tone="neutral">{getPluginCommandAvailabilityLabel(command.availability)}</Pill>
         <Pill tone={stateTone(command.state)}>{getSkillSourceStateLabel(command.state)}</Pill>
         <Pill tone={trustTone(command.trust)}>{getSkillTrustStateLabel(command.trust)}</Pill>
       </div>
-      <p className="mt-1 line-clamp-2 text-[12px] leading-[1.5] text-muted-foreground">{command.description}</p>
-      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1">
-          <span className="text-muted-foreground/60">Command</span>
+      <p className="mt-1 line-clamp-2 text-[11.5px] leading-[1.5] text-muted-foreground">{command.description}</p>
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+        <span>
+          <span className="text-muted-foreground/60">Command </span>
           <span className="font-mono text-foreground/80">{command.commandId}</span>
         </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="text-muted-foreground/60">Plugin</span>
+        <span>
+          <span className="text-muted-foreground/60">Plugin </span>
           <span className="font-mono text-foreground/80">{command.pluginId}</span>
         </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="text-muted-foreground/60">Entry</span>
+        <span>
+          <span className="text-muted-foreground/60">Entry </span>
           <span className="font-mono text-foreground/80">{command.entry}</span>
         </span>
       </div>

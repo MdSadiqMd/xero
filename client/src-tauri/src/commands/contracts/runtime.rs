@@ -519,6 +519,13 @@ pub struct ProviderProfileDiagnosticsDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunDoctorReportRequestDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::runtime::CadenceDoctorReportMode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartRuntimeRunRequestDto {
     pub project_id: String,
     pub agent_session_id: String,

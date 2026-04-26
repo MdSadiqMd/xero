@@ -177,6 +177,12 @@ export const cadenceDoctorReportSchema = z
     }
   })
 
+export const runDoctorReportRequestSchema = z
+  .object({
+    mode: cadenceDoctorReportModeSchema.default('quick_local'),
+  })
+  .strict()
+
 export const checkProviderProfileRequestSchema = z
   .object({
     profileId: z.string().trim().min(1),
@@ -235,6 +241,7 @@ export type CadenceDoctorReportOutputModeDto = z.infer<typeof cadenceDoctorRepor
 export type CadenceDoctorVersionInfoDto = z.infer<typeof cadenceDoctorVersionInfoSchema>
 export type CadenceDoctorReportSummaryDto = z.infer<typeof cadenceDoctorReportSummarySchema>
 export type CadenceDoctorReportDto = z.infer<typeof cadenceDoctorReportSchema>
+export type RunDoctorReportRequestDto = z.infer<typeof runDoctorReportRequestSchema>
 export type CheckProviderProfileRequestDto = z.infer<typeof checkProviderProfileRequestSchema>
 export type ProviderProfileDiagnosticsDto = z.infer<typeof providerProfileDiagnosticsSchema>
 

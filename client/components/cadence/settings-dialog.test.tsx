@@ -10,10 +10,11 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 }))
 
 import { SettingsDialog, type SettingsDialogProps } from '@/components/cadence/settings-dialog'
-import { createCadenceDiagnosticCheck } from '@/src/lib/cadence-model'
+import { createCadenceDiagnosticCheck, createCadenceDoctorReport } from '@/src/lib/cadence-model'
 import type { AgentPaneView, OperatorActionErrorView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
   McpRegistryDto,
+  CadenceDoctorReportDto,
   CadenceDiagnosticCheckDto,
   ProviderProfileDiagnosticsDto,
   ProviderModelCatalogDto,
@@ -374,6 +375,54 @@ function makeProviderProfileDiagnostics(
     diagnostics.modelCatalog = overrides.modelCatalog ?? null
   }
   return diagnostics
+}
+
+function makeDoctorReport(): CadenceDoctorReportDto {
+  return createCadenceDoctorReport({
+    reportId: 'doctor-20260426-120000',
+    generatedAt: '2026-04-26T12:00:00Z',
+    mode: 'quick_local',
+    versions: {
+      appVersion: 'test',
+      runtimeSupervisorVersion: 'test',
+      runtimeProtocolVersion: 'supervisor-v1',
+    },
+    profileChecks: [
+      createCadenceDiagnosticCheck({
+        subject: 'provider_profile',
+        status: 'passed',
+        severity: 'info',
+        retryable: false,
+        code: 'provider_profile_ready',
+        message: 'Provider profile `openrouter-work` is ready.',
+        affectedProfileId: 'openrouter-work',
+        affectedProviderId: 'openrouter',
+      }),
+    ],
+    runtimeSupervisorChecks: [
+      createCadenceDiagnosticCheck({
+        subject: 'runtime_binding',
+        status: 'failed',
+        severity: 'error',
+        retryable: false,
+        code: 'provider_profile_credentials_missing',
+        message: 'Runtime startup failed because provider credentials are missing.',
+        affectedProviderId: 'openrouter',
+        remediation: 'Open Providers settings, repair credentials, then restart the runtime session.',
+      }),
+    ],
+    settingsDependencyChecks: [
+      createCadenceDiagnosticCheck({
+        subject: 'settings_dependency',
+        status: 'skipped',
+        severity: 'info',
+        retryable: false,
+        code: 'notification_routes_not_configured',
+        message: 'No notification routes are configured.',
+        remediation: 'Add a notification route before checking notification credential readiness.',
+      }),
+    ],
+  })
 }
 
 function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): RuntimeSessionView {
@@ -753,6 +802,10 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): 
     onCheckProviderProfile: vi.fn(async (profileId: string) =>
       makeProviderProfileDiagnostics({ profileId }),
     ),
+    doctorReport: null,
+    doctorReportStatus: 'idle',
+    doctorReportError: null,
+    onRunDoctorReport: vi.fn(async () => makeDoctorReport()),
     onUpsertProviderProfile: vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles()),
     onSetActiveProviderProfile: vi.fn(async (_profileId: string) => makeProviderProfiles()),
     onStartLogin: vi.fn(async () => makeRuntimeSession()),
@@ -805,6 +858,29 @@ function getProviderCard(label: string): HTMLElement {
 }
 
 describe('SettingsDialog', () => {
+  it('renders doctor reports from the diagnostics section and runs extended checks explicitly', async () => {
+    const report = makeDoctorReport()
+    const onRunDoctorReport = vi.fn(async () => report)
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'diagnostics',
+          doctorReport: report,
+          onRunDoctorReport,
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Report summary')).toBeVisible()
+    expect(screen.getByText('Runtime startup failed because provider credentials are missing.')).toBeVisible()
+    expect(screen.getByText('provider_profile_credentials_missing')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Extended' }))
+
+    await waitFor(() => expect(onRunDoctorReport).toHaveBeenCalledWith({ mode: 'extended_network' }))
+  })
+
   it('refreshes app-local provider profiles on open and keeps notifications project-bound when no project is selected', async () => {
     const onRefreshProviderProfiles = vi.fn(async () => makeProviderProfiles())
 
@@ -1837,7 +1913,7 @@ describe('SettingsDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh statuses' }))
     await waitFor(() => expect(onRefreshMcpServerStatuses).toHaveBeenCalledWith({ serverIds: [] }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Memory Server' }))
     await waitFor(() => expect(onRemoveMcpServer).toHaveBeenCalledWith('memory'))
   })
 
@@ -2056,8 +2132,8 @@ describe('SettingsDialog', () => {
     expect(screen.getByText('Acme Tools')).toBeVisible()
     expect(screen.getAllByText('Open Panel').length).toBeGreaterThan(0)
     expect(screen.getByText('Project automation helpers.')).toBeVisible()
-    expect(screen.getByText(/1 plugins/)).toBeVisible()
-    expect(screen.getByText(/1 commands/)).toBeVisible()
+    expect(screen.getByText(/1 .* 1 command/)).toBeVisible()
+    expect(screen.getByText(/1 projected/)).toBeVisible()
 
     fireEvent.click(screen.getByText('Plugin metadata'))
     expect(screen.getAllByText('/tmp/cadence-plugins/acme-tools').length).toBeGreaterThan(0)

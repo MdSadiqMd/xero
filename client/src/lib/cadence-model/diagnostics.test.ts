@@ -7,6 +7,7 @@ import {
   createCadenceDoctorReport,
   providerProfileDiagnosticsSchema,
   renderCadenceDoctorReport,
+  runDoctorReportRequestSchema,
   sanitizeDiagnosticText,
   summarizeDiagnosticChecks,
 } from './diagnostics'
@@ -97,6 +98,11 @@ describe('diagnostics contract', () => {
   })
 
   it('accepts strict provider-profile diagnostics and rejects cross-profile catalog payloads', () => {
+    expect(runDoctorReportRequestSchema.parse({})).toEqual({ mode: 'quick_local' })
+    expect(runDoctorReportRequestSchema.parse({ mode: 'extended_network' })).toEqual({
+      mode: 'extended_network',
+    })
+
     expect(checkProviderProfileRequestSchema.parse({
       profileId: ' openrouter-default ',
       includeNetwork: true,

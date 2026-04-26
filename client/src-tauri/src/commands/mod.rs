@@ -2,6 +2,7 @@ pub mod agent_session;
 pub mod agent_task;
 pub mod browser;
 pub mod cancel_autonomous_run;
+pub mod doctor_report;
 pub mod emulator;
 pub mod get_autonomous_run;
 pub mod get_project_snapshot;
@@ -68,6 +69,7 @@ pub use browser::{
     BROWSER_TAB_UPDATED_EVENT, BROWSER_URL_CHANGED_EVENT,
 };
 pub use cancel_autonomous_run::cancel_autonomous_run;
+pub use doctor_report::run_doctor_report;
 pub use emulator::{
     emulator_android_provision, emulator_android_provision_status, emulator_input,
     emulator_ios_open_accessibility_settings, emulator_ios_request_ax_permission,

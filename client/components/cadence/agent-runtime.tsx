@@ -43,6 +43,7 @@ import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-con
 interface AgentRuntimeProps {
   agent: AgentPaneView
   onOpenSettings?: () => void
+  onOpenDiagnostics?: () => void
   onStartLogin?: () => Promise<RuntimeSessionView | null>
   onStartAutonomousRun?: () => Promise<unknown>
   onInspectAutonomousRun?: () => Promise<unknown>
@@ -77,6 +78,7 @@ const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItem
 export function AgentRuntime({
   agent,
   onOpenSettings,
+  onOpenDiagnostics,
   onStartRuntimeRun,
   onUpdateRuntimeRunControls,
   onStopRuntimeRun,
@@ -317,6 +319,7 @@ export function AgentRuntime({
           runtimeRunActionErrorTitle={controller.runtimeRunActionErrorTitle}
           runtimeRunActionStatus={agent.runtimeRunActionStatus}
           sendButtonLabel={sendButtonLabel}
+          onOpenDiagnostics={onOpenDiagnostics}
         />
       </div>
     </div>

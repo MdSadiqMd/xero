@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  createCadenceDoctorReport,
   type ImportMcpServersResponseDto,
   type ImportRepositoryResponseDto,
   type ListNotificationDispatchesResponseDto,
@@ -1616,6 +1617,18 @@ function createMockAdapter(options?: {
     removePlugin,
     getProviderModelCatalog,
     checkProviderProfile,
+    runDoctorReport: vi.fn(async (request) =>
+      createCadenceDoctorReport({
+        reportId: 'doctor-test',
+        generatedAt: '2026-04-26T12:00:00Z',
+        mode: request?.mode ?? 'quick_local',
+        versions: {
+          appVersion: 'test',
+          runtimeSupervisorVersion: 'test',
+          runtimeProtocolVersion: 'supervisor-v1',
+        },
+      }),
+    ),
     getProviderProfiles,
     startOpenAiLogin,
     submitOpenAiCallback,

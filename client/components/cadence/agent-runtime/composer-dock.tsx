@@ -1,4 +1,4 @@
-import { ArrowUp, LoaderCircle } from 'lucide-react'
+import { Activity, ArrowUp, LoaderCircle } from 'lucide-react'
 import type { KeyboardEvent } from 'react'
 
 import type {
@@ -49,6 +49,7 @@ interface ComposerDockProps {
   pendingRuntimeRunAction: RuntimeRunActionKind | null
   runtimeRunActionError: OperatorActionErrorView | null
   runtimeRunActionErrorTitle: string
+  onOpenDiagnostics?: () => void
   onDraftPromptChange: (value: string) => void
   onSubmitDraftPrompt: () => void
   onComposerModelChange: (value: string) => void
@@ -82,6 +83,7 @@ export function ComposerDock({
   pendingRuntimeRunAction,
   runtimeRunActionError,
   runtimeRunActionErrorTitle,
+  onOpenDiagnostics,
   onDraftPromptChange,
   onSubmitDraftPrompt,
   onComposerModelChange,
@@ -211,7 +213,21 @@ export function ComposerDock({
                   className="border-t border-destructive/25 bg-destructive/5 px-3 py-2 text-[10px] leading-relaxed text-destructive/90"
                   role="alert"
                 >
-                  <p className="font-medium">{runtimeRunActionErrorTitle}</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-medium">{runtimeRunActionErrorTitle}</p>
+                    {onOpenDiagnostics ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 shrink-0 gap-1 px-1.5 text-[10.5px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={onOpenDiagnostics}
+                      >
+                        <Activity className="h-3 w-3" />
+                        Diagnostics
+                      </Button>
+                    ) : null}
+                  </div>
                   <p>{runtimeRunActionError.message}</p>
                   {runtimeRunActionError.code ? <p className="font-mono text-[10px]">code: {runtimeRunActionError.code}</p> : null}
                 </div>

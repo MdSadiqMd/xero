@@ -120,6 +120,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::skills::set_plugin_enabled,
             commands::skills::remove_plugin,
             commands::provider_model_catalog::get_provider_model_catalog,
+            commands::doctor_report::run_doctor_report,
             commands::provider_diagnostics::check_provider_profile,
             commands::provider_profiles::list_provider_profiles,
             commands::provider_profiles::upsert_provider_profile,

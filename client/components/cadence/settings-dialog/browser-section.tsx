@@ -26,7 +26,7 @@ export function BrowserSection() {
   const running = status.kind === "running"
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-7">
       <SectionHeader
         title="Browser"
         description="Copy cookies from other installed browsers into Cadence's in-app browser so you stay signed in while developing."
@@ -45,48 +45,35 @@ export function BrowserSection() {
         }
       />
 
-      <div className="rounded-lg border border-border bg-card px-5 py-4">
-        <div className="flex items-start gap-3.5">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-secondary/60">
-            <Cookie className="h-4 w-4 text-foreground/70" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[14px] font-medium text-foreground">Import cookies</p>
-            <p className="mt-0.5 text-[12px] leading-[1.5] text-muted-foreground">
-              Pick a source browser. The first import from a given browser may
-              prompt once for Keychain access; cookies apply on the next reload.
-              The in-app browser must be open at least once.
-            </p>
-          </div>
+      <section className="flex flex-col gap-3">
+        <div>
+          <h4 className="text-[12.5px] font-semibold text-foreground">Import cookies</h4>
+          <p className="mt-0.5 text-[12px] leading-[1.5] text-muted-foreground">
+            Pick a source browser. The first import may prompt once for Keychain access; cookies apply on the next reload.
+            The in-app browser must be open at least once.
+          </p>
         </div>
 
         {available.length === 0 ? (
-          <div className="mt-4 rounded-md border border-dashed border-border/70 bg-secondary/20 px-3.5 py-3 text-center">
-            <p className="text-[12.5px] text-muted-foreground">
-              No supported browsers detected on this machine.
-            </p>
-          </div>
+          <p className="rounded-md border border-dashed border-border/60 bg-secondary/20 px-3 py-3 text-center text-[12.5px] text-muted-foreground">
+            No supported browsers detected on this machine.
+          </p>
         ) : (
-          <div className="mt-4 grid gap-1.5">
-            <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground/70">
-              Detected sources
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {available.map((browser) => (
-                <BrowserChip
-                  key={browser.id}
-                  browser={browser}
-                  running={running && status.kind === "running" && status.source === browser.id}
-                  disabled={running}
-                  onClick={() => void importFrom(browser)}
-                />
-              ))}
-            </div>
+          <div className="flex flex-wrap gap-2">
+            {available.map((browser) => (
+              <BrowserChip
+                key={browser.id}
+                browser={browser}
+                running={running && status.kind === "running" && status.source === browser.id}
+                disabled={running}
+                onClick={() => void importFrom(browser)}
+              />
+            ))}
           </div>
         )}
 
         {status.kind === "success" ? (
-          <div className="mt-4 flex items-start gap-2 rounded-md border border-success/30 bg-success/[0.08] px-3 py-2">
+          <div className="flex items-start gap-2 rounded-md border border-success/30 bg-success/[0.08] px-3 py-2">
             <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
             <p className="text-[12.5px] text-foreground/90">
               Imported <span className="font-semibold">{status.result.imported}</span> cookies across{" "}
@@ -96,18 +83,18 @@ export function BrowserSection() {
           </div>
         ) : null}
         {status.kind === "error" ? (
-          <p className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">
+          <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[12.5px] text-destructive">
             {status.message}
           </p>
         ) : null}
 
         {unavailable.length > 0 ? (
-          <p className="mt-4 text-[11.5px] text-muted-foreground/70">
-            <span className="font-medium">Not detected:</span>{" "}
+          <p className="text-[11.5px] text-muted-foreground/80">
+            <span className="font-medium text-muted-foreground">Not detected:</span>{" "}
             {unavailable.map((b) => b.label).join(", ")}.
           </p>
         ) : null}
-      </div>
+      </section>
     </div>
   )
 }

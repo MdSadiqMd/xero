@@ -1733,6 +1733,28 @@ describe('AgentRuntime current UI', () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
   })
 
+  it('offers diagnostics from runtime startup failures', () => {
+    const onOpenDiagnostics = vi.fn()
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeRunActionError: {
+            code: 'provider_profile_credentials_missing',
+            message: 'Runtime startup failed because provider credentials are missing.',
+            retryable: false,
+          },
+        })}
+        onOpenDiagnostics={onOpenDiagnostics}
+      />,
+    )
+
+    expect(screen.getByText('Runtime startup failed because provider credentials are missing.')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
+
+    expect(onOpenDiagnostics).toHaveBeenCalledTimes(1)
+  })
+
   it('renders the current model selectors and disables compose actions while a run update is pending', () => {
     render(
       <AgentRuntime

@@ -47,6 +47,7 @@ pub const REMOVE_PLUGIN_ROOT_COMMAND: &str = "remove_plugin_root";
 pub const SET_PLUGIN_ENABLED_COMMAND: &str = "set_plugin_enabled";
 pub const REMOVE_PLUGIN_COMMAND: &str = "remove_plugin";
 pub const GET_PROVIDER_MODEL_CATALOG_COMMAND: &str = "get_provider_model_catalog";
+pub const RUN_DOCTOR_REPORT_COMMAND: &str = "run_doctor_report";
 pub const LIST_PROVIDER_PROFILES_COMMAND: &str = "list_provider_profiles";
 pub const UPSERT_PROVIDER_PROFILE_COMMAND: &str = "upsert_provider_profile";
 pub const SET_ACTIVE_PROVIDER_PROFILE_COMMAND: &str = "set_active_provider_profile";
@@ -112,6 +113,7 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     SET_PLUGIN_ENABLED_COMMAND,
     REMOVE_PLUGIN_COMMAND,
     GET_PROVIDER_MODEL_CATALOG_COMMAND,
+    RUN_DOCTOR_REPORT_COMMAND,
     LIST_PROVIDER_PROFILES_COMMAND,
     UPSERT_PROVIDER_PROFILE_COMMAND,
     SET_ACTIVE_PROVIDER_PROFILE_COMMAND,

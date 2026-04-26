@@ -16,7 +16,7 @@ import { BrowserSidebar } from '@/components/cadence/browser-sidebar'
 import { IosEmulatorSidebar } from '@/components/cadence/ios-emulator-sidebar'
 import { AndroidEmulatorSidebar } from '@/components/cadence/android-emulator-sidebar'
 import { SolanaWorkbenchSidebar } from '@/components/cadence/solana-workbench-sidebar'
-import { SettingsDialog } from '@/components/cadence/settings-dialog'
+import { SettingsDialog, type SettingsSection } from '@/components/cadence/settings-dialog'
 import { VcsSidebar } from '@/components/cadence/vcs-sidebar'
 import { CadenceDesktopAdapter as DefaultCadenceDesktopAdapter, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import { type RepositoryDiffScope } from '@/src/lib/cadence-model/project'
@@ -67,6 +67,9 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     providerModelCatalogs,
     providerModelCatalogLoadStatuses,
     providerModelCatalogLoadErrors,
+    doctorReport,
+    doctorReportStatus,
+    doctorReportError,
     mcpRegistry,
     mcpImportDiagnostics,
     mcpRegistryLoadStatus,
@@ -108,6 +111,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     refreshProviderProfiles,
     refreshProviderModelCatalog,
     checkProviderProfile,
+    runDoctorReport,
     upsertProviderProfile,
     setActiveProviderProfile,
     refreshMcpRegistry,
@@ -135,6 +139,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   } = useCadenceDesktopState({ adapter })
 
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('providers')
   const [pendingAgentSessionId, setPendingAgentSessionId] = useState<string | null>(null)
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
   const [gamesOpen, setGamesOpen] = useState(false)
@@ -143,6 +148,11 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [androidOpen, setAndroidOpen] = useState(false)
   const [solanaOpen, setSolanaOpen] = useState(false)
   const [vcsOpen, setVcsOpen] = useState(false)
+
+  const openSettings = (section: SettingsSection = 'providers') => {
+    setSettingsInitialSection(section)
+    setSettingsOpen(true)
+  }
 
   const toggleGames = () => {
     setGamesOpen((current) => {
@@ -376,7 +386,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
                     agentView.runtimeSession?.isAuthenticated,
                 )}
                 isStartingRun={agentView?.runtimeRunActionStatus === 'running'}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={() => openSettings('providers')}
                 onStartRun={() => startRuntimeRun()}
               />
             </div>
@@ -391,7 +401,8 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
               <AgentRuntime
                 agent={agentView}
                 onLogout={() => logoutRuntimeSession()}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={() => openSettings('providers')}
+                onOpenDiagnostics={() => openSettings('diagnostics')}
                 onResolveOperatorAction={(actionId, decision, options) =>
                   resolveOperatorAction(actionId, decision, { userAnswer: options?.userAnswer ?? null })
                 }
@@ -454,7 +465,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         activeView={activeView}
         onViewChange={setActiveView}
         projectName={activeProject?.name}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => openSettings('providers')}
         onToggleGames={toggleGames}
         gamesOpen={gamesOpen}
         onToggleBrowser={toggleBrowser}
@@ -522,7 +533,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       activeView={activeView}
       onViewChange={setActiveView}
       projectName={activeProject?.name}
-      onOpenSettings={() => setSettingsOpen(true)}
+      onOpenSettings={() => openSettings('providers')}
       onToggleGames={toggleGames}
       gamesOpen={gamesOpen}
       onToggleBrowser={toggleBrowser}
@@ -588,6 +599,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
+        initialSection={settingsInitialSection}
         agent={agentView}
         providerProfiles={providerProfiles}
         providerProfilesLoadStatus={providerProfilesLoadStatus}
@@ -602,6 +614,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           refreshProviderModelCatalog(profileId, options)
         }
         onCheckProviderProfile={(profileId, options) => checkProviderProfile(profileId, options)}
+        doctorReport={doctorReport}
+        doctorReportStatus={doctorReportStatus}
+        doctorReportError={doctorReportError}
+        onRunDoctorReport={(request) => runDoctorReport(request)}
         onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
         onSetActiveProviderProfile={(profileId) => setActiveProviderProfile(profileId)}
         onStartLogin={() => startOpenAiLogin()}

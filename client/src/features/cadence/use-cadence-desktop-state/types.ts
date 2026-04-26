@@ -2,6 +2,7 @@ import type { CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import type {
   CreateProjectEntryRequestDto,
   CreateProjectEntryResponseDto,
+  CadenceDoctorReportDto,
   DeleteProjectEntryResponseDto,
   ImportMcpServersResponseDto,
   ListProjectFilesResponseDto,
@@ -40,6 +41,7 @@ import type {
   RuntimeRunView,
   RuntimeSessionView,
   RuntimeSettingsDto,
+  RunDoctorReportRequestDto,
   RuntimeStreamActionRequiredItemView,
   RuntimeStreamActivityItemView,
   RuntimeStreamIssueView,
@@ -106,6 +108,7 @@ export type NotificationRouteMutationStatus = 'idle' | 'running'
 export type ProviderProfilesLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type ProviderProfilesSaveStatus = 'idle' | 'running'
 export type ProviderModelCatalogLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
+export type DoctorReportRunStatus = 'idle' | 'running' | 'ready' | 'error'
 export type RuntimeSettingsLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type RuntimeSettingsSaveStatus = 'idle' | 'running'
 export type McpRegistryLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -401,6 +404,9 @@ export interface UseCadenceDesktopStateResult {
   activeProviderModelCatalog: ProviderModelCatalogDto | null
   activeProviderModelCatalogLoadStatus: ProviderModelCatalogLoadStatus
   activeProviderModelCatalogLoadError: OperatorActionErrorView | null
+  doctorReport: CadenceDoctorReportDto | null
+  doctorReportStatus: DoctorReportRunStatus
+  doctorReportError: OperatorActionErrorView | null
   runtimeSettings: RuntimeSettingsDto | null
   runtimeSettingsLoadStatus: RuntimeSettingsLoadStatus
   runtimeSettingsLoadError: OperatorActionErrorView | null
@@ -472,6 +478,7 @@ export interface UseCadenceDesktopStateResult {
     profileId: string,
     options?: { includeNetwork?: boolean },
   ) => Promise<ProviderProfileDiagnosticsDto>
+  runDoctorReport: (request?: Partial<RunDoctorReportRequestDto>) => Promise<CadenceDoctorReportDto>
   upsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   setActiveProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
   refreshRuntimeSettings: (options?: { force?: boolean }) => Promise<RuntimeSettingsDto>

@@ -521,20 +521,23 @@ Outcome: Cadence can actively test configured provider profiles and explain whet
 
 Outcome: Cadence can produce an OpenClaude-style doctor report from the desktop app, with both readable and JSON forms.
 
-- [ ] Slice 3.2.1: Implement the backend doctor report command.
+- [x] Slice 3.2.1: Implement the backend doctor report command.
   - Scope: add a Tauri command that gathers provider profile validation, provider reachability when requested, runtime session reconciliation, detached supervisor state, provider-model catalog state, MCP registry health, notification route readiness, and important app paths.
   - Acceptance: the command supports a quick local mode and an extended network mode; it reports partial failures without aborting the whole report; JSON output is stable and redacted.
   - Verification: Rust integration tests cover quick mode, extended mode, partial failure aggregation, unavailable app-data files, stale runtime session, and JSON redaction.
+  - Completed: 2026-04-26. Implementation: added the `run_doctor_report` Tauri command, stable/redacted request and response contracts, command-surface registration, quick local checks, extended catalog probes, partial-failure aggregation, MCP/runtime/notification/app-path checks, and runtime-session failure projection into report checks. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test doctor_report_command` passed 2 tests covering quick local output, redacted dependencies, and runtime session failure aggregation; `cargo test --manifest-path client/src-tauri/Cargo.toml --test provider_diagnostics_contract` passed 5 tests for shared provider diagnostic contracts; `cargo check --manifest-path client/src-tauri/Cargo.toml` passed; `cargo fmt --manifest-path client/src-tauri/Cargo.toml` passed.
 
-- [ ] Slice 3.2.2: Add a diagnostics settings surface.
+- [x] Slice 3.2.2: Add a diagnostics settings surface.
   - Scope: add a ShadCN-based Diagnostics section or tab that displays doctor summary counts, grouped checks, last run timestamp, copyable JSON, and per-check remediation.
   - Acceptance: users can run quick or extended diagnostics, inspect failures without scrolling through raw logs, and copy the redacted report for support.
   - Verification: React tests cover empty state, running state, passed/warning/failed/skipped groups, JSON copy action, and malformed report handling.
+  - Completed: 2026-04-26. Implementation: added the ShadCN-based Diagnostics settings section, quick and extended run actions, grouped report rendering, summary counts, last-run timestamp, status/remediation rows, malformed/error/empty/running states, and redacted JSON copy support through the desktop adapter and Cadence state hook. Verification evidence: `pnpm --dir client exec vitest run src/lib/cadence-model/diagnostics.test.ts components/cadence/settings-dialog.test.tsx components/cadence/agent-runtime.test.tsx` passed 3 test files and 63 tests; `pnpm --dir client exec tsc --noEmit` passed; `pnpm --dir client build` passed.
 
-- [ ] Slice 3.2.3: Thread doctor diagnostics into runtime startup failures.
+- [x] Slice 3.2.3: Thread doctor diagnostics into runtime startup failures.
   - Scope: connect runtime start/session failures to the same diagnostic vocabulary so a failed provider bind can offer "run diagnostics" and show the relevant provider/profile check inline.
   - Acceptance: runtime failures for stale binding, missing credentials, provider mismatch, unavailable local endpoint, and ambient auth missing all link back to the same remediation text users see in Settings.
   - Verification: state/view-builder tests cover runtime session failure projection, run-start failure projection, doctor suggestion visibility, and secret-free persisted diagnostics.
+  - Completed: 2026-04-26. Implementation: wired runtime startup failures to a Settings Diagnostics entry point, exposed doctor report state through the app shell, and added backend/runtime checks so provider and session failures use the same redacted diagnostic vocabulary as Settings. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test doctor_report_command` passed 2 tests, including runtime session failure projection; `pnpm --dir client exec vitest run src/lib/cadence-model/diagnostics.test.ts components/cadence/settings-dialog.test.tsx components/cadence/agent-runtime.test.tsx` passed 3 test files and 63 tests, including the runtime failure Diagnostics action; `pnpm --dir client exec tsc --noEmit` passed.
 
 ##### Phase 3: Add Provider Recommendation And Setup Guides
 

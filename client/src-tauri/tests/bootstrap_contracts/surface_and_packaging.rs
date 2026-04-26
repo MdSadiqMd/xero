@@ -9,8 +9,8 @@ pub(crate) fn builder_boots_and_registered_commands_return_expected_contract_sha
 
     assert_eq!(
         REGISTERED_COMMAND_NAMES.len(),
-        62,
-        "expected sixty-two desktop commands"
+        63,
+        "expected sixty-three desktop commands"
     );
 
     tauri::test::assert_ipc_response(

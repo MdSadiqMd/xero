@@ -19,7 +19,7 @@ export function ThemesSection() {
   }, [themes])
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-7">
       <SectionHeader
         title="Themes"
         description="Pick a palette for the entire app. Editor syntax highlighting and diff rendering follow the selected theme."
@@ -58,19 +58,15 @@ interface ThemeGroupProps {
 
 function ThemeGroup({ icon: Icon, label, themes, activeId, onSelect }: ThemeGroupProps) {
   return (
-    <div className="flex flex-col gap-2.5">
+    <section className="flex flex-col gap-2.5">
       <div className="flex items-center gap-2">
-        <Icon className="h-3 w-3 text-muted-foreground/70" />
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
-          {label}
-        </span>
-        <span className="ml-auto text-[10.5px] text-muted-foreground/60">
-          {themes.length}
-        </span>
+        <Icon className="h-3.5 w-3.5 text-muted-foreground/80" />
+        <h4 className="text-[12.5px] font-semibold text-foreground">{label}</h4>
+        <span className="ml-auto text-[11px] text-muted-foreground">{themes.length}</span>
       </div>
-      <div className="grid grid-cols-2 gap-2.5">
+      <div className="grid grid-cols-2 gap-2">
         {themes.map((theme) => (
-          <ThemeCard
+          <ThemeRow
             key={theme.id}
             theme={theme}
             active={theme.id === activeId}
@@ -78,111 +74,63 @@ function ThemeGroup({ icon: Icon, label, themes, activeId, onSelect }: ThemeGrou
           />
         ))}
       </div>
-    </div>
+    </section>
   )
 }
 
-interface ThemeCardProps {
+interface ThemeRowProps {
   theme: ThemeDefinition
   active: boolean
   onSelect: () => void
 }
 
-function ThemeCard({ theme, active, onSelect }: ThemeCardProps) {
+function ThemeRow({ theme, active, onSelect }: ThemeRowProps) {
   return (
     <button
       type="button"
       onClick={onSelect}
       aria-pressed={active}
       className={cn(
-        "group relative flex flex-col gap-3 overflow-hidden rounded-lg border p-3 text-left transition-all motion-fast",
+        "group relative flex items-center gap-3 rounded-md border px-2.5 py-2 text-left transition-colors motion-fast",
         active
-          ? "border-primary/60 bg-primary/[0.05] shadow-sm"
-          : "border-border bg-card hover:-translate-y-px hover:border-border/80 hover:bg-secondary/20 hover:shadow-sm",
+          ? "border-primary/50 bg-primary/[0.04]"
+          : "border-border/60 hover:border-border hover:bg-secondary/30",
       )}
     >
-      <ThemePreview theme={theme} active={active} />
-      <div className="flex items-center justify-between gap-2">
-        <p className="truncate text-[13px] font-medium text-foreground">{theme.name}</p>
-        <div
-          className={cn(
-            "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors",
-            active
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-border bg-transparent text-transparent group-hover:border-border/80",
-          )}
-          aria-hidden
-        >
-          <Check className="h-3 w-3" />
-        </div>
+      <ThemeSwatch theme={theme} />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[12.5px] font-medium text-foreground">{theme.name}</p>
+        <p className="mt-0.5 line-clamp-1 text-[11px] leading-[1.35] text-muted-foreground">
+          {theme.description}
+        </p>
       </div>
-      <p className="-mt-1.5 line-clamp-2 text-[11.5px] leading-[1.4] text-muted-foreground">
-        {theme.description}
-      </p>
+      <div
+        className={cn(
+          "flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors",
+          active
+            ? "bg-primary text-primary-foreground"
+            : "border border-border/70 bg-transparent text-transparent",
+        )}
+        aria-hidden
+      >
+        <Check className="h-2.5 w-2.5" />
+      </div>
     </button>
   )
 }
 
-function ThemePreview({ theme, active }: { theme: ThemeDefinition; active: boolean }) {
+function ThemeSwatch({ theme }: { theme: ThemeDefinition }) {
   const c = theme.colors
   return (
     <div
-      className={cn(
-        "relative h-20 w-full overflow-hidden rounded-md border transition-colors",
-        active ? "border-primary/40" : "border-border/70",
-      )}
+      className="relative flex h-9 w-9 shrink-0 overflow-hidden rounded-md border border-border/60"
       style={{ backgroundColor: c.background }}
       aria-hidden
     >
-      {/* Sidebar */}
-      <div
-        className="absolute inset-y-0 left-0 w-5"
-        style={{ backgroundColor: c.sidebar }}
-      >
-        <div
-          className="mx-1 mt-1.5 h-1 w-3 rounded-sm"
-          style={{ backgroundColor: c.primary }}
-        />
-        <div
-          className="mx-1 mt-1 h-0.5 w-2.5 rounded-sm opacity-50"
-          style={{ backgroundColor: c.foreground }}
-        />
-        <div
-          className="mx-1 mt-1 h-0.5 w-2 rounded-sm opacity-40"
-          style={{ backgroundColor: c.foreground }}
-        />
-      </div>
-      {/* Content lines */}
-      <div className="absolute left-7 top-2 right-2 space-y-1">
-        <div className="flex items-center gap-1">
-          <div
-            className="h-1 w-1 rounded-full"
-            style={{ backgroundColor: c.primary }}
-          />
-          <div
-            className="h-1 flex-1 rounded-sm"
-            style={{ backgroundColor: c.foreground, opacity: 0.7 }}
-          />
-        </div>
-        <div
-          className="h-1 w-3/4 rounded-sm"
-          style={{ backgroundColor: c.mutedForeground }}
-        />
-        <div
-          className="h-1 w-1/2 rounded-sm"
-          style={{ backgroundColor: c.mutedForeground }}
-        />
-      </div>
-      {/* Accent block bottom-right */}
-      <div className="absolute bottom-1.5 right-1.5 flex gap-1">
-        <div
-          className="h-2 w-3 rounded-sm"
-          style={{ backgroundColor: c.accent }}
-        />
-        <div
-          className="h-2 w-2 rounded-sm"
-          style={{ backgroundColor: c.primary }}
-        />
+      <div className="w-1/3" style={{ backgroundColor: c.sidebar }} />
+      <div className="flex flex-1 flex-col justify-end gap-0.5 p-1">
+        <div className="h-1 w-full rounded-sm" style={{ backgroundColor: c.primary }} />
+        <div className="h-1 w-full rounded-sm" style={{ backgroundColor: c.accent }} />
       </div>
     </div>
   )

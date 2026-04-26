@@ -210,9 +210,13 @@ import {
   type ProviderModelCatalogDto,
 } from '@/src/lib/cadence-model/provider-models'
 import {
+  cadenceDoctorReportSchema,
   checkProviderProfileRequestSchema,
   providerProfileDiagnosticsSchema,
+  runDoctorReportRequestSchema,
+  type CadenceDoctorReportDto,
   type ProviderProfileDiagnosticsDto,
+  type RunDoctorReportRequestDto,
 } from '@/src/lib/cadence-model/diagnostics'
 import {
   runtimeStreamItemSchema,
@@ -280,6 +284,7 @@ const COMMANDS = {
   setPluginEnabled: 'set_plugin_enabled',
   removePlugin: 'remove_plugin',
   getProviderModelCatalog: 'get_provider_model_catalog',
+  runDoctorReport: 'run_doctor_report',
   checkProviderProfile: 'check_provider_profile',
   listProviderProfiles: 'list_provider_profiles',
   upsertProviderProfile: 'upsert_provider_profile',
@@ -541,6 +546,7 @@ export interface CadenceDesktopAdapter {
     profileId: string,
     options?: { forceRefresh?: boolean },
   ): Promise<ProviderModelCatalogDto>
+  runDoctorReport(request?: Partial<RunDoctorReportRequestDto>): Promise<CadenceDoctorReportDto>
   checkProviderProfile(
     profileId: string,
     options?: { includeNetwork?: boolean },
@@ -1391,6 +1397,15 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
     return invokeTyped(COMMANDS.getProviderModelCatalog, providerModelCatalogSchema, {
       request,
+    })
+  },
+
+  runDoctorReport(request = {}) {
+    const parsedRequest = runDoctorReportRequestSchema.parse({
+      mode: request.mode ?? 'quick_local',
+    })
+    return invokeTyped(COMMANDS.runDoctorReport, cadenceDoctorReportSchema, {
+      request: parsedRequest,
     })
   },
 
