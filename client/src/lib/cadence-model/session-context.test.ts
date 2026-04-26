@@ -4,12 +4,19 @@ import {
   createContextBudget,
   createPublicSessionContextRedaction,
   createRedactedSessionContextText,
+  exportSessionTranscriptRequestSchema,
+  getSessionTranscriptRequestSchema,
   runTranscriptSchema,
+  saveSessionTranscriptExportRequestSchema,
+  searchSessionTranscriptsRequestSchema,
+  searchSessionTranscriptsResponseSchema,
   sessionContextContributorSchema,
   sessionContextPolicyDecisionSchema,
   sessionContextSnapshotSchema,
+  sessionTranscriptExportResponseSchema,
   sessionMemoryRecordSchema,
   sessionTranscriptExportPayloadSchema,
+  sessionTranscriptSearchResultSnippetSchema,
   sessionTranscriptSchema,
   type RunTranscriptDto,
   type SessionContextContributorDto,
@@ -184,6 +191,94 @@ describe('session context contract', () => {
     const serialized = JSON.stringify(memory)
     expect(serialized).not.toContain('sk-context-secret')
     expect(memory.reviewState).toBe('approved')
+  })
+
+  it('validates transcript command request, export, save, and search DTOs', () => {
+    const transcript = sessionTranscriptSchema.parse({
+      contractVersion: CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
+      projectId,
+      agentSessionId,
+      title: 'History session',
+      summary: 'Exportable session history',
+      status: 'active',
+      archived: false,
+      archivedAt: null,
+      runs: [],
+      items: [],
+      usageTotals: null,
+      redaction: createPublicSessionContextRedaction(),
+    })
+
+    expect(
+      getSessionTranscriptRequestSchema.parse({
+        projectId,
+        agentSessionId,
+        runId: runId,
+      }),
+    ).toEqual({ projectId, agentSessionId, runId })
+    expect(() => getSessionTranscriptRequestSchema.parse({ projectId, agentSessionId, extra: true })).toThrow()
+    expect(
+      exportSessionTranscriptRequestSchema.parse({
+        projectId,
+        agentSessionId,
+        runId: null,
+        format: 'markdown',
+      }).format,
+    ).toBe('markdown')
+    expect(
+      saveSessionTranscriptExportRequestSchema.parse({
+        path: '/tmp/history.md',
+        content: '# History',
+      }).path,
+    ).toBe('/tmp/history.md')
+
+    const exportResponse = sessionTranscriptExportResponseSchema.parse({
+      payload: {
+        contractVersion: CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
+        exportId: 'export-history-1',
+        generatedAt: '2026-04-26T10:06:00Z',
+        scope: 'session',
+        format: 'json',
+        transcript,
+        contextSnapshot: null,
+        redaction: createPublicSessionContextRedaction(),
+      },
+      content: JSON.stringify({ ok: true }),
+      mimeType: 'application/json',
+      suggestedFileName: 'history-session-transcript.json',
+    })
+    expect(exportResponse.payload.transcript.title).toBe('History session')
+
+    const result = sessionTranscriptSearchResultSnippetSchema.parse({
+      contractVersion: CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
+      resultId: 'item:run-history-1:message:1',
+      projectId,
+      agentSessionId,
+      runId,
+      itemId: 'message:1',
+      archived: false,
+      rank: 0,
+      matchedFields: ['text'],
+      snippet: 'Matched validation transcript item.',
+      redaction: createPublicSessionContextRedaction(),
+    })
+    expect(
+      searchSessionTranscriptsRequestSchema.parse({
+        projectId,
+        query: 'validation',
+        includeArchived: true,
+        limit: 12,
+      }).includeArchived,
+    ).toBe(true)
+    expect(
+      searchSessionTranscriptsResponseSchema.parse({
+        projectId,
+        query: 'validation',
+        results: [result],
+        total: 1,
+        truncated: false,
+      }).results[0].snippet,
+    ).toContain('validation')
   })
 })
 

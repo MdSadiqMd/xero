@@ -271,6 +271,66 @@ pub struct SessionTranscriptSearchResultSnippetDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetSessionTranscriptRequestDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExportSessionTranscriptRequestDto {
+    pub project_id: String,
+    pub agent_session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    pub format: SessionTranscriptExportFormatDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionTranscriptExportResponseDto {
+    pub payload: SessionTranscriptExportPayloadDto,
+    pub content: String,
+    pub mime_type: String,
+    pub suggested_file_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveSessionTranscriptExportRequestDto {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchSessionTranscriptsRequestDto {
+    pub project_id: String,
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub include_archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SearchSessionTranscriptsResponseDto {
+    pub project_id: String,
+    pub query: String,
+    pub results: Vec<SessionTranscriptSearchResultSnippetDto>,
+    pub total: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionContextContributorKindDto {
     SystemPrompt,
@@ -463,6 +523,10 @@ pub fn usage_totals_from_agent_usage(record: &AgentUsageRecord) -> SessionUsageT
     }
 }
 
+pub fn redact_session_context_text(value: &str) -> (String, SessionContextRedactionDto) {
+    sanitize_context_text(value)
+}
+
 pub fn run_transcript_from_agent_snapshot(
     snapshot: &AgentRunSnapshotRecord,
     usage: Option<&AgentUsageRecord>,
@@ -470,6 +534,39 @@ pub fn run_transcript_from_agent_snapshot(
     let usage_totals = usage.map(usage_totals_from_agent_usage);
     let mut candidates = Vec::new();
     let mut sequence = 1_u64;
+
+    let (prompt, prompt_redaction) = sanitize_context_text(&snapshot.run.prompt);
+    candidates.push(TimelineCandidate {
+        created_at: snapshot.run.started_at.clone(),
+        source_rank: 5,
+        source_id: 0,
+        item: SessionTranscriptItemDto {
+            contract_version: CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
+            item_id: format!("run_prompt:{}", snapshot.run.run_id),
+            project_id: snapshot.run.project_id.clone(),
+            agent_session_id: snapshot.run.agent_session_id.clone(),
+            run_id: snapshot.run.run_id.clone(),
+            provider_id: snapshot.run.provider_id.clone(),
+            model_id: snapshot.run.model_id.clone(),
+            source_kind: SessionTranscriptSourceKindDto::OwnedAgent,
+            source_table: "agent_runs".into(),
+            source_id: snapshot.run.run_id.clone(),
+            sequence: 0,
+            created_at: snapshot.run.started_at.clone(),
+            kind: SessionTranscriptItemKindDto::Message,
+            actor: SessionTranscriptActorDto::User,
+            title: Some("Run prompt".into()),
+            text: Some(prompt),
+            summary: None,
+            tool_call_id: None,
+            tool_name: None,
+            tool_state: None,
+            file_path: None,
+            checkpoint_kind: None,
+            action_id: None,
+            redaction: prompt_redaction,
+        },
+    });
 
     for message in &snapshot.messages {
         let (text, redaction) = sanitize_context_text(&message.content);
@@ -775,6 +872,8 @@ pub fn session_transcript_from_runs(
     session: &AgentSessionRecord,
     runs: Vec<RunTranscriptDto>,
 ) -> SessionTranscriptDto {
+    let (title, title_redaction) = sanitize_context_text(&session.title);
+    let (summary, summary_redaction) = sanitize_context_text(&session.summary);
     let mut run_summaries = runs
         .iter()
         .map(|run| RunTranscriptSummaryDto {
@@ -810,14 +909,19 @@ pub fn session_transcript_from_runs(
         item.sequence = (index as u64).saturating_add(1);
     }
 
-    let redaction = combine_redactions(items.iter().map(|item| &item.redaction));
+    let redaction = combine_redactions(
+        items
+            .iter()
+            .map(|item| &item.redaction)
+            .chain([&title_redaction, &summary_redaction]),
+    );
     let usage_totals = aggregate_usage_totals(&run_summaries);
     SessionTranscriptDto {
         contract_version: CADENCE_SESSION_CONTEXT_CONTRACT_VERSION,
         project_id: session.project_id.clone(),
         agent_session_id: session.agent_session_id.clone(),
-        title: session.title.clone(),
-        summary: session.summary.clone(),
+        title,
+        summary,
         status: match session.status {
             AgentSessionStatus::Active => AgentSessionTranscriptStatusDto::Active,
             AgentSessionStatus::Archived => AgentSessionTranscriptStatusDto::Archived,
@@ -1040,6 +1144,47 @@ pub fn validate_run_transcript_contract(transcript: &RunTranscriptDto) -> Result
         previous_sequence = item.sequence;
     }
     ensure_secret_free_json(transcript)
+}
+
+pub fn validate_session_transcript_contract(
+    transcript: &SessionTranscriptDto,
+) -> Result<(), String> {
+    if transcript.contract_version != CADENCE_SESSION_CONTEXT_CONTRACT_VERSION {
+        return Err("session transcript contract version is unsupported".into());
+    }
+    if transcript.archived && transcript.archived_at.is_none() {
+        return Err("archived session transcripts must include archived_at".into());
+    }
+    if matches!(transcript.status, AgentSessionTranscriptStatusDto::Archived)
+        && !transcript.archived
+    {
+        return Err("archived session transcripts must set archived=true".into());
+    }
+
+    let mut previous_sequence = 0_u64;
+    for item in &transcript.items {
+        if item.project_id != transcript.project_id {
+            return Err("transcript item project id must match the session transcript".into());
+        }
+        if item.agent_session_id != transcript.agent_session_id {
+            return Err("transcript item session id must match the session transcript".into());
+        }
+        if item.sequence <= previous_sequence {
+            return Err("transcript item sequences must be strictly increasing".into());
+        }
+        previous_sequence = item.sequence;
+    }
+    ensure_secret_free_json(transcript)
+}
+
+pub fn validate_export_payload_contract(
+    payload: &SessionTranscriptExportPayloadDto,
+) -> Result<(), String> {
+    if payload.contract_version != CADENCE_SESSION_CONTEXT_CONTRACT_VERSION {
+        return Err("session transcript export contract version is unsupported".into());
+    }
+    validate_session_transcript_contract(&payload.transcript)?;
+    ensure_secret_free_json(payload)
 }
 
 pub fn validate_context_snapshot_contract(

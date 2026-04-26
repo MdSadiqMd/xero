@@ -71,13 +71,12 @@ describe("EmulatorSidebar", () => {
 
   it("resizes with ArrowLeft on the resize handle", () => {
     const { container } = render(<EmulatorSidebar open platform="android" />)
-    const aside = container.querySelector("aside") as HTMLElement
     const separator = container.querySelector("[role='separator']") as HTMLElement
-    const before = Number.parseInt(aside.style.width, 10)
+    const before = Number(separator.getAttribute("aria-valuenow"))
 
     fireEvent.keyDown(separator, { key: "ArrowLeft" })
 
-    const after = Number.parseInt(aside.style.width, 10)
+    const after = Number(separator.getAttribute("aria-valuenow"))
     expect(after).toBeGreaterThan(before)
   })
 

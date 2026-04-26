@@ -217,6 +217,57 @@ export const sessionTranscriptSearchResultSnippetSchema = z
   })
   .strict()
 
+export const getSessionTranscriptRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    agentSessionId: z.string().trim().min(1),
+    runId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
+export const exportSessionTranscriptRequestSchema = getSessionTranscriptRequestSchema
+  .extend({
+    format: sessionTranscriptExportFormatSchema,
+  })
+  .strict()
+
+export const sessionTranscriptExportResponseSchema = z
+  .object({
+    payload: sessionTranscriptExportPayloadSchema,
+    content: z.string().min(1),
+    mimeType: z.string().trim().min(1),
+    suggestedFileName: z.string().trim().min(1),
+  })
+  .strict()
+
+export const saveSessionTranscriptExportRequestSchema = z
+  .object({
+    path: z.string().trim().min(1),
+    content: z.string().min(1),
+  })
+  .strict()
+
+export const searchSessionTranscriptsRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    query: z.string().trim().min(1),
+    agentSessionId: nonEmptyOptionalTextSchema,
+    runId: nonEmptyOptionalTextSchema,
+    includeArchived: z.boolean().optional(),
+    limit: z.number().int().positive().max(100).optional(),
+  })
+  .strict()
+
+export const searchSessionTranscriptsResponseSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    query: z.string().trim().min(1),
+    results: z.array(sessionTranscriptSearchResultSnippetSchema),
+    total: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+  })
+  .strict()
+
 export const sessionContextContributorKindSchema = z.enum([
   'system_prompt',
   'instruction_file',
@@ -366,6 +417,12 @@ export type AgentSessionTranscriptStatusDto = z.infer<typeof agentSessionTranscr
 export type SessionTranscriptDto = z.infer<typeof sessionTranscriptSchema>
 export type SessionTranscriptExportPayloadDto = z.infer<typeof sessionTranscriptExportPayloadSchema>
 export type SessionTranscriptSearchResultSnippetDto = z.infer<typeof sessionTranscriptSearchResultSnippetSchema>
+export type GetSessionTranscriptRequestDto = z.infer<typeof getSessionTranscriptRequestSchema>
+export type ExportSessionTranscriptRequestDto = z.infer<typeof exportSessionTranscriptRequestSchema>
+export type SessionTranscriptExportResponseDto = z.infer<typeof sessionTranscriptExportResponseSchema>
+export type SaveSessionTranscriptExportRequestDto = z.infer<typeof saveSessionTranscriptExportRequestSchema>
+export type SearchSessionTranscriptsRequestDto = z.infer<typeof searchSessionTranscriptsRequestSchema>
+export type SearchSessionTranscriptsResponseDto = z.infer<typeof searchSessionTranscriptsResponseSchema>
 export type SessionContextContributorKindDto = z.infer<typeof sessionContextContributorKindSchema>
 export type SessionContextBudgetPressureDto = z.infer<typeof sessionContextBudgetPressureSchema>
 export type SessionContextBudgetDto = z.infer<typeof sessionContextBudgetSchema>

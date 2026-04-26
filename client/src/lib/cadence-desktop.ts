@@ -230,6 +230,22 @@ import {
   type RuntimeStreamItemKindDto,
   type SubscribeRuntimeStreamResponseDto,
 } from '@/src/lib/cadence-model/runtime-stream'
+import {
+  exportSessionTranscriptRequestSchema,
+  getSessionTranscriptRequestSchema,
+  saveSessionTranscriptExportRequestSchema,
+  searchSessionTranscriptsRequestSchema,
+  searchSessionTranscriptsResponseSchema,
+  sessionTranscriptExportResponseSchema,
+  sessionTranscriptSchema,
+  type ExportSessionTranscriptRequestDto,
+  type GetSessionTranscriptRequestDto,
+  type SaveSessionTranscriptExportRequestDto,
+  type SearchSessionTranscriptsRequestDto,
+  type SearchSessionTranscriptsResponseDto,
+  type SessionTranscriptDto,
+  type SessionTranscriptExportResponseDto,
+} from '@/src/lib/cadence-model/session-context'
 import { projectSnapshotResponseSchema, type ProjectSnapshotResponseDto } from '@/src/lib/cadence-model'
 
 const COMMANDS = {
@@ -269,6 +285,10 @@ const COMMANDS = {
   getAgentRun: 'get_agent_run',
   listAgentRuns: 'list_agent_runs',
   subscribeAgentStream: 'subscribe_agent_stream',
+  getSessionTranscript: 'get_session_transcript',
+  exportSessionTranscript: 'export_session_transcript',
+  saveSessionTranscriptExport: 'save_session_transcript_export',
+  searchSessionTranscripts: 'search_session_transcripts',
   getRuntimeRun: 'get_runtime_run',
   getRuntimeSession: 'get_runtime_session',
   getRuntimeSettings: 'get_runtime_settings',
@@ -530,6 +550,14 @@ export interface CadenceDesktopAdapter {
   resumeAgentRun?(runId: string, response: string): Promise<AgentRunDto>
   getAgentRun?(runId: string): Promise<AgentRunDto>
   listAgentRuns?(projectId: string, agentSessionId: string): Promise<ListAgentRunsResponseDto>
+  getSessionTranscript?(request: GetSessionTranscriptRequestDto): Promise<SessionTranscriptDto>
+  exportSessionTranscript?(
+    request: ExportSessionTranscriptRequestDto,
+  ): Promise<SessionTranscriptExportResponseDto>
+  saveSessionTranscriptExport?(request: SaveSessionTranscriptExportRequestDto): Promise<void>
+  searchSessionTranscripts?(
+    request: SearchSessionTranscriptsRequestDto,
+  ): Promise<SearchSessionTranscriptsResponseDto>
   getRuntimeRun(projectId: string, agentSessionId: string): Promise<RuntimeRunDto | null>
   getRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
   getRuntimeSettings(): Promise<RuntimeSettingsDto>
@@ -1261,6 +1289,32 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
     return invokeTyped(COMMANDS.listAgentRuns, listAgentRunsResponseSchema, {
       request,
+    })
+  },
+
+  getSessionTranscript(request) {
+    const parsed = getSessionTranscriptRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getSessionTranscript, sessionTranscriptSchema, {
+      request: parsed,
+    })
+  },
+
+  exportSessionTranscript(request) {
+    const parsed = exportSessionTranscriptRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.exportSessionTranscript, sessionTranscriptExportResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  async saveSessionTranscriptExport(request) {
+    const parsed = saveSessionTranscriptExportRequestSchema.parse(request)
+    await invokeRaw(COMMANDS.saveSessionTranscriptExport, { request: parsed })
+  },
+
+  searchSessionTranscripts(request) {
+    const parsed = searchSessionTranscriptsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.searchSessionTranscripts, searchSessionTranscriptsResponseSchema, {
+      request: parsed,
     })
   },
 

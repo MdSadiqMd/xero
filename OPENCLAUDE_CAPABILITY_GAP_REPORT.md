@@ -657,25 +657,29 @@ Outcome: Cadence has one vocabulary for transcripts, context budgets, compaction
 
 Outcome: users can find, inspect, and export prior work without reopening raw database state or relying on the live feed.
 
-- [ ] Slice 4.1.1: Add a redacted transcript projection command.
+- [x] Slice 4.1.1: Add a redacted transcript projection command.
   - Scope: add backend commands that project one run or one agent session into a chronological transcript containing user/assistant messages, reasoning summaries, tool summaries, file changes, checkpoints, action requests, and usage totals.
   - Acceptance: projections work for active and archived sessions, preserve event/message order, summarize large tool payloads safely, and never expose secrets beyond what the current transcript already permits.
   - Verification: Rust project-store tests cover multi-run sessions, tool-call ordering, checkpoint/file-change ordering, archived-session access, malformed JSON recovery, large payload summarization, and redaction.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_history_commands` passed 2 tests covering active/archived/deleted sessions, run-scoped mismatch rejection, redaction, large tool payload summaries, ordering, usage totals, and search cleanup; `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_context_contract` passed 7 contract tests.
 
-- [ ] Slice 4.1.2: Add transcript export in Markdown and JSON.
+- [x] Slice 4.1.2: Add transcript export in Markdown and JSON.
   - Scope: expose export commands and adapter methods for selected run/session exports in readable Markdown and structured JSON, including enough metadata for support/debugging but excluding raw secret-bearing values.
   - Acceptance: users can export the selected session or a specific run from the agent UI; exported JSON round-trips through the schema; Markdown is readable and includes run boundaries, prompts, assistant responses, tool summaries, checkpoints, and file changes.
   - Verification: Rust serialization tests and React tests cover run export, session export, archived-session export, copy/save action states, failed export diagnostics, and redacted payloads.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_history_commands` passed Markdown, JSON, save, run-scope, archived-session, and redacted-payload assertions; `pnpm --dir client exec vitest run src/lib/cadence-model/session-context.test.ts components/cadence/agent-sessions-sidebar.test.tsx components/cadence/agent-runtime.test.tsx` passed 43 tests including schema round-trip and copy/save UI actions.
 
-- [ ] Slice 4.1.3: Add session and transcript search.
+- [x] Slice 4.1.3: Add session and transcript search.
   - Scope: add SQLite-backed search over session titles/summaries, prompts, assistant messages, tool summaries, file changes, and checkpoints, with project/session/run scopes and an archived-session toggle.
   - Acceptance: users can search across sessions, jump to the matching run/session, see safe snippets, and distinguish active vs archived results.
   - Verification: migration/store tests cover FTS or equivalent indexing, ranking, snippets, archived filtering, deleted-session cleanup, and redaction; React tests cover query input, empty state, result navigation, loading, and error states.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test session_history_commands` passed SQLite FTS-backed search, fallback-safe snippets, archived filtering, deleted-session cleanup, scope, and redaction assertions; the focused Vitest command above passed sidebar search input, loading/debounce, result navigation, and schema tests.
 
-- [ ] Slice 4.1.4: Surface rename and run navigation.
+- [x] Slice 4.1.4: Surface rename and run navigation.
   - Scope: connect the existing rename mutation to ShadCN session actions and add a compact run history view for the selected session.
   - Acceptance: users can rename a session, inspect its prior runs, reopen a historical run transcript, and start a follow-up from the correct selected session.
   - Verification: React tests cover rename validation, rename failure recovery, run list ordering, selected-run navigation, and no temporary debug controls.
+  - Completed: 2026-04-26. Verification evidence: the focused Vitest command above passed rename validation, rename failure recovery, search-result run navigation, selected-run export, and history run switching tests; `pnpm --dir client exec tsc --noEmit` exited 0; `pnpm --dir client build` completed successfully with only the existing Vite large-chunk warnings.
 
 ##### Phase 2: Add Context Visualization And Budget Awareness
 

@@ -878,6 +878,53 @@ pub fn load_agent_run(
     })
 }
 
+pub fn load_agent_usage(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Option<AgentUsageRecord>, CommandError> {
+    validate_non_empty_text(project_id, "projectId")?;
+    validate_non_empty_text(run_id, "runId")?;
+    let connection = open_agent_database(repo_root)?;
+    connection
+        .query_row(
+            r#"
+            SELECT
+                project_id,
+                run_id,
+                provider_id,
+                model_id,
+                input_tokens,
+                output_tokens,
+                total_tokens,
+                estimated_cost_micros,
+                updated_at
+            FROM agent_usage
+            WHERE project_id = ?1
+              AND run_id = ?2
+            "#,
+            params![project_id, run_id],
+            read_agent_usage_row,
+        )
+        .optional()
+        .map_err(|error| map_agent_store_query_error(repo_root, "agent_usage_read_failed", error))
+}
+
+pub fn load_agent_session_run_snapshots(
+    repo_root: &Path,
+    project_id: &str,
+    agent_session_id: &str,
+) -> Result<Vec<(AgentRunSnapshotRecord, Option<AgentUsageRecord>)>, CommandError> {
+    let runs = list_agent_runs_for_session(repo_root, project_id, agent_session_id)?;
+    let mut snapshots = Vec::with_capacity(runs.len());
+    for run in runs {
+        let usage = load_agent_usage(repo_root, project_id, &run.run_id)?;
+        let snapshot = load_agent_run(repo_root, project_id, &run.run_id)?;
+        snapshots.push((snapshot, usage));
+    }
+    Ok(snapshots)
+}
+
 pub fn list_agent_runs(
     repo_root: &Path,
     project_id: &str,
@@ -910,6 +957,52 @@ pub fn list_agent_runs(
               AND agent_session_id = ?2
             ORDER BY updated_at DESC, started_at DESC, run_id ASC
             LIMIT 50
+            "#,
+        )
+        .map_err(|error| {
+            map_agent_store_query_error(repo_root, "agent_runs_prepare_failed", error)
+        })?;
+    let rows = statement
+        .query_map(params![project_id, agent_session_id], read_agent_run_row)
+        .map_err(|error| {
+            map_agent_store_query_error(repo_root, "agent_runs_query_failed", error)
+        })?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| map_agent_store_query_error(repo_root, "agent_runs_decode_failed", error))
+}
+
+fn list_agent_runs_for_session(
+    repo_root: &Path,
+    project_id: &str,
+    agent_session_id: &str,
+) -> Result<Vec<AgentRunRecord>, CommandError> {
+    validate_non_empty_text(project_id, "projectId")?;
+    validate_non_empty_text(agent_session_id, "agentSessionId")?;
+    let connection = open_agent_database(repo_root)?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT
+                project_id,
+                agent_session_id,
+                run_id,
+                provider_id,
+                model_id,
+                status,
+                prompt,
+                system_prompt,
+                started_at,
+                last_heartbeat_at,
+                completed_at,
+                cancelled_at,
+                last_error_code,
+                last_error_message,
+                updated_at
+            FROM agent_runs
+            WHERE project_id = ?1
+              AND agent_session_id = ?2
+            ORDER BY started_at ASC, updated_at ASC, run_id ASC
             "#,
         )
         .map_err(|error| {
@@ -1256,6 +1349,25 @@ fn read_agent_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRunRecor
         },
         updated_at: row.get(14)?,
     })
+}
+
+fn read_agent_usage_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentUsageRecord> {
+    Ok(AgentUsageRecord {
+        project_id: row.get(0)?,
+        run_id: row.get(1)?,
+        provider_id: row.get(2)?,
+        model_id: row.get(3)?,
+        input_tokens: read_nonnegative_u64(row, 4)?,
+        output_tokens: read_nonnegative_u64(row, 5)?,
+        total_tokens: read_nonnegative_u64(row, 6)?,
+        estimated_cost_micros: read_nonnegative_u64(row, 7)?,
+        updated_at: row.get(8)?,
+    })
+}
+
+fn read_nonnegative_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+    let value: i64 = row.get(index)?;
+    u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
 }
 
 pub fn agent_run_status_sql_value(status: &AgentRunStatus) -> &'static str {

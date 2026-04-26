@@ -10,7 +10,12 @@ import {
   Smartphone,
   X,
 } from "lucide-react"
+import { motion } from "motion/react"
 import { cn } from "@/lib/utils"
+import {
+  useDeferredSidebarActivation,
+  useSidebarMotion,
+} from "@/lib/sidebar-motion"
 import {
   useEmulatorSession,
   type EmulatorInputKind,
@@ -88,11 +93,17 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
   )
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
   const [isResizing, setIsResizing] = useState(false)
+  const {
+    activateAfterAnimation: activateSessionAfterAnimation,
+    active: sessionActive,
+  } = useDeferredSidebarActivation(open)
+  const targetWidth = open ? width : 0
+  const { widthTransition } = useSidebarMotion(isResizing)
   const widthRef = useRef(width)
   widthRef.current = width
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
 
-  const session = useEmulatorSession({ platform, active: open })
+  const session = useEmulatorSession({ platform, active: sessionActive })
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -252,16 +263,18 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
   )
 
   return (
-    <aside
+    <motion.aside
+      animate={{ borderLeftWidth: open ? 1 : 0, width: targetWidth }}
       aria-hidden={!open}
       aria-label={meta.label}
       className={cn(
-        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar",
-        !isResizing && "transition-[width] motion-panel",
-        !open && "border-l-0",
+        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar will-change-[width]",
       )}
+      initial={false}
       inert={!open ? true : undefined}
-      style={{ width: open ? width : 0 }}
+      onAnimationComplete={activateSessionAfterAnimation}
+      style={{ width: targetWidth }}
+      transition={widthTransition}
     >
       <div
         aria-label={meta.ariaResize}
@@ -354,7 +367,7 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
         </div>
       </div>
 
-      <EmulatorMissingSdk platform={platform} />
+      <EmulatorMissingSdk active={sessionActive} platform={platform} />
 
       <EmulatorViewport
         currentDevice={session.currentDevice}
@@ -377,7 +390,7 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
         platform={platform}
       />
       </div>
-    </aside>
+    </motion.aside>
   )
 }
 

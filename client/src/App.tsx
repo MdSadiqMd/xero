@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AgentRuntime } from '@/components/cadence/agent-runtime'
+import type { SessionHistoryTarget } from '@/components/cadence/agent-runtime/session-history-section'
 import { AgentSessionsSidebar } from '@/components/cadence/agent-sessions-sidebar'
 import { ArchivedSessionsDialog } from '@/components/cadence/archived-sessions-dialog'
 import { type View } from '@/components/cadence/data'
@@ -21,6 +22,7 @@ import { SettingsDialog, type SettingsSection } from '@/components/cadence/setti
 import { VcsSidebar } from '@/components/cadence/vcs-sidebar'
 import { CadenceDesktopAdapter as DefaultCadenceDesktopAdapter, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import { mapAgentSession } from '@/src/lib/cadence-model/runtime'
+import type { SessionTranscriptSearchResultSnippetDto } from '@/src/lib/cadence-model/session-context'
 import { type RepositoryDiffScope } from '@/src/lib/cadence-model/project'
 import { useCadenceDesktopState } from '@/src/features/cadence/use-cadence-desktop-state'
 import { cn } from '@/lib/utils'
@@ -140,6 +142,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     archiveAgentSession,
     restoreAgentSession,
     deleteAgentSession,
+    renameAgentSession,
   } = useCadenceDesktopState({ adapter })
 
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -147,6 +150,9 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [pendingAgentSessionId, setPendingAgentSessionId] = useState<string | null>(null)
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
   const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(false)
+  const [historyTarget, setHistoryTarget] = useState<SessionHistoryTarget | null>(null)
+  const [historySearchResult, setHistorySearchResult] =
+    useState<SessionTranscriptSearchResultSnippetDto | null>(null)
   const [gamesOpen, setGamesOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [iosOpen, setIosOpen] = useState(false)
@@ -311,6 +317,11 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     }
   }, [isLoading, onboardingDismissed, projects.length])
 
+  useEffect(() => {
+    setHistoryTarget(null)
+    setHistorySearchResult(null)
+  }, [activeProjectId])
+
   const renderBody = () => {
     if (isLoading && !activeProject) {
       return (
@@ -360,6 +371,24 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       })
     }
 
+    const handleRenameAgentSession = async (agentSessionId: string, title: string) => {
+      await renameAgentSession(agentSessionId, title)
+    }
+
+    const handleOpenSearchResult = (result: SessionTranscriptSearchResultSnippetDto) => {
+      setActiveView('agent')
+      setHistorySearchResult(result)
+      setHistoryTarget({
+        agentSessionId: result.agentSessionId,
+        runId: result.runId === 'session' ? null : result.runId,
+        source: 'search',
+        nonce: Date.now(),
+      })
+      if (!result.archived && result.agentSessionId !== activeProject.selectedAgentSessionId) {
+        handleSelectAgentSession(result.agentSessionId)
+      }
+    }
+
     const isExecutionVisible = activeView === 'execution'
     const getViewPaneClassName = (visible: boolean) =>
       cn(
@@ -380,6 +409,21 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           onCreateSession={handleCreateAgentSession}
           onArchiveSession={handleArchiveAgentSession}
           onOpenArchivedSessions={() => setArchivedSessionsOpen(true)}
+          onRenameSession={handleRenameAgentSession}
+          onSearchSessions={
+            resolvedAdapter.searchSessionTranscripts
+              ? async (query) => {
+                  const response = await resolvedAdapter.searchSessionTranscripts?.({
+                    projectId: activeProject.id,
+                    query,
+                    includeArchived: true,
+                    limit: 12,
+                  })
+                  return response?.results ?? []
+                }
+              : undefined
+          }
+          onOpenSearchResult={handleOpenSearchResult}
           pendingSessionId={pendingAgentSessionId}
           isCreating={isCreatingAgentSession}
           collapsed={activeView !== 'agent'}
@@ -458,6 +502,11 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
                   submitOpenAiCallback(flowId, { manualInput })
                 }
                 onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
+                historyTarget={historyTarget}
+                historySearchResult={historySearchResult}
+                onLoadSessionTranscript={resolvedAdapter.getSessionTranscript?.bind(resolvedAdapter)}
+                onExportSessionTranscript={resolvedAdapter.exportSessionTranscript?.bind(resolvedAdapter)}
+                onSaveSessionTranscriptExport={resolvedAdapter.saveSessionTranscriptExport?.bind(resolvedAdapter)}
               />
             </div>
           ) : null}

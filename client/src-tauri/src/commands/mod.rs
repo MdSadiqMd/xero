@@ -29,6 +29,7 @@ pub mod remove_project;
 pub mod resolve_operator_action;
 pub mod resume_operator_run;
 pub mod search_project;
+pub mod session_history;
 pub mod skills;
 pub mod solana;
 pub mod start_autonomous_run;
@@ -109,6 +110,10 @@ pub use remove_project::remove_project;
 pub use resolve_operator_action::resolve_operator_action;
 pub use resume_operator_run::resume_operator_run;
 pub use search_project::{replace_in_project, search_project};
+pub use session_history::{
+    export_session_transcript, get_session_transcript, save_session_transcript_export,
+    search_session_transcripts,
+};
 pub use skills::{
     list_skill_registry, reload_skill_registry, remove_plugin, remove_plugin_root, remove_skill,
     remove_skill_local_root, set_plugin_enabled, set_skill_enabled, update_github_skill_source,

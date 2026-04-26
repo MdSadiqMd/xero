@@ -79,6 +79,7 @@ const PHASE_LABELS: Record<ProvisionPhase, string> = {
 }
 
 interface Props {
+  active?: boolean
   platform: EmulatorPlatform
   onDismiss?: () => void
 }
@@ -92,7 +93,7 @@ interface Props {
 /// - iOS (macOS): Xcode / `xcrun` not found.
 /// - iOS (non-macOS): hidden entirely — the shell already hides the
 ///   titlebar button on those hosts.
-export function EmulatorMissingSdk({ platform, onDismiss }: Props) {
+export function EmulatorMissingSdk({ active = true, platform, onDismiss }: Props) {
   const [status, setStatus] = useState<SdkStatus | null>(null)
   const [isProbing, setIsProbing] = useState(false)
   const [provision, setProvision] = useState<ProvisionState>(IDLE_STATE)
@@ -100,7 +101,7 @@ export function EmulatorMissingSdk({ platform, onDismiss }: Props) {
   onDismissRef.current = onDismiss
 
   const probe = useCallback(async () => {
-    if (!isTauri()) return
+    if (!active || !isTauri()) return
     setIsProbing(true)
     try {
       const next = await invoke<SdkStatus>("emulator_sdk_status")
@@ -110,17 +111,18 @@ export function EmulatorMissingSdk({ platform, onDismiss }: Props) {
     } finally {
       setIsProbing(false)
     }
-  }, [])
+  }, [active])
 
   useEffect(() => {
+    if (!active) return
     void probe()
-  }, [probe])
+  }, [active, probe])
 
   // Subscribe to provisioning events so the panel reflects backend
   // progress even if the user navigates away and back. Also refresh
   // probe status when the backend signals SDK discovery changed.
   useEffect(() => {
-    if (!isTauri()) return
+    if (!active || !isTauri()) return
     let cancelled = false
     const unlisten: UnlistenFn[] = []
 
@@ -151,10 +153,10 @@ export function EmulatorMissingSdk({ platform, onDismiss }: Props) {
       cancelled = true
       unlisten.forEach((fn) => fn())
     }
-  }, [probe])
+  }, [active, probe])
 
   const provisionStart = useCallback(async () => {
-    if (!isTauri()) return
+    if (!active || !isTauri()) return
     setProvision({ ...IDLE_STATE, active: true, phase: "starting" })
     try {
       await invoke("emulator_android_provision")
@@ -168,9 +170,9 @@ export function EmulatorMissingSdk({ platform, onDismiss }: Props) {
         active: false,
       })
     }
-  }, [])
+  }, [active])
 
-  if (!status) return null
+  if (!active || !status) return null
 
   const shouldShowProvisionStream = platform === "android" && provision.active
   if (shouldShowProvisionStream) {

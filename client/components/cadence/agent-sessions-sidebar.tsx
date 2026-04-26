@@ -11,16 +11,30 @@ import {
 } from 'react'
 import {
   Archive,
+  FileText,
   Loader2,
   MessageSquare,
   MoreHorizontal,
+  Pencil,
   Pin,
   PinOff,
   Plus,
+  Search,
   Trash2,
 } from 'lucide-react'
+import { motion } from 'motion/react'
 
 import { cn } from '@/lib/utils'
+import { useSidebarMotion } from '@/lib/sidebar-motion'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,7 +42,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import type { AgentSessionView } from '@/src/lib/cadence-model'
+import type { SessionTranscriptSearchResultSnippetDto } from '@/src/lib/cadence-model/session-context'
 
 interface AgentSessionsSidebarProps {
   projectId: string | null
@@ -39,6 +55,9 @@ interface AgentSessionsSidebarProps {
   onCreateSession: () => void
   onArchiveSession: (agentSessionId: string) => void
   onOpenArchivedSessions: () => void
+  onRenameSession?: (agentSessionId: string, title: string) => Promise<void> | void
+  onSearchSessions?: (query: string) => Promise<SessionTranscriptSearchResultSnippetDto[]>
+  onOpenSearchResult?: (result: SessionTranscriptSearchResultSnippetDto) => void
   pendingSessionId?: string | null
   isCreating?: boolean
   collapsed?: boolean
@@ -123,6 +142,9 @@ export function AgentSessionsSidebar({
   onCreateSession,
   onArchiveSession,
   onOpenArchivedSessions,
+  onRenameSession,
+  onSearchSessions,
+  onOpenSearchResult,
   pendingSessionId,
   isCreating,
   collapsed = false,
@@ -136,6 +158,16 @@ export function AgentSessionsSidebar({
   const [width, setWidth] = useState(() => readPersistedWidth() ?? DEFAULT_WIDTH)
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
   const [isResizing, setIsResizing] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SessionTranscriptSearchResultSnippetDto[]>([])
+  const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [renameSession, setRenameSession] = useState<AgentSessionView | null>(null)
+  const [renameTitle, setRenameTitle] = useState('')
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [pendingRename, setPendingRename] = useState(false)
+  const targetWidth = collapsed ? 0 : width
+  const { widthTransition } = useSidebarMotion(isResizing)
   const widthRef = useRef(width)
   widthRef.current = width
 
@@ -157,6 +189,40 @@ export function AgentSessionsSidebar({
   useEffect(() => {
     writePersistedWidth(width)
   }, [width])
+
+  useEffect(() => {
+    if (!onSearchSessions) return
+    const query = searchQuery.trim()
+    if (query.length < 2) {
+      setSearchResults([])
+      setSearchStatus('idle')
+      setSearchError(null)
+      return
+    }
+
+    let cancelled = false
+    setSearchStatus('loading')
+    setSearchError(null)
+    const timeout = window.setTimeout(() => {
+      onSearchSessions(query)
+        .then((results) => {
+          if (cancelled) return
+          setSearchResults(results)
+          setSearchStatus('ready')
+        })
+        .catch((error) => {
+          if (cancelled) return
+          setSearchResults([])
+          setSearchStatus('error')
+          setSearchError(error instanceof Error ? error.message : 'Session search failed.')
+        })
+    }, 220)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeout)
+    }
+  }, [onSearchSessions, searchQuery])
 
   const handleResizeStart = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (collapsed || event.button !== 0) return
@@ -217,6 +283,32 @@ export function AgentSessionsSidebar({
     },
     [projectId],
   )
+
+  const handleOpenRename = useCallback((session: AgentSessionView) => {
+    setRenameSession(session)
+    setRenameTitle(session.title)
+    setRenameError(null)
+  }, [])
+
+  const handleRenameSubmit = useCallback(async () => {
+    if (!renameSession || !onRenameSession) return
+    const title = renameTitle.trim()
+    if (title.length === 0) {
+      setRenameError('Enter a session name.')
+      return
+    }
+
+    setPendingRename(true)
+    setRenameError(null)
+    try {
+      await onRenameSession(renameSession.agentSessionId, title)
+      setRenameSession(null)
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : 'Cadence could not rename this session.')
+    } finally {
+      setPendingRename(false)
+    }
+  }, [onRenameSession, renameSession, renameTitle])
 
   const isFirstSyncRef = useRef(true)
   const [entries, setEntries] = useState<SessionEntry[]>(() =>
@@ -310,21 +402,24 @@ export function AgentSessionsSidebar({
         onSelectSession={onSelectSession}
         onArchiveSession={onArchiveSession}
         onTogglePin={togglePinSession}
+        onRenameSession={onRenameSession ? handleOpenRename : undefined}
         canArchive={activeSessions.length > 1 && entry.state !== 'exiting'}
       />
     </li>
   )
 
   return (
-    <aside
+    <motion.aside
+      animate={{ borderRightWidth: collapsed ? 0 : 1, width: targetWidth }}
       aria-hidden={collapsed}
       className={cn(
-        'motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar',
-        !isResizing && 'transition-[width,border-color] motion-panel',
-        collapsed && 'w-0 border-r-transparent',
+        'motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar will-change-[width]',
+        collapsed && 'w-0',
       )}
+      initial={false}
       inert={collapsed ? true : undefined}
-      style={{ width: collapsed ? 0 : width }}
+      style={{ width: targetWidth }}
+      transition={widthTransition}
     >
       {!collapsed ? (
         <div
@@ -386,6 +481,66 @@ export function AgentSessionsSidebar({
           </div>
         </div>
 
+        {onSearchSessions ? (
+          <div className="shrink-0 border-b border-border/60 px-3 pb-2">
+            <label className="sr-only" htmlFor="agent-session-search">
+              Search sessions
+            </label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                id="agent-session-search"
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search sessions"
+                className="h-8 pl-7 text-xs"
+              />
+            </div>
+            {searchQuery.trim().length >= 2 ? (
+              <div className="mt-2 max-h-48 overflow-y-auto rounded-md border border-border/70 bg-background/80 p-1 scrollbar-thin">
+                {searchStatus === 'loading' ? (
+                  <div className="flex items-center gap-2 px-2 py-2 text-[11px] text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Searching…
+                  </div>
+                ) : searchStatus === 'error' ? (
+                  <div className="px-2 py-2 text-[11px] leading-5 text-destructive">{searchError}</div>
+                ) : searchResults.length > 0 ? (
+                  searchResults.map((result) => (
+                    <button
+                      key={result.resultId}
+                      type="button"
+                      className="flex w-full items-start gap-2 rounded px-2 py-2 text-left transition-colors hover:bg-secondary/60"
+                      onClick={() => {
+                        onOpenSearchResult?.(result)
+                        setSearchQuery('')
+                      }}
+                    >
+                      <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1 text-[11px] font-medium text-foreground">
+                          <span className="truncate">{result.runId}</span>
+                          {result.archived ? (
+                            <span className="rounded bg-secondary px-1 text-[9px] uppercase text-muted-foreground">
+                              archived
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="mt-1 line-clamp-2 block text-[10.5px] leading-4 text-muted-foreground">
+                          {result.snippet}
+                        </span>
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="px-2 py-2 text-[11px] text-muted-foreground">No matches</div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {entries.length === 0 ? (
             <div className="px-3 py-5 text-center text-[11px] leading-relaxed text-muted-foreground/80">
@@ -420,7 +575,48 @@ export function AgentSessionsSidebar({
           )}
         </div>
       </div>
-    </aside>
+      <Dialog open={renameSession !== null} onOpenChange={(open) => !open && setRenameSession(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename session</DialogTitle>
+            <DialogDescription>Change the session name shown in the project sidebar.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="agent-session-rename">
+              Name
+            </label>
+            <Input
+              id="agent-session-rename"
+              value={renameTitle}
+              onChange={(event) => setRenameTitle(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void handleRenameSubmit()
+                }
+              }}
+              disabled={pendingRename}
+              autoFocus
+            />
+            {renameError ? <p className="text-xs text-destructive">{renameError}</p> : null}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pendingRename}
+              onClick={() => setRenameSession(null)}
+            >
+              Cancel
+            </Button>
+            <Button type="button" disabled={pendingRename} onClick={() => void handleRenameSubmit()}>
+              {pendingRename ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </motion.aside>
   )
 }
 
@@ -441,6 +637,7 @@ interface AgentSessionsSidebarItemProps {
   onSelectSession: (agentSessionId: string) => void
   onArchiveSession: (agentSessionId: string) => void
   onTogglePin: (agentSessionId: string) => void
+  onRenameSession?: (session: AgentSessionView) => void
 }
 
 function AgentSessionsSidebarItem({
@@ -452,6 +649,7 @@ function AgentSessionsSidebarItem({
   onSelectSession,
   onArchiveSession,
   onTogglePin,
+  onRenameSession,
 }: AgentSessionsSidebarItemProps) {
   const formattedCreatedAt = formatRelativeDate(session.createdAt)
 
@@ -540,6 +738,17 @@ function AgentSessionsSidebarItem({
               </>
             )}
           </DropdownMenuItem>
+          {onRenameSession ? (
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault()
+                onRenameSession(session)
+              }}
+            >
+              <Pencil className="h-4 w-4" />
+              Rename
+            </DropdownMenuItem>
+          ) : null}
           {canArchive ? (
             <>
               <DropdownMenuSeparator />

@@ -2,7 +2,9 @@
 
 import { useCallback, useMemo, useRef, useState } from "react"
 import { ChevronRight, Play, Search } from "lucide-react"
+import { motion } from "motion/react"
 import { cn } from "@/lib/utils"
+import { useSidebarMotion } from "@/lib/sidebar-motion"
 import { Asteroids } from "./games/asteroids"
 import { Breakout } from "./games/breakout"
 import { Galaga } from "./games/galaga"
@@ -300,6 +302,8 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null)
+  const targetWidth = open ? width : 0
+  const { contentTransition, widthTransition } = useSidebarMotion(isResizing)
   const widthRef = useRef(width)
   widthRef.current = width
   const widthBeforeSelectRef = useRef<number | null>(null)
@@ -382,15 +386,16 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
   }, [query])
 
   return (
-    <aside
+    <motion.aside
+      animate={{ borderLeftWidth: open ? 1 : 0, width: targetWidth }}
       aria-hidden={!open}
       className={cn(
-        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar",
-        !isResizing && "transition-[width] motion-panel",
-        !open && "border-l-0",
+        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar will-change-[width]",
       )}
+      initial={false}
       inert={!open ? true : undefined}
-      style={{ width: open ? width : 0 }}
+      style={{ width: targetWidth }}
+      transition={widthTransition}
     >
       <div
         aria-label="Resize arcade sidebar"
@@ -413,12 +418,12 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
         className="flex h-full min-w-0 shrink-0 flex-col"
         style={{ width }}
       >
-      <div
-        className={cn(
-          "flex min-h-0 flex-1 flex-col animate-in fade-in-0 motion-standard",
-          viewDirectionRef.current === 1 ? "slide-in-from-right-3" : "slide-in-from-left-3",
-        )}
+      <motion.div
+        animate={{ opacity: 1, x: 0 }}
+        className="flex min-h-0 flex-1 flex-col"
+        initial={{ opacity: 0, x: viewDirectionRef.current * 12 }}
         key={selectedGame?.id ?? "__list__"}
+        transition={contentTransition}
       >
         {selectedGame ? (
           <GameDetail game={selectedGame} onBack={handleBack} />
@@ -431,9 +436,9 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
             total={GAMES.length}
           />
         )}
+      </motion.div>
       </div>
-      </div>
-    </aside>
+    </motion.aside>
   )
 }
 

@@ -19,7 +19,12 @@ import {
   Wallet,
   Zap,
 } from "lucide-react"
+import { motion } from "motion/react"
 import { cn } from "@/lib/utils"
+import {
+  useDeferredSidebarActivation,
+  useSidebarMotion,
+} from "@/lib/sidebar-motion"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -56,7 +61,6 @@ import {
 const MIN_WIDTH = 360
 const DEFAULT_WIDTH = 440
 const MAX_WIDTH = 900
-const SIDEBAR_OPEN_ACTIVATION_DELAY_MS = 180
 const STORAGE_KEY = "cadence.solana.workbench.width"
 
 type TabId =
@@ -102,26 +106,18 @@ function writePersistedWidth(value: number) {
 export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
   const [width, setWidth] = useState<number>(() => readPersistedWidth() ?? DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
-  const [workbenchActive, setWorkbenchActive] = useState(open)
+  const {
+    activateAfterAnimation: activateWorkbenchAfterAnimation,
+    active: workbenchActive,
+  } = useDeferredSidebarActivation(open)
+  const targetWidth = open ? width : 0
+  const { widthTransition } = useSidebarMotion(isResizing)
   const widthRef = useRef(width)
   widthRef.current = width
 
   const workbench = useSolanaWorkbench({ active: workbenchActive })
   const [selectedKind, setSelectedKind] = useState<ClusterKind>("localnet")
   const [activeTab, setActiveTab] = useState<TabId>("personas")
-
-  useEffect(() => {
-    if (!open) {
-      setWorkbenchActive(false)
-      return
-    }
-
-    const activationTimer = window.setTimeout(
-      () => setWorkbenchActive(true),
-      SIDEBAR_OPEN_ACTIVATION_DELAY_MS,
-    )
-    return () => window.clearTimeout(activationTimer)
-  }, [open])
 
   useEffect(() => {
     if (!workbench.clusters.length) return
@@ -558,15 +554,17 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
   const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label ?? "Personas"
 
   return (
-    <aside
+    <motion.aside
+      animate={{ borderLeftWidth: open ? 1 : 0, width: targetWidth }}
       aria-hidden={!open}
       className={cn(
-        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar",
-        !isResizing && "transition-[width] motion-panel",
-        !open && "border-l-0",
+        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar will-change-[width]",
       )}
+      initial={false}
       inert={!open ? true : undefined}
-      style={{ width: open ? width : 0 }}
+      onAnimationComplete={activateWorkbenchAfterAnimation}
+      style={{ width: targetWidth }}
+      transition={widthTransition}
     >
       <div
         aria-label="Resize Solana workbench sidebar"
@@ -623,14 +621,15 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
         </button>
       </div>
 
-      <SolanaMissingToolchain
-        installEvent={workbench.toolchainInstallEvent}
-        installing={workbench.toolchainInstalling}
-        loading={workbench.toolchainLoading}
-        onInstall={() => void workbench.installToolchain()}
-        onRefresh={() => void workbench.refreshToolchain()}
-        status={workbench.toolchain}
-      />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <SolanaMissingToolchain
+          installEvent={workbench.toolchainInstallEvent}
+          installing={workbench.toolchainInstalling}
+          loading={workbench.toolchainLoading}
+          onInstall={() => void workbench.installToolchain()}
+          onRefresh={() => void workbench.refreshToolchain()}
+          status={workbench.toolchain}
+        />
 
       <div className="flex min-h-0 flex-1">
         <div
@@ -952,7 +951,8 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
         </div>
       </div>
       </div>
-    </aside>
+      </div>
+    </motion.aside>
   )
 }
 

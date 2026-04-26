@@ -7,9 +7,10 @@ import {
   type PointerEvent,
 } from 'react'
 import { Loader2, MoreHorizontal, Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { motion, useReducedMotion, type Transition } from 'motion/react'
+import { motion, type Transition } from 'motion/react'
 
 import { cn } from '@/lib/utils'
+import { useSidebarMotion } from '@/lib/sidebar-motion'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,11 +36,6 @@ const DEFAULT_WIDTH = 224
 const MAX_WIDTH = 480
 const RIGHT_PADDING = 360
 const STORAGE_KEY = 'cadence.projectRail.width'
-const RAIL_REVEAL_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1]
-const RAIL_WIDTH_SPRING: Transition = { type: 'spring', stiffness: 520, damping: 48, mass: 0.78 }
-const RAIL_LAYOUT_SPRING: Transition = { type: 'spring', stiffness: 620, damping: 52, mass: 0.82 }
-const RAIL_REVEAL_TRANSITION: Transition = { duration: 0.16, ease: RAIL_REVEAL_EASE }
-const INSTANT_TRANSITION: Transition = { duration: 0 }
 
 interface ProjectRailProps {
   projects: ProjectListItem[]
@@ -104,11 +100,12 @@ export function ProjectRail({
   const [width, setWidth] = useState(() => readPersistedWidth() ?? DEFAULT_WIDTH)
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
   const [isResizing, setIsResizing] = useState(false)
-  const shouldReduceMotion = useReducedMotion()
   const targetWidth = collapsed ? COLLAPSED_WIDTH : width
-  const railWidthTransition = isResizing || shouldReduceMotion ? INSTANT_TRANSITION : RAIL_WIDTH_SPRING
-  const railLayoutTransition = shouldReduceMotion ? INSTANT_TRANSITION : RAIL_LAYOUT_SPRING
-  const railContentTransition = shouldReduceMotion ? INSTANT_TRANSITION : RAIL_REVEAL_TRANSITION
+  const {
+    contentTransition: railContentTransition,
+    layoutTransition: railLayoutTransition,
+    widthTransition: railWidthTransition,
+  } = useSidebarMotion(isResizing)
   const widthRef = useRef(width)
   widthRef.current = width
 

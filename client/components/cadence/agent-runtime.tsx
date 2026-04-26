@@ -4,8 +4,13 @@ import { useMemo } from 'react'
 
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
+  ExportSessionTranscriptRequestDto,
+  GetSessionTranscriptRequestDto,
   RuntimeRunView,
   RuntimeSessionView,
+  SessionTranscriptDto,
+  SessionTranscriptExportResponseDto,
+  SessionTranscriptSearchResultSnippetDto,
   UpsertNotificationRouteRequestDto,
 } from '@/src/lib/cadence-model'
 import {
@@ -38,6 +43,10 @@ import {
 } from './agent-runtime/runtime-stream-helpers'
 import { displayValue, formatSequence } from './agent-runtime/shared-helpers'
 import { SetupEmptyState } from './agent-runtime/setup-empty-state'
+import {
+  SessionHistorySection,
+  type SessionHistoryTarget,
+} from './agent-runtime/session-history-section'
 import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-controller'
 
 interface AgentRuntimeProps {
@@ -71,6 +80,13 @@ interface AgentRuntimeProps {
   onUpsertNotificationRoute?: (
     request: Omit<UpsertNotificationRouteRequestDto, 'projectId'>,
   ) => Promise<unknown>
+  historyTarget?: SessionHistoryTarget | null
+  historySearchResult?: SessionTranscriptSearchResultSnippetDto | null
+  onLoadSessionTranscript?: (request: GetSessionTranscriptRequestDto) => Promise<SessionTranscriptDto>
+  onExportSessionTranscript?: (
+    request: ExportSessionTranscriptRequestDto,
+  ) => Promise<SessionTranscriptExportResponseDto>
+  onSaveSessionTranscriptExport?: (request: { path: string; content: string }) => Promise<void>
 }
 
 const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItems']> = []
@@ -85,6 +101,11 @@ export function AgentRuntime({
   onStartRuntimeSession,
   onResolveOperatorAction,
   onResumeOperatorRun,
+  historyTarget,
+  historySearchResult,
+  onLoadSessionTranscript,
+  onExportSessionTranscript,
+  onSaveSessionTranscriptExport,
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
   const runtimeRun = agent.runtimeRun ?? null
@@ -240,6 +261,10 @@ export function AgentRuntime({
   )
   const promptInputLabel = controller.promptInputAvailable ? 'Agent input' : 'Agent input unavailable'
   const sendButtonLabel = controller.promptInputAvailable ? 'Send message' : 'Send message unavailable'
+  const selectedAgentSession = useMemo(() => {
+    const targetSessionId = historyTarget?.agentSessionId ?? agent.project.selectedAgentSessionId
+    return agent.project.agentSessions.find((session) => session.agentSessionId === targetSessionId) ?? null
+  }, [agent.project.agentSessions, agent.project.selectedAgentSessionId, historyTarget?.agentSessionId])
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -255,6 +280,15 @@ export function AgentRuntime({
             <SetupEmptyState onOpenSettings={onOpenSettings} />
           ) : (
             <div className="mx-auto flex max-w-4xl flex-col gap-4">
+              <SessionHistorySection
+                projectId={agent.project.id}
+                selectedSession={selectedAgentSession}
+                historyTarget={historyTarget}
+                searchResult={historySearchResult}
+                onLoadTranscript={onLoadSessionTranscript}
+                onExportTranscript={onExportSessionTranscript}
+                onSaveTranscriptExport={onSaveSessionTranscriptExport}
+              />
               {hasAgentFeedSurface ? (
                 <AgentFeedSection
                   activityItems={activityItems}

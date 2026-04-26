@@ -4,8 +4,10 @@ import * as React from 'react'
 import { Slot } from '@radix-ui/react-slot'
 import { cva, VariantProps } from 'class-variance-authority'
 import { PanelLeftIcon } from 'lucide-react'
+import { motion } from 'motion/react'
 
 import { useIsMobile } from '@/hooks/use-mobile'
+import { useSidebarMotion } from '@/lib/sidebar-motion'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -164,6 +166,8 @@ function Sidebar({
   collapsible?: 'offcanvas' | 'icon' | 'none'
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const { layoutTransition } = useSidebarMotion()
+  const motionContainerProps = props as React.ComponentProps<typeof motion.div>
 
   if (collapsible === 'none') {
     return (
@@ -215,21 +219,23 @@ function Sidebar({
       data-slot="sidebar"
     >
       {/* This is what handles the sidebar gap on desktop */}
-      <div
+      <motion.div
         data-slot="sidebar-gap"
         className={cn(
-          'relative w-(--sidebar-width) bg-transparent transition-[width] motion-panel',
+          'relative w-(--sidebar-width) bg-transparent will-change-[width]',
           'group-data-[collapsible=offcanvas]:w-0',
           'group-data-[side=right]:rotate-180',
           variant === 'floating' || variant === 'inset'
             ? 'group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4)))]'
             : 'group-data-[collapsible=icon]:w-(--sidebar-width-icon)',
         )}
+        layout
+        transition={layoutTransition}
       />
-      <div
+      <motion.div
         data-slot="sidebar-container"
         className={cn(
-          'fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] motion-panel md:flex',
+          'fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) will-change-[left,right,width] md:flex',
           side === 'left'
             ? 'left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
             : 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
@@ -239,7 +245,9 @@ function Sidebar({
             : 'group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l',
           className,
         )}
-        {...props}
+        layout
+        transition={layoutTransition}
+        {...motionContainerProps}
       >
         <div
           data-sidebar="sidebar"
@@ -248,7 +256,7 @@ function Sidebar({
         >
           {children}
         </div>
-      </div>
+      </motion.div>
     </div>
   )
 }

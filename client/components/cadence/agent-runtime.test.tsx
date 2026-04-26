@@ -1,16 +1,22 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { openUrlMock } = vi.hoisted(() => ({
+const { openUrlMock, saveDialogMock } = vi.hoisted(() => ({
   openUrlMock: vi.fn(),
+  saveDialogMock: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/plugin-opener', () => ({
   openUrl: openUrlMock,
 }))
 
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  save: saveDialogMock,
+}))
+
 afterEach(() => {
   openUrlMock.mockReset()
+  saveDialogMock.mockReset()
 })
 
 if (!HTMLElement.prototype.hasPointerCapture) {
@@ -28,10 +34,13 @@ if (!HTMLElement.prototype.releasePointerCapture) {
 import { AgentRuntime } from '@/components/cadence/agent-runtime'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
+  AgentSessionView,
   ProjectDetailView,
   RuntimeRunView,
   RuntimeSessionView,
   RuntimeStreamView,
+  SessionTranscriptDto,
+  SessionTranscriptExportResponseDto,
 } from '@/src/lib/cadence-model'
 
 type CheckpointControlLoopCard = NonNullable<AgentPaneView['checkpointControlLoop']>['items'][number]
@@ -94,6 +103,27 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
   }
 }
 
+function makeAgentSession(overrides: Partial<AgentSessionView> = {}): AgentSessionView {
+  return {
+    projectId: 'project-1',
+    agentSessionId: 'agent-session-main',
+    title: 'History session',
+    summary: 'Session with durable run history',
+    status: 'active',
+    statusLabel: 'Active',
+    selected: true,
+    createdAt: '2026-04-26T10:00:00Z',
+    updatedAt: '2026-04-26T11:00:00Z',
+    archivedAt: null,
+    lastRunId: 'run-history-2',
+    lastRuntimeKind: 'owned_agent',
+    lastProviderId: 'openrouter',
+    isActive: true,
+    isArchived: false,
+    ...overrides,
+  }
+}
+
 function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): RuntimeSessionView {
   return {
     projectId: 'project-1',
@@ -119,6 +149,94 @@ function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): Runtim
     isSignedOut: false,
     isFailed: false,
     ...overrides,
+  }
+}
+
+function makeSessionTranscript(): SessionTranscriptDto {
+  const redaction = {
+    redactionClass: 'public' as const,
+    redacted: false,
+    reason: null,
+  }
+  const baseItem = {
+    contractVersion: 1 as const,
+    projectId: 'project-1',
+    agentSessionId: 'agent-session-main',
+    providerId: 'openrouter',
+    modelId: 'openai/gpt-5.4',
+    sourceKind: 'owned_agent' as const,
+    sourceTable: 'agent_runs',
+    kind: 'message' as const,
+    actor: 'user' as const,
+    summary: null,
+    toolCallId: null,
+    toolName: null,
+    toolState: null,
+    filePath: null,
+    checkpointKind: null,
+    actionId: null,
+    redaction,
+  }
+
+  return {
+    contractVersion: 1,
+    projectId: 'project-1',
+    agentSessionId: 'agent-session-main',
+    title: 'History session',
+    summary: 'Session with durable run history',
+    status: 'active',
+    archived: false,
+    archivedAt: null,
+    runs: [
+      {
+        projectId: 'project-1',
+        agentSessionId: 'agent-session-main',
+        runId: 'run-history-1',
+        providerId: 'openrouter',
+        modelId: 'openai/gpt-5.4',
+        status: 'completed',
+        startedAt: '2026-04-26T10:00:00Z',
+        completedAt: '2026-04-26T10:05:00Z',
+        itemCount: 1,
+        usageTotals: null,
+      },
+      {
+        projectId: 'project-1',
+        agentSessionId: 'agent-session-main',
+        runId: 'run-history-2',
+        providerId: 'openrouter',
+        modelId: 'openai/gpt-5.4',
+        status: 'completed',
+        startedAt: '2026-04-26T11:00:00Z',
+        completedAt: '2026-04-26T11:05:00Z',
+        itemCount: 1,
+        usageTotals: null,
+      },
+    ],
+    items: [
+      {
+        ...baseItem,
+        itemId: 'run_prompt:run-history-1',
+        runId: 'run-history-1',
+        sourceId: 'run-history-1',
+        sequence: 1,
+        createdAt: '2026-04-26T10:00:00Z',
+        title: 'Run prompt',
+        text: 'First run prompt',
+      },
+      {
+        ...baseItem,
+        itemId: 'run_prompt:run-history-2',
+        runId: 'run-history-2',
+        sourceId: 'run-history-2',
+        sequence: 2,
+        createdAt: '2026-04-26T11:00:00Z',
+        title: 'Run prompt',
+        text: 'Second run prompt',
+      },
+    ],
+    usageTotals: null,
+    redaction,
   }
 }
 
@@ -2107,5 +2225,103 @@ describe('AgentRuntime current UI', () => {
       }),
     )
     expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('Approval · yolo')
+  })
+
+  it('loads session history, navigates prior runs, and exports the selected run', async () => {
+    const transcript = makeSessionTranscript()
+    const redaction = {
+      redactionClass: 'public' as const,
+      redacted: false,
+      reason: null,
+    }
+    const onLoadSessionTranscript = vi.fn(async () => transcript)
+    const onExportSessionTranscript = vi.fn(
+      async (request: { runId?: string | null; format: 'markdown' | 'json' }) =>
+        ({
+          payload: {
+            contractVersion: 1,
+            exportId: `export-${request.format}`,
+            generatedAt: '2026-04-26T12:00:00Z',
+            scope: request.runId ? 'run' : 'session',
+            format: request.format,
+            transcript,
+            contextSnapshot: null,
+            redaction,
+          },
+          content: `${request.format} export for ${request.runId ?? 'session'}`,
+          mimeType: request.format === 'json' ? 'application/json' : 'text/markdown',
+          suggestedFileName: request.format === 'json' ? 'history.json' : 'history.md',
+        }) satisfies SessionTranscriptExportResponseDto,
+    )
+    const onSaveSessionTranscriptExport = vi.fn(async () => undefined)
+    const clipboardWrite = vi.fn(async () => undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboardWrite },
+    })
+    saveDialogMock.mockResolvedValue('/tmp/history.json')
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          project: makeProject({
+            agentSessions: [makeAgentSession()],
+            selectedAgentSession: makeAgentSession(),
+            selectedAgentSessionId: 'agent-session-main',
+          }),
+        })}
+        historyTarget={{
+          agentSessionId: 'agent-session-main',
+          runId: 'run-history-1',
+          source: 'search',
+          nonce: 1,
+        }}
+        historySearchResult={{
+          contractVersion: 1,
+          resultId: 'item:run-history-1:run_prompt',
+          projectId: 'project-1',
+          agentSessionId: 'agent-session-main',
+          runId: 'run-history-1',
+          itemId: 'run_prompt:run-history-1',
+          archived: false,
+          rank: 0,
+          matchedFields: ['text'],
+          snippet: 'First run prompt',
+          redaction,
+        }}
+        onLoadSessionTranscript={onLoadSessionTranscript}
+        onExportSessionTranscript={onExportSessionTranscript}
+        onSaveSessionTranscriptExport={onSaveSessionTranscriptExport}
+      />,
+    )
+
+    expect(await screen.findByText('History session')).toBeVisible()
+    expect(onLoadSessionTranscript).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      runId: null,
+    })
+    expect(screen.getAllByText('First run prompt').length).toBeGreaterThanOrEqual(1)
+
+    fireEvent.click(screen.getByRole('button', { name: /run-history-2/i }))
+    expect(await screen.findByText('Second run prompt')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith('markdown export for run-history-2'))
+    expect(onExportSessionTranscript).toHaveBeenLastCalledWith({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      runId: 'run-history-2',
+      format: 'markdown',
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'JSON' }))
+    await waitFor(() =>
+      expect(onSaveSessionTranscriptExport).toHaveBeenCalledWith({
+        path: '/tmp/history.json',
+        content: 'json export for run-history-2',
+      }),
+    )
   })
 })

@@ -14,6 +14,7 @@ import {
   RotateCcw,
   X,
 } from "lucide-react"
+import { motion } from "motion/react"
 import type {
   GitCommitResponseDto,
   GitFetchResponseDto,
@@ -26,6 +27,7 @@ import type {
 import { getLangFromPath, tokenizeCode, type TokenizedLine } from "@/lib/shiki"
 import { useTheme } from "@/src/features/theme/theme-provider"
 import { cn } from "@/lib/utils"
+import { useSidebarMotion } from "@/lib/sidebar-motion"
 
 const MIN_WIDTH = 600
 const DEFAULT_WIDTH_RATIO = 0.7
@@ -86,6 +88,7 @@ export function VcsSidebar(props: VcsSidebarProps) {
   const shouldRenderDiffPane = (props.status?.entries.length ?? 0) > 0
   const [width, setWidth] = useState<number>(() => defaultViewportWidth())
   const [isResizing, setIsResizing] = useState(false)
+  const { contentTransition, widthTransition } = useSidebarMotion(isResizing)
   const widthRef = useRef(width)
   widthRef.current = width
   const renderedWidth = shouldRenderDiffPane ? width : FILE_LIST_WIDTH
@@ -163,26 +166,30 @@ export function VcsSidebar(props: VcsSidebarProps) {
   return (
     <>
       {/* Backdrop: dims the underlying app and dismisses the panel on click. */}
-      <div
+      <motion.div
+        animate={{ opacity: open ? 1 : 0 }}
         aria-hidden="true"
         className={cn(
-          "pointer-events-none fixed inset-x-0 top-11 bottom-8 z-40 bg-black/30 transition-opacity",
-          open ? "opacity-100 pointer-events-auto" : "opacity-0",
+          "fixed inset-x-0 top-11 bottom-8 z-40 bg-black/30",
+          open ? "pointer-events-auto" : "pointer-events-none",
         )}
+        initial={false}
         onClick={() => props.onClose?.()}
+        transition={contentTransition}
       />
-      <aside
+      <motion.aside
+        animate={{ width: renderedWidth, x: open ? 0 : renderedWidth }}
         aria-hidden={!open}
         aria-label="Source control panel"
         className={cn(
-          "fixed top-11 bottom-8 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl",
-          !isResizing && "transition-transform motion-panel",
+          "fixed top-11 bottom-8 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl will-change-[transform,width]",
         )}
+        initial={false}
         inert={!open ? true : undefined}
         style={{
           width: renderedWidth,
-          transform: open ? "translateX(0)" : `translateX(${renderedWidth}px)`,
         }}
+        transition={widthTransition}
       >
         {shouldRenderDiffPane ? (
           <div
@@ -204,7 +211,7 @@ export function VcsSidebar(props: VcsSidebarProps) {
         ) : null}
 
         {open ? <VcsSidebarBody {...props} /> : null}
-      </aside>
+      </motion.aside>
     </>
   )
 }
