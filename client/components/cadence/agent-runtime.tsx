@@ -64,6 +64,7 @@ import {
   type SessionHistoryTarget,
 } from './agent-runtime/session-history-section'
 import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-controller'
+import type { SpeechDictationAdapter } from './agent-runtime/use-speech-dictation'
 
 interface AgentRuntimeProps {
   agent: AgentPaneView
@@ -124,6 +125,7 @@ interface AgentRuntimeProps {
   ) => Promise<ExtractSessionMemoryCandidatesResponseDto>
   onUpdateSessionMemory?: (request: UpdateSessionMemoryRequestDto) => Promise<SessionMemoryRecordDto>
   onDeleteSessionMemory?: (request: DeleteSessionMemoryRequestDto) => Promise<void>
+  desktopAdapter?: SpeechDictationAdapter
 }
 
 const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItems']> = []
@@ -151,6 +153,7 @@ export function AgentRuntime({
   onExtractSessionMemoryCandidates,
   onUpdateSessionMemory,
   onDeleteSessionMemory,
+  desktopAdapter,
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
   const runtimeRun = agent.runtimeRun ?? null
@@ -220,6 +223,8 @@ export function AgentRuntime({
     canStartRuntimeSession,
     canStopRuntimeRun,
     actionRequiredItems,
+    dictationAdapter: desktopAdapter,
+    dictationScopeKey: `${agent.project.id}:${agent.project.selectedAgentSessionId ?? 'none'}`,
     onStartRuntimeRun,
     onStartRuntimeSession,
     onUpdateRuntimeRunControls: canMutateRuntimeRun ? onUpdateRuntimeRunControls : undefined,
@@ -402,6 +407,7 @@ export function AgentRuntime({
           composerThinkingOptions={composerThinkingOptions}
           composerThinkingPlaceholder={composerThinkingPlaceholder}
           controlsDisabled={controller.areControlsDisabled}
+          dictation={controller.dictation}
           draftPrompt={controller.draftPrompt}
           isPromptDisabled={controller.isPromptDisabled}
           isSendDisabled={!controller.canSubmitPrompt}
@@ -413,6 +419,7 @@ export function AgentRuntime({
           onSubmitDraftPrompt={() => void controller.handleSubmitDraftPrompt()}
           pendingRuntimeRunAction={agent.pendingRuntimeRunAction ?? null}
           placeholder={composerPlaceholder}
+          promptInputRef={controller.promptInputRef}
           promptInputLabel={promptInputLabel}
           runtimeSessionBindInFlight={controller.runtimeSessionBindInFlight}
           runtimeRunActionError={controller.runtimeRunActionError}

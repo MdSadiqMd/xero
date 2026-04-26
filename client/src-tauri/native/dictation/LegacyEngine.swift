@@ -30,6 +30,7 @@ final class CadenceLegacyDictationEngine {
     }
 
     private static let recognitionWindow: DispatchTimeInterval = .seconds(55)
+    private static let rolloverActivityGraceNanoseconds: UInt64 = 5_000_000_000
 
     private let sessionId: String
     private let localeIdentifier: String
@@ -54,6 +55,7 @@ final class CadenceLegacyDictationEngine {
     private var lastTaskTranscript = ""
     private var hasDetectedSpeech = false
     private var hasFinalResult = false
+    private var lastSpeechActivityUptime: UInt64?
     private var emittedText = false
     private var terminalEventEmitted = false
 
@@ -299,6 +301,7 @@ final class CadenceLegacyDictationEngine {
         lastTaskTranscript = ""
         hasDetectedSpeech = false
         hasFinalResult = false
+        lastSpeechActivityUptime = nil
         recognitionRequest = request
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -378,6 +381,7 @@ final class CadenceLegacyDictationEngine {
 
         if let text = update.text, !text.isEmpty {
             hasDetectedSpeech = true
+            lastSpeechActivityUptime = DispatchTime.now().uptimeNanoseconds
             emittedText = true
             sequence += 1
 
@@ -428,7 +432,7 @@ final class CadenceLegacyDictationEngine {
             return
         }
 
-        if hasDetectedSpeech && !hasFinalResult {
+        if hasDetectedSpeech && !hasFinalResult && hasRecentSpeechActivityOnQueue() {
             commitLastPartialAsFinalOnQueue()
             stopCurrentTaskForRolloverOnQueue()
             do {
@@ -446,6 +450,16 @@ final class CadenceLegacyDictationEngine {
         }
 
         _ = stopOnQueue(cancelled: false, reason: "user")
+    }
+
+    private func hasRecentSpeechActivityOnQueue() -> Bool {
+        guard let lastSpeechActivityUptime else {
+            return false
+        }
+
+        let now = DispatchTime.now().uptimeNanoseconds
+        return now >= lastSpeechActivityUptime
+            && now - lastSpeechActivityUptime <= Self.rolloverActivityGraceNanoseconds
     }
 
     private func stopCurrentTaskForRolloverOnQueue() {

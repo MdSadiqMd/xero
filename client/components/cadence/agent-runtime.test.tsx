@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openUrlMock, saveDialogMock } = vi.hoisted(() => ({
@@ -33,7 +33,9 @@ if (!HTMLElement.prototype.releasePointerCapture) {
 }
 
 import { AgentRuntime } from '@/components/cadence/agent-runtime'
+import type { SpeechDictationAdapter } from '@/components/cadence/agent-runtime/use-speech-dictation'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
+import type { DictationEventDto, DictationStatusDto } from '@/src/lib/cadence-model/dictation'
 import type {
   AgentSessionView,
   AgentSessionBranchResponseDto,
@@ -977,6 +979,77 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     messagesUnavailableReason:
       overrides.messagesUnavailableReason ?? 'Cadence authenticated this project, but the live runtime stream has not started yet.',
     ...overrides,
+  }
+}
+
+function makeDictationStatus(overrides: Partial<DictationStatusDto> = {}): DictationStatusDto {
+  return {
+    platform: 'macos',
+    defaultLocale: 'en_US',
+    modern: {
+      available: false,
+      compiled: false,
+      runtimeSupported: false,
+      reason: 'modern_sdk_unavailable',
+    },
+    legacy: {
+      available: true,
+      compiled: true,
+      runtimeSupported: true,
+      reason: null,
+    },
+    microphonePermission: 'authorized',
+    speechPermission: 'authorized',
+    activeSession: null,
+    ...overrides,
+  }
+}
+
+function createDictationAdapter(options: {
+  status?: DictationStatusDto
+  stop?: () => Promise<void>
+  cancel?: () => Promise<void>
+} = {}) {
+  let eventHandler: ((event: DictationEventDto) => void) | null = null
+  const session = {
+    response: {
+      sessionId: 'dictation-session-1',
+      engine: 'legacy' as const,
+      locale: 'en_US',
+    },
+    unsubscribe: vi.fn(),
+    stop: vi.fn(options.stop ?? (async () => undefined)),
+    cancel: vi.fn(options.cancel ?? (async () => undefined)),
+  }
+  const adapter: SpeechDictationAdapter = {
+    isDesktopRuntime: () => true,
+    speechDictationStatus: vi.fn(async () => options.status ?? makeDictationStatus()),
+    speechDictationStart: vi.fn(async (_request, handler) => {
+      eventHandler = handler
+      handler({
+        kind: 'started',
+        sessionId: session.response.sessionId,
+        engine: 'legacy',
+        locale: 'en_US',
+      })
+      return session
+    }),
+    speechDictationStop: vi.fn(async () => undefined),
+    speechDictationCancel: vi.fn(async () => undefined),
+  }
+
+  return {
+    adapter,
+    session,
+    emit(event: DictationEventDto) {
+      if (!eventHandler) {
+        throw new Error('Dictation session has not started.')
+      }
+
+      act(() => {
+        eventHandler?.(event)
+      })
+    },
   }
 }
 
@@ -2561,6 +2634,173 @@ describe('AgentRuntime current UI', () => {
         },
       }),
     )
+  })
+
+  it('keeps the dictation mic hidden without native macOS support', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+        })}
+        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Start dictation' })).not.toBeInTheDocument()
+  })
+
+  it('streams dictated partials into the composer without duplicating revised fragments', async () => {
+    const dictation = createDictationAdapter()
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+        })}
+        desktopAdapter={dictation.adapter}
+        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    const input = screen.getByLabelText('Agent input')
+    fireEvent.change(input, { target: { value: 'Review' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Start dictation' }))
+
+    await waitFor(() => expect(dictation.adapter.speechDictationStart).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop dictation' })).toHaveAttribute('aria-pressed', 'true'))
+    await waitFor(() => expect(input).toHaveFocus())
+
+    dictation.emit({
+      kind: 'partial',
+      sessionId: 'dictation-session-1',
+      text: 'the logs',
+      sequence: 1,
+    })
+    expect(input).toHaveValue('Review the logs')
+
+    dictation.emit({
+      kind: 'partial',
+      sessionId: 'dictation-session-1',
+      text: 'the logs carefully',
+      sequence: 2,
+    })
+    expect(input).toHaveValue('Review the logs carefully')
+
+    dictation.emit({
+      kind: 'final',
+      sessionId: 'dictation-session-1',
+      text: 'the logs carefully before sending',
+      sequence: 3,
+    })
+    expect(input).toHaveValue('Review the logs carefully before sending')
+  })
+
+  it('appends new dictated partials after manual edits during dictation', async () => {
+    const dictation = createDictationAdapter()
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+        })}
+        desktopAdapter={dictation.adapter}
+        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun())}
+      />,
+    )
+
+    const input = screen.getByLabelText('Agent input')
+    fireEvent.change(input, { target: { value: 'Draft' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Start dictation' }))
+    await waitFor(() => expect(dictation.adapter.speechDictationStart).toHaveBeenCalledTimes(1))
+
+    dictation.emit({
+      kind: 'partial',
+      sessionId: 'dictation-session-1',
+      text: 'first phrase',
+      sequence: 1,
+    })
+    expect(input).toHaveValue('Draft first phrase')
+
+    fireEvent.change(input, { target: { value: 'Draft with manual edit' } })
+
+    dictation.emit({
+      kind: 'partial',
+      sessionId: 'dictation-session-1',
+      text: 'second phrase',
+      sequence: 2,
+    })
+    expect(input).toHaveValue('Draft with manual edit second phrase')
+  })
+
+  it('stops active dictation before submitting the composer draft', async () => {
+    const calls: string[] = []
+    const dictation = createDictationAdapter({
+      stop: async () => {
+        calls.push('stop')
+      },
+    })
+    const onUpdateRuntimeRunControls = vi.fn(async () => {
+      calls.push('submit')
+      return makeRuntimeRun()
+    })
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+        })}
+        desktopAdapter={dictation.adapter}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('Agent input'), {
+      target: { value: 'Send after stopping dictation.' },
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Start dictation' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop dictation' })).toBeVisible())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => expect(onUpdateRuntimeRunControls).toHaveBeenCalledTimes(1))
+    expect(dictation.session.stop).toHaveBeenCalledTimes(1)
+    expect(calls).toEqual(['stop', 'submit'])
+  })
+
+  it('cancels active dictation when the selected agent session changes', async () => {
+    const dictation = createDictationAdapter()
+    const onUpdateRuntimeRunControls = vi.fn(async () => makeRuntimeRun())
+    const { rerender } = render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+        })}
+        desktopAdapter={dictation.adapter}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start dictation' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop dictation' })).toBeVisible())
+
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          project: makeProject({ selectedAgentSessionId: 'agent-session-next' }),
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun(),
+        })}
+        desktopAdapter={dictation.adapter}
+        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+      />,
+    )
+
+    await waitFor(() => expect(dictation.session.cancel).toHaveBeenCalledTimes(1))
   })
 
   it('loads session history, navigates prior runs, and exports the selected run', async () => {

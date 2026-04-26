@@ -1,5 +1,5 @@
-import { Activity, ArrowUp, LoaderCircle } from 'lucide-react'
-import type { KeyboardEvent } from 'react'
+import { Activity, ArrowUp, LoaderCircle, Mic } from 'lucide-react'
+import type { KeyboardEvent, RefObject } from 'react'
 
 import type {
   OperatorActionErrorView,
@@ -23,16 +23,34 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { cn } from '@/lib/utils'
 
 import type {
   ComposerApprovalOption,
   ComposerModelGroup,
   ComposerThinkingOption,
 } from './composer-helpers'
+import type { SpeechDictationPhase } from './use-speech-dictation'
+
+interface ComposerDictationControl {
+  isVisible: boolean
+  phase: SpeechDictationPhase
+  isListening: boolean
+  isToggleDisabled: boolean
+  ariaLabel: string
+  tooltip: string
+  toggle: () => Promise<void>
+}
 
 interface ComposerDockProps {
   placeholder: string
   draftPrompt: string
+  promptInputRef: RefObject<HTMLTextAreaElement | null>
   promptInputLabel: string
   sendButtonLabel: string
   isPromptDisabled: boolean
@@ -51,6 +69,7 @@ interface ComposerDockProps {
   pendingRuntimeRunAction: RuntimeRunActionKind | null
   runtimeRunActionError: OperatorActionErrorView | null
   runtimeRunActionErrorTitle: string
+  dictation: ComposerDictationControl
   onOpenDiagnostics?: () => void
   onDraftPromptChange: (value: string) => void
   onSubmitDraftPrompt: () => void
@@ -69,6 +88,7 @@ const composerInlineSelectContentClassName =
 export function ComposerDock({
   placeholder,
   draftPrompt,
+  promptInputRef,
   promptInputLabel,
   sendButtonLabel,
   isPromptDisabled,
@@ -87,6 +107,7 @@ export function ComposerDock({
   pendingRuntimeRunAction,
   runtimeRunActionError,
   runtimeRunActionErrorTitle,
+  dictation,
   onOpenDiagnostics,
   onDraftPromptChange,
   onSubmitDraftPrompt,
@@ -129,6 +150,7 @@ export function ComposerDock({
               onChange={(event) => onDraftPromptChange(event.target.value)}
               onKeyDown={handlePromptKeyDown}
               placeholder={placeholder}
+              ref={promptInputRef}
               rows={3}
               value={draftPrompt}
             />
@@ -206,6 +228,37 @@ export function ComposerDock({
                     </kbd>
                     <span>to send</span>
                   </span>
+                  {dictation.isVisible ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          aria-label={dictation.ariaLabel}
+                          aria-pressed={dictation.isListening}
+                          className={cn(
+                            'relative h-8 w-8 rounded-md px-0',
+                            dictation.isListening
+                              ? 'border-destructive/35 bg-destructive/10 text-destructive hover:bg-destructive/15'
+                              : null,
+                          )}
+                          disabled={dictation.isToggleDisabled}
+                          onClick={() => void dictation.toggle()}
+                          size="icon-sm"
+                          type="button"
+                          variant={dictation.isListening ? 'outline' : 'ghost'}
+                        >
+                          {dictation.phase === 'requesting' || dictation.phase === 'stopping' ? (
+                            <LoaderCircle className="h-3.5 w-3.5 animate-spin" strokeWidth={2.5} />
+                          ) : (
+                            <Mic
+                              className={cn('h-3.5 w-3.5', dictation.isListening ? 'animate-pulse' : null)}
+                              strokeWidth={2.5}
+                            />
+                          )}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">{dictation.tooltip}</TooltipContent>
+                    </Tooltip>
+                  ) : null}
                   <Button
                     aria-label={sendButtonLabel}
                     className="h-8 w-8 rounded-md px-0"

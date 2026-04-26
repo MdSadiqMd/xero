@@ -17,6 +17,10 @@ import {
   getComposerModelOption,
   resolveComposerThinkingSelection,
 } from './composer-helpers'
+import {
+  useSpeechDictation,
+  type SpeechDictationAdapter,
+} from './use-speech-dictation'
 
 export type OperatorIntentKind = 'approve' | 'reject' | 'resume'
 export type ComposerThinkingLevel = ProviderModelThinkingEffortDto | null
@@ -47,6 +51,8 @@ interface UseAgentRuntimeControllerOptions {
   canStartRuntimeSession: boolean
   canStopRuntimeRun: boolean
   actionRequiredItems: NonNullable<AgentPaneView['actionRequiredItems']>
+  dictationAdapter?: SpeechDictationAdapter
+  dictationScopeKey: string
   onStartRuntimeRun?: (options?: {
     controls?: RuntimeRunControlInputDto | null
     prompt?: string | null
@@ -116,6 +122,8 @@ export function useAgentRuntimeController({
   canStartRuntimeSession,
   canStopRuntimeRun,
   actionRequiredItems,
+  dictationAdapter,
+  dictationScopeKey,
   onStartRuntimeRun,
   onStartRuntimeSession,
   onUpdateRuntimeRunControls,
@@ -137,9 +145,11 @@ export function useAgentRuntimeController({
     previousRunId: string
     nextRunId: string
   } | null>(null)
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null)
 
   const lastSeenProjectIdRef = useRef(projectId)
   const lastSeenRuntimeRunIdRef = useRef<string | null>(renderableRuntimeRun?.runId ?? null)
+  const draftPromptRef = useRef(draftPrompt)
 
   const effectiveModelId = renderableRuntimeRun ? selectedModelId : draftModelId
   const effectiveThinkingEffort = renderableRuntimeRun ? selectedThinkingEffort : draftThinkingEffort
@@ -183,6 +193,18 @@ export function useAgentRuntimeController({
           !renderableRuntimeRun.isTerminal &&
           onUpdateRuntimeRunControls)),
   )
+  const dictation = useSpeechDictation({
+    adapter: dictationAdapter,
+    scopeKey: dictationScopeKey,
+    draftPrompt,
+    setDraftPrompt,
+    promptInputDisabled: isPromptDisabled,
+    promptInputRef,
+  })
+
+  useEffect(() => {
+    draftPromptRef.current = draftPrompt
+  }, [draftPrompt])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -317,10 +339,15 @@ export function useAgentRuntimeController({
         }
       : null)
 
+  const composerActionError = resolvedRuntimeRunActionError ?? dictation.error
+
   const runtimeRunActionErrorTitle =
     resolvedRuntimeRunActionError?.retryable || resolvedRuntimeRunActionError?.code.includes('timeout')
       ? 'Run control needs retry'
       : 'Run control failed'
+  const composerActionErrorTitle = resolvedRuntimeRunActionError
+    ? runtimeRunActionErrorTitle
+    : 'Dictation unavailable'
 
   async function queueRuntimeRunControls(nextControls: RuntimeRunControlInputDto | null) {
     if (!renderableRuntimeRun || renderableRuntimeRun.isTerminal || !onUpdateRuntimeRunControls || !nextControls) {
@@ -367,12 +394,17 @@ export function useAgentRuntimeController({
         }
       }
 
+      if (!(await dictation.stopBeforeSubmit())) {
+        return
+      }
+
+      const promptToSubmit = draftPromptRef.current.trim()
       await onStartRuntimeRun({
         controls: selectedControlInput,
-        prompt: trimmedDraftPrompt.length > 0 ? trimmedDraftPrompt : null,
+        prompt: promptToSubmit.length > 0 ? promptToSubmit : null,
       })
-      if (trimmedDraftPrompt.length > 0) {
-        setQueuedDraftAcknowledgement(trimmedDraftPrompt)
+      if (promptToSubmit.length > 0) {
+        setQueuedDraftAcknowledgement(promptToSubmit)
       }
     } catch (error) {
       setQueuedDraftAcknowledgement(null)
@@ -398,11 +430,20 @@ export function useAgentRuntimeController({
     setRuntimeRunActionMessage(null)
 
     try {
+      if (!(await dictation.stopBeforeSubmit())) {
+        return
+      }
+
+      const promptToSubmit = draftPromptRef.current.trim()
+      if (promptToSubmit.length === 0) {
+        return
+      }
+
       await onUpdateRuntimeRunControls({
-        prompt: trimmedDraftPrompt,
+        prompt: promptToSubmit,
         ...(autoCompactEnabled ? { autoCompact: AUTO_COMPACT_DEFAULT_PREFERENCE } : {}),
       })
-      setQueuedDraftAcknowledgement(trimmedDraftPrompt)
+      setQueuedDraftAcknowledgement(promptToSubmit)
     } catch (error) {
       setQueuedDraftAcknowledgement(null)
       setRuntimeRunActionMessage(getErrorMessage(error, 'Cadence could not queue the next prompt for this supervised run.'))
@@ -424,6 +465,7 @@ export function useAgentRuntimeController({
   }
 
   function handleDraftPromptChange(value: string) {
+    draftPromptRef.current = value
     setDraftPrompt(value)
   }
 
@@ -579,8 +621,10 @@ export function useAgentRuntimeController({
     operatorAnswers,
     pendingOperatorIntent,
     recentRunReplacement,
-    runtimeRunActionError: resolvedRuntimeRunActionError,
-    runtimeRunActionErrorTitle,
+    runtimeRunActionError: composerActionError,
+    runtimeRunActionErrorTitle: composerActionErrorTitle,
+    dictation,
+    promptInputRef,
     handleDraftPromptChange,
     handleAutoCompactEnabledChange,
     handleSubmitDraftPrompt,

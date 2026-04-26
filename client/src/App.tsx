@@ -591,6 +591,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
             >
               <AgentRuntime
                 agent={agentView}
+                desktopAdapter={resolvedAdapter}
                 onLogout={() => logoutRuntimeSession()}
                 onOpenSettings={() => openSettings('providers')}
                 onOpenDiagnostics={() => openSettings('diagnostics')}

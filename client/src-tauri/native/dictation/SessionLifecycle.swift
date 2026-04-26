@@ -85,6 +85,9 @@ private final class CadenceDictationSession {
         if let modernEngine {
             _ = modernEngine.cancel()
         }
+        if let legacyEngine {
+            _ = legacyEngine.cancel()
+        }
     }
 
     func start() -> CadenceDictationOperationResponse {
