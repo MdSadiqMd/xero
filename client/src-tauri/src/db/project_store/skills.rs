@@ -323,6 +323,15 @@ pub fn set_installed_skill_enabled(
             format!("Cadence could not find installed skill source `{source_id}`."),
         )
     })?;
+    if enabled
+        && (record.source.state == CadenceSkillSourceState::Blocked
+            || record.source.trust == CadenceSkillTrustState::Blocked)
+    {
+        return Err(CommandError::user_fixable(
+            "installed_skill_blocked",
+            format!("Cadence cannot enable blocked skill source `{source_id}`."),
+        ));
+    }
     let next_state = if enabled {
         CadenceSkillSourceState::Enabled
     } else {

@@ -48,7 +48,7 @@ pub use settings::{
     SKILL_SOURCE_SETTINGS_SCHEMA_VERSION,
 };
 pub use skill_tool::{
-    decide_skill_tool_access, model_may_discover_skill_source,
+    decide_skill_tool_access, model_may_discover_skill_source, sanitize_skill_tool_model_text,
     skill_tool_diagnostic_from_command_error, validate_skill_tool_context_payload,
     validate_skill_tool_input, validate_skill_tool_lifecycle_event, CadenceSkillToolAccessDecision,
     CadenceSkillToolAccessStatus, CadenceSkillToolContextAsset, CadenceSkillToolContextDocument,

@@ -499,7 +499,7 @@ pub fn validate_skill_tool_context_payload(
 pub fn skill_tool_diagnostic_from_command_error(
     error: &CommandError,
 ) -> CadenceSkillToolDiagnostic {
-    let (message, redacted) = redact_skill_tool_model_text(&error.message);
+    let (message, redacted) = sanitize_skill_tool_model_text(&error.message);
     CadenceSkillToolDiagnostic {
         code: if error.code.trim().is_empty() {
             "skill_tool_failed".into()
@@ -510,6 +510,10 @@ pub fn skill_tool_diagnostic_from_command_error(
         retryable: error.retryable,
         redacted,
     }
+}
+
+pub fn sanitize_skill_tool_model_text(value: &str) -> (String, bool) {
+    redact_skill_tool_model_text(value)
 }
 
 pub fn validate_skill_tool_lifecycle_event(

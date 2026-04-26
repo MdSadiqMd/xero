@@ -259,7 +259,9 @@ Status: completed on 2026-04-25. The owned-agent runtime now covers the most imp
 - [x] PowerShell-specific tool behavior for Windows parity.
 - [x] Better tool search/deferred tool loading for large tool surfaces.
 
-### Priority 2: Bring Over Skills And Plugins In A Cadence-Native Way
+### Priority 2: Bring Over Skills And Plugins In A Cadence-Native Way - Completed
+
+Status: completed on 2026-04-26. Cadence now has durable installed skills, local/project/bundled/GitHub/dynamic/plugin/MCP skill sources, model-visible SkillTool discovery and invocation, settings management for skills and plugins, plugin manifests and command loading, explicit trust controls, reload/stale-state hardening, and workflow documentation. Verification evidence is recorded under Phase 6.
 
 Cadence already has an autonomous skill runtime, but it should be connected to the user and model experience:
 
@@ -421,25 +423,40 @@ Outcome: MCP servers can contribute model-visible skills without weakening the e
 
 Outcome: Priority 2 is safe enough to call complete and hand to normal users.
 
-- Slice 2.6.1: Add source trust and policy hardening.
+- [x] Slice 2.6.1: Add source trust and policy hardening.
   - Scope: enforce explicit trust boundaries for local, project, GitHub, MCP, dynamic, and plugin-provided skills; redact local secrets and absolute paths from model-facing outputs where they are not required for execution.
   - Acceptance: untrusted sources cannot become model-invocable silently, blocked sources fail closed, and diagnostics give users enough information to fix configuration safely.
   - Verification: security-focused tests cover trust escalation attempts, disabled source use, secret redaction, and path redaction.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed 9 tests including candidate/diagnostic redaction, untrusted dynamic non-invocation, and disabled-source visibility; `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_durable_registry` passed 5 tests including blocked source re-enable rejection.
 
-- Slice 2.6.2: Add reload and stale-state hardening.
+- [x] Slice 2.6.2: Add reload and stale-state hardening.
   - Scope: make reload idempotent across skill and plugin sources; mark stale records when source content changes or disappears; preserve last-known diagnostics for troubleshooting.
   - Acceptance: repeated reloads do not create duplicates, removed sources become unavailable, and changed hashes/versions are reflected in registry state.
   - Verification: registry tests cover repeated reload, content change, deleted source, partial failure, and recovery after failure.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed reload coverage for changed and deleted filesystem skills with stale diagnostics and no duplicate records; `cargo test --manifest-path client/src-tauri/Cargo.toml --test plugin_sources` passed 4 tests covering plugin reload, stale contribution cleanup, disabled plugins, and invalid plugin skill assets.
 
-- Slice 2.6.3: Document the user and agent workflows.
+- [x] Slice 2.6.3: Document the user and agent workflows.
   - Scope: document how users add skills/plugins, how agents discover and invoke skills, what trust states mean, and how to troubleshoot blocked or failed skills.
   - Acceptance: a fresh engineer can implement a new skill source against the documented contract, and a user can understand why a skill is unavailable.
   - Verification: docs review plus focused tests for any examples or fixtures included with the docs.
+  - Completed: 2026-04-26. Verification evidence: added `docs/skills-and-plugins.md` covering user workflows, agent SkillTool operations, trust states, source contracts, plugin contracts, and troubleshooting; the doc uses descriptive contracts only and does not add untested executable examples.
 
-- Slice 2.6.4: Declare Priority 2 complete.
+- [x] Slice 2.6.4: Declare Priority 2 complete.
   - Scope: run the focused Rust tests for skill/plugin registry and SkillTool behavior, focused React tests for settings and run-view surfaces, and the existing autonomous skill runtime tests.
   - Acceptance: the report can mark Priority 2 complete only after local/project/bundled/GitHub skills, plugin-provided skills, MCP-provided skills, model-visible invocation, settings management, trust controls, reload, and diagnostics all have passing verification.
   - Verification: record the exact commands and passing results in the completion note, using one Cargo command at a time.
+  - Completed: 2026-04-26. Verification evidence:
+    - `cargo fmt --manifest-path client/src-tauri/Cargo.toml` passed.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed 9 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_durable_registry` passed 5 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_tool_contract` passed 6 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_source_contract` passed 5 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test plugin_sources` passed 4 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test skill_source_settings` passed 4 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_runtime` passed 7 tests.
+    - `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_tool_runtime` passed 21 tests.
+    - `pnpm --dir client test -- settings-dialog.test.tsx agent-runtime.test.tsx use-cadence-desktop-state.test.tsx` passed 23 test files and 297 tests.
+    - `pnpm --dir client build` passed with the existing Vite large-chunk warning.
 
 ### Priority 3: Build Runtime Diagnostics And Provider Setup Parity
 
@@ -491,7 +508,7 @@ Cadence should not blindly copy OpenClaude in these areas because it already has
 ## Suggested Milestone Order
 
 1. [x] Agent parity foundation: MCP invocation, subagents, todo/task tools, tool search, LSP, notebook editing, and PowerShell are now in the owned-agent runtime.
-2. [ ] Skills and plugins: make skills first-class in the UI and model tool list, then add plugin source/trust/reload mechanics.
+2. [x] Skills and plugins: make skills first-class in the UI and model tool list, then add plugin source/trust/reload mechanics.
 3. [ ] Provider and diagnostics: add doctor reports, provider repair, profile recommendation, and missing provider presets.
 4. [ ] Memory and sessions: add compact/export/search/resume/rename/branch-style user flows.
 5. [ ] External surfaces: add headless API and editor/remote integrations if Cadence is meant to be used outside the desktop app.

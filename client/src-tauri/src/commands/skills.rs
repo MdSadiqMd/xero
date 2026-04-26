@@ -79,6 +79,15 @@ pub fn set_skill_enabled<R: Runtime>(
                     format!("Cadence could not find skill source `{source_id}`."),
                 )
             })?;
+        if request.enabled
+            && (discovered.source.state == CadenceSkillSourceState::Blocked
+                || discovered.source.trust == CadenceSkillTrustState::Blocked)
+        {
+            return Err(CommandError::user_fixable(
+                "skill_source_blocked",
+                format!("Cadence cannot enable blocked skill source `{source_id}`."),
+            ));
+        }
         let trust = if request.enabled {
             approve_trust_for_user_enable(discovered.source.trust)
         } else {

@@ -111,6 +111,8 @@ fn seed_project(root: &TempDir, project_id: &str) -> PathBuf {
         has_staged_changes: false,
         has_unstaged_changes: false,
         has_untracked_changes: false,
+        additions: 0,
+        deletions: 0,
     };
     db::import_project(&repository, DesktopState::default().import_failpoints())
         .expect("import project");
@@ -337,6 +339,38 @@ fn installed_skill_registry_persists_updates_scopes_and_rejects_corrupt_rows() {
     )
     .expect_err("corrupt installed skill rows should fail closed");
     assert_eq!(error.code, "installed_skill_record_corrupt");
+}
+
+#[test]
+fn installed_skill_registry_refuses_blocked_source_reenable() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let repo_root = seed_project(&root, "project-1");
+    let timestamp = "2026-04-25T12:00:00Z";
+    let mut record = registry_record(
+        skill_source_metadata("find-skills", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        CadenceSkillSourceState::Disabled,
+        timestamp,
+    );
+    record.source.trust = CadenceSkillTrustState::Blocked;
+    let persisted =
+        project_store::upsert_installed_skill(&repo_root, record).expect("persist blocked skill");
+    assert_eq!(persisted.source.trust, CadenceSkillTrustState::Blocked);
+
+    let error = project_store::set_installed_skill_enabled(
+        &repo_root,
+        &persisted.source.source_id,
+        true,
+        "2026-04-25T12:01:00Z",
+    )
+    .expect_err("blocked skills cannot be re-enabled");
+    assert_eq!(error.code, "installed_skill_blocked");
+
+    let unchanged =
+        project_store::load_installed_skill_by_source_id(&repo_root, &persisted.source.source_id)
+            .expect("reload blocked skill")
+            .expect("blocked skill");
+    assert_eq!(unchanged.source.state, CadenceSkillSourceState::Disabled);
+    assert_eq!(unchanged.source.trust, CadenceSkillTrustState::Blocked);
 }
 
 #[test]

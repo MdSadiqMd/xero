@@ -18,9 +18,9 @@ use cadence_desktop_lib::{
         McpEnvironmentReference, McpRegistry, McpServerRecord, McpTransport,
     },
     runtime::{
-        AutonomousBundledSkillRoot, AutonomousLocalSkillRoot, AutonomousSkillCacheStore,
-        AutonomousSkillRuntime, AutonomousSkillRuntimeConfig, AutonomousSkillSource,
-        AutonomousSkillSourceEntryKind, AutonomousSkillSourceError,
+        AutonomousBundledSkillRoot, AutonomousLocalSkillRoot, AutonomousPluginRoot,
+        AutonomousSkillCacheStore, AutonomousSkillRuntime, AutonomousSkillRuntimeConfig,
+        AutonomousSkillSource, AutonomousSkillSourceEntryKind, AutonomousSkillSourceError,
         AutonomousSkillSourceFileRequest, AutonomousSkillSourceFileResponse,
         AutonomousSkillSourceMetadata, AutonomousSkillSourceTreeEntry,
         AutonomousSkillSourceTreeRequest, AutonomousSkillSourceTreeResponse,
@@ -743,6 +743,79 @@ fn skill_tool_merges_sources_filters_trust_and_invokes_validated_context() {
 }
 
 #[test]
+fn skill_tool_redacts_candidate_metadata_and_source_diagnostics_before_model_projection() {
+    let root = tempfile::tempdir().expect("temp dir");
+    init_project_state(root.path());
+    let local_root = root.path().join("local-skills");
+    let bundled_root = root.path().join("bundled-skills");
+    write_skill(
+        &local_root,
+        "leaky-skill",
+        "leaky-skill",
+        "Reads /Users/sn0w/.config/cadence with github_pat_1234567890.",
+    );
+
+    let source = Arc::new(FixtureSkillSource::default());
+    source.set_tree_response(Ok(AutonomousSkillSourceTreeResponse {
+        entries: Vec::new(),
+    }));
+    let runtime = AutonomousToolRuntime::new(root.path())
+        .expect("runtime")
+        .with_skill_tool_config(
+            "project-1",
+            skill_runtime(&root, source),
+            vec![AutonomousBundledSkillRoot {
+                bundle_id: "cadence".into(),
+                version: "2026.04.25".into(),
+                root_path: bundled_root,
+            }],
+            vec![AutonomousLocalSkillRoot {
+                root_id: "personal".into(),
+                root_path: local_root,
+            }],
+            true,
+            true,
+            vec![AutonomousPluginRoot {
+                root_id: "missing-plugins".into(),
+                root_path: root.path().join("missing-plugins"),
+            }],
+        );
+
+    let list = runtime
+        .execute(AutonomousToolRequest::Skill(CadenceSkillToolInput::List {
+            query: Some("leaky".into()),
+            include_unavailable: true,
+            limit: Some(20),
+        }))
+        .expect("list redacted skills");
+    match list.output {
+        AutonomousToolOutput::Skill(output) => {
+            let leaky = output
+                .candidates
+                .iter()
+                .find(|candidate| candidate.skill_id == "leaky-skill")
+                .expect("leaky skill candidate");
+            assert!(!leaky.description.contains("/Users/sn0w"));
+            assert!(!leaky.description.contains("github_pat"));
+            assert!(leaky.description.contains("[redacted-path]"));
+            assert!(leaky.description.contains("[redacted]"));
+
+            let plugin_diagnostic = output
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "cadence_plugin_root_unavailable")
+                .expect("plugin root diagnostic");
+            assert!(plugin_diagnostic.redacted);
+            assert!(!plugin_diagnostic
+                .message
+                .contains(root.path().to_string_lossy().as_ref()));
+            assert!(plugin_diagnostic.message.contains("[redacted-path]"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+}
+
+#[test]
 fn skill_tool_refreshes_stale_bundled_skill_before_invocation() {
     let root = tempfile::tempdir().expect("temp dir");
     init_project_state(root.path());
@@ -837,6 +910,132 @@ fn skill_tool_refreshes_stale_bundled_skill_before_invocation() {
         }
         other => panic!("unexpected output: {other:?}"),
     }
+}
+
+#[test]
+fn skill_tool_reload_marks_changed_and_deleted_filesystem_sources_stale_idempotently() {
+    let root = tempfile::tempdir().expect("temp dir");
+    init_project_state(root.path());
+    let bundled_root = root.path().join("bundled-skills");
+    write_skill(
+        &bundled_root,
+        "bundled-skill",
+        "bundled-skill",
+        "Bundled skill v1.",
+    );
+
+    let source = Arc::new(FixtureSkillSource::default());
+    source.set_tree_response(Ok(AutonomousSkillSourceTreeResponse {
+        entries: Vec::new(),
+    }));
+    let runtime = runtime_with_bundled_version(&root, source.clone(), &bundled_root, "2026.04.25");
+    let list = runtime
+        .execute(AutonomousToolRequest::Skill(CadenceSkillToolInput::List {
+            query: Some("bundled".into()),
+            include_unavailable: false,
+            limit: Some(10),
+        }))
+        .expect("list bundled skill");
+    let source_id = match list.output {
+        AutonomousToolOutput::Skill(output) => output.candidates[0].source_id.clone(),
+        other => panic!("unexpected output: {other:?}"),
+    };
+    runtime
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Invoke {
+                source_id: source_id.clone(),
+                approval_grant_id: None,
+                include_supporting_assets: false,
+            },
+        ))
+        .expect("install bundled skill through invoke");
+    let installed_v1 = project_store::load_installed_skill_by_source_id(root.path(), &source_id)
+        .expect("load installed bundled skill")
+        .expect("installed skill");
+    assert_eq!(installed_v1.source.state, CadenceSkillSourceState::Enabled);
+
+    write_skill(
+        &bundled_root,
+        "bundled-skill",
+        "bundled-skill",
+        "Bundled skill v2.",
+    );
+    let runtime_v2 = runtime_with_bundled_version(&root, source, &bundled_root, "2026.04.25");
+    let reloaded = runtime_v2
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Reload {
+                source_id: Some(source_id.clone()),
+                source_kind: None,
+            },
+        ))
+        .expect("reload changed bundled skill");
+    match reloaded.output {
+        AutonomousToolOutput::Skill(output) => {
+            assert_eq!(output.candidates.len(), 1);
+            assert_eq!(output.candidates[0].state, CadenceSkillSourceState::Stale);
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+    let changed = project_store::load_installed_skill_by_source_id(root.path(), &source_id)
+        .expect("load changed bundled skill")
+        .expect("changed skill");
+    assert_eq!(changed.source.state, CadenceSkillSourceState::Stale);
+    assert_ne!(changed.version_hash, installed_v1.version_hash);
+    assert_eq!(
+        changed
+            .last_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.code.as_str()),
+        Some("skill_source_content_changed")
+    );
+
+    let repeated = runtime_v2
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Reload {
+                source_id: Some(source_id.clone()),
+                source_kind: None,
+            },
+        ))
+        .expect("repeat reload");
+    match repeated.output {
+        AutonomousToolOutput::Skill(output) => assert_eq!(output.candidates.len(), 1),
+        other => panic!("unexpected output: {other:?}"),
+    }
+    let installed = project_store::list_installed_skills(
+        root.path(),
+        project_store::InstalledSkillScopeFilter::project("project-1", true)
+            .expect("project filter"),
+    )
+    .expect("list installed skills");
+    assert_eq!(
+        installed
+            .iter()
+            .filter(|record| record.source.source_id == source_id)
+            .count(),
+        1
+    );
+
+    fs::remove_file(bundled_root.join("bundled-skill").join("SKILL.md"))
+        .expect("remove bundled skill");
+    runtime_v2
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Reload {
+                source_id: Some(source_id.clone()),
+                source_kind: None,
+            },
+        ))
+        .expect("reload deleted bundled skill");
+    let deleted = project_store::load_installed_skill_by_source_id(root.path(), &source_id)
+        .expect("load deleted bundled skill")
+        .expect("deleted skill");
+    assert_eq!(deleted.source.state, CadenceSkillSourceState::Stale);
+    assert_eq!(
+        deleted
+            .last_diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.code.as_str()),
+        Some("skill_source_content_missing")
+    );
 }
 
 #[test]

@@ -23,17 +23,17 @@ use crate::{
         decide_skill_tool_access, discover_bundled_skill_directory, discover_local_skill_directory,
         discover_plugin_roots, discover_plugin_skill_contribution,
         discover_project_skill_directory, load_discovered_skill_context,
-        load_skill_context_from_directory, skill_tool_diagnostic_from_command_error,
-        validate_skill_tool_context_payload, AutonomousSkillInstallRequest,
-        AutonomousSkillInvokeRequest, AutonomousSkillResolveOutput, AutonomousSkillResolveRequest,
-        AutonomousSkillSourceMetadata, CadenceDiscoveredSkill, CadencePluginRoot,
-        CadenceSkillDirectoryDiscovery, CadenceSkillSourceLocator, CadenceSkillSourceRecord,
-        CadenceSkillSourceScope, CadenceSkillSourceState, CadenceSkillToolAccessStatus,
-        CadenceSkillToolContextAsset, CadenceSkillToolContextDocument,
-        CadenceSkillToolContextPayload, CadenceSkillToolDiagnostic,
-        CadenceSkillToolDynamicAssetInput, CadenceSkillToolInput, CadenceSkillToolLifecycleEvent,
-        CadenceSkillToolLifecycleResult, CadenceSkillToolOperation, CadenceSkillTrustState,
-        CADENCE_SKILL_TOOL_CONTRACT_VERSION,
+        load_skill_context_from_directory, sanitize_skill_tool_model_text,
+        skill_tool_diagnostic_from_command_error, validate_skill_tool_context_payload,
+        AutonomousSkillInstallRequest, AutonomousSkillInvokeRequest, AutonomousSkillResolveOutput,
+        AutonomousSkillResolveRequest, AutonomousSkillSourceMetadata, CadenceDiscoveredSkill,
+        CadencePluginRoot, CadenceSkillDirectoryDiscovery, CadenceSkillSourceLocator,
+        CadenceSkillSourceRecord, CadenceSkillSourceScope, CadenceSkillSourceState,
+        CadenceSkillToolAccessStatus, CadenceSkillToolContextAsset,
+        CadenceSkillToolContextDocument, CadenceSkillToolContextPayload,
+        CadenceSkillToolDiagnostic, CadenceSkillToolDynamicAssetInput, CadenceSkillToolInput,
+        CadenceSkillToolLifecycleEvent, CadenceSkillToolLifecycleResult, CadenceSkillToolOperation,
+        CadenceSkillTrustState, CADENCE_SKILL_TOOL_CONTRACT_VERSION,
     },
 };
 
@@ -515,6 +515,10 @@ impl AutonomousToolRuntime {
             self.collect_github_skills(skill_tool, query, &mut entries, &mut diagnostics)?;
         }
 
+        if operation == CadenceSkillToolOperation::Reload {
+            self.reconcile_installed_candidates_for_reload(skill_tool, &mut entries)?;
+        }
+
         let mut entries = entries
             .into_values()
             .filter(|entry| {
@@ -766,6 +770,72 @@ impl AutonomousToolRuntime {
             cache.insert(candidate_source_id(entry), entry.clone());
         }
         Ok(())
+    }
+
+    fn reconcile_installed_candidates_for_reload(
+        &self,
+        skill_tool: &super::AutonomousSkillToolRuntime,
+        entries: &mut BTreeMap<String, CachedSkillToolCandidate>,
+    ) -> CommandResult<()> {
+        let source_ids = entries.keys().cloned().collect::<Vec<_>>();
+        for source_id in source_ids {
+            let Some(CachedSkillToolCandidate::Installed(record)) =
+                entries.get(&source_id).cloned()
+            else {
+                continue;
+            };
+            let reconciled = self.reconcile_installed_record_for_reload(skill_tool, record.clone());
+            let reconciled = match reconciled {
+                Ok(record) => record,
+                Err(error) => mark_installed_record_stale(
+                    record,
+                    "skill_source_reload_failed",
+                    format!(
+                        "Cadence could not reload this skill source: {}",
+                        error.message
+                    ),
+                    error.retryable,
+                ),
+            };
+            if project_store::load_installed_skill_by_source_id(&self.repo_root, &source_id)?
+                .as_ref()
+                .is_some_and(|current| current == &reconciled)
+            {
+                continue;
+            }
+            let persisted = project_store::upsert_installed_skill(&self.repo_root, reconciled)?;
+            entries.insert(source_id, CachedSkillToolCandidate::Installed(persisted));
+        }
+        Ok(())
+    }
+
+    fn reconcile_installed_record_for_reload(
+        &self,
+        skill_tool: &super::AutonomousSkillToolRuntime,
+        record: InstalledSkillRecord,
+    ) -> CommandResult<InstalledSkillRecord> {
+        if matches!(
+            record.source.state,
+            CadenceSkillSourceState::Blocked | CadenceSkillSourceState::Disabled
+        ) {
+            return Ok(record);
+        }
+
+        if let Some((code, message)) = reload_unavailable_reason(skill_tool, &record) {
+            return Ok(mark_installed_record_stale(record, code, message, false));
+        }
+
+        if record.source.state == CadenceSkillSourceState::Stale && record.last_diagnostic.is_none()
+        {
+            return Ok(mark_installed_record_stale(
+                record,
+                "skill_source_content_changed",
+                "Cadence marked this skill stale because the source content changed during reload.",
+                false,
+            ));
+        }
+
+        Ok(record)
     }
 
     fn apply_plugin_state_to_installed_skill(
@@ -1579,6 +1649,17 @@ fn merge_installed_candidate(
     record.user_invocable = candidate_user_invocable(&discovered);
     record.local_location = candidate_local_location(&discovered).or(record.local_location);
     record.version_hash = Some(discovered_version);
+    record.updated_at = now_timestamp();
+    if record.last_diagnostic.is_none() {
+        record.last_diagnostic = Some(InstalledSkillDiagnosticRecord {
+            code: "skill_source_content_changed".into(),
+            message:
+                "Cadence marked this skill stale because the source content changed during reload."
+                    .into(),
+            retryable: false,
+            recorded_at: now_timestamp(),
+        });
+    }
     Ok(record)
 }
 
@@ -1593,8 +1674,8 @@ fn public_skill_candidate(
     Ok(AutonomousSkillToolCandidate {
         source_id: record.source_id,
         skill_id: candidate_skill_id(entry),
-        name: candidate_name(entry),
-        description: candidate_description(entry),
+        name: sanitize_candidate_text(&candidate_name(entry), &candidate_skill_id(entry)),
+        description: sanitize_candidate_text(&candidate_description(entry), ""),
         source_kind: record.locator.kind(),
         state,
         trust,
@@ -1605,6 +1686,15 @@ fn public_skill_candidate(
         cache_key: candidate_cache_key(entry),
         access,
     })
+}
+
+fn sanitize_candidate_text(value: &str, fallback: &str) -> String {
+    let (sanitized, _redacted) = sanitize_skill_tool_model_text(value);
+    if sanitized.trim().is_empty() {
+        fallback.to_owned()
+    } else {
+        sanitized
+    }
 }
 
 fn source_record_for_entry(
@@ -1689,6 +1779,96 @@ fn candidate_local_location(entry: &CachedSkillToolCandidate) -> Option<String> 
         CachedSkillToolCandidate::Discovered(candidate) => Some(candidate.local_location.clone()),
         CachedSkillToolCandidate::Github(_) | CachedSkillToolCandidate::Mcp(_) => None,
     }
+}
+
+fn reload_unavailable_reason(
+    skill_tool: &super::AutonomousSkillToolRuntime,
+    record: &InstalledSkillRecord,
+) -> Option<(&'static str, String)> {
+    match &record.source.locator {
+        CadenceSkillSourceLocator::Local { root_id, .. } => {
+            if !skill_tool
+                .local_roots
+                .iter()
+                .any(|root| root.root_id == *root_id)
+            {
+                return Some((
+                    "skill_source_root_unavailable",
+                    format!(
+                        "Cadence marked this skill stale because local skill root `{root_id}` is no longer configured for this run."
+                    ),
+                ));
+            }
+            filesystem_skill_location_unavailable(record)
+        }
+        CadenceSkillSourceLocator::Project { .. } => {
+            if !skill_tool.project_skills_enabled {
+                return Some((
+                    "skill_source_root_unavailable",
+                    "Cadence marked this skill stale because project skill discovery is disabled for this run.".into(),
+                ));
+            }
+            filesystem_skill_location_unavailable(record)
+        }
+        CadenceSkillSourceLocator::Bundled { bundle_id, .. } => {
+            if !skill_tool
+                .bundled_roots
+                .iter()
+                .any(|root| root.bundle_id == *bundle_id)
+            {
+                return Some((
+                    "skill_source_root_unavailable",
+                    format!(
+                        "Cadence marked this skill stale because bundled skill root `{bundle_id}` is no longer available."
+                    ),
+                ));
+            }
+            filesystem_skill_location_unavailable(record)
+        }
+        CadenceSkillSourceLocator::Dynamic { .. } | CadenceSkillSourceLocator::Plugin { .. } => {
+            filesystem_skill_location_unavailable(record)
+        }
+        CadenceSkillSourceLocator::Github { .. } | CadenceSkillSourceLocator::Mcp { .. } => None,
+    }
+}
+
+fn filesystem_skill_location_unavailable(
+    record: &InstalledSkillRecord,
+) -> Option<(&'static str, String)> {
+    let Some(local_location) = record.local_location.as_deref() else {
+        return Some((
+            "skill_source_content_missing",
+            "Cadence marked this skill stale because its installed filesystem location is missing from durable state.".into(),
+        ));
+    };
+    let path = Path::new(local_location);
+    if !path.join("SKILL.md").is_file() {
+        return Some((
+            "skill_source_content_missing",
+            "Cadence marked this skill stale because SKILL.md was not found at the installed source location.".into(),
+        ));
+    }
+    None
+}
+
+fn mark_installed_record_stale(
+    mut record: InstalledSkillRecord,
+    code: impl Into<String>,
+    message: impl Into<String>,
+    retryable: bool,
+) -> InstalledSkillRecord {
+    if record.source.state != CadenceSkillSourceState::Blocked {
+        record.source.state = CadenceSkillSourceState::Stale;
+    }
+    let timestamp = now_timestamp();
+    record.updated_at = timestamp.clone();
+    record.last_diagnostic = Some(InstalledSkillDiagnosticRecord {
+        code: code.into(),
+        message: message.into(),
+        retryable,
+        recorded_at: timestamp,
+    });
+    record
 }
 
 fn candidate_model_visible(entry: &CachedSkillToolCandidate) -> bool {
@@ -2083,11 +2263,12 @@ fn diagnostic(
     message: impl Into<String>,
     retryable: bool,
 ) -> CadenceSkillToolDiagnostic {
+    let (message, redacted) = sanitize_skill_tool_model_text(&message.into());
     CadenceSkillToolDiagnostic {
         code: code.into(),
-        message: message.into(),
+        message,
         retryable,
-        redacted: false,
+        redacted,
     }
 }
 
@@ -2127,10 +2308,12 @@ fn mcp_projection_error_diagnostic(
 ) -> CadenceSkillToolDiagnostic {
     let mut diagnostic = skill_tool_diagnostic_from_command_error(error);
     diagnostic.code = "skill_tool_mcp_projection_failed".into();
-    diagnostic.message = format!(
+    let (message, redacted) = sanitize_skill_tool_model_text(&format!(
         "Cadence could not project MCP skills from server `{}` with {method}: {}",
         server.id, diagnostic.message
-    );
+    ));
+    diagnostic.message = message;
+    diagnostic.redacted |= redacted;
     diagnostic
 }
 
