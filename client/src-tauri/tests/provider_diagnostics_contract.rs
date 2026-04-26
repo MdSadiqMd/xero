@@ -4,13 +4,16 @@ use cadence_desktop_lib::{
         ProviderModelRecord, ProviderModelThinkingCapability,
     },
     provider_profiles::{
-        ProviderProfileCredentialLink, ProviderProfileReadinessProjection,
-        ProviderProfileReadinessStatus, ProviderProfileRecord,
+        ProviderApiKeyCredentialEntry, ProviderProfileCredentialLink,
+        ProviderProfileCredentialsFile, ProviderProfileReadinessProjection,
+        ProviderProfileReadinessStatus, ProviderProfileRecord, ProviderProfilesMetadataFile,
+        ProviderProfilesSnapshot,
     },
     runtime::{
         ambient_auth_failure_diagnostic, invalid_base_url_diagnostic,
         provider_model_catalog_diagnostic, provider_profile_readiness_diagnostic,
-        render_doctor_report, stale_runtime_binding_diagnostic, summarize_diagnostic_checks,
+        provider_profile_validation_diagnostics, render_doctor_report,
+        stale_runtime_binding_diagnostic, summarize_diagnostic_checks,
         unsupported_provider_diagnostic, validate_diagnostic_check, validate_doctor_report,
         CadenceDiagnosticCheck, CadenceDiagnosticCheckInput, CadenceDiagnosticSeverity,
         CadenceDiagnosticStatus, CadenceDiagnosticSubject, CadenceDoctorReport,
@@ -49,6 +52,23 @@ fn readiness(status: ProviderProfileReadinessStatus) -> ProviderProfileReadiness
         status,
         proof: None,
         proof_updated_at: None,
+    }
+}
+
+fn snapshot_for(
+    active_profile_id: &str,
+    profiles: Vec<ProviderProfileRecord>,
+    api_keys: Vec<ProviderApiKeyCredentialEntry>,
+) -> ProviderProfilesSnapshot {
+    ProviderProfilesSnapshot {
+        metadata: ProviderProfilesMetadataFile {
+            version: 3,
+            active_profile_id: active_profile_id.into(),
+            profiles,
+            updated_at: "2026-04-26T12:00:00Z".into(),
+            migration: None,
+        },
+        credentials: ProviderProfileCredentialsFile { api_keys },
     }
 }
 
@@ -163,6 +183,274 @@ fn provider_diagnostics_normalize_readiness_profile_repair_and_redaction() {
     assert!(ambient.redacted);
     assert!(!ambient_json.contains("/Users/sn0w"));
     assert!(!ambient_json.contains("ya29.secret"));
+}
+
+#[test]
+fn provider_profile_validation_reports_metadata_runtime_and_readiness_contracts() {
+    let mut ready = profile("openrouter-work", "openrouter", "openrouter", None);
+    ready.model_id = "openai/o4-mini".into();
+    ready.credential_link = Some(ProviderProfileCredentialLink::ApiKey {
+        updated_at: "2026-04-26T12:00:00Z".into(),
+    });
+    let snapshot = snapshot_for(
+        "openrouter-work",
+        vec![ready.clone()],
+        vec![ProviderApiKeyCredentialEntry {
+            profile_id: "openrouter-work".into(),
+            api_key: "sk-or-v1-test".into(),
+            updated_at: "2026-04-26T12:00:00Z".into(),
+        }],
+    );
+
+    let checks = provider_profile_validation_diagnostics(&snapshot, &ready)
+        .expect("validate ready provider profile");
+    assert!(checks
+        .iter()
+        .all(|check| check.status != CadenceDiagnosticStatus::Failed));
+    assert!(checks
+        .iter()
+        .any(|check| check.code == "provider_profile_active"));
+    assert!(checks
+        .iter()
+        .any(|check| check.code == "provider_profile_runtime_aligned"));
+    assert!(checks
+        .iter()
+        .any(|check| check.code == "provider_profile_metadata_ready"));
+    assert!(checks
+        .iter()
+        .any(|check| check.code == "provider_profile_ready"));
+
+    let malformed_metadata = profile(
+        "openrouter-bad",
+        "openrouter",
+        "openrouter",
+        Some("https://openrouter.ai/api/v1"),
+    );
+    let malformed_snapshot = snapshot_for(
+        "openrouter-bad",
+        vec![malformed_metadata.clone()],
+        Vec::new(),
+    );
+
+    let repair_checks =
+        provider_profile_validation_diagnostics(&malformed_snapshot, &malformed_metadata)
+            .expect("validate malformed provider profile");
+    assert!(repair_checks
+        .iter()
+        .any(|check| check.code == "provider_profile_metadata_unexpected"
+            && check.status == CadenceDiagnosticStatus::Failed));
+    assert!(repair_checks
+        .iter()
+        .any(|check| check.code == "provider_profile_credentials_missing"
+            && check
+                .remediation
+                .as_deref()
+                .is_some_and(|value| value.contains("Add credentials"))));
+}
+
+#[test]
+fn provider_profile_validation_accepts_supported_provider_metadata_shapes() {
+    #[derive(Clone, Copy)]
+    enum CredentialKind {
+        OpenAiCodex,
+        ApiKey,
+        Local,
+        Ambient,
+    }
+
+    struct Case {
+        profile_id: &'static str,
+        provider_id: &'static str,
+        runtime_kind: &'static str,
+        model_id: &'static str,
+        preset_id: Option<&'static str>,
+        base_url: Option<&'static str>,
+        api_version: Option<&'static str>,
+        region: Option<&'static str>,
+        project_id: Option<&'static str>,
+        credential: CredentialKind,
+    }
+
+    let cases = [
+        Case {
+            profile_id: "openai_codex-default",
+            provider_id: "openai_codex",
+            runtime_kind: "openai_codex",
+            model_id: "openai_codex",
+            preset_id: None,
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::OpenAiCodex,
+        },
+        Case {
+            profile_id: "openrouter-work",
+            provider_id: "openrouter",
+            runtime_kind: "openrouter",
+            model_id: "openai/o4-mini",
+            preset_id: Some("openrouter"),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::ApiKey,
+        },
+        Case {
+            profile_id: "anthropic-work",
+            provider_id: "anthropic",
+            runtime_kind: "anthropic",
+            model_id: "claude-3-7-sonnet-latest",
+            preset_id: Some("anthropic"),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::ApiKey,
+        },
+        Case {
+            profile_id: "github-models-work",
+            provider_id: "github_models",
+            runtime_kind: "openai_compatible",
+            model_id: "openai/gpt-4.1",
+            preset_id: Some("github_models"),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::ApiKey,
+        },
+        Case {
+            profile_id: "openai-compatible-work",
+            provider_id: "openai_api",
+            runtime_kind: "openai_compatible",
+            model_id: "gpt-4.1-mini",
+            preset_id: Some("openai_api"),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::ApiKey,
+        },
+        Case {
+            profile_id: "ollama-work",
+            provider_id: "ollama",
+            runtime_kind: "openai_compatible",
+            model_id: "llama3.2",
+            preset_id: Some("ollama"),
+            base_url: Some("http://127.0.0.1:11434/v1"),
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::Local,
+        },
+        Case {
+            profile_id: "azure-work",
+            provider_id: "azure_openai",
+            runtime_kind: "openai_compatible",
+            model_id: "gpt-4.1-mini",
+            preset_id: Some("azure_openai"),
+            base_url: Some("https://azure.example.invalid/openai/deployments/work"),
+            api_version: Some("2025-04-01-preview"),
+            region: None,
+            project_id: None,
+            credential: CredentialKind::ApiKey,
+        },
+        Case {
+            profile_id: "gemini-work",
+            provider_id: "gemini_ai_studio",
+            runtime_kind: "gemini",
+            model_id: "gemini-2.5-pro",
+            preset_id: Some("gemini_ai_studio"),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            credential: CredentialKind::ApiKey,
+        },
+        Case {
+            profile_id: "bedrock-work",
+            provider_id: "bedrock",
+            runtime_kind: "anthropic",
+            model_id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+            preset_id: Some("bedrock"),
+            base_url: None,
+            api_version: None,
+            region: Some("us-east-1"),
+            project_id: None,
+            credential: CredentialKind::Ambient,
+        },
+        Case {
+            profile_id: "vertex-work",
+            provider_id: "vertex",
+            runtime_kind: "anthropic",
+            model_id: "claude-3-7-sonnet@20250219",
+            preset_id: Some("vertex"),
+            base_url: None,
+            api_version: None,
+            region: Some("us-central1"),
+            project_id: Some("vertex-project"),
+            credential: CredentialKind::Ambient,
+        },
+    ];
+
+    for case in cases {
+        let updated_at = "2026-04-26T12:00:00Z";
+        let mut record = profile(
+            case.profile_id,
+            case.provider_id,
+            case.runtime_kind,
+            case.base_url,
+        );
+        record.model_id = case.model_id.into();
+        record.preset_id = case.preset_id.map(str::to_string);
+        record.api_version = case.api_version.map(str::to_string);
+        record.region = case.region.map(str::to_string);
+        record.project_id = case.project_id.map(str::to_string);
+        record.credential_link = Some(match case.credential {
+            CredentialKind::OpenAiCodex => ProviderProfileCredentialLink::OpenAiCodex {
+                account_id: "acct-test".into(),
+                session_id: "session-test".into(),
+                updated_at: updated_at.into(),
+            },
+            CredentialKind::ApiKey => ProviderProfileCredentialLink::ApiKey {
+                updated_at: updated_at.into(),
+            },
+            CredentialKind::Local => ProviderProfileCredentialLink::Local {
+                updated_at: updated_at.into(),
+            },
+            CredentialKind::Ambient => ProviderProfileCredentialLink::Ambient {
+                updated_at: updated_at.into(),
+            },
+        });
+        let api_keys = match case.credential {
+            CredentialKind::ApiKey => vec![ProviderApiKeyCredentialEntry {
+                profile_id: case.profile_id.into(),
+                api_key: "test-api-key".into(),
+                updated_at: updated_at.into(),
+            }],
+            CredentialKind::OpenAiCodex | CredentialKind::Local | CredentialKind::Ambient => {
+                Vec::new()
+            }
+        };
+        let snapshot = snapshot_for(case.profile_id, vec![record.clone()], api_keys);
+
+        let checks = provider_profile_validation_diagnostics(&snapshot, &record)
+            .unwrap_or_else(|error| panic!("{} validation failed: {error:?}", case.provider_id));
+        assert!(
+            checks
+                .iter()
+                .all(|check| check.status != CadenceDiagnosticStatus::Failed),
+            "{} should not emit failed validation checks: {checks:?}",
+            case.provider_id
+        );
+        assert!(checks
+            .iter()
+            .any(|check| check.code == "provider_profile_metadata_ready"));
+        assert!(checks
+            .iter()
+            .any(|check| check.code == "provider_profile_ready"));
+    }
 }
 
 #[test]

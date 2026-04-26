@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type {
   AgentPaneView,
   McpRegistryLoadStatus,
@@ -17,6 +17,7 @@ import type {
   McpImportDiagnosticDto,
   McpRegistryDto,
   ProviderModelCatalogDto,
+  ProviderProfileDiagnosticsDto,
   ProviderProfilesDto,
   RuntimeSessionView,
   ListSkillRegistryRequestDto,
@@ -113,6 +114,10 @@ export interface SettingsDialogProps {
     profileId: string,
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
+  onCheckProviderProfile?: (
+    profileId: string,
+    options?: { includeNetwork?: boolean },
+  ) => Promise<ProviderProfileDiagnosticsDto>
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
   onStartLogin?: () => Promise<RuntimeSessionView | null>
@@ -167,6 +172,7 @@ export function SettingsDialog({
   providerModelCatalogLoadErrors,
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
+  onCheckProviderProfile,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
   onStartLogin,
@@ -207,34 +213,35 @@ export function SettingsDialog({
   onStartOnboarding,
 }: SettingsDialogProps) {
   const [section, setSection] = useState<SettingsSection>("providers")
+  const refreshOnOpenCallbacksRef = useRef({
+    providerProfiles: onRefreshProviderProfiles,
+    mcpRegistry: onRefreshMcpRegistry,
+    skillRegistry: onRefreshSkillRegistry,
+  })
 
   useEffect(() => {
     if (open) setSection("providers")
   }, [open])
 
   useEffect(() => {
-    if (!open || !onRefreshProviderProfiles) {
-      return
+    refreshOnOpenCallbacksRef.current = {
+      providerProfiles: onRefreshProviderProfiles,
+      mcpRegistry: onRefreshMcpRegistry,
+      skillRegistry: onRefreshSkillRegistry,
     }
-
-    void onRefreshProviderProfiles({ force: true }).catch(() => undefined)
-  }, [open, onRefreshProviderProfiles])
+  }, [onRefreshMcpRegistry, onRefreshProviderProfiles, onRefreshSkillRegistry])
 
   useEffect(() => {
-    if (!open || !onRefreshMcpRegistry) {
+    if (!open) {
       return
     }
 
-    void onRefreshMcpRegistry({ force: true }).catch(() => undefined)
-  }, [onRefreshMcpRegistry, open])
+    const { providerProfiles, mcpRegistry, skillRegistry } = refreshOnOpenCallbacksRef.current
 
-  useEffect(() => {
-    if (!open || !onRefreshSkillRegistry) {
-      return
-    }
-
-    void onRefreshSkillRegistry({ force: true }).catch(() => undefined)
-  }, [onRefreshSkillRegistry, open])
+    void providerProfiles?.({ force: true }).catch(() => undefined)
+    void mcpRegistry?.({ force: true }).catch(() => undefined)
+    void skillRegistry?.({ force: true }).catch(() => undefined)
+  }, [open])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -311,6 +318,7 @@ export function SettingsDialog({
                   providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
                   onRefreshProviderProfiles={onRefreshProviderProfiles}
                   onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
+                  onCheckProviderProfile={onCheckProviderProfile}
                   onUpsertProviderProfile={onUpsertProviderProfile}
                   onSetActiveProviderProfile={onSetActiveProviderProfile}
                   onStartLogin={onStartLogin}

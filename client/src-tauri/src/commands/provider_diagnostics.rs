@@ -1,0 +1,166 @@
+use tauri::{AppHandle, Runtime, State};
+
+use crate::{
+    auth::load_openai_codex_session_for_profile_link,
+    commands::{
+        provider_model_catalog::map_provider_model_catalog,
+        provider_profiles::load_provider_profiles_snapshot, CheckProviderProfileRequestDto,
+        CommandError, CommandResult, ProviderProfileDiagnosticsDto,
+    },
+    provider_models::load_provider_model_catalog,
+    provider_profiles::ProviderProfileRecord,
+    runtime::{
+        openai_codex_provider, provider_model_catalog_diagnostic,
+        provider_profile_validation_diagnostics, CadenceDiagnosticCheck,
+        CadenceDiagnosticCheckInput, CadenceDiagnosticSeverity, CadenceDiagnosticStatus,
+        CadenceDiagnosticSubject, OPENAI_CODEX_PROVIDER_ID,
+    },
+    state::DesktopState,
+};
+
+#[tauri::command]
+pub fn check_provider_profile<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: CheckProviderProfileRequestDto,
+) -> CommandResult<ProviderProfileDiagnosticsDto> {
+    let profile_id = request.profile_id.trim();
+    if profile_id.is_empty() {
+        return Err(CommandError::invalid_request("profileId"));
+    }
+
+    let snapshot = load_provider_profiles_snapshot(&app, state.inner())?;
+    let profile = snapshot.profile(profile_id).cloned().ok_or_else(|| {
+        CommandError::user_fixable(
+            "provider_profile_not_found",
+            format!("Cadence could not find provider profile `{profile_id}`."),
+        )
+    })?;
+
+    let mut validation_checks = provider_profile_validation_diagnostics(&snapshot, &profile)?;
+    if let Some(check) = openai_codex_session_check(&app, state.inner(), &profile)? {
+        validation_checks.push(check);
+    }
+
+    let mut reachability_checks = Vec::new();
+    let mut model_catalog = None;
+    if request.include_network {
+        match load_provider_model_catalog(&app, state.inner(), profile_id, true) {
+            Ok(catalog) => {
+                reachability_checks.push(provider_model_catalog_diagnostic(&catalog)?);
+                model_catalog = Some(map_provider_model_catalog(catalog));
+            }
+            Err(error) => {
+                reachability_checks.push(command_error_to_model_catalog_check(&profile, error)?);
+            }
+        }
+    }
+
+    Ok(ProviderProfileDiagnosticsDto {
+        checked_at: crate::auth::now_timestamp(),
+        profile_id: profile.profile_id,
+        provider_id: profile.provider_id,
+        validation_checks,
+        reachability_checks,
+        model_catalog,
+    })
+}
+
+fn openai_codex_session_check<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    profile: &ProviderProfileRecord,
+) -> CommandResult<Option<CadenceDiagnosticCheck>> {
+    if profile.provider_id != OPENAI_CODEX_PROVIDER_ID {
+        return Ok(None);
+    }
+
+    let Some(link) = profile.credential_link.as_ref() else {
+        return Ok(None);
+    };
+
+    let auth_store_path = state
+        .auth_store_file_for_provider(app, openai_codex_provider())
+        .map_err(|error| {
+            if error.retryable {
+                CommandError::retryable(error.code, error.message)
+            } else {
+                CommandError::user_fixable(error.code, error.message)
+            }
+        })?;
+
+    match load_openai_codex_session_for_profile_link(&auth_store_path, link) {
+        Ok(Some(session)) => CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::ProviderProfile,
+            status: CadenceDiagnosticStatus::Passed,
+            severity: CadenceDiagnosticSeverity::Info,
+            retryable: false,
+            code: "provider_profile_openai_session_ready".into(),
+            message: format!(
+                "OpenAI Codex profile `{}` has a matching app-local auth session for account `{}`.",
+                profile.profile_id, session.account_id
+            ),
+            affected_profile_id: Some(profile.profile_id.clone()),
+            affected_provider_id: Some(profile.provider_id.clone()),
+            endpoint: None,
+            remediation: None,
+        })
+        .map(Some),
+        Ok(None) => CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::ProviderProfile,
+            status: CadenceDiagnosticStatus::Failed,
+            severity: CadenceDiagnosticSeverity::Error,
+            retryable: false,
+            code: "provider_profile_openai_session_missing".into(),
+            message: format!(
+                "OpenAI Codex profile `{}` points at an auth session that is no longer present.",
+                profile.profile_id
+            ),
+            affected_profile_id: Some(profile.profile_id.clone()),
+            affected_provider_id: Some(profile.provider_id.clone()),
+            endpoint: None,
+            remediation: Some(
+                "Sign in to OpenAI Codex again from Providers settings to repair this profile."
+                    .into(),
+            ),
+        })
+        .map(Some),
+        Err(error) => CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::ProviderProfile,
+            status: CadenceDiagnosticStatus::Failed,
+            severity: CadenceDiagnosticSeverity::Error,
+            retryable: error.retryable,
+            code: error.code,
+            message: error.message,
+            affected_profile_id: Some(profile.profile_id.clone()),
+            affected_provider_id: Some(profile.provider_id.clone()),
+            endpoint: None,
+            remediation: Some(
+                "Reconnect or resave this OpenAI Codex profile so Cadence can rebuild the app-local auth link."
+                    .into(),
+            ),
+        })
+        .map(Some),
+    }
+}
+
+fn command_error_to_model_catalog_check(
+    profile: &ProviderProfileRecord,
+    error: CommandError,
+) -> CommandResult<CadenceDiagnosticCheck> {
+    CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+        subject: CadenceDiagnosticSubject::ModelCatalog,
+        status: CadenceDiagnosticStatus::Failed,
+        severity: CadenceDiagnosticSeverity::Error,
+        retryable: error.retryable,
+        code: error.code,
+        message: error.message,
+        affected_profile_id: Some(profile.profile_id.clone()),
+        affected_provider_id: Some(profile.provider_id.clone()),
+        endpoint: None,
+        remediation: Some(
+            "Repair the provider profile, credentials, or endpoint metadata before checking the connection again."
+                .into(),
+        ),
+    })
+}

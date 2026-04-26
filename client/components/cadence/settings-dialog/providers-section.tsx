@@ -7,6 +7,7 @@ import type {
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import type {
   ProviderModelCatalogDto,
+  ProviderProfileDiagnosticsDto,
   ProviderProfilesDto,
   RuntimeSessionView,
   UpsertProviderProfileRequestDto,
@@ -30,6 +31,10 @@ export interface ProvidersSectionProps {
     profileId: string,
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
+  onCheckProviderProfile?: (
+    profileId: string,
+    options?: { includeNetwork?: boolean },
+  ) => Promise<ProviderProfileDiagnosticsDto>
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
   onStartLogin?: () => Promise<RuntimeSessionView | null>
@@ -49,6 +54,7 @@ export function ProvidersSection({
   providerModelCatalogLoadErrors,
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
+  onCheckProviderProfile,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
   onStartLogin,
@@ -72,6 +78,7 @@ export function ProvidersSection({
         providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
         onRefreshProviderProfiles={onRefreshProviderProfiles}
         onRefreshProviderModelCatalog={active ? onRefreshProviderModelCatalog : undefined}
+        onCheckProviderProfile={active ? onCheckProviderProfile : undefined}
         onUpsertProviderProfile={onUpsertProviderProfile}
         onSetActiveProviderProfile={onSetActiveProviderProfile}
         runtimeSession={agent?.runtimeSession ?? null}

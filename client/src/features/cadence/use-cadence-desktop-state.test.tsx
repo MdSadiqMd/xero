@@ -1093,6 +1093,36 @@ function createMockAdapter(options?: {
       return nextCatalog
     },
   )
+  const checkProviderProfile = vi.fn(async (profileId: string) => {
+    const currentProfile = currentProviderProfiles.value.profiles.find((profile) => profile.profileId === profileId)
+    if (!currentProfile) {
+      throw new CadenceDesktopError({
+        code: 'provider_profile_not_found',
+        errorClass: 'user_fixable',
+        message: `Cadence could not find provider profile \`${profileId}\`.`,
+      })
+    }
+
+    const modelCatalog =
+      currentProviderModelCatalogs.value[profileId] ??
+      makeProviderModelCatalog(profileId, {
+        providerId: currentProfile.providerId,
+        configuredModelId: currentProfile.modelId,
+      })
+    currentProviderModelCatalogs.value = {
+      ...currentProviderModelCatalogs.value,
+      [profileId]: modelCatalog,
+    }
+
+    return {
+      checkedAt: '2026-04-26T12:00:00Z',
+      profileId,
+      providerId: currentProfile.providerId,
+      validationChecks: [],
+      reachabilityChecks: [],
+      modelCatalog,
+    }
+  })
   const getProviderProfiles = vi.fn(async () => currentProviderProfiles.value)
   const upsertRuntimeSettings = vi.fn(async (request: {
     providerId: RuntimeSettingsDto['providerId']
@@ -1585,6 +1615,7 @@ function createMockAdapter(options?: {
     setPluginEnabled,
     removePlugin,
     getProviderModelCatalog,
+    checkProviderProfile,
     getProviderProfiles,
     startOpenAiLogin,
     submitOpenAiCallback,
@@ -1714,6 +1745,7 @@ function createMockAdapter(options?: {
     setPluginEnabled,
     removePlugin,
     getProviderModelCatalog,
+    checkProviderProfile,
     getProviderProfiles,
     listProjectFiles,
     readProjectFile,

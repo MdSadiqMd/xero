@@ -499,20 +499,23 @@ Outcome: Cadence has one shared vocabulary for provider readiness, reachability,
 
 Outcome: Cadence can actively test configured provider profiles and explain whether failure is credentials, endpoint shape, network, catalog parsing, local service readiness, or ambient auth.
 
-- [ ] Slice 3.1.1: Add a provider profile validation engine.
+- [x] Slice 3.1.1: Add a provider profile validation engine.
   - Scope: inspect saved provider-profile metadata and credentials before any network probe; validate active profile, profile/provider/runtime-kind alignment, required base URL/API version/region/project fields, credential-link freshness, local readiness proofs, and ambient readiness proofs.
   - Acceptance: malformed or partially migrated profiles return actionable repair suggestions and do not require model catalog refresh to reveal the problem.
   - Verification: Rust tests cover ready/missing/malformed profiles for OpenAI Codex, OpenRouter, Anthropic, GitHub Models, OpenAI-compatible, Ollama, Azure OpenAI, Gemini AI Studio, Bedrock, and Vertex.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test provider_diagnostics_contract` passed 5 tests, including ready/missing/malformed validation and supported metadata shapes for OpenAI Codex, OpenRouter, Anthropic, GitHub Models, OpenAI-compatible, Ollama, Azure OpenAI, Gemini AI Studio, Bedrock, and Vertex.
 
-- [ ] Slice 3.1.2: Add active provider reachability probes.
+- [x] Slice 3.1.2: Add active provider reachability probes.
   - Scope: reuse existing provider-model catalog and auth clients to run explicit reachability probes for the active profile, including OpenAI-compatible `/models`, GitHub Models catalog, Ollama local endpoint, OpenRouter, Anthropic-family providers, Bedrock, and Vertex.
   - Acceptance: probes classify DNS/connect timeout, 401/403, 404 endpoint-shape errors, 429/rate-limit, bad JSON, missing local service, and unsupported catalog strategies with provider-specific recovery text.
   - Verification: backend tests use mocked HTTP/auth clients and local fixture responses for success, timeout, auth failure, rate limit, bad JSON, stale cache fallback, and manual-catalog providers.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test provider_model_catalog_bridge` passed 25 tests, including the new `check_provider_profile` live OpenRouter probe, OpenRouter auth failure, stale-cache rate-limit warning, unreachable Ollama local service, and manual Azure catalog cases.
 
-- [ ] Slice 3.1.3: Surface profile repair suggestions in Settings.
+- [x] Slice 3.1.3: Surface profile repair suggestions in Settings.
   - Scope: extend the existing Providers settings surface with compact diagnostic rows, repair calls to action, and a "Check connection" action that runs validation/probe for one profile.
   - Acceptance: users can see whether the issue is key, endpoint, model catalog, local service, or ambient auth; existing model catalog choices remain visible when Cadence has a stale usable cache.
   - Verification: React tests cover ready, missing key, malformed credential link, invalid base URL, unreachable local Ollama, stale cache with warning, and successful recheck.
+  - Completed: 2026-04-26. Verification evidence: `pnpm --dir client exec vitest run src/lib/cadence-model/diagnostics.test.ts components/cadence/settings-dialog.test.tsx` passed 2 test files and 29 tests, including missing-key repair copy, malformed credential-link copy, invalid base URL copy, unreachable Ollama copy, stale-cache warning copy, and successful recheck. Additional verification: `pnpm --dir client exec vitest run src/features/cadence/use-cadence-desktop-state.test.tsx src/App.test.tsx` passed 2 test files and 76 tests; `pnpm --dir client exec tsc --noEmit` passed; targeted `pnpm --dir client exec eslint ...` passed; `cargo fmt --manifest-path client/src-tauri/Cargo.toml -- --check` passed.
 
 ##### Phase 2: Add Runtime Doctor Reports
 

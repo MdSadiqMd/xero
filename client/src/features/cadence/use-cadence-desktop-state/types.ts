@@ -17,6 +17,7 @@ import type {
   ProviderModelCatalogDto,
   ProviderModelCatalogSourceDto,
   ProviderModelThinkingEffortDto,
+  ProviderProfileDiagnosticsDto,
   ProviderProfileReadinessDto,
   ProviderProfilesDto,
   ReadProjectFileResponseDto,
@@ -467,6 +468,10 @@ export interface UseCadenceDesktopStateResult {
     profileId: string,
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
+  checkProviderProfile: (
+    profileId: string,
+    options?: { includeNetwork?: boolean },
+  ) => Promise<ProviderProfileDiagnosticsDto>
   upsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   setActiveProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
   refreshRuntimeSettings: (options?: { force?: boolean }) => Promise<RuntimeSettingsDto>

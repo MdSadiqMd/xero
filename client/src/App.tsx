@@ -107,6 +107,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     resumeOperatorRun,
     refreshProviderProfiles,
     refreshProviderModelCatalog,
+    checkProviderProfile,
     upsertProviderProfile,
     setActiveProviderProfile,
     refreshMcpRegistry,
@@ -600,6 +601,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         onRefreshProviderModelCatalog={(profileId, options) =>
           refreshProviderModelCatalog(profileId, options)
         }
+        onCheckProviderProfile={(profileId, options) => checkProviderProfile(profileId, options)}
         onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
         onSetActiveProviderProfile={(profileId) => setActiveProviderProfile(profileId)}
         onStartLogin={() => startOpenAiLogin()}

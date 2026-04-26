@@ -1,5 +1,7 @@
 import { z } from 'zod'
 import { isoTimestampSchema, nonEmptyOptionalTextSchema } from './shared'
+import { providerModelCatalogSchema } from './provider-models'
+import { runtimeProviderIdSchema } from './runtime'
 
 export const CADENCE_DIAGNOSTIC_CONTRACT_VERSION = 1
 export const CADENCE_DOCTOR_REPORT_CONTRACT_VERSION = 1
@@ -175,6 +177,53 @@ export const cadenceDoctorReportSchema = z
     }
   })
 
+export const checkProviderProfileRequestSchema = z
+  .object({
+    profileId: z.string().trim().min(1),
+    includeNetwork: z.boolean().default(false),
+  })
+  .strict()
+
+export const providerProfileDiagnosticsSchema = z
+  .object({
+    checkedAt: isoTimestampSchema,
+    profileId: z.string().trim().min(1),
+    providerId: runtimeProviderIdSchema,
+    validationChecks: z.array(cadenceDiagnosticCheckSchema).default([]),
+    reachabilityChecks: z.array(cadenceDiagnosticCheckSchema).default([]),
+    modelCatalog: providerModelCatalogSchema.nullable().optional(),
+  })
+  .strict()
+  .superRefine((diagnostics, ctx) => {
+    for (const [index, check] of diagnostics.validationChecks.entries()) {
+      if (check.affectedProfileId && check.affectedProfileId !== diagnostics.profileId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['validationChecks', index, 'affectedProfileId'],
+          message: 'Provider-profile diagnostics must not include validation checks for another profile.',
+        })
+      }
+    }
+
+    for (const [index, check] of diagnostics.reachabilityChecks.entries()) {
+      if (check.affectedProfileId && check.affectedProfileId !== diagnostics.profileId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['reachabilityChecks', index, 'affectedProfileId'],
+          message: 'Provider-profile diagnostics must not include reachability checks for another profile.',
+        })
+      }
+    }
+
+    if (diagnostics.modelCatalog && diagnostics.modelCatalog.profileId !== diagnostics.profileId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['modelCatalog', 'profileId'],
+        message: 'Provider-profile diagnostics model catalog must belong to the checked profile.',
+      })
+    }
+  })
+
 export type CadenceDiagnosticSubjectDto = z.infer<typeof cadenceDiagnosticSubjectSchema>
 export type CadenceDiagnosticStatusDto = z.infer<typeof cadenceDiagnosticStatusSchema>
 export type CadenceDiagnosticSeverityDto = z.infer<typeof cadenceDiagnosticSeveritySchema>
@@ -186,6 +235,8 @@ export type CadenceDoctorReportOutputModeDto = z.infer<typeof cadenceDoctorRepor
 export type CadenceDoctorVersionInfoDto = z.infer<typeof cadenceDoctorVersionInfoSchema>
 export type CadenceDoctorReportSummaryDto = z.infer<typeof cadenceDoctorReportSummarySchema>
 export type CadenceDoctorReportDto = z.infer<typeof cadenceDoctorReportSchema>
+export type CheckProviderProfileRequestDto = z.infer<typeof checkProviderProfileRequestSchema>
+export type ProviderProfileDiagnosticsDto = z.infer<typeof providerProfileDiagnosticsSchema>
 
 export interface CadenceDiagnosticCheckInput {
   subject: CadenceDiagnosticSubjectDto
@@ -241,7 +292,7 @@ export function createCadenceDiagnosticCheck(input: CadenceDiagnosticCheckInput)
 }
 
 export function createCadenceDoctorReport(input: CadenceDoctorReportInput): CadenceDoctorReportDto {
-  const report = {
+  const report: CadenceDoctorReportDto = {
     contractVersion: CADENCE_DOCTOR_REPORT_CONTRACT_VERSION,
     reportId: input.reportId.trim(),
     generatedAt: input.generatedAt.trim(),

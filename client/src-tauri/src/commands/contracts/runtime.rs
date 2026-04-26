@@ -499,6 +499,26 @@ pub struct GetProviderModelCatalogRequestDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckProviderProfileRequestDto {
+    pub profile_id: String,
+    #[serde(default)]
+    pub include_network: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderProfileDiagnosticsDto {
+    pub checked_at: String,
+    pub profile_id: String,
+    pub provider_id: String,
+    pub validation_checks: Vec<crate::runtime::CadenceDiagnosticCheck>,
+    pub reachability_checks: Vec<crate::runtime::CadenceDiagnosticCheck>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_catalog: Option<ProviderModelCatalogDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StartRuntimeRunRequestDto {
     pub project_id: String,
     pub agent_session_id: String,

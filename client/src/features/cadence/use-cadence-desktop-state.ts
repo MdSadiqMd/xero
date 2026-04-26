@@ -33,6 +33,7 @@ import {
   type ProjectDetailView,
   type ProjectListItem,
   type ProviderModelCatalogDto,
+  type ProviderProfileDiagnosticsDto,
   type ProviderProfilesDto,
   type ReadProjectFileResponseDto,
   type RenameProjectEntryRequestDto,
@@ -833,6 +834,46 @@ export function useCadenceDesktopState(
         promise: loadPromise,
       }
       return loadPromise
+    },
+    [adapter],
+  )
+
+  const checkProviderProfile = useCallback(
+    async (
+      profileId: string,
+      options: { includeNetwork?: boolean } = {},
+    ): Promise<ProviderProfileDiagnosticsDto> => {
+      const trimmedProfileId = profileId.trim()
+      const response = await adapter.checkProviderProfile(trimmedProfileId, {
+        includeNetwork: options.includeNetwork ?? true,
+      })
+
+      const modelCatalog = response.modelCatalog
+      if (modelCatalog) {
+        const profile = providerProfilesRef.current?.profiles.find(
+          (candidate) => candidate.profileId === response.profileId,
+        )
+
+        if (profile) {
+          providerModelCatalogDependencyKeysRef.current[response.profileId] =
+            getProviderModelCatalogDependencyKey(profile)
+        }
+
+        setProviderModelCatalogs((currentCatalogs) => ({
+          ...currentCatalogs,
+          [response.profileId]: modelCatalog,
+        }))
+        setProviderModelCatalogLoadStatuses((currentStatuses) => ({
+          ...currentStatuses,
+          [response.profileId]: 'ready',
+        }))
+        setProviderModelCatalogLoadErrors((currentErrors) => ({
+          ...currentErrors,
+          [response.profileId]: null,
+        }))
+      }
+
+      return response
     },
     [adapter],
   )
@@ -1710,6 +1751,7 @@ export function useCadenceDesktopState(
     resumeOperatorRun,
     refreshProviderProfiles,
     refreshProviderModelCatalog,
+    checkProviderProfile,
     upsertProviderProfile,
     setActiveProviderProfile,
     refreshRuntimeSettings,

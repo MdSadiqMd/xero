@@ -210,6 +210,11 @@ import {
   type ProviderModelCatalogDto,
 } from '@/src/lib/cadence-model/provider-models'
 import {
+  checkProviderProfileRequestSchema,
+  providerProfileDiagnosticsSchema,
+  type ProviderProfileDiagnosticsDto,
+} from '@/src/lib/cadence-model/diagnostics'
+import {
   runtimeStreamItemSchema,
   subscribeRuntimeStreamRequestSchema,
   subscribeRuntimeStreamResponseSchema,
@@ -275,6 +280,7 @@ const COMMANDS = {
   setPluginEnabled: 'set_plugin_enabled',
   removePlugin: 'remove_plugin',
   getProviderModelCatalog: 'get_provider_model_catalog',
+  checkProviderProfile: 'check_provider_profile',
   listProviderProfiles: 'list_provider_profiles',
   upsertProviderProfile: 'upsert_provider_profile',
   setActiveProviderProfile: 'set_active_provider_profile',
@@ -535,6 +541,10 @@ export interface CadenceDesktopAdapter {
     profileId: string,
     options?: { forceRefresh?: boolean },
   ): Promise<ProviderModelCatalogDto>
+  checkProviderProfile(
+    profileId: string,
+    options?: { includeNetwork?: boolean },
+  ): Promise<ProviderProfileDiagnosticsDto>
   getProviderProfiles(): Promise<ProviderProfilesDto>
   startOpenAiLogin(projectId: string, options: StartOpenAiLoginOptions): Promise<RuntimeSessionDto>
   submitOpenAiCallback(
@@ -1380,6 +1390,16 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
       forceRefresh: options?.forceRefresh ?? false,
     })
     return invokeTyped(COMMANDS.getProviderModelCatalog, providerModelCatalogSchema, {
+      request,
+    })
+  },
+
+  checkProviderProfile(profileId, options) {
+    const request = checkProviderProfileRequestSchema.parse({
+      profileId,
+      includeNetwork: options?.includeNetwork ?? false,
+    })
+    return invokeTyped(COMMANDS.checkProviderProfile, providerProfileDiagnosticsSchema, {
       request,
     })
   },

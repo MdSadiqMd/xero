@@ -19,6 +19,7 @@ pub mod list_notification_routes;
 pub mod list_projects;
 pub mod logout_runtime_session;
 pub mod project_files;
+pub mod provider_diagnostics;
 pub mod provider_model_catalog;
 pub mod provider_profiles;
 pub mod record_notification_dispatch_outcome;
@@ -95,6 +96,7 @@ pub use project_files::{
     create_project_entry, delete_project_entry, list_project_files, read_project_file,
     rename_project_entry, write_project_file,
 };
+pub use provider_diagnostics::check_provider_profile;
 pub use provider_model_catalog::get_provider_model_catalog;
 pub use provider_profiles::{
     list_provider_profiles, set_active_provider_profile, upsert_provider_profile,

@@ -6,7 +6,16 @@ use crate::{
     provider_models::{ProviderModelCatalog, ProviderModelCatalogSource},
     provider_profiles::{
         ProviderProfileReadinessProjection, ProviderProfileReadinessStatus, ProviderProfileRecord,
+        ProviderProfilesSnapshot,
     },
+};
+
+use super::provider::{
+    resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID,
+    BEDROCK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID, GEMINI_RUNTIME_KIND,
+    GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
+    OPENAI_CODEX_PROVIDER_ID, OPENAI_COMPATIBLE_RUNTIME_KIND, OPENROUTER_PROVIDER_ID,
+    VERTEX_PROVIDER_ID,
 };
 
 pub const CADENCE_DIAGNOSTIC_CONTRACT_VERSION: u32 = 1;
@@ -544,6 +553,429 @@ pub fn provider_model_catalog_diagnostic(
             })
         }
     }
+}
+
+pub fn provider_profile_validation_diagnostics(
+    snapshot: &ProviderProfilesSnapshot,
+    profile: &ProviderProfileRecord,
+) -> CommandResult<Vec<CadenceDiagnosticCheck>> {
+    let mut checks = Vec::new();
+    checks.push(provider_profile_active_selection_diagnostic(
+        snapshot, profile,
+    )?);
+    checks.push(provider_profile_runtime_alignment_diagnostic(profile)?);
+    checks.extend(provider_profile_metadata_diagnostics(profile)?);
+    checks.push(provider_profile_readiness_diagnostic(
+        profile,
+        &profile.readiness(&snapshot.credentials),
+    )?);
+    Ok(checks)
+}
+
+fn provider_profile_active_selection_diagnostic(
+    snapshot: &ProviderProfilesSnapshot,
+    profile: &ProviderProfileRecord,
+) -> CommandResult<CadenceDiagnosticCheck> {
+    if snapshot.metadata.active_profile_id == profile.profile_id {
+        return CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::ProviderProfile,
+            status: CadenceDiagnosticStatus::Passed,
+            severity: CadenceDiagnosticSeverity::Info,
+            retryable: false,
+            code: "provider_profile_active".into(),
+            message: format!(
+                "Provider profile `{}` is the active profile.",
+                profile.profile_id
+            ),
+            affected_profile_id: Some(profile.profile_id.clone()),
+            affected_provider_id: Some(profile.provider_id.clone()),
+            endpoint: endpoint_metadata_from_profile(profile),
+            remediation: None,
+        });
+    }
+
+    CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+        subject: CadenceDiagnosticSubject::ProviderProfile,
+        status: CadenceDiagnosticStatus::Skipped,
+        severity: CadenceDiagnosticSeverity::Info,
+        retryable: false,
+        code: "provider_profile_not_active".into(),
+        message: format!(
+            "Provider profile `{}` is saved but is not the active profile.",
+            profile.profile_id
+        ),
+        affected_profile_id: Some(profile.profile_id.clone()),
+        affected_provider_id: Some(profile.provider_id.clone()),
+        endpoint: endpoint_metadata_from_profile(profile),
+        remediation: Some(
+            "Select this profile before launching a runtime that should use it.".into(),
+        ),
+    })
+}
+
+fn provider_profile_runtime_alignment_diagnostic(
+    profile: &ProviderProfileRecord,
+) -> CommandResult<CadenceDiagnosticCheck> {
+    match resolve_runtime_provider_identity(
+        Some(profile.provider_id.as_str()),
+        Some(profile.runtime_kind.as_str()),
+    ) {
+        Ok(provider) => CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::ProviderProfile,
+            status: CadenceDiagnosticStatus::Passed,
+            severity: CadenceDiagnosticSeverity::Info,
+            retryable: false,
+            code: "provider_profile_runtime_aligned".into(),
+            message: format!(
+                "Provider profile `{}` maps `{}` to runtime kind `{}`.",
+                profile.profile_id, provider.provider_id, provider.runtime_kind
+            ),
+            affected_profile_id: Some(profile.profile_id.clone()),
+            affected_provider_id: Some(profile.provider_id.clone()),
+            endpoint: endpoint_metadata_from_profile(profile),
+            remediation: None,
+        }),
+        Err(diagnostic) => CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::ProviderProfile,
+            status: CadenceDiagnosticStatus::Failed,
+            severity: CadenceDiagnosticSeverity::Error,
+            retryable: diagnostic.retryable,
+            code: diagnostic.code,
+            message: diagnostic.message,
+            affected_profile_id: Some(profile.profile_id.clone()),
+            affected_provider_id: Some(profile.provider_id.clone()),
+            endpoint: endpoint_metadata_from_profile(profile),
+            remediation: Some(
+                "Resave this profile from Providers settings so provider and runtime metadata match."
+                    .into(),
+            ),
+        }),
+    }
+}
+
+fn provider_profile_metadata_diagnostics(
+    profile: &ProviderProfileRecord,
+) -> CommandResult<Vec<CadenceDiagnosticCheck>> {
+    let mut checks = Vec::new();
+
+    match profile.provider_id.as_str() {
+        OPENAI_CODEX_PROVIDER_ID => {
+            require_model_id(profile, OPENAI_CODEX_PROVIDER_ID, &mut checks)?;
+            require_absent(
+                profile,
+                "presetId",
+                profile.preset_id.as_deref(),
+                &mut checks,
+            )?;
+            require_absent(profile, "baseUrl", profile.base_url.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "apiVersion",
+                profile.api_version.as_deref(),
+                &mut checks,
+            )?;
+            require_absent(profile, "region", profile.region.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "projectId",
+                profile.project_id.as_deref(),
+                &mut checks,
+            )?;
+        }
+        OPENROUTER_PROVIDER_ID
+        | ANTHROPIC_PROVIDER_ID
+        | GITHUB_MODELS_PROVIDER_ID
+        | GEMINI_AI_STUDIO_PROVIDER_ID => {
+            require_preset_id(profile, profile.provider_id.as_str(), &mut checks)?;
+            require_absent(profile, "baseUrl", profile.base_url.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "apiVersion",
+                profile.api_version.as_deref(),
+                &mut checks,
+            )?;
+            require_absent(profile, "region", profile.region.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "projectId",
+                profile.project_id.as_deref(),
+                &mut checks,
+            )?;
+            if profile.provider_id == GEMINI_AI_STUDIO_PROVIDER_ID
+                && profile.runtime_kind != GEMINI_RUNTIME_KIND
+            {
+                checks.push(metadata_failed(
+                    profile,
+                    "provider_profile_runtime_kind_invalid",
+                    "Gemini AI Studio profiles must use runtime kind `gemini`.",
+                    "Resave the profile so Cadence can rebuild Gemini runtime metadata.",
+                )?);
+            }
+        }
+        OPENAI_API_PROVIDER_ID => {
+            if let Some(base_url) = profile.base_url.as_deref() {
+                require_http_base_url(profile, base_url, &mut checks)?;
+                if profile
+                    .preset_id
+                    .as_deref()
+                    .is_some_and(|preset_id| preset_id != OPENAI_API_PROVIDER_ID)
+                {
+                    checks.push(metadata_failed(
+                        profile,
+                        "provider_profile_preset_invalid",
+                        "Custom OpenAI-compatible profiles may only keep presetId `openai_api`.",
+                        "Choose the OpenAI-compatible preset or clear unsupported preset metadata.",
+                    )?);
+                }
+            } else {
+                require_preset_id(profile, OPENAI_API_PROVIDER_ID, &mut checks)?;
+                require_absent(
+                    profile,
+                    "apiVersion",
+                    profile.api_version.as_deref(),
+                    &mut checks,
+                )?;
+            }
+            require_absent(profile, "region", profile.region.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "projectId",
+                profile.project_id.as_deref(),
+                &mut checks,
+            )?;
+        }
+        OLLAMA_PROVIDER_ID => {
+            require_preset_id(profile, OLLAMA_PROVIDER_ID, &mut checks)?;
+            if let Some(base_url) = profile.base_url.as_deref() {
+                require_http_base_url(profile, base_url, &mut checks)?;
+            }
+            require_absent(
+                profile,
+                "apiVersion",
+                profile.api_version.as_deref(),
+                &mut checks,
+            )?;
+            require_absent(profile, "region", profile.region.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "projectId",
+                profile.project_id.as_deref(),
+                &mut checks,
+            )?;
+            if profile.runtime_kind != OPENAI_COMPATIBLE_RUNTIME_KIND {
+                checks.push(metadata_failed(
+                    profile,
+                    "provider_profile_runtime_kind_invalid",
+                    "Ollama profiles must use runtime kind `openai_compatible`.",
+                    "Resave the profile so Cadence can rebuild local runtime metadata.",
+                )?);
+            }
+        }
+        AZURE_OPENAI_PROVIDER_ID => {
+            require_preset_id(profile, AZURE_OPENAI_PROVIDER_ID, &mut checks)?;
+            require_present(profile, "baseUrl", profile.base_url.as_deref(), &mut checks)?;
+            if let Some(base_url) = profile.base_url.as_deref() {
+                require_http_base_url(profile, base_url, &mut checks)?;
+            }
+            require_present(
+                profile,
+                "apiVersion",
+                profile.api_version.as_deref(),
+                &mut checks,
+            )?;
+            require_absent(profile, "region", profile.region.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "projectId",
+                profile.project_id.as_deref(),
+                &mut checks,
+            )?;
+        }
+        BEDROCK_PROVIDER_ID => {
+            require_preset_id(profile, BEDROCK_PROVIDER_ID, &mut checks)?;
+            require_present(profile, "region", profile.region.as_deref(), &mut checks)?;
+            require_absent(profile, "baseUrl", profile.base_url.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "apiVersion",
+                profile.api_version.as_deref(),
+                &mut checks,
+            )?;
+            require_absent(
+                profile,
+                "projectId",
+                profile.project_id.as_deref(),
+                &mut checks,
+            )?;
+        }
+        VERTEX_PROVIDER_ID => {
+            require_preset_id(profile, VERTEX_PROVIDER_ID, &mut checks)?;
+            require_present(profile, "region", profile.region.as_deref(), &mut checks)?;
+            require_present(
+                profile,
+                "projectId",
+                profile.project_id.as_deref(),
+                &mut checks,
+            )?;
+            require_absent(profile, "baseUrl", profile.base_url.as_deref(), &mut checks)?;
+            require_absent(
+                profile,
+                "apiVersion",
+                profile.api_version.as_deref(),
+                &mut checks,
+            )?;
+        }
+        other => {
+            checks.push(unsupported_provider_diagnostic(
+                Some(profile.profile_id.as_str()),
+                other,
+            )?);
+        }
+    }
+
+    if checks.is_empty() {
+        checks.push(CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+            subject: CadenceDiagnosticSubject::ProviderProfile,
+            status: CadenceDiagnosticStatus::Passed,
+            severity: CadenceDiagnosticSeverity::Info,
+            retryable: false,
+            code: "provider_profile_metadata_ready".into(),
+            message: format!(
+                "Provider profile `{}` has complete provider metadata.",
+                profile.profile_id
+            ),
+            affected_profile_id: Some(profile.profile_id.clone()),
+            affected_provider_id: Some(profile.provider_id.clone()),
+            endpoint: endpoint_metadata_from_profile(profile),
+            remediation: None,
+        })?);
+    }
+
+    Ok(checks)
+}
+
+fn require_model_id(
+    profile: &ProviderProfileRecord,
+    expected: &str,
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+) -> CommandResult<()> {
+    if profile.model_id.trim() == expected {
+        return Ok(());
+    }
+
+    checks.push(metadata_failed(
+        profile,
+        "provider_profile_model_invalid",
+        &format!(
+            "Provider profile `{}` must use model id `{expected}` for `{}`.",
+            profile.profile_id, profile.provider_id
+        ),
+        "Resave this provider profile from Providers settings.",
+    )?);
+    Ok(())
+}
+
+fn require_preset_id(
+    profile: &ProviderProfileRecord,
+    expected: &str,
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+) -> CommandResult<()> {
+    if profile.preset_id.as_deref() == Some(expected) {
+        return Ok(());
+    }
+
+    checks.push(metadata_failed(
+        profile,
+        "provider_profile_preset_invalid",
+        &format!(
+            "Provider profile `{}` must use presetId `{expected}` for `{}`.",
+            profile.profile_id, profile.provider_id
+        ),
+        "Resave this profile from Providers settings so Cadence can restore the preset metadata.",
+    )?);
+    Ok(())
+}
+
+fn require_present(
+    profile: &ProviderProfileRecord,
+    field: &'static str,
+    value: Option<&str>,
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+) -> CommandResult<()> {
+    if value.is_some_and(|value| !value.trim().is_empty()) {
+        return Ok(());
+    }
+
+    checks.push(metadata_failed(
+        profile,
+        "provider_profile_metadata_missing",
+        &format!(
+            "Provider profile `{}` is missing required `{field}` metadata.",
+            profile.profile_id
+        ),
+        "Open this profile in Providers settings, fill the required connection field, and save it again.",
+    )?);
+    Ok(())
+}
+
+fn require_absent(
+    profile: &ProviderProfileRecord,
+    field: &'static str,
+    value: Option<&str>,
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+) -> CommandResult<()> {
+    if value.is_none_or(|value| value.trim().is_empty()) {
+        return Ok(());
+    }
+
+    checks.push(metadata_failed(
+        profile,
+        "provider_profile_metadata_unexpected",
+        &format!(
+            "Provider profile `{}` has unsupported `{field}` metadata for `{}`.",
+            profile.profile_id, profile.provider_id
+        ),
+        "Resave this profile from Providers settings so Cadence can drop unsupported connection metadata.",
+    )?);
+    Ok(())
+}
+
+fn require_http_base_url(
+    profile: &ProviderProfileRecord,
+    base_url: &str,
+    checks: &mut Vec<CadenceDiagnosticCheck>,
+) -> CommandResult<()> {
+    let parsed = Url::parse(base_url);
+    let valid = parsed
+        .as_ref()
+        .ok()
+        .is_some_and(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some());
+    if valid {
+        return Ok(());
+    }
+
+    checks.push(invalid_base_url_diagnostic(profile, base_url)?);
+    Ok(())
+}
+
+fn metadata_failed(
+    profile: &ProviderProfileRecord,
+    code: &str,
+    message: &str,
+    remediation: &str,
+) -> CommandResult<CadenceDiagnosticCheck> {
+    CadenceDiagnosticCheck::new(CadenceDiagnosticCheckInput {
+        subject: CadenceDiagnosticSubject::ProviderProfile,
+        status: CadenceDiagnosticStatus::Failed,
+        severity: CadenceDiagnosticSeverity::Error,
+        retryable: false,
+        code: code.into(),
+        message: message.into(),
+        affected_profile_id: Some(profile.profile_id.clone()),
+        affected_provider_id: Some(profile.provider_id.clone()),
+        endpoint: endpoint_metadata_from_profile(profile),
+        remediation: Some(remediation.into()),
+    })
 }
 
 pub fn validate_diagnostic_check(

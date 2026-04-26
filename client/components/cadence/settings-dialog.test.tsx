@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 const { openUrlMock } = vi.hoisted(() => ({
@@ -10,9 +10,12 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 }))
 
 import { SettingsDialog, type SettingsDialogProps } from '@/components/cadence/settings-dialog'
+import { createCadenceDiagnosticCheck } from '@/src/lib/cadence-model'
 import type { AgentPaneView, OperatorActionErrorView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
   McpRegistryDto,
+  CadenceDiagnosticCheckDto,
+  ProviderProfileDiagnosticsDto,
   ProviderModelCatalogDto,
   ProviderProfileDto,
   ProviderProfilesDto,
@@ -171,6 +174,29 @@ function makeOpenAiApiProfile(overrides: Partial<ProviderProfileDto> = {}): Prov
   }
 }
 
+function makeOllamaProfile(overrides: Partial<ProviderProfileDto> = {}): ProviderProfileDto {
+  return {
+    profileId: 'ollama-default',
+    providerId: 'ollama',
+    runtimeKind: 'openai_compatible',
+    label: 'Ollama',
+    modelId: 'llama3.2',
+    presetId: 'ollama',
+    active: false,
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    apiVersion: null,
+    readiness: {
+      ready: true,
+      status: 'ready',
+      proof: 'local',
+      proofUpdatedAt: '2026-04-20T00:00:00Z',
+    },
+    migratedFromLegacy: false,
+    migratedAt: null,
+    ...overrides,
+  }
+}
+
 function makeProviderProfiles(overrides: Partial<ProviderProfilesDto> = {}): ProviderProfilesDto {
   return {
     activeProfileId: overrides.activeProfileId ?? 'openai_codex-default',
@@ -295,6 +321,59 @@ function makeProviderModelCatalog(
                   },
                 ]),
   }
+}
+
+function makeProviderDiagnosticCheck(
+  overrides: Partial<CadenceDiagnosticCheckDto> = {},
+): CadenceDiagnosticCheckDto {
+  return createCadenceDiagnosticCheck({
+    subject: overrides.subject ?? 'provider_profile',
+    status: overrides.status ?? 'passed',
+    severity: overrides.severity ?? 'info',
+    retryable: overrides.retryable ?? false,
+    code: overrides.code ?? 'provider_profile_metadata_ready',
+    message: overrides.message ?? 'Provider profile metadata is ready.',
+    affectedProfileId: overrides.affectedProfileId ?? 'openrouter-default',
+    affectedProviderId: overrides.affectedProviderId ?? 'openrouter',
+    endpoint: overrides.endpoint ?? null,
+    remediation: overrides.remediation ?? null,
+  })
+}
+
+function makeProviderProfileDiagnostics(
+  overrides: Partial<ProviderProfileDiagnosticsDto> = {},
+): ProviderProfileDiagnosticsDto {
+  const profileId = overrides.profileId ?? 'openrouter-default'
+  const providerId = overrides.providerId ?? 'openrouter'
+
+  const diagnostics: ProviderProfileDiagnosticsDto = {
+    checkedAt: overrides.checkedAt ?? '2026-04-26T12:00:00Z',
+    profileId,
+    providerId,
+    validationChecks:
+      overrides.validationChecks ??
+      [
+        makeProviderDiagnosticCheck({
+          affectedProfileId: profileId,
+          affectedProviderId: providerId,
+        }),
+      ],
+    reachabilityChecks:
+      overrides.reachabilityChecks ??
+      [
+        makeProviderDiagnosticCheck({
+          subject: 'model_catalog',
+          code: 'provider_model_catalog_ready',
+          message: 'Provider model catalog is reachable.',
+          affectedProfileId: profileId,
+          affectedProviderId: providerId,
+        }),
+      ],
+  }
+  if ('modelCatalog' in overrides) {
+    diagnostics.modelCatalog = overrides.modelCatalog ?? null
+  }
+  return diagnostics
 }
 
 function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): RuntimeSessionView {
@@ -671,6 +750,9 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): 
     },
     onRefreshProviderProfiles: vi.fn(async () => makeProviderProfiles()),
     onRefreshProviderModelCatalog: vi.fn(async (profileId: string) => makeProviderModelCatalog(profileId)),
+    onCheckProviderProfile: vi.fn(async (profileId: string) =>
+      makeProviderProfileDiagnostics({ profileId }),
+    ),
     onUpsertProviderProfile: vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles()),
     onSetActiveProviderProfile: vi.fn(async (_profileId: string) => makeProviderProfiles()),
     onStartLogin: vi.fn(async () => makeRuntimeSession()),
@@ -750,6 +832,77 @@ describe('SettingsDialog', () => {
     ).toBeVisible()
   })
 
+  it('does not force-refresh registries again when refresh handler props change while open', async () => {
+    const firstRefreshProviderProfiles = vi.fn(async () => makeProviderProfiles())
+    const firstRefreshMcpRegistry = vi.fn(async () => makeMcpRegistry())
+    const firstRefreshSkillRegistry = vi.fn(async () => makeSkillRegistry())
+    const nextRefreshProviderProfiles = vi.fn(async () => makeProviderProfiles())
+    const nextRefreshMcpRegistry = vi.fn(async () => makeMcpRegistry())
+    const nextRefreshSkillRegistry = vi.fn(async () => makeSkillRegistry())
+
+    const { rerender } = render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          onRefreshProviderProfiles: firstRefreshProviderProfiles,
+          onRefreshMcpRegistry: firstRefreshMcpRegistry,
+          onRefreshSkillRegistry: firstRefreshSkillRegistry,
+        })}
+      />,
+    )
+
+    await waitFor(() => expect(firstRefreshProviderProfiles).toHaveBeenCalledWith({ force: true }))
+    expect(firstRefreshMcpRegistry).toHaveBeenCalledWith({ force: true })
+    expect(firstRefreshSkillRegistry).toHaveBeenCalledWith({ force: true })
+
+    rerender(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          open: true,
+          providerProfilesLoadStatus: 'loading',
+          mcpRegistryLoadStatus: 'loading',
+          skillRegistryLoadStatus: 'loading',
+          onRefreshProviderProfiles: nextRefreshProviderProfiles,
+          onRefreshMcpRegistry: nextRefreshMcpRegistry,
+          onRefreshSkillRegistry: nextRefreshSkillRegistry,
+        })}
+      />,
+    )
+
+    await act(async () => {})
+
+    expect(nextRefreshProviderProfiles).not.toHaveBeenCalled()
+    expect(nextRefreshMcpRegistry).not.toHaveBeenCalled()
+    expect(nextRefreshSkillRegistry).not.toHaveBeenCalled()
+
+    rerender(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          open: false,
+          onRefreshProviderProfiles: nextRefreshProviderProfiles,
+          onRefreshMcpRegistry: nextRefreshMcpRegistry,
+          onRefreshSkillRegistry: nextRefreshSkillRegistry,
+        })}
+      />,
+    )
+
+    await act(async () => {})
+
+    rerender(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          open: true,
+          onRefreshProviderProfiles: nextRefreshProviderProfiles,
+          onRefreshMcpRegistry: nextRefreshMcpRegistry,
+          onRefreshSkillRegistry: nextRefreshSkillRegistry,
+        })}
+      />,
+    )
+
+    await waitFor(() => expect(nextRefreshProviderProfiles).toHaveBeenCalledWith({ force: true }))
+    expect(nextRefreshMcpRegistry).toHaveBeenCalledWith({ force: true })
+    expect(nextRefreshSkillRegistry).toHaveBeenCalledWith({ force: true })
+  })
+
   it('keeps provider setup usable while the provider snapshot is refreshing', async () => {
     const onUpsertProviderProfile = vi.fn(async (_request: UpsertProviderProfileRequestDto) =>
       makeProviderProfiles({
@@ -806,6 +959,222 @@ describe('SettingsDialog', () => {
         activate: false,
       }),
     )
+  })
+
+  it('surfaces provider-profile repair suggestions from connection checks', async () => {
+    const onCheckProviderProfile = vi.fn(async (profileId: string) =>
+      makeProviderProfileDiagnostics({
+        profileId,
+        validationChecks: [
+          makeProviderDiagnosticCheck({
+            status: 'failed',
+            severity: 'error',
+            code: 'provider_profile_credentials_missing',
+            message: 'OpenRouter is missing app-local credentials.',
+            remediation: 'Add credentials for OpenRouter in Providers settings, then check the connection again.',
+            affectedProfileId: profileId,
+            affectedProviderId: 'openrouter',
+          }),
+        ],
+        reachabilityChecks: [],
+      }),
+    )
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          onCheckProviderProfile,
+        })}
+      />,
+    )
+
+    const card = getProviderCard('OpenRouter')
+    fireEvent.click(within(card).getByRole('button', { name: /check connection/i }))
+
+    await waitFor(() =>
+      expect(onCheckProviderProfile).toHaveBeenCalledWith('openrouter-default', {
+        includeNetwork: true,
+      }),
+    )
+    expect(within(card).getByText('Connection check found 1 issue.')).toBeVisible()
+    expect(
+      within(card).getByText(
+        'Add credentials for OpenRouter in Providers settings, then check the connection again.',
+      ),
+    ).toBeVisible()
+  })
+
+  it.each([
+    {
+      label: 'malformed credential link',
+      cardLabel: 'OpenRouter',
+      profile: makeOpenRouterProfile({
+        readiness: {
+          ready: false,
+          status: 'malformed',
+          proofUpdatedAt: '2026-04-20T00:00:00Z',
+        },
+      }),
+      diagnostic: {
+        subject: 'provider_profile' as const,
+        code: 'provider_profile_credentials_malformed',
+        message: 'OpenRouter has a stale credential link.',
+        remediation: 'Reconnect or resave this provider profile so Cadence can rebuild the app-local credential link.',
+      },
+    },
+    {
+      label: 'invalid base URL',
+      cardLabel: 'OpenAI-compatible',
+      profile: makeOpenAiApiProfile({
+        baseUrl: 'https://token:[redacted]@example.invalid/v1',
+      }),
+      diagnostic: {
+        subject: 'provider_profile' as const,
+        code: 'provider_profile_base_url_invalid',
+        message: 'OpenAI-compatible has an invalid base URL.',
+        remediation: 'Enter a valid http or https base URL, then save the profile again.',
+      },
+    },
+    {
+      label: 'unreachable local Ollama service',
+      cardLabel: 'Ollama',
+      profile: makeOllamaProfile(),
+      diagnostic: {
+        subject: 'model_catalog' as const,
+        code: 'ollama_provider_unavailable',
+        message: 'Ollama did not answer the local model probe.',
+        remediation: 'Start Ollama locally, then check the connection again.',
+      },
+    },
+  ])('surfaces $label diagnostics in provider settings', async ({ cardLabel, profile, diagnostic }) => {
+    const onCheckProviderProfile = vi.fn(async (profileId: string) =>
+      makeProviderProfileDiagnostics({
+        profileId,
+        providerId: profile.providerId,
+        validationChecks:
+          diagnostic.subject === 'provider_profile'
+            ? [
+                makeProviderDiagnosticCheck({
+                  status: 'failed',
+                  severity: 'error',
+                  code: diagnostic.code,
+                  message: diagnostic.message,
+                  remediation: diagnostic.remediation,
+                  affectedProfileId: profileId,
+                  affectedProviderId: profile.providerId,
+                }),
+              ]
+            : [],
+        reachabilityChecks:
+          diagnostic.subject === 'model_catalog'
+            ? [
+                makeProviderDiagnosticCheck({
+                  subject: 'model_catalog',
+                  status: 'failed',
+                  severity: 'error',
+                  retryable: true,
+                  code: diagnostic.code,
+                  message: diagnostic.message,
+                  remediation: diagnostic.remediation,
+                  affectedProfileId: profileId,
+                  affectedProviderId: profile.providerId,
+                }),
+              ]
+            : [],
+      }),
+    )
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          providerProfiles: makeProviderProfiles({
+            profiles: [makeOpenAiProfile({ active: true }), profile],
+          }),
+          onCheckProviderProfile,
+        })}
+      />,
+    )
+
+    const card = getProviderCard(cardLabel)
+    fireEvent.click(within(card).getByRole('button', { name: /check connection/i }))
+
+    await waitFor(() => expect(within(card).getByText('Connection check found 1 issue.')).toBeVisible())
+    expect(within(card).getByText(diagnostic.message)).toBeVisible()
+    expect(within(card).getByText(diagnostic.remediation)).toBeVisible()
+  })
+
+  it('surfaces stale provider reachability while keeping cached model truth visible', async () => {
+    const onCheckProviderProfile = vi.fn(async (profileId: string) =>
+      makeProviderProfileDiagnostics({
+        profileId,
+        reachabilityChecks: [
+          makeProviderDiagnosticCheck({
+            subject: 'model_catalog',
+            status: 'warning',
+            severity: 'warning',
+            retryable: true,
+            code: 'openrouter_rate_limited',
+            message: 'OpenRouter rate limited model discovery.',
+            remediation: 'Cadence is keeping the last successful model catalog visible. Retry after the provider rate limit resets.',
+            affectedProfileId: profileId,
+            affectedProviderId: 'openrouter',
+          }),
+        ],
+        modelCatalog: makeProviderModelCatalog(profileId, {
+          source: 'cache',
+          lastRefreshError: {
+            code: 'openrouter_rate_limited',
+            message: 'OpenRouter rate limited model discovery.',
+            retryable: true,
+          },
+        }),
+      }),
+    )
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          onCheckProviderProfile,
+        })}
+      />,
+    )
+
+    const card = getProviderCard('OpenRouter')
+    fireEvent.click(within(card).getByRole('button', { name: /check connection/i }))
+
+    await waitFor(() => expect(within(card).getByText('Connection check found 1 warning.')).toBeVisible())
+    expect(
+      within(card).getByText(
+        'Cadence is keeping the last successful model catalog visible. Retry after the provider rate limit resets.',
+      ),
+    ).toBeVisible()
+  })
+
+  it('runs provider connection checks with network probes and confirms success', async () => {
+    const onCheckProviderProfile = vi.fn(async (profileId: string) =>
+      makeProviderProfileDiagnostics({ profileId }),
+    )
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          onCheckProviderProfile,
+        })}
+      />,
+    )
+
+    const card = getProviderCard('OpenRouter')
+    fireEvent.click(within(card).getByRole('button', { name: /check connection/i }))
+
+    await waitFor(() =>
+      expect(onCheckProviderProfile).toHaveBeenCalledWith('openrouter-default', {
+        includeNetwork: true,
+      }),
+    )
+    expect(within(card).getByText('Connection check passed.')).toBeVisible()
+    expect(
+      within(card).getByText('Validation and provider reachability checks completed without repair steps.'),
+    ).toBeVisible()
   })
 
   it('shows route target validation errors and omits project metadata when creating routes', async () => {
@@ -1687,8 +2056,8 @@ describe('SettingsDialog', () => {
     expect(screen.getByText('Acme Tools')).toBeVisible()
     expect(screen.getAllByText('Open Panel').length).toBeGreaterThan(0)
     expect(screen.getByText('Project automation helpers.')).toBeVisible()
-    expect(screen.getByText('1 plugins')).toBeVisible()
-    expect(screen.getByText('1 commands')).toBeVisible()
+    expect(screen.getByText(/1 plugins/)).toBeVisible()
+    expect(screen.getByText(/1 commands/)).toBeVisible()
 
     fireEvent.click(screen.getByText('Plugin metadata'))
     expect(screen.getAllByText('/tmp/cadence-plugins/acme-tools').length).toBeGreaterThan(0)

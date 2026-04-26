@@ -10,12 +10,14 @@ use std::{
 use cadence_desktop_lib::{
     auth::{AnthropicAuthConfig, OpenAiCompatibleAuthConfig, OpenRouterAuthConfig},
     commands::{
+        provider_diagnostics::check_provider_profile,
         provider_model_catalog::get_provider_model_catalog,
-        provider_profiles::upsert_provider_profile, GetProviderModelCatalogRequestDto,
-        ProviderModelCatalogSourceDto, ProviderModelThinkingEffortDto,
-        UpsertProviderProfileRequestDto,
+        provider_profiles::upsert_provider_profile, CheckProviderProfileRequestDto,
+        GetProviderModelCatalogRequestDto, ProviderModelCatalogSourceDto,
+        ProviderModelThinkingEffortDto, UpsertProviderProfileRequestDto,
     },
     configure_builder_with_state,
+    runtime::CadenceDiagnosticStatus,
     state::DesktopState,
 };
 use tauri::Manager;
@@ -1195,4 +1197,222 @@ fn get_provider_model_catalog_projects_manual_azure_model_truth_when_list_models
     assert_eq!(catalog.models.len(), 1);
     assert_eq!(catalog.models[0].model_id, "gpt-4.1-mini");
     assert!(!catalog.models[0].thinking.supported);
+}
+
+#[test]
+fn check_provider_profile_validates_and_probes_openrouter_reachability() {
+    let models_base_url = spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"openai/o4-mini","name":"OpenAI o4-mini","supported_parameters":["reasoning"]}]}"#,
+    );
+    let root = tempfile::tempdir().expect("temp dir");
+    let state = create_state(&root).with_openrouter_auth_config_override(openrouter_auth_config(
+        format!("{models_base_url}/api/v1/models"),
+    ));
+    let app = build_mock_app(state);
+    seed_openrouter_profile(&app, "openrouter-work", "openai/o4-mini", "sk-or-v1-test");
+
+    let report = check_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CheckProviderProfileRequestDto {
+            profile_id: "openrouter-work".into(),
+            include_network: true,
+        },
+    )
+    .expect("check openrouter provider profile");
+
+    assert_eq!(report.profile_id, "openrouter-work");
+    assert_eq!(report.provider_id, "openrouter");
+    assert!(report
+        .validation_checks
+        .iter()
+        .all(|check| check.status != CadenceDiagnosticStatus::Failed));
+    assert!(report.reachability_checks.iter().any(|check| {
+        check.code == "provider_model_catalog_ready"
+            && check.status == CadenceDiagnosticStatus::Passed
+    }));
+    assert_eq!(
+        report
+            .model_catalog
+            .as_ref()
+            .map(|catalog| catalog.source.clone()),
+        Some(ProviderModelCatalogSourceDto::Live)
+    );
+}
+
+#[test]
+fn check_provider_profile_surfaces_openrouter_auth_failure_without_aborting_validation() {
+    let models_base_url = spawn_static_http_server(401, r#"{"error":"bad api key"}"#);
+    let root = tempfile::tempdir().expect("temp dir");
+    let state = create_state(&root).with_openrouter_auth_config_override(openrouter_auth_config(
+        format!("{models_base_url}/api/v1/models"),
+    ));
+    let app = build_mock_app(state);
+    seed_openrouter_profile(&app, "openrouter-work", "openai/o4-mini", "sk-or-v1-test");
+
+    let report = check_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CheckProviderProfileRequestDto {
+            profile_id: "openrouter-work".into(),
+            include_network: true,
+        },
+    )
+    .expect("return diagnostics for openrouter auth failure");
+
+    assert!(report
+        .validation_checks
+        .iter()
+        .any(|check| check.code == "provider_profile_ready"));
+    assert!(report.reachability_checks.iter().any(|check| {
+        check.code == "openrouter_invalid_api_key"
+            && check.status == CadenceDiagnosticStatus::Failed
+            && !check.retryable
+    }));
+    assert_eq!(
+        report
+            .model_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.last_refresh_error.as_ref())
+            .map(|error| error.code.as_str()),
+        Some("openrouter_invalid_api_key")
+    );
+}
+
+#[test]
+fn check_provider_profile_reports_stale_cache_warning_when_live_probe_is_rate_limited() {
+    let success_base_url = spawn_static_http_server(
+        200,
+        r#"{"data":[{"id":"openai/o4-mini","name":"OpenAI o4-mini","supported_parameters":["reasoning"]}]}"#,
+    );
+    let root = tempfile::tempdir().expect("temp dir");
+    let first_state = create_state(&root).with_openrouter_auth_config_override(
+        openrouter_auth_config(format!("{success_base_url}/api/v1/models")),
+    );
+    let first_app = build_mock_app(first_state);
+    seed_openrouter_profile(
+        &first_app,
+        "openrouter-work",
+        "openai/o4-mini",
+        "sk-or-v1-first",
+    );
+    get_provider_model_catalog(
+        first_app.handle().clone(),
+        first_app.state::<DesktopState>(),
+        GetProviderModelCatalogRequestDto {
+            profile_id: "openrouter-work".into(),
+            force_refresh: true,
+        },
+    )
+    .expect("seed openrouter cache");
+
+    let failing_base_url = spawn_static_http_server(429, r#"{"error":"rate limited"}"#);
+    let second_state = create_state(&root).with_openrouter_auth_config_override(
+        openrouter_auth_config(format!("{failing_base_url}/api/v1/models")),
+    );
+    let second_app = build_mock_app(second_state);
+
+    let report = check_provider_profile(
+        second_app.handle().clone(),
+        second_app.state::<DesktopState>(),
+        CheckProviderProfileRequestDto {
+            profile_id: "openrouter-work".into(),
+            include_network: true,
+        },
+    )
+    .expect("return stale cache warning");
+
+    assert!(report.reachability_checks.iter().any(|check| {
+        check.code == "openrouter_rate_limited"
+            && check.status == CadenceDiagnosticStatus::Warning
+            && check.retryable
+    }));
+    assert_eq!(
+        report
+            .model_catalog
+            .as_ref()
+            .map(|catalog| catalog.source.clone()),
+        Some(ProviderModelCatalogSourceDto::Cache)
+    );
+}
+
+#[test]
+fn check_provider_profile_reports_ollama_unreachable_without_requesting_api_key() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    seed_openai_compatible_profile(
+        &app,
+        "ollama-work",
+        "ollama",
+        "openai_compatible",
+        "llama3.2",
+        Some("ollama"),
+        Some(&unused_local_openai_base_url()),
+        None,
+        None,
+    );
+
+    let report = check_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CheckProviderProfileRequestDto {
+            profile_id: "ollama-work".into(),
+            include_network: true,
+        },
+    )
+    .expect("return ollama reachability diagnostics");
+
+    assert!(report.reachability_checks.iter().any(|check| {
+        check.code == "ollama_provider_unavailable"
+            && check.status == CadenceDiagnosticStatus::Failed
+            && check.retryable
+            && !check.message.contains("API key")
+    }));
+    assert_eq!(
+        report
+            .model_catalog
+            .as_ref()
+            .map(|catalog| catalog.source.clone()),
+        Some(ProviderModelCatalogSourceDto::Unavailable)
+    );
+}
+
+#[test]
+fn check_provider_profile_projects_manual_azure_catalog_as_skipped_reachability() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let app = build_mock_app(create_state(&root));
+    seed_openai_compatible_profile(
+        &app,
+        "azure-work",
+        "azure_openai",
+        "openai_compatible",
+        "gpt-4.1-mini",
+        Some("azure_openai"),
+        Some("https://azure.example.invalid/openai/deployments/work"),
+        Some("2025-04-01-preview"),
+        Some("azure-secret"),
+    );
+
+    let report = check_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        CheckProviderProfileRequestDto {
+            profile_id: "azure-work".into(),
+            include_network: true,
+        },
+    )
+    .expect("return azure manual catalog diagnostics");
+
+    assert!(report.reachability_checks.iter().any(|check| {
+        check.code == "provider_model_catalog_manual"
+            && check.status == CadenceDiagnosticStatus::Skipped
+    }));
+    assert_eq!(
+        report
+            .model_catalog
+            .as_ref()
+            .map(|catalog| catalog.source.clone()),
+        Some(ProviderModelCatalogSourceDto::Manual)
+    );
 }

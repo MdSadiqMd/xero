@@ -30,7 +30,7 @@ pub fn get_provider_model_catalog<R: Runtime>(
     Ok(map_provider_model_catalog(catalog))
 }
 
-fn map_provider_model_catalog(catalog: ProviderModelCatalog) -> ProviderModelCatalogDto {
+pub(crate) fn map_provider_model_catalog(catalog: ProviderModelCatalog) -> ProviderModelCatalogDto {
     ProviderModelCatalogDto {
         profile_id: catalog.profile_id,
         provider_id: catalog.provider_id,

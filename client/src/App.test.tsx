@@ -1697,6 +1697,23 @@ function createAdapter(options?: {
       currentProviderModelCatalogs[profileId] = nextCatalog
       return nextCatalog
     },
+    checkProviderProfile: async (profileId) => {
+      const currentProfile = currentProviderProfiles.profiles.find((profile) => profile.profileId === profileId)
+      if (!currentProfile) {
+        throw new Error(`Missing provider profile ${profileId}`)
+      }
+
+      const modelCatalog = currentProviderModelCatalogs[profileId] ?? buildProviderModelCatalog(currentProfile)
+      currentProviderModelCatalogs[profileId] = modelCatalog
+      return {
+        checkedAt: '2026-04-26T12:00:00Z',
+        profileId,
+        providerId: currentProfile.providerId,
+        validationChecks: [],
+        reachabilityChecks: [],
+        modelCatalog,
+      }
+    },
     getProviderProfiles: async () => currentProviderProfiles,
     getRuntimeSession: async () => currentRuntimeSession,
     startOpenAiLogin: async (_projectId, _options) => {

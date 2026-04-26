@@ -1,6 +1,7 @@
 import { useEffect, useState, type ElementType } from "react"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
+  Activity,
   AlertCircle,
   Check,
   Cloud,
@@ -46,8 +47,10 @@ import type { CloudProviderPreset } from "@/src/lib/cadence-model/provider-prese
 import {
   getActiveProviderProfile,
   getProviderModelCatalogFetchedAt,
+  type CadenceDiagnosticCheckDto,
   type ProviderModelCatalogDto,
   type ProviderModelDto,
+  type ProviderProfileDiagnosticsDto,
   type ProviderProfilesDto,
   type ProviderProfileDto,
   type RuntimeSessionView,
@@ -110,6 +113,8 @@ interface ProviderModelCatalogState {
   selectedChoice: ProviderModelChoice | null
 }
 
+type ProviderProfileDiagnosticStatus = "idle" | "loading" | "ready" | "error"
+
 const PROVIDER_ICON_BY_ID: Record<SupportedProviderId, ElementType> = {
   openai_codex: OpenAIIcon,
   openrouter: KeyRound,
@@ -147,6 +152,53 @@ function errMsg(error: unknown, fallback: string): string {
 function errorViewMessage(error: OperatorActionErrorView | null, fallback: string): string {
   if (error?.message?.trim()) return error.message
   return fallback
+}
+
+function getProviderDiagnosticChecks(
+  report: ProviderProfileDiagnosticsDto,
+): CadenceDiagnosticCheckDto[] {
+  return [...report.validationChecks, ...report.reachabilityChecks]
+}
+
+function getActionableProviderDiagnosticChecks(
+  report: ProviderProfileDiagnosticsDto,
+): CadenceDiagnosticCheckDto[] {
+  const checks = getProviderDiagnosticChecks(report)
+  const actionable = checks.filter((check) => check.status === "failed" || check.status === "warning")
+  if (actionable.length > 0) return actionable
+  return checks.filter((check) => check.status === "skipped" && check.code !== "provider_profile_not_active")
+}
+
+function getProviderDiagnosticSummary(report: ProviderProfileDiagnosticsDto): string {
+  const checks = getProviderDiagnosticChecks(report)
+  const failed = checks.filter((check) => check.status === "failed").length
+  const warnings = checks.filter((check) => check.status === "warning").length
+
+  if (failed > 0) {
+    return `Connection check found ${failed} issue${failed === 1 ? "" : "s"}.`
+  }
+
+  if (warnings > 0) {
+    return `Connection check found ${warnings} warning${warnings === 1 ? "" : "s"}.`
+  }
+
+  return "Connection check passed."
+}
+
+function getDiagnosticRowClassName(check: CadenceDiagnosticCheckDto): string {
+  if (check.status === "failed") {
+    return "border-destructive/30 bg-destructive/5 text-destructive"
+  }
+
+  if (check.status === "warning") {
+    return "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-200"
+  }
+
+  if (check.status === "skipped") {
+    return "border-border bg-muted/30 text-muted-foreground"
+  }
+
+  return "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-200"
 }
 
 function normalizeOptionalText(value: string): string | null {
@@ -561,6 +613,10 @@ export interface ProviderProfileFormProps {
     profileId: string,
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
+  onCheckProviderProfile?: (
+    profileId: string,
+    options?: { includeNetwork?: boolean },
+  ) => Promise<ProviderProfileDiagnosticsDto>
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   onSetActiveProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
   runtimeSession?: RuntimeSessionView | null
@@ -581,6 +637,7 @@ export function ProviderProfileForm({
   providerModelCatalogLoadErrors = {},
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
+  onCheckProviderProfile,
   onUpsertProviderProfile,
   onSetActiveProviderProfile,
   runtimeSession,
@@ -594,6 +651,10 @@ export function ProviderProfileForm({
   const [pendingAuth, setPendingAuth] = useState<AuthPending>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [authError, setAuthError] = useState<string | null>(null)
+  const [profileDiagnostics, setProfileDiagnostics] = useState<Record<string, ProviderProfileDiagnosticsDto>>({})
+  const [profileDiagnosticStatuses, setProfileDiagnosticStatuses] =
+    useState<Record<string, ProviderProfileDiagnosticStatus>>({})
+  const [profileDiagnosticErrors, setProfileDiagnosticErrors] = useState<Record<string, string | null>>({})
 
   const cards = getProfileCards(providerProfiles)
   const isRefreshing = providerProfilesLoadStatus === "loading"
@@ -780,6 +841,45 @@ export function ProviderProfileForm({
     await onRefreshProviderModelCatalog(profileId, { force: true }).catch(() => undefined)
   }
 
+  async function handleCheckConnection(card: ProviderProfileCard) {
+    const profileId = card.profile?.profileId
+    if (!profileId || !onCheckProviderProfile) {
+      return
+    }
+
+    setFormError(null)
+    setAuthError(null)
+    setProfileDiagnosticStatuses((currentStatuses) => ({
+      ...currentStatuses,
+      [profileId]: "loading",
+    }))
+    setProfileDiagnosticErrors((currentErrors) => ({
+      ...currentErrors,
+      [profileId]: null,
+    }))
+
+    try {
+      const report = await onCheckProviderProfile(profileId, { includeNetwork: true })
+      setProfileDiagnostics((currentReports) => ({
+        ...currentReports,
+        [profileId]: report,
+      }))
+      setProfileDiagnosticStatuses((currentStatuses) => ({
+        ...currentStatuses,
+        [profileId]: "ready",
+      }))
+    } catch (error) {
+      setProfileDiagnosticStatuses((currentStatuses) => ({
+        ...currentStatuses,
+        [profileId]: "error",
+      }))
+      setProfileDiagnosticErrors((currentErrors) => ({
+        ...currentErrors,
+        [profileId]: errMsg(error, `Could not check ${card.preset.label}.`),
+      }))
+    }
+  }
+
   async function handleOpenAiConnect() {
     if (!hasSelectedProject || !onStartLogin) return
 
@@ -930,6 +1030,18 @@ export function ProviderProfileForm({
           const modelChoiceGroups = groupProviderModelChoices(cardCatalogState.choices)
           const isCatalogRefreshing = cardCatalogState.loadStatus === "loading"
           const canRefreshCatalog = Boolean(onRefreshProviderModelCatalog && card.profile && card.preset.supportsCatalogRefresh)
+          const profileDiagnosticReport = card.profile ? profileDiagnostics[card.profile.profileId] ?? null : null
+          const profileDiagnosticStatus: ProviderProfileDiagnosticStatus = card.profile
+            ? profileDiagnosticStatuses[card.profile.profileId] ?? "idle"
+            : "idle"
+          const profileDiagnosticError = card.profile
+            ? profileDiagnosticErrors[card.profile.profileId] ?? null
+            : null
+          const actionableDiagnosticChecks = profileDiagnosticReport
+            ? getActionableProviderDiagnosticChecks(profileDiagnosticReport)
+            : []
+          const isCheckingConnection = profileDiagnosticStatus === "loading"
+          const canCheckConnection = Boolean(onCheckProviderProfile && card.profile)
 
           const statusBadge = isOpenAi && isOpenAiConnected
             ? { label: "Connected", className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300" }
@@ -971,7 +1083,7 @@ export function ProviderProfileForm({
                   ) : null}
                 </div>
 
-                <div className="flex shrink-0 items-center gap-1.5">
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                   {statusBadge ? (
                     <span
                       className={cn(
@@ -981,6 +1093,24 @@ export function ProviderProfileForm({
                     >
                       {statusBadge.label}
                     </span>
+                  ) : null}
+
+                  {canCheckConnection ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1.5 px-2.5 text-[11.5px]"
+                      disabled={isSaving || isCheckingConnection}
+                      onClick={() => void handleCheckConnection(card)}
+                    >
+                      {isCheckingConnection ? (
+                        <LoaderCircle className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Activity className="h-3 w-3" />
+                      )}
+                      Check connection
+                    </Button>
                   ) : null}
 
                   {isSelected ? null : (
@@ -1080,6 +1210,46 @@ export function ProviderProfileForm({
                     {inlineStatus.recovery ? <span className="mt-1 block">{inlineStatus.recovery}</span> : null}
                   </AlertDescription>
                 </Alert>
+              ) : null}
+
+              {profileDiagnosticError ? (
+                <Alert variant="destructive" className="mt-2.5 border-destructive/30 bg-destructive/5 py-2.5">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  <AlertDescription className="text-[12px] leading-relaxed">
+                    {profileDiagnosticError}
+                  </AlertDescription>
+                </Alert>
+              ) : profileDiagnosticReport ? (
+                <div className="mt-2.5 rounded-md border border-border/80 bg-muted/20 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+                    <p className="text-[12px] font-medium text-foreground">
+                      {getProviderDiagnosticSummary(profileDiagnosticReport)}
+                    </p>
+                  </div>
+                  {actionableDiagnosticChecks.length > 0 ? (
+                    <div className="mt-2 grid gap-1.5">
+                      {actionableDiagnosticChecks.map((check) => (
+                        <div
+                          key={check.checkId}
+                          className={cn(
+                            "rounded-md border px-2.5 py-2 text-[11.5px] leading-relaxed",
+                            getDiagnosticRowClassName(check),
+                          )}
+                        >
+                          <p className="font-medium">{check.message}</p>
+                          {check.remediation ? (
+                            <p className="mt-1 opacity-85">{check.remediation}</p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-1.5 text-[11.5px] text-muted-foreground">
+                      Validation and provider reachability checks completed without repair steps.
+                    </p>
+                  )}
+                </div>
               ) : null}
 
               {isEditing ? (
