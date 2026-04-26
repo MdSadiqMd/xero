@@ -1,8 +1,11 @@
 use std::{
     collections::BTreeSet,
     fs,
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpListener,
     path::Path,
     sync::{Arc, Mutex},
+    thread,
 };
 
 use cadence_desktop_lib::{
@@ -10,6 +13,10 @@ use cadence_desktop_lib::{
         RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
     },
     db::project_store,
+    mcp::{
+        persist_mcp_registry, McpConnectionDiagnostic, McpConnectionState, McpConnectionStatus,
+        McpEnvironmentReference, McpRegistry, McpServerRecord, McpTransport,
+    },
     runtime::{
         AutonomousBundledSkillRoot, AutonomousLocalSkillRoot, AutonomousSkillCacheStore,
         AutonomousSkillRuntime, AutonomousSkillRuntimeConfig, AutonomousSkillSource,
@@ -220,6 +227,223 @@ fn standard_skill_tree(skill_id: &str, tree_hash: &str) -> AutonomousSkillSource
             },
         ],
     }
+}
+
+fn connected_mcp_connection() -> McpConnectionState {
+    McpConnectionState {
+        status: McpConnectionStatus::Connected,
+        diagnostic: None,
+        last_checked_at: Some("2026-04-25T00:00:00Z".into()),
+        last_healthy_at: Some("2026-04-25T00:00:00Z".into()),
+    }
+}
+
+fn unavailable_mcp_connection(status: McpConnectionStatus, code: &str) -> McpConnectionState {
+    McpConnectionState {
+        status,
+        diagnostic: Some(McpConnectionDiagnostic {
+            code: code.into(),
+            message: format!("MCP server is unavailable for test code {code}."),
+            retryable: true,
+        }),
+        last_checked_at: Some("2026-04-25T00:00:00Z".into()),
+        last_healthy_at: None,
+    }
+}
+
+fn mcp_server_record(
+    id: &str,
+    name: &str,
+    url: &str,
+    connection: McpConnectionState,
+) -> McpServerRecord {
+    McpServerRecord {
+        id: id.into(),
+        name: name.into(),
+        transport: McpTransport::Http { url: url.into() },
+        env: Vec::new(),
+        cwd: None,
+        connection,
+        updated_at: "2026-04-25T00:00:00Z".into(),
+    }
+}
+
+fn persist_mcp_servers(path: &Path, servers: Vec<McpServerRecord>) {
+    persist_mcp_registry(
+        path,
+        &McpRegistry {
+            version: 1,
+            servers,
+            updated_at: "2026-04-25T00:00:00Z".into(),
+        },
+    )
+    .expect("persist MCP registry");
+}
+
+fn spawn_mcp_skill_server() -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mcp skill server");
+    let address = listener.local_addr().expect("mcp skill server address");
+    thread::spawn(move || {
+        for _ in 0..48 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let body = read_http_request_body(&mut stream);
+            let value: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or_else(|_| serde_json::json!({}));
+            let method = value
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let id = value.get("id").and_then(serde_json::Value::as_i64);
+            if id.is_none() {
+                write!(
+                    stream,
+                    "HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+                )
+                .expect("write notification response");
+                continue;
+            }
+            let result = match method {
+                "initialize" => serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {}
+                }),
+                "resources/list" => serde_json::json!({
+                    "resources": [
+                        {
+                            "uri": "skill://workspace/review-skill/SKILL.md",
+                            "name": "review-skill",
+                            "description": "Review skill from an MCP resource.",
+                            "mimeType": "text/markdown",
+                            "metadata": {
+                                "cadenceSkill": true,
+                                "userInvocable": true
+                            }
+                        },
+                        {
+                            "uri": "file://workspace/notes.txt",
+                            "name": "notes",
+                            "description": "Not a skill."
+                        }
+                    ]
+                }),
+                "prompts/list" => serde_json::json!({
+                    "prompts": [
+                        {
+                            "name": "skill:deploy-helper",
+                            "description": "Deployment helper prompt.",
+                            "_meta": { "cadenceSkill": true }
+                        },
+                        {
+                            "name": "generic-prompt",
+                            "description": "Not a skill."
+                        }
+                    ]
+                }),
+                "resources/read" => serde_json::json!({
+                    "contents": [
+                        {
+                            "uri": "skill://workspace/review-skill/SKILL.md",
+                            "mimeType": "text/markdown",
+                            "text": "---\nname: review-skill\ndescription: Review skill from MCP.\nuser-invocable: true\n---\n\n# Review skill\n"
+                        },
+                        {
+                            "uri": "skill://workspace/review-skill/guide.md",
+                            "mimeType": "text/markdown",
+                            "text": "# MCP guide\n"
+                        }
+                    ]
+                }),
+                "prompts/get" => serde_json::json!({
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": {
+                                "type": "text",
+                                "text": "Use the deployment checklist from the MCP prompt."
+                            }
+                        }
+                    ]
+                }),
+                other => serde_json::json!({ "echoed": other }),
+            };
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result
+            })
+            .to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nmcp-session-id: test-session\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+                response.len(),
+                response,
+            )
+            .expect("write mcp skill response");
+        }
+    });
+    format!("http://{address}/mcp")
+}
+
+fn spawn_mcp_error_server(status: u16) -> String {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind mcp error server");
+    let address = listener.local_addr().expect("mcp error server address");
+    thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let _ = read_http_request_body(&mut stream);
+        let body = "{\"error\":\"auth required\"}";
+        write!(
+            stream,
+            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body,
+        )
+        .expect("write mcp error response");
+    });
+    format!("http://{address}/mcp")
+}
+
+fn read_http_request_body(stream: &mut impl Read) -> String {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    let mut content_length = 0_usize;
+    loop {
+        line.clear();
+        let bytes = reader.read_line(&mut line).expect("read request header");
+        if bytes == 0 || line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse().expect("content length");
+            }
+        }
+    }
+    let mut body = vec![0_u8; content_length];
+    reader.read_exact(&mut body).expect("read request body");
+    String::from_utf8(body).expect("utf8 request body")
+}
+
+fn runtime_with_mcp_skills(
+    root: &TempDir,
+    source: Arc<FixtureSkillSource>,
+    mcp_registry_path: &Path,
+) -> AutonomousToolRuntime {
+    AutonomousToolRuntime::new(root.path())
+        .expect("runtime")
+        .with_mcp_registry_path(mcp_registry_path)
+        .with_skill_tool_config(
+            "project-1",
+            skill_runtime(root, source),
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            Vec::new(),
+        )
 }
 
 #[test]
@@ -738,4 +962,330 @@ fn skill_tool_dynamic_candidates_start_disabled_untrusted_and_non_invocable() {
         }
         other => panic!("unexpected output: {other:?}"),
     }
+}
+
+#[test]
+fn skill_tool_projects_mcp_resource_and_prompt_skills_from_connected_servers_only() {
+    let root = tempfile::tempdir().expect("temp dir");
+    init_project_state(root.path());
+    let source = Arc::new(FixtureSkillSource::default());
+    source.set_tree_response(Ok(AutonomousSkillSourceTreeResponse {
+        entries: Vec::new(),
+    }));
+    let mcp_url = spawn_mcp_skill_server();
+    let mcp_registry_path = root.path().join("mcp-registry.json");
+    persist_mcp_servers(
+        &mcp_registry_path,
+        vec![
+            mcp_server_record(
+                "skills-mcp",
+                "Skills MCP",
+                &mcp_url,
+                connected_mcp_connection(),
+            ),
+            mcp_server_record(
+                "blocked-mcp",
+                "Blocked MCP",
+                &mcp_url,
+                unavailable_mcp_connection(McpConnectionStatus::Blocked, "blocked"),
+            ),
+            mcp_server_record(
+                "stale-mcp",
+                "Stale MCP",
+                &mcp_url,
+                unavailable_mcp_connection(McpConnectionStatus::Stale, "stale"),
+            ),
+            mcp_server_record(
+                "misconfigured-mcp",
+                "Misconfigured MCP",
+                &mcp_url,
+                unavailable_mcp_connection(McpConnectionStatus::Misconfigured, "misconfigured"),
+            ),
+        ],
+    );
+    let runtime = runtime_with_mcp_skills(&root, source, &mcp_registry_path);
+
+    let list = runtime
+        .execute(AutonomousToolRequest::Skill(CadenceSkillToolInput::List {
+            query: None,
+            include_unavailable: true,
+            limit: Some(20),
+        }))
+        .expect("list mcp skills");
+    match list.output {
+        AutonomousToolOutput::Skill(output) => {
+            let ids = output
+                .candidates
+                .iter()
+                .map(|candidate| candidate.skill_id.as_str())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(ids, BTreeSet::from(["deploy-helper", "review-skill"]));
+            assert!(output.candidates.iter().all(|candidate| {
+                candidate.source_kind == CadenceSkillSourceKind::Mcp
+                    && candidate.trust == CadenceSkillTrustState::Trusted
+                    && candidate.description.contains("Skills MCP")
+                    && candidate.description.contains("skills-mcp")
+            }));
+            assert_eq!(
+                output
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.code == "skill_tool_mcp_server_unavailable")
+                    .count(),
+                3
+            );
+            assert!(output.candidates.iter().all(|candidate| !candidate
+                .source_id
+                .contains("blocked-mcp")
+                && !candidate.source_id.contains("stale-mcp")
+                && !candidate.source_id.contains("misconfigured-mcp")));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+}
+
+#[test]
+fn skill_tool_invokes_mcp_skills_and_keeps_them_out_of_installed_state() {
+    let root = tempfile::tempdir().expect("temp dir");
+    init_project_state(root.path());
+    let source = Arc::new(FixtureSkillSource::default());
+    source.set_tree_response(Ok(AutonomousSkillSourceTreeResponse {
+        entries: Vec::new(),
+    }));
+    let mcp_url = spawn_mcp_skill_server();
+    let mcp_registry_path = root.path().join("mcp-registry.json");
+    persist_mcp_servers(
+        &mcp_registry_path,
+        vec![mcp_server_record(
+            "skills-mcp",
+            "Skills MCP",
+            &mcp_url,
+            connected_mcp_connection(),
+        )],
+    );
+    let runtime = runtime_with_mcp_skills(&root, source, &mcp_registry_path);
+
+    let list = runtime
+        .execute(AutonomousToolRequest::Skill(CadenceSkillToolInput::List {
+            query: None,
+            include_unavailable: false,
+            limit: Some(20),
+        }))
+        .expect("list mcp skills");
+    let candidates = match list.output {
+        AutonomousToolOutput::Skill(output) => output.candidates,
+        other => panic!("unexpected output: {other:?}"),
+    };
+    let review_source_id = candidates
+        .iter()
+        .find(|candidate| candidate.skill_id == "review-skill")
+        .expect("resource skill")
+        .source_id
+        .clone();
+    let prompt_source_id = candidates
+        .iter()
+        .find(|candidate| candidate.skill_id == "deploy-helper")
+        .expect("prompt skill")
+        .source_id
+        .clone();
+
+    let resource = runtime
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Invoke {
+                source_id: review_source_id,
+                approval_grant_id: None,
+                include_supporting_assets: true,
+            },
+        ))
+        .expect("invoke mcp resource skill");
+    match resource.output {
+        AutonomousToolOutput::Skill(output) => {
+            assert_eq!(output.status, AutonomousSkillToolStatus::Succeeded);
+            let context = output.context.expect("resource context");
+            assert_eq!(context.skill_id, "review-skill");
+            assert!(context.markdown.content.contains("# Review skill"));
+            assert_eq!(context.supporting_assets.len(), 1);
+            assert_eq!(output.lifecycle_events.len(), 1);
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+
+    let prompt = runtime
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Invoke {
+                source_id: prompt_source_id,
+                approval_grant_id: None,
+                include_supporting_assets: true,
+            },
+        ))
+        .expect("invoke mcp prompt skill");
+    match prompt.output {
+        AutonomousToolOutput::Skill(output) => {
+            assert_eq!(output.status, AutonomousSkillToolStatus::Succeeded);
+            let context = output.context.expect("prompt context");
+            assert_eq!(context.skill_id, "deploy-helper");
+            assert!(context.markdown.content.contains("name: deploy-helper"));
+            assert!(context
+                .markdown
+                .content
+                .contains("Use the deployment checklist from the MCP prompt."));
+            assert!(context.supporting_assets.is_empty());
+            assert_eq!(output.lifecycle_events.len(), 1);
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+
+    let installed = project_store::list_installed_skills(
+        root.path(),
+        project_store::InstalledSkillScopeFilter::project("project-1", true)
+            .expect("project filter"),
+    )
+    .expect("list installed skills");
+    assert!(installed.is_empty());
+}
+
+#[test]
+fn skill_tool_reports_mcp_invocation_failures_without_corrupting_installed_state() {
+    let root = tempfile::tempdir().expect("temp dir");
+    init_project_state(root.path());
+    let source = Arc::new(FixtureSkillSource::default());
+    source.set_tree_response(Ok(AutonomousSkillSourceTreeResponse {
+        entries: Vec::new(),
+    }));
+    let mcp_url = spawn_mcp_skill_server();
+    let mcp_registry_path = root.path().join("mcp-registry.json");
+    persist_mcp_servers(
+        &mcp_registry_path,
+        vec![mcp_server_record(
+            "skills-mcp",
+            "Skills MCP",
+            &mcp_url,
+            connected_mcp_connection(),
+        )],
+    );
+    let runtime = runtime_with_mcp_skills(&root, source, &mcp_registry_path);
+    let list = runtime
+        .execute(AutonomousToolRequest::Skill(CadenceSkillToolInput::List {
+            query: Some("review".into()),
+            include_unavailable: false,
+            limit: Some(20),
+        }))
+        .expect("list mcp skills");
+    let source_id = match list.output {
+        AutonomousToolOutput::Skill(output) => output
+            .candidates
+            .iter()
+            .find(|candidate| candidate.skill_id == "review-skill")
+            .expect("resource skill")
+            .source_id
+            .clone(),
+        other => panic!("unexpected output: {other:?}"),
+    };
+
+    persist_mcp_servers(
+        &mcp_registry_path,
+        vec![McpServerRecord {
+            id: "skills-mcp".into(),
+            name: "Skills MCP".into(),
+            transport: McpTransport::Stdio {
+                command: "python3".into(),
+                args: Vec::new(),
+            },
+            env: vec![McpEnvironmentReference {
+                key: "MCP_TOKEN".into(),
+                from_env: "__CADENCE_TEST_MISSING_MCP_SKILL_TOKEN__".into(),
+            }],
+            cwd: None,
+            connection: connected_mcp_connection(),
+            updated_at: "2026-04-25T00:00:01Z".into(),
+        }],
+    );
+    let auth_failure = runtime
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Invoke {
+                source_id: source_id.clone(),
+                approval_grant_id: None,
+                include_supporting_assets: false,
+            },
+        ))
+        .expect("mcp auth failure is typed output");
+    match auth_failure.output {
+        AutonomousToolOutput::Skill(output) => {
+            assert_eq!(output.status, AutonomousSkillToolStatus::Failed);
+            assert!(output.context.is_none());
+            assert!(output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "autonomous_tool_mcp_env_missing"));
+            assert_eq!(output.lifecycle_events.len(), 1);
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+
+    persist_mcp_servers(
+        &mcp_registry_path,
+        vec![mcp_server_record(
+            "skills-mcp",
+            "Skills MCP",
+            &mcp_url,
+            unavailable_mcp_connection(McpConnectionStatus::Stale, "stale"),
+        )],
+    );
+    let disconnected = runtime
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Invoke {
+                source_id: source_id.clone(),
+                approval_grant_id: None,
+                include_supporting_assets: false,
+            },
+        ))
+        .expect("mcp disconnected failure is typed output");
+    match disconnected.output {
+        AutonomousToolOutput::Skill(output) => {
+            assert_eq!(output.status, AutonomousSkillToolStatus::Failed);
+            assert!(output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "autonomous_tool_mcp_server_not_connected"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+
+    let error_url = spawn_mcp_error_server(401);
+    persist_mcp_servers(
+        &mcp_registry_path,
+        vec![mcp_server_record(
+            "skills-mcp",
+            "Skills MCP",
+            &error_url,
+            connected_mcp_connection(),
+        )],
+    );
+    let transport_failure = runtime
+        .execute(AutonomousToolRequest::Skill(
+            CadenceSkillToolInput::Invoke {
+                source_id,
+                approval_grant_id: None,
+                include_supporting_assets: false,
+            },
+        ))
+        .expect("mcp transport failure is typed output");
+    match transport_failure.output {
+        AutonomousToolOutput::Skill(output) => {
+            assert_eq!(output.status, AutonomousSkillToolStatus::Failed);
+            assert!(output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "autonomous_tool_mcp_http_status"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+
+    let installed = project_store::list_installed_skills(
+        root.path(),
+        project_store::InstalledSkillScopeFilter::project("project-1", true)
+            .expect("project filter"),
+    )
+    .expect("list installed skills");
+    assert!(installed.is_empty());
 }

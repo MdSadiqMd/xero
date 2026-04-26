@@ -829,7 +829,7 @@ const LSP_SERVER_DESCRIPTORS: &[LspServerDescriptor] = &[
     },
 ];
 
-fn connected_mcp_server<'a>(
+pub(super) fn connected_mcp_server<'a>(
     servers: &'a [McpServerRecord],
     server_id: &str,
 ) -> CommandResult<&'a McpServerRecord> {
@@ -2102,7 +2102,7 @@ fn required_trimmed(value: Option<&str>, field: &'static str) -> CommandResult<S
     Ok(value.trim().into())
 }
 
-fn normalize_mcp_timeout(timeout_ms: Option<u64>) -> CommandResult<u64> {
+pub(super) fn normalize_mcp_timeout(timeout_ms: Option<u64>) -> CommandResult<u64> {
     let timeout = timeout_ms.unwrap_or(DEFAULT_MCP_TIMEOUT_MS);
     if timeout == 0 || timeout > MAX_MCP_TIMEOUT_MS {
         return Err(CommandError::user_fixable(
@@ -2150,7 +2150,7 @@ fn mcp_method_and_params(
     }
 }
 
-fn invoke_mcp_server(
+pub(super) fn invoke_mcp_server(
     server: &McpServerRecord,
     method: &str,
     params: JsonValue,

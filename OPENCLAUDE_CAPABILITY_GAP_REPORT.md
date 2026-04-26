@@ -405,15 +405,17 @@ Outcome: plugins can contribute skills and commands through Cadence-controlled m
 
 Outcome: MCP servers can contribute model-visible skills without weakening the existing MCP registry approval model.
 
-- Slice 2.5.1: Extend MCP projection with skill metadata.
+- [x] Slice 2.5.1: Extend MCP projection with skill metadata.
   - Scope: map MCP-provided skill resources/prompts, where available, into Cadence skill candidate records with server provenance and approval state.
   - Acceptance: MCP skills are visible only for approved/connected servers and include enough provenance for users to identify the contributing server.
   - Verification: MCP projection tests cover connected, blocked, stale, and misconfigured servers.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed 7 tests, including MCP resource/prompt projection from connected servers, blocked/stale/misconfigured server filtering, and server provenance assertions.
 
-- Slice 2.5.2: Invoke MCP-provided skills through SkillTool.
+- [x] Slice 2.5.2: Invoke MCP-provided skills through SkillTool.
   - Scope: route MCP skill invocation through existing MCP tool/resource/prompt invocation mechanics instead of creating a parallel transport.
   - Acceptance: server approval, authentication failures, and transport failures surface as typed skill diagnostics and do not corrupt installed skill state.
   - Verification: integration-style tests cover successful invocation, auth-required failure, disconnected server failure, and lifecycle event persistence.
+  - Completed: 2026-04-26. Verification evidence: `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_skill_model_tool` passed successful MCP resource and prompt SkillTool invocation, auth/env failure, disconnected-server failure, transport failure, lifecycle event assertions, and installed-skill registry non-mutation assertions; `cargo test --manifest-path client/src-tauri/Cargo.toml --test autonomous_tool_runtime` passed 21 tests covering the shared MCP transport regression surface.
 
 ##### Phase 6: Hardening, Docs, And Completion Criteria
 

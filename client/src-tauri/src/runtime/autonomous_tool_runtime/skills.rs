@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -17,6 +18,7 @@ use crate::{
     db::project_store::{
         self, InstalledSkillDiagnosticRecord, InstalledSkillRecord, InstalledSkillScopeFilter,
     },
+    mcp::{load_mcp_registry_from_path, McpConnectionStatus, McpServerRecord},
     runtime::autonomous_skill_runtime::{
         decide_skill_tool_access, discover_bundled_skill_directory, discover_local_skill_directory,
         discover_plugin_roots, discover_plugin_skill_contribution,
@@ -40,6 +42,7 @@ pub(super) enum CachedSkillToolCandidate {
     Installed(InstalledSkillRecord),
     Discovered(CadenceDiscoveredSkill),
     Github(ResolvedGithubSkillCandidate),
+    Mcp(ResolvedMcpSkillCandidate),
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +53,24 @@ pub(super) struct ResolvedGithubSkillCandidate {
     pub description: String,
     pub user_invocable: Option<bool>,
     pub github_source: AutonomousSkillSourceMetadata,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ResolvedMcpSkillCandidate {
+    pub source: CadenceSkillSourceRecord,
+    pub skill_id: String,
+    pub name: String,
+    pub description: String,
+    pub user_invocable: Option<bool>,
+    pub version_hash: String,
+    pub server_id: String,
+    pub capability: McpSkillCapability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum McpSkillCapability {
+    Resource { uri: String },
+    Prompt { name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -252,6 +273,7 @@ impl AutonomousToolRuntime {
             CachedSkillToolCandidate::Github(candidate) => {
                 self.install_github_skill(skill_tool, &candidate.github_source)
             }
+            CachedSkillToolCandidate::Mcp(candidate) => self.install_mcp_skill(&candidate),
             CachedSkillToolCandidate::Discovered(candidate) => {
                 self.install_discovered_skill(&candidate, approval_grant_id)
             }
@@ -296,6 +318,9 @@ impl AutonomousToolRuntime {
                 &candidate.github_source,
                 include_supporting_assets,
             ),
+            CachedSkillToolCandidate::Mcp(candidate) => {
+                self.invoke_mcp_skill(&candidate, include_supporting_assets)
+            }
             CachedSkillToolCandidate::Discovered(candidate) => self.invoke_discovered_skill(
                 &candidate,
                 approval_grant_id,
@@ -480,6 +505,12 @@ impl AutonomousToolRuntime {
         self.collect_local_skills(skill_tool, &mut entries, &mut diagnostics)?;
         self.collect_bundled_skills(skill_tool, &mut entries, &mut diagnostics)?;
         self.collect_plugin_skills(skill_tool, &mut entries, &mut diagnostics)?;
+        self.collect_mcp_skills(
+            skill_tool,
+            include_unavailable,
+            &mut entries,
+            &mut diagnostics,
+        )?;
         if let Some(query) = query.filter(|value| !value.trim().is_empty()) {
             self.collect_github_skills(skill_tool, query, &mut entries, &mut diagnostics)?;
         }
@@ -681,6 +712,46 @@ impl AutonomousToolRuntime {
         Ok(())
     }
 
+    fn collect_mcp_skills(
+        &self,
+        skill_tool: &super::AutonomousSkillToolRuntime,
+        include_unavailable: bool,
+        entries: &mut BTreeMap<String, CachedSkillToolCandidate>,
+        diagnostics: &mut Vec<CadenceSkillToolDiagnostic>,
+    ) -> CommandResult<()> {
+        let Some(registry_path) = self.mcp_registry_path.as_ref() else {
+            return Ok(());
+        };
+        let registry = match load_mcp_registry_from_path(registry_path) {
+            Ok(registry) => registry,
+            Err(error) => {
+                diagnostics.push(skill_tool_diagnostic_from_command_error(&error));
+                return Ok(());
+            }
+        };
+        let timeout = super::priority_tools::normalize_mcp_timeout(None)?;
+
+        for server in &registry.servers {
+            if server.connection.status != McpConnectionStatus::Connected {
+                if include_unavailable {
+                    diagnostics.push(mcp_server_unavailable_diagnostic(server));
+                }
+                continue;
+            }
+
+            collect_mcp_resource_skill_candidates(
+                skill_tool,
+                server,
+                timeout,
+                entries,
+                diagnostics,
+            );
+            collect_mcp_prompt_skill_candidates(skill_tool, server, timeout, entries, diagnostics);
+        }
+
+        Ok(())
+    }
+
     fn cache_skill_candidates(&self, entries: &[CachedSkillToolCandidate]) -> CommandResult<()> {
         let Some(skill_tool) = self.skill_tool.as_ref() else {
             return Ok(());
@@ -850,6 +921,11 @@ impl AutonomousToolRuntime {
         Ok(())
     }
 
+    fn install_mcp_skill(&self, candidate: &ResolvedMcpSkillCandidate) -> CommandResult<()> {
+        let _ = self.connected_mcp_skill_server(candidate)?;
+        Ok(())
+    }
+
     fn install_discovered_skill(
         &self,
         candidate: &CadenceDiscoveredSkill,
@@ -882,6 +958,7 @@ impl AutonomousToolRuntime {
                 })?;
                 self.install_github_skill(skill_tool, &source)
             }
+            CadenceSkillSourceLocator::Mcp { .. } => Ok(()),
             CadenceSkillSourceLocator::Dynamic { .. }
                 if record.source.state != CadenceSkillSourceState::Enabled =>
             {
@@ -937,6 +1014,54 @@ impl AutonomousToolRuntime {
         skill_context_from_github_invocation(&source_record, invoked, include_supporting_assets)
     }
 
+    fn invoke_mcp_skill(
+        &self,
+        candidate: &ResolvedMcpSkillCandidate,
+        include_supporting_assets: bool,
+    ) -> CommandResult<CadenceSkillToolContextPayload> {
+        let server = self.connected_mcp_skill_server(candidate)?;
+        let timeout = super::priority_tools::normalize_mcp_timeout(None)?;
+        match &candidate.capability {
+            McpSkillCapability::Resource { uri } => {
+                let result = super::priority_tools::invoke_mcp_server(
+                    &server,
+                    "resources/read",
+                    json!({ "uri": uri }),
+                    timeout,
+                )?;
+                mcp_resource_context(candidate, result, include_supporting_assets)
+            }
+            McpSkillCapability::Prompt { name } => {
+                let result = super::priority_tools::invoke_mcp_server(
+                    &server,
+                    "prompts/get",
+                    json!({
+                        "name": name,
+                        "arguments": {}
+                    }),
+                    timeout,
+                )?;
+                mcp_prompt_context(candidate, result)
+            }
+        }
+    }
+
+    fn connected_mcp_skill_server(
+        &self,
+        candidate: &ResolvedMcpSkillCandidate,
+    ) -> CommandResult<McpServerRecord> {
+        let registry_path = self.mcp_registry_path.as_ref().ok_or_else(|| {
+            CommandError::user_fixable(
+                "skill_tool_mcp_registry_unavailable",
+                "Cadence cannot invoke MCP-provided skills because no MCP registry path is wired.",
+            )
+        })?;
+        let registry = load_mcp_registry_from_path(registry_path)?;
+        let server =
+            super::priority_tools::connected_mcp_server(&registry.servers, &candidate.server_id)?;
+        Ok(server.clone())
+    }
+
     fn invoke_discovered_skill(
         &self,
         candidate: &CadenceDiscoveredSkill,
@@ -964,6 +1089,10 @@ impl AutonomousToolRuntime {
                 })?;
                 self.invoke_github_skill(skill_tool, &source, include_supporting_assets)
             }
+            CadenceSkillSourceLocator::Mcp { .. } => Err(CommandError::user_fixable(
+                "skill_tool_mcp_installed_state_unsupported",
+                "MCP-provided skills are invoked from the connected MCP server rather than from installed filesystem state.",
+            )),
             CadenceSkillSourceLocator::Dynamic { .. }
                 if record.source.state != CadenceSkillSourceState::Enabled =>
             {
@@ -1166,6 +1295,206 @@ impl AutonomousToolRuntime {
     }
 }
 
+fn collect_mcp_resource_skill_candidates(
+    skill_tool: &super::AutonomousSkillToolRuntime,
+    server: &McpServerRecord,
+    timeout: u64,
+    entries: &mut BTreeMap<String, CachedSkillToolCandidate>,
+    diagnostics: &mut Vec<CadenceSkillToolDiagnostic>,
+) {
+    let result = match super::priority_tools::invoke_mcp_server(
+        server,
+        "resources/list",
+        json!({}),
+        timeout,
+    ) {
+        Ok(result) => result,
+        Err(error) if mcp_capability_absent(&error) => return,
+        Err(error) => {
+            diagnostics.push(mcp_projection_error_diagnostic(
+                server,
+                "resources/list",
+                &error,
+            ));
+            return;
+        }
+    };
+    let Some(resources) = result.get("resources").and_then(JsonValue::as_array) else {
+        diagnostics.push(diagnostic(
+            "skill_tool_mcp_projection_invalid",
+            format!(
+                "Cadence could not project MCP skills from server `{}` because resources/list did not return a resources array.",
+                server.id
+            ),
+            false,
+        ));
+        return;
+    };
+
+    for resource in resources {
+        match mcp_resource_skill_candidate(skill_tool, server, resource) {
+            Ok(Some(candidate)) => {
+                insert_candidate(entries, CachedSkillToolCandidate::Mcp(candidate))
+            }
+            Ok(None) => {}
+            Err(error) => diagnostics.push(skill_tool_diagnostic_from_command_error(&error)),
+        }
+    }
+}
+
+fn collect_mcp_prompt_skill_candidates(
+    skill_tool: &super::AutonomousSkillToolRuntime,
+    server: &McpServerRecord,
+    timeout: u64,
+    entries: &mut BTreeMap<String, CachedSkillToolCandidate>,
+    diagnostics: &mut Vec<CadenceSkillToolDiagnostic>,
+) {
+    let result = match super::priority_tools::invoke_mcp_server(
+        server,
+        "prompts/list",
+        json!({}),
+        timeout,
+    ) {
+        Ok(result) => result,
+        Err(error) if mcp_capability_absent(&error) => return,
+        Err(error) => {
+            diagnostics.push(mcp_projection_error_diagnostic(
+                server,
+                "prompts/list",
+                &error,
+            ));
+            return;
+        }
+    };
+    let Some(prompts) = result.get("prompts").and_then(JsonValue::as_array) else {
+        diagnostics.push(diagnostic(
+            "skill_tool_mcp_projection_invalid",
+            format!(
+                "Cadence could not project MCP skills from server `{}` because prompts/list did not return a prompts array.",
+                server.id
+            ),
+            false,
+        ));
+        return;
+    };
+
+    for prompt in prompts {
+        match mcp_prompt_skill_candidate(skill_tool, server, prompt) {
+            Ok(Some(candidate)) => {
+                insert_candidate(entries, CachedSkillToolCandidate::Mcp(candidate))
+            }
+            Ok(None) => {}
+            Err(error) => diagnostics.push(skill_tool_diagnostic_from_command_error(&error)),
+        }
+    }
+}
+
+fn mcp_resource_skill_candidate(
+    skill_tool: &super::AutonomousSkillToolRuntime,
+    server: &McpServerRecord,
+    resource: &JsonValue,
+) -> CommandResult<Option<ResolvedMcpSkillCandidate>> {
+    if !mcp_resource_is_skill(resource) {
+        return Ok(None);
+    }
+    let uri = required_json_string(resource, "uri", "skill_tool_mcp_resource_invalid")?;
+    let skill_id = mcp_skill_id_from_value(resource)
+        .or_else(|| mcp_skill_id_from_text(resource.get("name").and_then(JsonValue::as_str)))
+        .or_else(|| mcp_skill_id_from_uri(&uri))
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "skill_tool_mcp_skill_id_invalid",
+                format!(
+                    "Cadence could not derive a kebab-case skill id for MCP resource `{uri}` from server `{}`.",
+                    server.id
+                ),
+            )
+        })?;
+    let name = resource
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&skill_id)
+        .to_owned();
+    let base_description = resource
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("MCP resource skill.");
+    let capability_id = mcp_capability_id("resource", &skill_id, &uri);
+    let source = CadenceSkillSourceRecord::new(
+        CadenceSkillSourceScope::project(skill_tool.project_id.clone())?,
+        CadenceSkillSourceLocator::Mcp {
+            server_id: server.id.clone(),
+            capability_id,
+            skill_id: skill_id.clone(),
+        },
+        CadenceSkillSourceState::Discoverable,
+        CadenceSkillTrustState::Trusted,
+    )?;
+    Ok(Some(ResolvedMcpSkillCandidate {
+        source,
+        skill_id,
+        name,
+        description: mcp_candidate_description(base_description, server),
+        user_invocable: mcp_user_invocable(resource),
+        version_hash: mcp_candidate_hash(server, "resource", &uri, base_description),
+        server_id: server.id.clone(),
+        capability: McpSkillCapability::Resource { uri },
+    }))
+}
+
+fn mcp_prompt_skill_candidate(
+    skill_tool: &super::AutonomousSkillToolRuntime,
+    server: &McpServerRecord,
+    prompt: &JsonValue,
+) -> CommandResult<Option<ResolvedMcpSkillCandidate>> {
+    if !mcp_prompt_is_skill(prompt) {
+        return Ok(None);
+    }
+    let prompt_name = required_json_string(prompt, "name", "skill_tool_mcp_prompt_invalid")?;
+    let skill_id = mcp_skill_id_from_value(prompt)
+        .or_else(|| mcp_skill_id_from_prompt_name(&prompt_name))
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "skill_tool_mcp_skill_id_invalid",
+                format!(
+                    "Cadence could not derive a kebab-case skill id for MCP prompt `{prompt_name}` from server `{}`.",
+                    server.id
+                ),
+            )
+        })?;
+    let base_description = prompt
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("MCP prompt skill.");
+    let capability_id = mcp_capability_id("prompt", &skill_id, &prompt_name);
+    let source = CadenceSkillSourceRecord::new(
+        CadenceSkillSourceScope::project(skill_tool.project_id.clone())?,
+        CadenceSkillSourceLocator::Mcp {
+            server_id: server.id.clone(),
+            capability_id,
+            skill_id: skill_id.clone(),
+        },
+        CadenceSkillSourceState::Discoverable,
+        CadenceSkillTrustState::Trusted,
+    )?;
+    Ok(Some(ResolvedMcpSkillCandidate {
+        source,
+        skill_id: skill_id.clone(),
+        name: skill_id.replace('-', " "),
+        description: mcp_candidate_description(base_description, server),
+        user_invocable: mcp_user_invocable(prompt),
+        version_hash: mcp_candidate_hash(server, "prompt", &prompt_name, base_description),
+        server_id: server.id.clone(),
+        capability: McpSkillCapability::Prompt { name: prompt_name },
+    }))
+}
+
 struct SkillToolDiscoveryResult {
     entries: Vec<CachedSkillToolCandidate>,
     diagnostics: Vec<CadenceSkillToolDiagnostic>,
@@ -1285,6 +1614,7 @@ fn source_record_for_entry(
         CachedSkillToolCandidate::Installed(record) => record.source.clone().validate(),
         CachedSkillToolCandidate::Discovered(candidate) => candidate.source.clone().validate(),
         CachedSkillToolCandidate::Github(candidate) => candidate.source.clone().validate(),
+        CachedSkillToolCandidate::Mcp(candidate) => candidate.source.clone().validate(),
     }
 }
 
@@ -1293,6 +1623,7 @@ fn candidate_source_id(entry: &CachedSkillToolCandidate) -> String {
         CachedSkillToolCandidate::Installed(record) => record.source.source_id.clone(),
         CachedSkillToolCandidate::Discovered(candidate) => candidate.source.source_id.clone(),
         CachedSkillToolCandidate::Github(candidate) => candidate.source.source_id.clone(),
+        CachedSkillToolCandidate::Mcp(candidate) => candidate.source.source_id.clone(),
     }
 }
 
@@ -1301,6 +1632,7 @@ fn candidate_skill_id(entry: &CachedSkillToolCandidate) -> String {
         CachedSkillToolCandidate::Installed(record) => record.skill_id.clone(),
         CachedSkillToolCandidate::Discovered(candidate) => candidate.skill_id.clone(),
         CachedSkillToolCandidate::Github(candidate) => candidate.skill_id.clone(),
+        CachedSkillToolCandidate::Mcp(candidate) => candidate.skill_id.clone(),
     }
 }
 
@@ -1309,6 +1641,7 @@ fn candidate_name(entry: &CachedSkillToolCandidate) -> String {
         CachedSkillToolCandidate::Installed(record) => record.name.clone(),
         CachedSkillToolCandidate::Discovered(candidate) => candidate.name.clone(),
         CachedSkillToolCandidate::Github(candidate) => candidate.name.clone(),
+        CachedSkillToolCandidate::Mcp(candidate) => candidate.name.clone(),
     }
 }
 
@@ -1317,6 +1650,7 @@ fn candidate_description(entry: &CachedSkillToolCandidate) -> String {
         CachedSkillToolCandidate::Installed(record) => record.description.clone(),
         CachedSkillToolCandidate::Discovered(candidate) => candidate.description.clone(),
         CachedSkillToolCandidate::Github(candidate) => candidate.description.clone(),
+        CachedSkillToolCandidate::Mcp(candidate) => candidate.description.clone(),
     }
 }
 
@@ -1325,6 +1659,7 @@ fn candidate_user_invocable(entry: &CachedSkillToolCandidate) -> Option<bool> {
         CachedSkillToolCandidate::Installed(record) => record.user_invocable,
         CachedSkillToolCandidate::Discovered(candidate) => candidate.user_invocable,
         CachedSkillToolCandidate::Github(candidate) => candidate.user_invocable,
+        CachedSkillToolCandidate::Mcp(candidate) => candidate.user_invocable,
     }
 }
 
@@ -1335,13 +1670,16 @@ fn candidate_version_hash(entry: &CachedSkillToolCandidate) -> Option<String> {
         CachedSkillToolCandidate::Github(candidate) => {
             Some(candidate.github_source.tree_hash.clone())
         }
+        CachedSkillToolCandidate::Mcp(candidate) => Some(candidate.version_hash.clone()),
     }
 }
 
 fn candidate_cache_key(entry: &CachedSkillToolCandidate) -> Option<String> {
     match entry {
         CachedSkillToolCandidate::Installed(record) => record.cache_key.clone(),
-        CachedSkillToolCandidate::Discovered(_) | CachedSkillToolCandidate::Github(_) => None,
+        CachedSkillToolCandidate::Discovered(_)
+        | CachedSkillToolCandidate::Github(_)
+        | CachedSkillToolCandidate::Mcp(_) => None,
     }
 }
 
@@ -1349,7 +1687,7 @@ fn candidate_local_location(entry: &CachedSkillToolCandidate) -> Option<String> 
     match entry {
         CachedSkillToolCandidate::Installed(record) => record.local_location.clone(),
         CachedSkillToolCandidate::Discovered(candidate) => Some(candidate.local_location.clone()),
-        CachedSkillToolCandidate::Github(_) => None,
+        CachedSkillToolCandidate::Github(_) | CachedSkillToolCandidate::Mcp(_) => None,
     }
 }
 
@@ -1417,6 +1755,7 @@ fn candidate_rank(entry: &CachedSkillToolCandidate, query: Option<&str>) -> (u8,
                 }
             }
             CachedSkillToolCandidate::Github(_) => 3,
+            CachedSkillToolCandidate::Mcp(_) => 4,
             CachedSkillToolCandidate::Installed(_) => 0,
         },
     )
@@ -1546,6 +1885,101 @@ fn skill_context_from_github_invocation(
     })
 }
 
+fn mcp_resource_context(
+    candidate: &ResolvedMcpSkillCandidate,
+    result: JsonValue,
+    include_supporting_assets: bool,
+) -> CommandResult<CadenceSkillToolContextPayload> {
+    let contents = result
+        .get("contents")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "skill_tool_mcp_resource_invalid",
+                format!(
+                    "Cadence expected MCP resource skill `{}` from server `{}` to return a contents array.",
+                    candidate.skill_id, candidate.server_id
+                ),
+            )
+        })?;
+    let mut markdown = None;
+    let mut assets = Vec::new();
+
+    for (index, content) in contents.iter().enumerate() {
+        let text = content.get("text").and_then(JsonValue::as_str);
+        let Some(text) = text else {
+            if content.get("blob").is_some() {
+                return Err(CommandError::user_fixable(
+                    "skill_tool_mcp_resource_binary_unsupported",
+                    format!(
+                        "Cadence rejected MCP resource skill `{}` because it returned binary blob content.",
+                        candidate.skill_id
+                    ),
+                ));
+            }
+            continue;
+        };
+        if markdown.is_none() && mcp_content_is_skill_markdown(content, text, contents.len()) {
+            markdown = Some(text.to_owned());
+            continue;
+        }
+        if include_supporting_assets {
+            let relative_path = mcp_content_asset_path(content, index);
+            assets.push(CadenceSkillToolContextAsset {
+                relative_path,
+                sha256: sha256_hex(text.as_bytes()),
+                bytes: text.len(),
+                content: text.to_owned(),
+            });
+        }
+    }
+
+    let markdown = markdown.ok_or_else(|| {
+        CommandError::user_fixable(
+            "skill_tool_mcp_resource_missing_skill_markdown",
+            format!(
+                "Cadence could not find text SKILL.md content in MCP resource skill `{}` from server `{}`.",
+                candidate.skill_id, candidate.server_id
+            ),
+        )
+    })?;
+    assert_mcp_markdown_matches_candidate(candidate, &markdown)?;
+    skill_context_from_mcp_markdown(candidate, markdown, assets)
+}
+
+fn mcp_prompt_context(
+    candidate: &ResolvedMcpSkillCandidate,
+    result: JsonValue,
+) -> CommandResult<CadenceSkillToolContextPayload> {
+    let prompt_text = mcp_prompt_text(&result)?;
+    let markdown = if prompt_text.trim_start().starts_with("---") {
+        assert_mcp_markdown_matches_candidate(candidate, &prompt_text)?;
+        prompt_text
+    } else {
+        synthesize_mcp_prompt_skill_markdown(candidate, &prompt_text)
+    };
+    skill_context_from_mcp_markdown(candidate, markdown, Vec::new())
+}
+
+fn skill_context_from_mcp_markdown(
+    candidate: &ResolvedMcpSkillCandidate,
+    markdown: String,
+    supporting_assets: Vec<CadenceSkillToolContextAsset>,
+) -> CommandResult<CadenceSkillToolContextPayload> {
+    validate_skill_tool_context_payload(CadenceSkillToolContextPayload {
+        contract_version: CADENCE_SKILL_TOOL_CONTRACT_VERSION,
+        source_id: candidate.source.source_id.clone(),
+        skill_id: candidate.skill_id.clone(),
+        markdown: CadenceSkillToolContextDocument {
+            relative_path: "SKILL.md".into(),
+            sha256: sha256_hex(markdown.as_bytes()),
+            bytes: markdown.len(),
+            content: markdown,
+        },
+        supporting_assets,
+    })
+}
+
 fn skill_unavailable_output(operation: CadenceSkillToolOperation) -> AutonomousSkillToolOutput {
     AutonomousSkillToolOutput {
         operation,
@@ -1662,6 +2096,370 @@ fn plugin_diagnostic(
     message: impl Into<String>,
 ) -> CadenceSkillToolDiagnostic {
     diagnostic(code, message, false)
+}
+
+fn mcp_server_unavailable_diagnostic(server: &McpServerRecord) -> CadenceSkillToolDiagnostic {
+    let status = format!("{:?}", server.connection.status).to_ascii_lowercase();
+    let retryable = server
+        .connection
+        .diagnostic
+        .as_ref()
+        .map(|diagnostic| diagnostic.retryable)
+        .unwrap_or(true);
+    let message = server
+        .connection
+        .diagnostic
+        .as_ref()
+        .map(|diagnostic| diagnostic.message.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "MCP server `{}` is {status}; Cadence exposes MCP-provided skills only from connected servers.",
+                server.id
+            )
+        });
+    diagnostic("skill_tool_mcp_server_unavailable", message, retryable)
+}
+
+fn mcp_projection_error_diagnostic(
+    server: &McpServerRecord,
+    method: &str,
+    error: &CommandError,
+) -> CadenceSkillToolDiagnostic {
+    let mut diagnostic = skill_tool_diagnostic_from_command_error(error);
+    diagnostic.code = "skill_tool_mcp_projection_failed".into();
+    diagnostic.message = format!(
+        "Cadence could not project MCP skills from server `{}` with {method}: {}",
+        server.id, diagnostic.message
+    );
+    diagnostic
+}
+
+fn mcp_capability_absent(error: &CommandError) -> bool {
+    error.code == "autonomous_tool_mcp_error"
+        && (error.message.contains("-32601")
+            || error
+                .message
+                .to_ascii_lowercase()
+                .contains("method not found"))
+}
+
+fn mcp_resource_is_skill(resource: &JsonValue) -> bool {
+    if mcp_has_skill_marker(resource) {
+        return true;
+    }
+    let uri = resource
+        .get("uri")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    uri.starts_with("skill://")
+        || uri.starts_with("cadence-skill://")
+        || uri.ends_with("/skill.md")
+        || uri.ends_with(":skill.md")
+}
+
+fn mcp_prompt_is_skill(prompt: &JsonValue) -> bool {
+    if mcp_has_skill_marker(prompt) {
+        return true;
+    }
+    prompt
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .map(|name| {
+            let normalized = name.trim().to_ascii_lowercase();
+            normalized.starts_with("skill:") || normalized.starts_with("cadence.skill.")
+        })
+        .unwrap_or(false)
+}
+
+fn mcp_has_skill_marker(value: &JsonValue) -> bool {
+    for container in [
+        Some(value),
+        value.get("metadata"),
+        value.get("annotations"),
+        value.get("_meta"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if container
+            .get("cadenceSkill")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false)
+            || container
+                .get("skill")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false)
+        {
+            return true;
+        }
+        if container
+            .get("kind")
+            .or_else(|| container.get("type"))
+            .and_then(JsonValue::as_str)
+            .map(|kind| kind.eq_ignore_ascii_case("skill"))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn required_json_string(
+    value: &JsonValue,
+    field: &str,
+    code: &'static str,
+) -> CommandResult<String> {
+    value
+        .get(field)
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                code,
+                format!(
+                    "Cadence expected MCP skill metadata field `{field}` to be a non-empty string."
+                ),
+            )
+        })
+}
+
+fn mcp_skill_id_from_value(value: &JsonValue) -> Option<String> {
+    for container in [
+        Some(value),
+        value.get("metadata"),
+        value.get("annotations"),
+        value.get("_meta"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for key in ["skillId", "skill_id", "cadenceSkillId"] {
+            if let Some(skill_id) =
+                mcp_skill_id_from_text(container.get(key).and_then(JsonValue::as_str))
+            {
+                return Some(skill_id);
+            }
+        }
+    }
+    None
+}
+
+fn mcp_skill_id_from_uri(uri: &str) -> Option<String> {
+    let trimmed = uri
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(uri)
+        .trim_end_matches('/');
+    let mut segments = trimmed
+        .split(['/', ':'])
+        .filter(|segment| !segment.trim().is_empty())
+        .collect::<Vec<_>>();
+    if segments
+        .last()
+        .map(|segment| segment.eq_ignore_ascii_case("SKILL.md"))
+        .unwrap_or(false)
+    {
+        segments.pop();
+    }
+    segments
+        .last()
+        .and_then(|segment| mcp_skill_id_from_text(Some(segment)))
+}
+
+fn mcp_skill_id_from_prompt_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let normalized = if lower.starts_with("skill:") {
+        &trimmed["skill:".len()..]
+    } else if lower.starts_with("cadence.skill.") {
+        &trimmed["cadence.skill.".len()..]
+    } else {
+        trimmed
+    };
+    mcp_skill_id_from_text(Some(normalized))
+}
+
+fn mcp_skill_id_from_text(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    let mut last_was_dash = false;
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            out.push(character.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    let out = out.trim_matches('-').to_owned();
+    (!out.is_empty()).then_some(out)
+}
+
+fn mcp_user_invocable(value: &JsonValue) -> Option<bool> {
+    for container in [
+        Some(value),
+        value.get("metadata"),
+        value.get("annotations"),
+        value.get("_meta"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for key in ["userInvocable", "user-invocable", "user_invocable"] {
+            if let Some(value) = container.get(key).and_then(JsonValue::as_bool) {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn mcp_capability_id(kind: &str, skill_id: &str, stable_value: &str) -> String {
+    format!(
+        "{kind}-{skill_id}-{}",
+        &sha256_hex(stable_value.as_bytes())[..12]
+    )
+}
+
+fn mcp_candidate_hash(
+    server: &McpServerRecord,
+    kind: &str,
+    stable_value: &str,
+    description: &str,
+) -> String {
+    sha256_hex(
+        format!(
+            "{}\0{}\0{}\0{}\0{}",
+            server.id, server.updated_at, kind, stable_value, description
+        )
+        .as_bytes(),
+    )
+}
+
+fn mcp_candidate_description(description: &str, server: &McpServerRecord) -> String {
+    format!(
+        "{} Source: MCP server `{}` ({})",
+        description.trim(),
+        server.name,
+        server.id
+    )
+}
+
+fn mcp_content_is_skill_markdown(content: &JsonValue, text: &str, content_count: usize) -> bool {
+    let uri = content
+        .get("uri")
+        .and_then(JsonValue::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    uri.ends_with("/skill.md")
+        || uri.ends_with(":skill.md")
+        || content
+            .get("name")
+            .and_then(JsonValue::as_str)
+            .map(|name| name.eq_ignore_ascii_case("SKILL.md"))
+            .unwrap_or(false)
+        || (content_count == 1 && text.trim_start().starts_with("---"))
+}
+
+fn mcp_content_asset_path(content: &JsonValue, index: usize) -> String {
+    let raw = content
+        .get("uri")
+        .and_then(JsonValue::as_str)
+        .or_else(|| content.get("name").and_then(JsonValue::as_str))
+        .unwrap_or("asset.md");
+    let leaf = raw
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(raw)
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or("asset.md");
+    let mut sanitized = sanitize_path_segment(leaf);
+    if sanitized.is_empty() || sanitized.eq_ignore_ascii_case("SKILL.md") {
+        sanitized = format!("asset-{index}.md");
+    }
+    if !sanitized.contains('.') {
+        sanitized.push_str(".md");
+    }
+    sanitized
+}
+
+fn assert_mcp_markdown_matches_candidate(
+    candidate: &ResolvedMcpSkillCandidate,
+    markdown: &str,
+) -> CommandResult<()> {
+    let metadata = frontmatter_metadata(markdown)?;
+    if metadata.name != candidate.skill_id {
+        return Err(CommandError::user_fixable(
+            "skill_tool_mcp_skill_id_mismatch",
+            format!(
+                "Cadence rejected MCP skill `{}` from server `{}` because SKILL.md declared `{}`.",
+                candidate.skill_id, candidate.server_id, metadata.name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn mcp_prompt_text(result: &JsonValue) -> CommandResult<String> {
+    let Some(messages) = result.get("messages").and_then(JsonValue::as_array) else {
+        return Err(CommandError::user_fixable(
+            "skill_tool_mcp_prompt_invalid",
+            "Cadence expected MCP prompt skill invocation to return a messages array.",
+        ));
+    };
+    let parts = messages
+        .iter()
+        .filter_map(|message| match message.get("content") {
+            Some(JsonValue::String(text)) => Some(text.clone()),
+            Some(JsonValue::Object(content)) => {
+                if content
+                    .get("type")
+                    .and_then(JsonValue::as_str)
+                    .map(|kind| kind == "text")
+                    .unwrap_or(false)
+                {
+                    content
+                        .get("text")
+                        .and_then(JsonValue::as_str)
+                        .map(ToOwned::to_owned)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return Err(CommandError::user_fixable(
+            "skill_tool_mcp_prompt_invalid",
+            "Cadence rejected MCP prompt skill invocation because it returned no text content.",
+        ));
+    }
+    Ok(parts.join("\n\n"))
+}
+
+fn synthesize_mcp_prompt_skill_markdown(
+    candidate: &ResolvedMcpSkillCandidate,
+    prompt_text: &str,
+) -> String {
+    let description = candidate.description.replace('\n', " ");
+    format!(
+        "---\nname: {}\ndescription: {}\n---\n\n# {}\n\n{}\n",
+        candidate.skill_id,
+        description.trim(),
+        candidate.name,
+        prompt_text.trim()
+    )
 }
 
 fn persist_skill_failure(
