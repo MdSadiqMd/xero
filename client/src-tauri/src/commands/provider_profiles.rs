@@ -15,8 +15,8 @@ use crate::{
         ProviderProfilesSnapshot,
     },
     runtime::{
-        resolve_runtime_provider_identity, BEDROCK_PROVIDER_ID, OLLAMA_PROVIDER_ID,
-        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, VERTEX_PROVIDER_ID,
+        normalize_openai_codex_model_id, resolve_runtime_provider_identity, BEDROCK_PROVIDER_ID,
+        OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, VERTEX_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -202,7 +202,7 @@ fn apply_provider_profile_upsert(
         })?;
 
     if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
-        let validated = runtime_settings_file_from_request(provider_id, model_id, false)?;
+        let _ = runtime_settings_file_from_request(provider_id, model_id, false)?;
         if request
             .api_key
             .as_deref()
@@ -210,10 +210,13 @@ fn apply_provider_profile_upsert(
         {
             return Err(CommandError::invalid_request("apiKey"));
         }
-        if validated.model_id != OPENAI_CODEX_PROVIDER_ID {
-            return Err(CommandError::invalid_request("modelId"));
-        }
     }
+
+    let normalized_model_id = if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
+        normalize_openai_codex_model_id(model_id)
+    } else {
+        model_id.to_owned()
+    };
 
     let supports_api_key = !matches!(
         provider.provider_id,
@@ -281,11 +284,7 @@ fn apply_provider_profile_upsert(
         provider_id: provider.provider_id.to_owned(),
         runtime_kind: provider.runtime_kind.to_owned(),
         label: label.to_owned(),
-        model_id: if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
-            OPENAI_CODEX_PROVIDER_ID.into()
-        } else {
-            model_id.to_owned()
-        },
+        model_id: normalized_model_id.clone(),
         preset_id: normalize_optional_text(request.preset_id.clone()),
         base_url: normalize_optional_text(request.base_url.clone()),
         api_version: normalize_optional_text(request.api_version.clone()),
@@ -304,12 +303,7 @@ fn apply_provider_profile_upsert(
                 profile.provider_id == provider.provider_id
                     && profile.runtime_kind == provider.runtime_kind
                     && profile.label == label
-                    && profile.model_id
-                        == if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
-                            OPENAI_CODEX_PROVIDER_ID
-                        } else {
-                            model_id
-                        }
+                    && profile.model_id == normalized_model_id
                     && profile.preset_id == normalize_optional_text(request.preset_id.clone())
                     && profile.base_url == normalize_optional_text(request.base_url.clone())
                     && profile.api_version == normalize_optional_text(request.api_version.clone())

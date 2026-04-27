@@ -27,7 +27,7 @@ pub fn logout_runtime_session<R: Runtime>(
     let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
     let current = load_runtime_session_status(state.inner(), &repo_root, &request.project_id)?;
     let (current, selection) =
-        match prepare_runtime_session_for_selected_provider(&app, state.inner(), current) {
+        match prepare_runtime_session_for_selected_provider(&app, state.inner(), current, None) {
             Ok(prepared) => prepared,
             Err(updated) => {
                 let persisted = persist_runtime_session(&repo_root, &updated)?;

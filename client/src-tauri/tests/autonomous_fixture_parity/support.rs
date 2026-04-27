@@ -24,8 +24,9 @@ pub(crate) use cadence_desktop_lib::{
         NotificationReplyClaimStatusDto, OperatorApprovalStatus, PhaseStatus, PhaseStep,
         ProjectIdRequestDto, ResumeHistoryStatus, RuntimeAuthPhase, RuntimeRunCheckpointKindDto,
         RuntimeRunStatusDto, RuntimeRunTransportLivenessDto, RuntimeSessionDto,
-        RuntimeStreamItemDto, RuntimeStreamItemKind, StopRuntimeRunRequestDto,
-        SubmitNotificationReplyRequestDto, UpsertRuntimeSettingsRequestDto,
+        RuntimeStreamItemDto, RuntimeStreamItemKind, StartRuntimeSessionRequestDto,
+        StopRuntimeRunRequestDto, SubmitNotificationReplyRequestDto,
+        UpsertRuntimeSettingsRequestDto,
     },
     configure_builder_with_state,
     db::{self, database_path_for_repo, project_store},
@@ -791,8 +792,9 @@ pub(crate) fn seed_authenticated_runtime(
     let runtime = start_runtime_session(
         app.handle().clone(),
         app.state::<DesktopState>(),
-        ProjectIdRequestDto {
+        StartRuntimeSessionRequestDto {
             project_id: project_id.into(),
+            provider_profile_id: None,
         },
     )
     .expect("start runtime session");
@@ -820,8 +822,9 @@ pub(crate) fn seed_openrouter_runtime(
     let runtime = start_runtime_session(
         app.handle().clone(),
         app.state::<DesktopState>(),
-        ProjectIdRequestDto {
+        StartRuntimeSessionRequestDto {
             project_id: project_id.into(),
+            provider_profile_id: None,
         },
     )
     .expect("start openrouter runtime session");

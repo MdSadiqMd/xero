@@ -22,8 +22,6 @@ const RIGHT_PADDING = 360
 const STORAGE_KEY = 'cadence.editor.explorer.width'
 
 interface ExplorerPaneProps {
-  projectLabel: string
-  subtitle: string | null
   searchQuery: string
   isTreeLoading: boolean
   workspaceError: string | null
@@ -75,8 +73,6 @@ function writePersistedWidth(width: number): void {
 }
 
 export function ExplorerPane({
-  projectLabel,
-  subtitle,
   searchQuery,
   isTreeLoading,
   workspaceError,
@@ -193,8 +189,6 @@ export function ExplorerPane({
           <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Explorer
           </span>
-          <p className="truncate text-[11px] text-foreground/85">{projectLabel}</p>
-          {subtitle ? <p className="truncate text-[10px] text-muted-foreground">{subtitle}</p> : null}
         </div>
         <div className="flex items-center gap-0.5">
           <IconButton label="New file" onClick={() => onRequestNewFile('/')}>

@@ -852,10 +852,6 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): 
       'openai_codex-default': 'ready',
       'openrouter-default': 'ready',
     },
-    providerModelCatalogLoadErrors: {
-      'openai_codex-default': null,
-      'openrouter-default': null,
-    },
     onRefreshProviderProfiles: vi.fn(async () => makeProviderProfiles()),
     onRefreshProviderModelCatalog: vi.fn(async (profileId: string) => makeProviderModelCatalog(profileId)),
     onCheckProviderProfile: vi.fn(async (profileId: string) =>
@@ -866,7 +862,6 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): 
     doctorReportError: null,
     onRunDoctorReport: vi.fn(async () => makeDoctorReport()),
     onUpsertProviderProfile: vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles()),
-    onSetActiveProviderProfile: vi.fn(async (_profileId: string) => makeProviderProfiles()),
     onStartLogin: vi.fn(async () => makeRuntimeSession()),
     onLogout: vi.fn(async () => makeRuntimeSession({ sessionId: null, accountId: null })),
     mcpRegistry: makeMcpRegistry(),
@@ -991,7 +986,7 @@ describe('SettingsDialog', () => {
 
     await waitFor(() => expect(onRefreshProviderProfiles).toHaveBeenCalledWith({ force: true }))
     expect(
-      screen.getByText('Pick a provider, manage its API key, and choose a model.'),
+      screen.getByText('Configure provider credentials, endpoints, readiness checks, and catalog discovery.'),
     ).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
@@ -1104,7 +1099,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    const setupButton = within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Set up' })
+    const setupButton = within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' })
     expect(setupButton).toBeEnabled()
 
     fireEvent.click(setupButton)
@@ -1436,7 +1431,7 @@ describe('SettingsDialog', () => {
     })
   })
 
-  it('keeps provider profile secrets blank on re-open and switches the active profile explicitly', async () => {
+  it('keeps provider profile secrets blank on re-open without provider selection controls', async () => {
     const secret = 'sk-or-v1-test-secret'
 
     let nextProviderProfiles = makeProviderProfiles({
@@ -1465,35 +1460,22 @@ describe('SettingsDialog', () => {
       return nextProviderProfiles
     })
 
-    const onSetActiveProviderProfile = vi.fn(async (_profileId: string) => {
-      nextProviderProfiles = makeProviderProfiles({
-        activeProfileId: 'openrouter-default',
-        profiles: [makeOpenAiProfile({ active: false }), makeOpenRouterProfile({ active: true, readiness: { ready: true, status: 'ready', proofUpdatedAt: '2026-04-20T12:00:00Z' } })],
-      })
-
-      return nextProviderProfiles
-    })
-
     const { rerender } = render(
       <SettingsDialog
         {...makeSettingsDialogProps({
           providerProfiles: nextProviderProfiles,
           onUpsertProviderProfile,
-          onSetActiveProviderProfile,
         })}
       />,
     )
 
-    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' }))
 
-    const modelSelector = screen.getByLabelText('Model')
     const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
 
-    expect(modelSelector).toHaveTextContent('OpenAI GPT-4.1 Mini · openai/gpt-4.1-mini')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(keyInput).toHaveValue('')
 
-    fireEvent.keyDown(modelSelector, { key: 'ArrowDown' })
-    fireEvent.click(await screen.findByRole('option', { name: 'Claude 3.5 Sonnet · openrouter/anthropic/claude-3.5-sonnet' }))
     fireEvent.change(keyInput, { target: { value: secret } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -1503,7 +1485,7 @@ describe('SettingsDialog', () => {
         providerId: 'openrouter',
         runtimeKind: 'openrouter',
         label: 'OpenRouter',
-        modelId: 'openrouter/anthropic/claude-3.5-sonnet',
+        modelId: 'openai/gpt-4.1-mini',
         presetId: 'openrouter',
         baseUrl: null,
         apiVersion: null,
@@ -1519,41 +1501,26 @@ describe('SettingsDialog', () => {
         {...makeSettingsDialogProps({
           providerProfiles: nextProviderProfiles,
           onUpsertProviderProfile,
-          onSetActiveProviderProfile,
         })}
       />,
     )
 
     expect(screen.getByText('Ready')).toBeVisible()
-    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Edit' }))
+    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' }))
 
-    const modelSelectorAfter = screen.getByLabelText('Model')
     const keyInputAfter = screen.getByLabelText('API Key') as HTMLInputElement
 
-    expect(modelSelectorAfter).toHaveTextContent('Claude 3.5 Sonnet · openrouter/anthropic/claude-3.5-sonnet')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(keyInputAfter).toHaveValue('')
     expect(screen.queryByDisplayValue(secret)).not.toBeInTheDocument()
     expect(screen.queryByText(secret)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Use this' }))
-
-    await waitFor(() => expect(onSetActiveProviderProfile).toHaveBeenCalledWith('openrouter-default'))
-
-    rerender(
-      <SettingsDialog
-        {...makeSettingsDialogProps({
-          providerProfiles: nextProviderProfiles,
-          onUpsertProviderProfile,
-          onSetActiveProviderProfile,
-        })}
-      />,
-    )
-
-    expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
+    expect(within(getProviderCard('OpenRouter')).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+    expect(within(getProviderCard('OpenRouter')).queryByText('Active')).not.toBeInTheDocument()
   })
 
-  it('lets Anthropic use the shared API-key save, edit, and activate flow', async () => {
+  it('lets Anthropic use the shared API-key save and edit flow', async () => {
     const secret = 'sk-ant-test-secret'
 
     let nextProviderProfiles = makeProviderProfiles({
@@ -1589,45 +1556,22 @@ describe('SettingsDialog', () => {
       return nextProviderProfiles
     })
 
-    const onSetActiveProviderProfile = vi.fn(async (_profileId: string) => {
-      nextProviderProfiles = makeProviderProfiles({
-        activeProfileId: 'anthropic-default',
-        profiles: [
-          makeOpenAiProfile({ active: false }),
-          makeOpenRouterProfile({ active: false }),
-          makeAnthropicProfile({
-            active: true,
-            label: 'Anthropic Work',
-            readiness: {
-              ready: true,
-              status: 'ready',
-              proofUpdatedAt: '2026-04-20T12:00:00Z',
-            },
-          }),
-        ],
-      })
-
-      return nextProviderProfiles
-    })
-
     const { rerender } = render(
       <SettingsDialog
         {...makeSettingsDialogProps({
           providerProfiles: nextProviderProfiles,
           onUpsertProviderProfile,
-          onSetActiveProviderProfile,
         })}
       />,
     )
 
-    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'API key' }))
 
     const labelInput = screen.getByLabelText('Profile label') as HTMLInputElement
-    const modelSelector = screen.getByLabelText('Model')
     const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
 
     expect(labelInput).toHaveValue('Anthropic')
-    expect(modelSelector).toHaveTextContent('claude-3-7-sonnet-latest')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(keyInput).toHaveValue('')
 
     fireEvent.change(labelInput, { target: { value: '   ' } })
@@ -1663,13 +1607,12 @@ describe('SettingsDialog', () => {
         {...makeSettingsDialogProps({
           providerProfiles: nextProviderProfiles,
           onUpsertProviderProfile,
-          onSetActiveProviderProfile,
         })}
       />,
     )
 
     expect(screen.getByText('Ready')).toBeVisible()
-    fireEvent.click(within(getProviderCard('Anthropic Work')).getByRole('button', { name: 'Edit' }))
+    fireEvent.click(within(getProviderCard('Anthropic Work')).getByRole('button', { name: 'API key' }))
 
     const keyInputAfter = screen.getByLabelText('API Key') as HTMLInputElement
 
@@ -1678,9 +1621,8 @@ describe('SettingsDialog', () => {
     expect(screen.queryByText(secret)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    fireEvent.click(within(getProviderCard('Anthropic Work')).getByRole('button', { name: 'Use this' }))
-
-    await waitFor(() => expect(onSetActiveProviderProfile).toHaveBeenCalledWith('anthropic-default'))
+    expect(within(getProviderCard('Anthropic Work')).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+    expect(within(getProviderCard('Anthropic Work')).queryByText('Active')).not.toBeInTheDocument()
   })
 
 
@@ -1729,17 +1671,16 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'API key' }))
 
     const labelInput = screen.getByLabelText('Profile label') as HTMLInputElement
-    const modelInput = screen.getByLabelText('Model') as HTMLInputElement
     const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
 
     expect(labelInput).toHaveValue('GitHub Models')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(keyInput).toHaveValue('')
 
     fireEvent.change(labelInput, { target: { value: 'GitHub Work' } })
-    fireEvent.change(modelInput, { target: { value: 'meta/Llama-4-Scout-17B-16E-Instruct' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(screen.getByText('GitHub Models requires an API key.')).toBeVisible()
 
@@ -1773,7 +1714,7 @@ describe('SettingsDialog', () => {
     )
 
     expect(screen.getByText('Ready')).toBeVisible()
-    fireEvent.click(within(getProviderCard('GitHub Work')).getByRole('button', { name: 'Edit' }))
+    fireEvent.click(within(getProviderCard('GitHub Work')).getByRole('button', { name: 'API key' }))
 
     const keyInputAfter = screen.getByLabelText('API Key') as HTMLInputElement
     expect(keyInputAfter).toHaveValue('')
@@ -1828,19 +1769,18 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(within(getProviderCard('OpenAI-compatible')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('OpenAI-compatible')).getByRole('button', { name: 'API key' }))
 
     const labelInput = screen.getByLabelText('Profile label') as HTMLInputElement
-    const modelInput = screen.getByLabelText('Model') as HTMLInputElement
     const baseUrlInput = screen.getByLabelText('Base URL') as HTMLInputElement
     const apiVersionInput = screen.getByLabelText('API version') as HTMLInputElement
     const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
 
     expect(labelInput).toHaveValue('OpenAI-compatible')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(keyInput).toHaveValue('')
 
     fireEvent.change(labelInput, { target: { value: 'OpenAI Work' } })
-    fireEvent.change(modelInput, { target: { value: 'gpt-4.1-mini' } })
     fireEvent.change(baseUrlInput, { target: { value: 'https://api.openai.example/v1' } })
     fireEvent.change(apiVersionInput, { target: { value: '2024-10-21' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -1876,7 +1816,7 @@ describe('SettingsDialog', () => {
     )
 
     expect(screen.getByText('Ready')).toBeVisible()
-    fireEvent.click(within(getProviderCard('OpenAI Work')).getByRole('button', { name: 'Edit' }))
+    fireEvent.click(within(getProviderCard('OpenAI Work')).getByRole('button', { name: 'API key' }))
 
     expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.openai.example/v1')
     expect((screen.getByLabelText('API version') as HTMLInputElement).value).toBe('2024-10-21')
@@ -1931,7 +1871,7 @@ describe('SettingsDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply recipe' }))
 
     expect(screen.getByLabelText('Profile label')).toHaveValue('LM Studio')
-    expect(screen.getByLabelText('Model')).toHaveTextContent('local-model')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Base URL')).toHaveValue('http://127.0.0.1:1234/v1')
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
     expect(screen.getByText('No app-local API key is stored for LM Studio')).toBeVisible()
@@ -2000,9 +1940,9 @@ describe('SettingsDialog', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'Atomic Chat local' }))
     fireEvent.click(screen.getByRole('button', { name: 'Apply recipe' }))
 
-    expect(screen.getByText('Start Atomic Chat with its local server enabled, then choose the loaded model id.')).toBeVisible()
+    expect(screen.getByText('Start Atomic Chat with its local server enabled before checking the local endpoint.')).toBeVisible()
     expect(screen.getByLabelText('Profile label')).toHaveValue('Atomic Chat')
-    expect(screen.getByLabelText('Model')).toHaveTextContent('local-model')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Base URL')).toHaveValue('http://127.0.0.1:1337/v1')
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument()
     expect(screen.getByText('No app-local API key is stored for Atomic Chat local')).toBeVisible()
@@ -2081,9 +2021,9 @@ describe('SettingsDialog', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'Groq' }))
     fireEvent.click(screen.getByRole('button', { name: 'Apply recipe' }))
 
-    expect(screen.getByText('Use a Groq API key and a Groq model id supported by the OpenAI-compatible endpoint.')).toBeVisible()
+    expect(screen.getByText('Use a Groq API key with the Groq OpenAI-compatible endpoint.')).toBeVisible()
     expect(screen.getByLabelText('Profile label')).toHaveValue('Groq')
-    expect(screen.getByLabelText('Model')).toHaveTextContent('llama-3.3-70b-versatile')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Base URL')).toHaveValue('https://api.groq.com/openai/v1')
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -2148,19 +2088,19 @@ describe('SettingsDialog', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Azure AI Foundry' }))
     fireEvent.click(screen.getByRole('button', { name: 'Apply recipe' }))
 
-    expect(screen.getByText('Use the Azure AI Foundry OpenAI-compatible endpoint and set Model to the deployment name.')).toBeVisible()
+    expect(screen.getByText('Use the Azure AI Foundry OpenAI-compatible endpoint for your deployment route.')).toBeVisible()
     expect(screen.getByText(/Use the Azure OpenAI preset instead for deployment URLs that require api-version metadata/)).toBeVisible()
     expect(screen.getByLabelText('Profile label')).toHaveValue('Azure AI Foundry')
-    expect(screen.getByLabelText('Model')).toHaveTextContent('deployment-name')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Base URL')).toHaveValue('')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(screen.getByText('Azure AI Foundry requires a base URL.')).toBeVisible()
   })
 
-  it('limits OpenAI auth controls to the selected profile and keeps typed auth failures inline', async () => {
-    const onStartLogin = vi.fn(async () => {
+  it('offers OpenAI auth controls without profile management buttons and keeps typed auth failures inline', async () => {
+    const onStartLogin = vi.fn(async (_options?: { profileId?: string | null }) => {
       throw new Error(
-        'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of the selected profile `zz-openai-alt`. Retry login for the currently selected profile.',
+        'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of provider profile `zz-openai-alt`. Start a fresh login for that profile.',
       )
     })
 
@@ -2187,19 +2127,22 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible()
+    const openAiCard = getProviderCard('OpenAI Codex')
+    expect(screen.queryByText('OpenAI Alt')).not.toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(1)
+    expect(within(openAiCard).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+    expect(within(openAiCard).queryByRole('button', { name: 'API key' })).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    fireEvent.click(within(openAiCard).getByRole('button', { name: 'Sign in' }))
 
-    await waitFor(() => expect(onStartLogin).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(onStartLogin).toHaveBeenCalledWith({ profileId: 'openai_codex-default' }))
     expect(
       screen.getByText(
-        'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of the selected profile `zz-openai-alt`. Retry login for the currently selected profile.',
+        'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of provider profile `zz-openai-alt`. Start a fresh login for that profile.',
       ),
     ).toBeVisible()
-    expect(screen.getByText('OpenAI Alt')).toBeVisible()
-    expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
+    expect(screen.queryByText('OpenAI Alt')).not.toBeInTheDocument()
+    expect(within(openAiCard).queryByText('Active')).not.toBeInTheDocument()
   })
 
   it('manages MCP servers from settings with validation, import, remove, and status refresh actions', async () => {
@@ -2704,9 +2647,9 @@ describe('SettingsDialog', () => {
     expect(screen.getByText('OpenRouter')).toBeVisible()
     expect(screen.getByText('OpenAI Codex')).toBeVisible()
 
-    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Edit' }))
+    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' }))
 
-    expect(screen.getByLabelText('Model')).toHaveTextContent('openrouter/meta-llama/llama-3.1-8b-instruct')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(screen.getByText('Ready')).toBeVisible()
   })
 })

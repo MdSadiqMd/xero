@@ -13,9 +13,9 @@ use crate::{
         CommandError, CommandResult,
     },
     runtime::{
-        resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID,
-        BEDROCK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID, GEMINI_RUNTIME_KIND,
-        GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
+        normalize_openai_codex_model_id, resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID,
+        AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
+        GEMINI_RUNTIME_KIND, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
         OPENAI_CODEX_PROVIDER_ID, OPENAI_COMPATIBLE_RUNTIME_KIND, OPENROUTER_PROVIDER_ID,
         VERTEX_PROVIDER_ID,
     },
@@ -680,7 +680,7 @@ pub(crate) fn build_openai_default_profile(
         provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
         runtime_kind: OPENAI_CODEX_PROVIDER_ID.into(),
         label: OPENAI_CODEX_DEFAULT_PROFILE_LABEL.into(),
-        model_id: OPENAI_CODEX_PROVIDER_ID.into(),
+        model_id: normalize_openai_codex_model_id(OPENAI_CODEX_PROVIDER_ID),
         preset_id: None,
         base_url: None,
         api_version: None,
@@ -895,17 +895,11 @@ fn validate_provider_profile_record(
         ));
     }
 
-    if provider.provider_id == OPENAI_CODEX_PROVIDER_ID && model_id != OPENAI_CODEX_PROVIDER_ID {
-        return Err(CommandError::user_fixable(
-            "provider_profiles_invalid",
-            format!(
-                "Cadence rejected provider profile `{}` in {} because OpenAI Codex profiles must use modelId `{}`.",
-                profile_id,
-                path.display(),
-                OPENAI_CODEX_PROVIDER_ID
-            ),
-        ));
-    }
+    let model_id = if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
+        normalize_openai_codex_model_id(model_id)
+    } else {
+        model_id.to_owned()
+    };
 
     let preset_id = normalize_optional_text(profile.preset_id);
     let base_url = normalize_optional_text(profile.base_url);
@@ -984,7 +978,7 @@ fn validate_provider_profile_record(
         provider_id: provider.provider_id.to_owned(),
         runtime_kind: provider.runtime_kind.to_owned(),
         label: label.to_owned(),
-        model_id: model_id.to_owned(),
+        model_id,
         preset_id,
         base_url,
         api_version,

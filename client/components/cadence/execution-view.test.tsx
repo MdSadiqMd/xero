@@ -393,6 +393,7 @@ describe('ExecutionView', () => {
 
     expect(await screen.findByTestId('file:/README.md')).toBeVisible()
     expect(screen.getByText('Explorer')).toBeVisible()
+    expect(screen.queryByText('/tmp/Cadence')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Search files')).toHaveValue('')
     expect(screen.getByText('No files open')).toBeVisible()
 

@@ -1,22 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { openUrlMock, saveDialogMock } = vi.hoisted(() => ({
-  openUrlMock: vi.fn(),
-  saveDialogMock: vi.fn(),
-}))
-
-vi.mock('@tauri-apps/plugin-opener', () => ({
-  openUrl: openUrlMock,
-}))
-
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  save: saveDialogMock,
-}))
-
 afterEach(() => {
-  openUrlMock.mockReset()
-  saveDialogMock.mockReset()
   window.localStorage.clear()
 })
 
@@ -37,22 +22,10 @@ import type { SpeechDictationAdapter } from '@/components/cadence/agent-runtime/
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type { DictationEventDto, DictationStatusDto } from '@/src/lib/cadence-model/dictation'
 import type {
-  AgentSessionView,
-  AgentSessionBranchResponseDto,
-  CompactSessionHistoryResponseDto,
-  DeleteSessionMemoryRequestDto,
-  ExtractSessionMemoryCandidatesRequestDto,
-  ListSessionMemoriesRequestDto,
   ProjectDetailView,
   RuntimeRunView,
   RuntimeSessionView,
   RuntimeStreamView,
-  SessionCompactionRecordDto,
-  SessionContextSnapshotDto,
-  SessionMemoryRecordDto,
-  SessionTranscriptDto,
-  SessionTranscriptExportResponseDto,
-  UpdateSessionMemoryRequestDto,
 } from '@/src/lib/cadence-model'
 
 type CheckpointControlLoopCard = NonNullable<AgentPaneView['checkpointControlLoop']>['items'][number]
@@ -115,72 +88,6 @@ function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailV
   }
 }
 
-function makeAgentSession(overrides: Partial<AgentSessionView> = {}): AgentSessionView {
-  return {
-    projectId: 'project-1',
-    agentSessionId: 'agent-session-main',
-    title: 'History session',
-    summary: 'Session with durable run history',
-    status: 'active',
-    statusLabel: 'Active',
-    selected: true,
-    createdAt: '2026-04-26T10:00:00Z',
-    updatedAt: '2026-04-26T11:00:00Z',
-    archivedAt: null,
-    lastRunId: 'run-history-2',
-    lastRuntimeKind: 'owned_agent',
-    lastProviderId: 'openrouter',
-    lineage: null,
-    isActive: true,
-    isArchived: false,
-    ...overrides,
-  }
-}
-
-function makeAgentSessionBranchResponse(
-  overrides: Partial<AgentSessionBranchResponseDto> = {},
-): AgentSessionBranchResponseDto {
-  const lineage = {
-    lineageId: 'lineage-branch-1',
-    projectId: 'project-1',
-    childAgentSessionId: 'agent-session-branch',
-    sourceAgentSessionId: 'agent-session-main',
-    sourceRunId: 'run-history-2',
-    sourceBoundaryKind: 'run' as const,
-    sourceMessageId: null,
-    sourceCheckpointId: null,
-    sourceCompactionId: null,
-    sourceTitle: 'History session',
-    branchTitle: 'History session branch',
-    replayRunId: 'run-history-branch',
-    fileChangeSummary: '1 file-change record and 1 checkpoint were before the branch point.',
-    diagnostic: null,
-    createdAt: '2026-04-26T12:00:00Z',
-    sourceDeletedAt: null,
-  }
-
-  return {
-    session: {
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-branch',
-      title: 'History session branch',
-      summary: 'Branched session history',
-      status: 'active',
-      selected: true,
-      createdAt: '2026-04-26T12:00:00Z',
-      updatedAt: '2026-04-26T12:00:00Z',
-      archivedAt: null,
-      lastRunId: 'run-history-branch',
-      lastRuntimeKind: 'owned_agent',
-      lastProviderId: 'openrouter',
-      lineage,
-    },
-    lineage,
-    replayRunId: 'run-history-branch',
-    ...overrides,
-  }
-}
-
 function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): RuntimeSessionView {
   return {
     projectId: 'project-1',
@@ -209,339 +116,6 @@ function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): Runtim
   }
 }
 
-function makeSessionTranscript(): SessionTranscriptDto {
-  const redaction = {
-    redactionClass: 'public' as const,
-    redacted: false,
-    reason: null,
-  }
-  const baseItem = {
-    contractVersion: 1 as const,
-    projectId: 'project-1',
-    agentSessionId: 'agent-session-main',
-    providerId: 'openrouter',
-    modelId: 'openai/gpt-5.4',
-    sourceKind: 'owned_agent' as const,
-    sourceTable: 'agent_runs',
-    kind: 'message' as const,
-    actor: 'user' as const,
-    summary: null,
-    toolCallId: null,
-    toolName: null,
-    toolState: null,
-    filePath: null,
-    checkpointKind: null,
-    actionId: null,
-    redaction,
-  }
-
-  return {
-    contractVersion: 1,
-    projectId: 'project-1',
-    agentSessionId: 'agent-session-main',
-    title: 'History session',
-    summary: 'Session with durable run history',
-    status: 'active',
-    archived: false,
-    archivedAt: null,
-    runs: [
-      {
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        runId: 'run-history-1',
-        providerId: 'openrouter',
-        modelId: 'openai/gpt-5.4',
-        status: 'completed',
-        startedAt: '2026-04-26T10:00:00Z',
-        completedAt: '2026-04-26T10:05:00Z',
-        itemCount: 1,
-        usageTotals: null,
-      },
-      {
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        runId: 'run-history-2',
-        providerId: 'openrouter',
-        modelId: 'openai/gpt-5.4',
-        status: 'completed',
-        startedAt: '2026-04-26T11:00:00Z',
-        completedAt: '2026-04-26T11:05:00Z',
-        itemCount: 1,
-        usageTotals: null,
-      },
-    ],
-    items: [
-      {
-        ...baseItem,
-        itemId: 'run_prompt:run-history-1',
-        runId: 'run-history-1',
-        sourceId: 'run-history-1',
-        sequence: 1,
-        createdAt: '2026-04-26T10:00:00Z',
-        title: 'Run prompt',
-        text: 'First run prompt',
-      },
-      {
-        ...baseItem,
-        itemId: 'run_prompt:run-history-2',
-        runId: 'run-history-2',
-        sourceId: 'run-history-2',
-        sequence: 2,
-        createdAt: '2026-04-26T11:00:00Z',
-        title: 'Run prompt',
-        text: 'Second run prompt',
-      },
-    ],
-    usageTotals: null,
-    redaction,
-  }
-}
-
-function makeContextSnapshot(overrides: Partial<SessionContextSnapshotDto> = {}): SessionContextSnapshotDto {
-  const redaction = {
-    redactionClass: 'public' as const,
-    redacted: false,
-    reason: null,
-  }
-  const contributors: SessionContextSnapshotDto['contributors'] = [
-    {
-      contributorId: 'system_prompt:run-1',
-      kind: 'system_prompt',
-      label: 'System prompt',
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      runId: 'run-1',
-      sourceId: 'owned_agent_system_prompt',
-      sequence: 1,
-      estimatedTokens: 180,
-      estimatedChars: 720,
-      included: true,
-      modelVisible: true,
-      text: 'Owned-agent system prompt.',
-      redaction,
-    },
-    {
-      contributorId: 'instruction:AGENTS.md',
-      kind: 'instruction_file',
-      label: 'Project instructions',
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      runId: null,
-      sourceId: 'AGENTS.md',
-      sequence: 2,
-      estimatedTokens: 120,
-      estimatedChars: 480,
-      included: true,
-      modelVisible: true,
-      text: 'Use ShadCN for all UI where possible.',
-      redaction,
-    },
-    {
-      contributorId: 'tool_descriptor:read',
-      kind: 'tool_descriptor',
-      label: 'Tool descriptor: read',
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      runId: 'run-1',
-      sourceId: 'read',
-      sequence: 3,
-      estimatedTokens: 220,
-      estimatedChars: 880,
-      included: true,
-      modelVisible: true,
-      text: 'Read a file from the imported repository.',
-      redaction,
-    },
-    {
-      contributorId: 'message:run-1:2',
-      kind: 'conversation_tail',
-      label: 'User message',
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      runId: 'run-1',
-      sourceId: '2',
-      sequence: 4,
-      estimatedTokens: 360,
-      estimatedChars: 1440,
-      included: true,
-      modelVisible: true,
-      text: 'Implement the context panel.',
-      redaction,
-    },
-    {
-      contributorId: 'provider_usage:run-1',
-      kind: 'provider_usage',
-      label: 'Provider usage',
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      runId: 'run-1',
-      sourceId: 'run-1',
-      sequence: 5,
-      estimatedTokens: 0,
-      estimatedChars: 48,
-      included: false,
-      modelVisible: false,
-      text: '1200 input + 400 output = 1600 total tokens.',
-      redaction,
-    },
-  ]
-
-  return {
-    contractVersion: 1,
-    snapshotId: 'context:project-1:agent-session-main:run-1',
-    projectId: 'project-1',
-    agentSessionId: 'agent-session-main',
-    runId: 'run-1',
-    providerId: 'openrouter',
-    modelId: 'openai/gpt-5.4',
-    generatedAt: '2026-04-26T12:00:00Z',
-    budget: {
-      budgetTokens: 1000,
-      estimatedTokens: 880,
-      estimationSource: 'mixed',
-      pressure: 'high',
-      knownProviderBudget: true,
-    },
-    contributors,
-    policyDecisions: [
-      {
-        contractVersion: 1,
-        decisionId: 'compaction:auto:disabled',
-        kind: 'compaction',
-        action: 'skipped',
-        trigger: 'auto',
-        reasonCode: 'auto_compact_disabled',
-        message: 'Auto-compact is disabled for this session.',
-        rawTranscriptPreserved: true,
-        modelVisible: false,
-        redaction,
-      },
-    ],
-    usageTotals: {
-      projectId: 'project-1',
-      runId: 'run-1',
-      providerId: 'openrouter',
-      modelId: 'openai/gpt-5.4',
-      inputTokens: 1200,
-      outputTokens: 400,
-      totalTokens: 1600,
-      estimatedCostMicros: 42,
-      source: 'provider',
-      updatedAt: '2026-04-26T12:00:00Z',
-    },
-    redaction,
-    ...overrides,
-  }
-}
-
-function makeCompactedContextSnapshot(
-  overrides: Partial<SessionContextSnapshotDto> = {},
-): SessionContextSnapshotDto {
-  const snapshot = makeContextSnapshot()
-  const compactionSummary: SessionContextSnapshotDto['contributors'][number] = {
-    ...snapshot.contributors[0],
-    contributorId: 'compaction_summary:compact-1',
-    kind: 'compaction_summary',
-    label: 'Compacted history summary',
-    sourceId: 'compact-1',
-    sequence: 4,
-    estimatedTokens: 90,
-    estimatedChars: 360,
-    text: 'Earlier user intent, tool outcomes, and open decisions were summarized for replay.',
-  }
-
-  return {
-    ...snapshot,
-    contributors: [
-      snapshot.contributors[0],
-      snapshot.contributors[1],
-      snapshot.contributors[2],
-      compactionSummary,
-      ...snapshot.contributors.slice(3).map((contributor, index) => ({
-        ...contributor,
-        sequence: index + 5,
-      })),
-    ],
-    ...overrides,
-  }
-}
-
-function makeSessionCompactionRecord(
-  overrides: Partial<SessionCompactionRecordDto> = {},
-): SessionCompactionRecordDto {
-  const redaction = {
-    redactionClass: 'public' as const,
-    redacted: false,
-    reason: null,
-  }
-
-  return {
-    contractVersion: 1,
-    compactionId: 'compact-1',
-    projectId: 'project-1',
-    agentSessionId: 'agent-session-main',
-    sourceRunId: 'run-1',
-    providerId: 'openai_codex',
-    modelId: 'openai_codex',
-    summary: 'Earlier user intent, tool outcomes, and open decisions were summarized for replay.',
-    coveredRunIds: ['run-1'],
-    coveredMessageStartId: 1,
-    coveredMessageEndId: 3,
-    coveredEventStartId: 1,
-    coveredEventEndId: 4,
-    sourceHash: 'a'.repeat(64),
-    inputTokens: 1200,
-    summaryTokens: 90,
-    rawTailMessageCount: 8,
-    policyReason: 'manual_compact_requested',
-    trigger: 'manual',
-    active: true,
-    diagnostic: null,
-    createdAt: '2026-04-26T12:05:00Z',
-    supersededAt: null,
-    redaction,
-    ...overrides,
-  }
-}
-
-function makeMemoryRecord(overrides: Partial<SessionMemoryRecordDto> = {}): SessionMemoryRecordDto {
-  const redaction = {
-    redactionClass: 'public' as const,
-    redacted: false,
-    reason: null,
-  }
-
-  return {
-    contractVersion: 1,
-    memoryId: 'memory-project-fact',
-    projectId: 'project-1',
-    agentSessionId: null,
-    scope: 'project',
-    kind: 'project_fact',
-    text: 'Cadence stores reviewed memory in repo-local SQLite.',
-    reviewState: 'candidate',
-    enabled: false,
-    confidence: 92,
-    sourceRunId: 'run-1',
-    sourceItemIds: ['run_prompt:run-1'],
-    createdAt: '2026-04-26T12:00:00Z',
-    updatedAt: '2026-04-26T12:00:00Z',
-    diagnostic: null,
-    redaction,
-    ...overrides,
-  }
-}
-
-function makeCompactSessionHistoryResponse(
-  overrides: Partial<CompactSessionHistoryResponseDto> = {},
-): CompactSessionHistoryResponseDto {
-  return {
-    compaction: makeSessionCompactionRecord(),
-    contextSnapshot: makeCompactedContextSnapshot(),
-    ...overrides,
-  }
-}
-
 function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView {
   const runtimeRun: RuntimeRunView = {
     projectId: 'project-1',
@@ -562,6 +136,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
     },
     controls: {
       active: {
+        providerProfileId: null,
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
@@ -574,6 +149,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
       pending: null,
       selected: {
         source: 'active',
+        providerProfileId: null,
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
@@ -695,6 +271,11 @@ function makeAgentModel(
   overrides: Partial<NonNullable<AgentPaneView['selectedModelOption']>> = {},
 ): NonNullable<AgentPaneView['selectedModelOption']> {
   return {
+    selectionKey: 'unscoped::openai_codex',
+    profileId: null,
+    profileLabel: null,
+    providerId: 'openai_codex',
+    providerLabel: 'OpenAI Codex',
     modelId: 'openai_codex',
     label: 'openai_codex',
     displayName: 'openai_codex',
@@ -1068,12 +649,14 @@ describe('AgentRuntime current UI', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: /What should we build in Cadence/ })).toBeVisible()
     expect(screen.queryByRole('tab', { name: 'Runtime' })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Pipeline' })).not.toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Cadence Desktop' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Pipeline contract overview')).not.toBeInTheDocument()
     expect(screen.queryByText('Distributed evidence-pack assembly')).not.toBeInTheDocument()
+    expect(screen.queryByText('Session history')).not.toBeInTheDocument()
+    expect(screen.queryByText('Context')).not.toBeInTheDocument()
   })
 
   it('hides the autonomous ledger and remote-escalation debug panels', () => {
@@ -1141,7 +724,7 @@ describe('AgentRuntime current UI', () => {
           runtimeRunUnavailableReason:
             'Cadence recovered a supervised harness run and its durable checkpoints before the live runtime feed resumed.',
           messagesUnavailableReason:
-            'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired Ollama local-endpoint metadata for the selected provider.',
+            'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired Ollama local-endpoint metadata for the configured provider.',
         })}
       />,
     )
@@ -1544,13 +1127,13 @@ describe('AgentRuntime current UI', () => {
           openrouterApiKeyConfigured: true,
           providerMismatch: true,
           providerMismatchReason:
-            'Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex.',
+            'Configured provider profile OpenRouter Work (openrouter-work) no longer matches the persisted runtime session for OpenAI Codex.',
           providerMismatchRecoveryCopy:
-            'Rebind the selected profile so durable runtime truth matches Settings.',
+            'Rebind this profile so durable runtime truth matches Settings.',
           sessionUnavailableReason:
-            'Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile so durable runtime truth matches Settings.',
+            'Configured provider profile OpenRouter Work (openrouter-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile so durable runtime truth matches Settings.',
           messagesUnavailableReason:
-            'Live runtime streaming is paused because Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile before trusting new stream activity.',
+            'Live runtime streaming is paused because Configured provider profile OpenRouter Work (openrouter-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile before trusting new stream activity.',
           runtimeSession: makeRuntimeSession({
             providerId: 'openai_codex',
             runtimeKind: 'openai_codex',
@@ -1593,9 +1176,7 @@ describe('AgentRuntime current UI', () => {
     )
 
     expect(screen.getByText('Configure agent runtime')).toBeVisible()
-    expect(
-      screen.getByText('Open Settings to choose a provider and model before using the agent tab for this imported project.'),
-    ).toBeVisible()
+    expect(screen.getByText('Connect a provider in Settings to start chatting with the agent.')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Configure' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute(
       'placeholder',
@@ -1619,13 +1200,13 @@ describe('AgentRuntime current UI', () => {
           },
           providerMismatch: true,
           providerMismatchReason:
-            'Settings now select provider profile GitHub Models Work (github-models-work), but the persisted runtime session still reflects OpenAI Codex.',
+            'Configured provider profile GitHub Models Work (github-models-work) no longer matches the persisted runtime session for OpenAI Codex.',
           providerMismatchRecoveryCopy:
-            'Rebind the selected profile so durable runtime truth matches Settings.',
+            'Rebind this profile so durable runtime truth matches Settings.',
           sessionUnavailableReason:
-            'Settings now select provider profile GitHub Models Work (github-models-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile so durable runtime truth matches Settings.',
+            'Configured provider profile GitHub Models Work (github-models-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile so durable runtime truth matches Settings.',
           messagesUnavailableReason:
-            'Live runtime streaming is paused because Settings now select provider profile GitHub Models Work (github-models-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile before trusting new stream activity.',
+            'Live runtime streaming is paused because Configured provider profile GitHub Models Work (github-models-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile before trusting new stream activity.',
           runtimeSession: makeRuntimeSession({
             providerId: 'openai_codex',
             runtimeKind: 'openai_codex',
@@ -1689,13 +1270,13 @@ describe('AgentRuntime current UI', () => {
           },
           providerMismatch: true,
           providerMismatchReason:
-            'Settings now select provider profile Anthropic Work (anthropic-work), but the persisted runtime session still reflects OpenAI Codex.',
+            'Configured provider profile Anthropic Work (anthropic-work) no longer matches the persisted runtime session for OpenAI Codex.',
           providerMismatchRecoveryCopy:
-            'Rebind the selected profile so durable runtime truth matches Settings.',
+            'Rebind this profile so durable runtime truth matches Settings.',
           sessionUnavailableReason:
-            'Settings now select provider profile Anthropic Work (anthropic-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile so durable runtime truth matches Settings.',
+            'Configured provider profile Anthropic Work (anthropic-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile so durable runtime truth matches Settings.',
           messagesUnavailableReason:
-            'Live runtime streaming is paused because Settings now select provider profile Anthropic Work (anthropic-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile before trusting new stream activity.',
+            'Live runtime streaming is paused because Configured provider profile Anthropic Work (anthropic-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile before trusting new stream activity.',
           runtimeSession: makeRuntimeSession({
             providerId: 'openai_codex',
             runtimeKind: 'openai_codex',
@@ -1760,13 +1341,13 @@ describe('AgentRuntime current UI', () => {
           },
           providerMismatch: true,
           providerMismatchReason:
-            'Settings now select provider profile Ollama Work (ollama-work), but the persisted runtime session still reflects OpenAI Codex.',
+            'Configured provider profile Ollama Work (ollama-work) no longer matches the persisted runtime session for OpenAI Codex.',
           providerMismatchRecoveryCopy:
-            'Rebind the selected profile so durable runtime truth matches Settings.',
+            'Rebind this profile so durable runtime truth matches Settings.',
           sessionUnavailableReason:
-            'Settings now select provider profile Ollama Work (ollama-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile so durable runtime truth matches Settings.',
+            'Configured provider profile Ollama Work (ollama-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile so durable runtime truth matches Settings.',
           messagesUnavailableReason:
-            'Live runtime streaming is paused because Settings now select provider profile Ollama Work (ollama-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile before trusting new stream activity.',
+            'Live runtime streaming is paused because Configured provider profile Ollama Work (ollama-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile before trusting new stream activity.',
           runtimeSession: makeRuntimeSession({
             providerId: 'openai_codex',
             runtimeKind: 'openai_codex',
@@ -1831,13 +1412,13 @@ describe('AgentRuntime current UI', () => {
           },
           providerMismatch: true,
           providerMismatchReason:
-            'Settings now select provider profile Amazon Bedrock Work (bedrock-work), but the persisted runtime session still reflects OpenAI Codex.',
+            'Configured provider profile Amazon Bedrock Work (bedrock-work) no longer matches the persisted runtime session for OpenAI Codex.',
           providerMismatchRecoveryCopy:
-            'Rebind the selected profile so durable runtime truth matches Settings.',
+            'Rebind this profile so durable runtime truth matches Settings.',
           sessionUnavailableReason:
-            'Settings now select provider profile Amazon Bedrock Work (bedrock-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile so durable runtime truth matches Settings.',
+            'Configured provider profile Amazon Bedrock Work (bedrock-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile so durable runtime truth matches Settings.',
           messagesUnavailableReason:
-            'Live runtime streaming is paused because Settings now select provider profile Amazon Bedrock Work (bedrock-work), but the persisted runtime session still reflects OpenAI Codex. Rebind the selected profile before trusting new stream activity.',
+            'Live runtime streaming is paused because Configured provider profile Amazon Bedrock Work (bedrock-work) no longer matches the persisted runtime session for OpenAI Codex. Rebind this profile before trusting new stream activity.',
           runtimeSession: makeRuntimeSession({
             providerId: 'openai_codex',
             runtimeKind: 'openai_codex',
@@ -2215,9 +1796,7 @@ describe('AgentRuntime current UI', () => {
     const thinkingLevelSelector = screen.getByRole('combobox', { name: 'Thinking level selector' })
 
     expect(screen.getByText('Configure agent runtime')).toBeVisible()
-    expect(
-      screen.getByText('Open Settings to choose a provider and model before using the agent tab for this imported project.'),
-    ).toBeVisible()
+    expect(screen.getByText('Connect a provider in Settings to start chatting with the agent.')).toBeVisible()
     expect(composer).toHaveAttribute('placeholder', 'Connect a provider to start.')
     expect(composer).toHaveAttribute('rows', '3')
     expect(modelSelector).toHaveTextContent('openai_codex')
@@ -2269,6 +1848,7 @@ describe('AgentRuntime current UI', () => {
             hasQueuedPrompt: true,
           },
           runtimeRunActiveControls: {
+            providerProfileId: null,
             modelId: 'openai_codex',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -2279,6 +1859,7 @@ describe('AgentRuntime current UI', () => {
             appliedAt: '2026-04-20T12:00:00Z',
           },
           runtimeRunPendingControls: {
+            providerProfileId: null,
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
@@ -2354,6 +1935,7 @@ describe('AgentRuntime current UI', () => {
     await waitFor(() =>
       expect(onStartRuntimeRun).toHaveBeenCalledWith({
         controls: {
+          providerProfileId: null,
           modelId: 'openai_codex',
           thinkingEffort: null,
           approvalMode: 'suggest',
@@ -2378,6 +1960,7 @@ describe('AgentRuntime current UI', () => {
             hasQueuedPrompt: true,
           },
           runtimeRunActiveControls: {
+            providerProfileId: null,
             modelId: 'openai_codex',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -2388,6 +1971,7 @@ describe('AgentRuntime current UI', () => {
             appliedAt: '2026-04-20T12:00:00Z',
           },
           runtimeRunPendingControls: {
+            providerProfileId: null,
             modelId: 'openai_codex',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -2484,6 +2068,7 @@ describe('AgentRuntime current UI', () => {
     await waitFor(() =>
       expect(onStartRuntimeRun).toHaveBeenCalledWith({
         controls: {
+          providerProfileId: null,
           modelId: 'openai/gpt-4.1-mini',
           thinkingEffort: 'medium',
           approvalMode: 'suggest',
@@ -2580,6 +2165,7 @@ describe('AgentRuntime current UI', () => {
           selectedThinkingEffort: 'medium',
           selectedApprovalMode: 'yolo',
           runtimeRunActiveControls: {
+            providerProfileId: null,
             modelId: 'openai_codex',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -2862,557 +2448,4 @@ describe('AgentRuntime current UI', () => {
     await waitFor(() => expect(dictation.session.cancel).toHaveBeenCalledTimes(1))
   })
 
-  it('loads session history, navigates prior runs, and exports the selected run', async () => {
-    const transcript = makeSessionTranscript()
-    const redaction = {
-      redactionClass: 'public' as const,
-      redacted: false,
-      reason: null,
-    }
-    const onLoadSessionTranscript = vi.fn(async () => transcript)
-    const onExportSessionTranscript = vi.fn(
-      async (request: { runId?: string | null; format: 'markdown' | 'json' }) =>
-        ({
-          payload: {
-            contractVersion: 1,
-            exportId: `export-${request.format}`,
-            generatedAt: '2026-04-26T12:00:00Z',
-            scope: request.runId ? 'run' : 'session',
-            format: request.format,
-            transcript,
-            contextSnapshot: null,
-            redaction,
-          },
-          content: `${request.format} export for ${request.runId ?? 'session'}`,
-          mimeType: request.format === 'json' ? 'application/json' : 'text/markdown',
-          suggestedFileName: request.format === 'json' ? 'history.json' : 'history.md',
-        }) satisfies SessionTranscriptExportResponseDto,
-    )
-    const onSaveSessionTranscriptExport = vi.fn(async () => undefined)
-    const clipboardWrite = vi.fn(async () => undefined)
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText: clipboardWrite },
-    })
-    saveDialogMock.mockResolvedValue('/tmp/history.json')
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          project: makeProject({
-            agentSessions: [makeAgentSession()],
-            selectedAgentSession: makeAgentSession(),
-            selectedAgentSessionId: 'agent-session-main',
-          }),
-        })}
-        historyTarget={{
-          agentSessionId: 'agent-session-main',
-          runId: 'run-history-1',
-          source: 'search',
-          nonce: 1,
-        }}
-        historySearchResult={{
-          contractVersion: 1,
-          resultId: 'item:run-history-1:run_prompt',
-          projectId: 'project-1',
-          agentSessionId: 'agent-session-main',
-          runId: 'run-history-1',
-          itemId: 'run_prompt:run-history-1',
-          archived: false,
-          rank: 0,
-          matchedFields: ['text'],
-          snippet: 'First run prompt',
-          redaction,
-        }}
-        onLoadSessionTranscript={onLoadSessionTranscript}
-        onExportSessionTranscript={onExportSessionTranscript}
-        onSaveSessionTranscriptExport={onSaveSessionTranscriptExport}
-      />,
-    )
-
-    expect(await screen.findByText('History session')).toBeVisible()
-    expect(onLoadSessionTranscript).toHaveBeenCalledWith({
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      runId: null,
-    })
-    expect(screen.getAllByText('First run prompt').length).toBeGreaterThanOrEqual(1)
-
-    fireEvent.click(screen.getByRole('button', { name: /run-history-2/i }))
-    expect(await screen.findByText('Second run prompt')).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
-    await waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith('markdown export for run-history-2'))
-    expect(onExportSessionTranscript).toHaveBeenLastCalledWith({
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      runId: 'run-history-2',
-      format: 'markdown',
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: 'JSON' }))
-    await waitFor(() =>
-      expect(onSaveSessionTranscriptExport).toHaveBeenCalledWith({
-        path: '/tmp/history.json',
-        content: 'json export for run-history-2',
-      }),
-    )
-  })
-
-  it('branches history runs, rewinds transcript boundaries, and surfaces lineage', async () => {
-    const transcript = makeSessionTranscript()
-    transcript.items = [
-      ...transcript.items,
-      {
-        ...transcript.items[1],
-        itemId: 'message:42',
-        sourceTable: 'agent_messages',
-        sourceId: '42',
-        sequence: 3,
-        title: 'User message',
-        text: 'Boundary message',
-      },
-      {
-        ...transcript.items[1],
-        itemId: 'checkpoint:7',
-        sourceTable: 'agent_checkpoints',
-        sourceId: '7',
-        sequence: 4,
-        kind: 'checkpoint',
-        actor: 'cadence',
-        title: 'Checkpoint',
-        text: null,
-        summary: 'Checkpoint summary',
-        checkpointKind: 'tool',
-      },
-    ]
-
-    const lineage = {
-      lineageId: 'lineage-message-1',
-      projectId: 'project-1',
-      childAgentSessionId: 'agent-session-main',
-      sourceAgentSessionId: 'source-session',
-      sourceRunId: 'run-source',
-      sourceBoundaryKind: 'message' as const,
-      sourceMessageId: 42,
-      sourceCheckpointId: null,
-      sourceCompactionId: null,
-      sourceTitle: 'Original session',
-      branchTitle: 'History session',
-      replayRunId: 'run-history-2',
-      fileChangeSummary: 'Branching does not roll files back automatically.',
-      diagnostic: null,
-      createdAt: '2026-04-26T12:00:00Z',
-      sourceDeletedAt: null,
-    }
-    const selectedSession = makeAgentSession({ lineage })
-    const onBranchAgentSession = vi.fn(async () => makeAgentSessionBranchResponse())
-    const onRewindAgentSession = vi.fn(async () =>
-      makeAgentSessionBranchResponse({
-        session: {
-          ...makeAgentSessionBranchResponse().session,
-          title: 'History session rewind',
-        },
-        replayRunId: 'run-history-rewind',
-      }),
-    )
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          project: makeProject({
-            agentSessions: [selectedSession],
-            selectedAgentSession: selectedSession,
-            selectedAgentSessionId: 'agent-session-main',
-          }),
-        })}
-        onLoadSessionTranscript={vi.fn(async () => transcript)}
-        onBranchAgentSession={onBranchAgentSession}
-        onRewindAgentSession={onRewindAgentSession}
-      />,
-    )
-
-    expect(await screen.findByText('Branch lineage')).toBeVisible()
-    expect(screen.getByText('Message 42')).toBeVisible()
-    expect(await screen.findByText('Boundary message')).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Branch run run-history-2' }))
-    await waitFor(() =>
-      expect(onBranchAgentSession).toHaveBeenCalledWith({
-        sourceAgentSessionId: 'agent-session-main',
-        sourceRunId: 'run-history-2',
-        selected: true,
-      }),
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Rewind session to message 3' }))
-    await waitFor(() =>
-      expect(onRewindAgentSession).toHaveBeenLastCalledWith({
-        sourceAgentSessionId: 'agent-session-main',
-        sourceRunId: 'run-history-2',
-        boundaryKind: 'message',
-        sourceMessageId: 42,
-        sourceCheckpointId: null,
-        selected: true,
-      }),
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Rewind session to checkpoint 4' }))
-    await waitFor(() =>
-      expect(onRewindAgentSession).toHaveBeenLastCalledWith({
-        sourceAgentSessionId: 'agent-session-main',
-        sourceRunId: 'run-history-2',
-        boundaryKind: 'checkpoint',
-        sourceMessageId: null,
-        sourceCheckpointId: 7,
-        selected: true,
-      }),
-    )
-  })
-
-  it('loads context visualization with budget pressure and contributors', async () => {
-    const onLoadSessionContextSnapshot = vi.fn(async () => makeContextSnapshot())
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          project: makeProject({
-            agentSessions: [makeAgentSession({ lastRunId: 'run-1' })],
-            selectedAgentSession: makeAgentSession({ lastRunId: 'run-1' }),
-            selectedAgentSessionId: 'agent-session-main',
-          }),
-        })}
-        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
-        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
-      />,
-    )
-
-    expect(await screen.findByText('Context')).toBeVisible()
-    await waitFor(() =>
-      expect(onLoadSessionContextSnapshot).toHaveBeenCalledWith({
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        runId: 'run-1',
-        providerId: 'openai_codex',
-        modelId: 'openai_codex',
-        pendingPrompt: null,
-      }),
-    )
-    expect(screen.getByText('High pressure')).toBeVisible()
-    expect(screen.getByText('AGENTS.md included')).toBeVisible()
-    expect(screen.getByText('Tool descriptor: read')).toBeVisible()
-    expect(screen.getByText('Provider usage: 1.6K tokens recorded.')).toBeVisible()
-  })
-
-  it('reviews extracted memory candidates from the context panel', async () => {
-    const onLoadSessionContextSnapshot = vi.fn(async () => makeContextSnapshot())
-    let memories: SessionMemoryRecordDto[] = [
-      makeMemoryRecord(),
-      makeMemoryRecord({
-        memoryId: 'memory-decision',
-        kind: 'decision',
-        text: 'Approved memory requires explicit review before provider replay.',
-        confidence: 88,
-      }),
-      makeMemoryRecord({
-        memoryId: 'memory-troubleshooting',
-        agentSessionId: 'agent-session-main',
-        scope: 'session',
-        kind: 'troubleshooting',
-        text: 'Compact replay before extracting memory from very long sessions.',
-        reviewState: 'approved',
-        enabled: false,
-        confidence: 84,
-      }),
-    ]
-    const onListSessionMemories = vi.fn(async (_request: ListSessionMemoriesRequestDto) => ({
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      memories,
-    }))
-    const onExtractSessionMemoryCandidates = vi.fn(
-      async (_request: ExtractSessionMemoryCandidatesRequestDto) => {
-        memories = [
-          ...memories,
-          makeMemoryRecord({
-            memoryId: 'memory-preference',
-            kind: 'user_preference',
-            text: 'Use focused e2e tests for reviewed memory workflows.',
-            confidence: 90,
-          }),
-        ]
-        return {
-          projectId: 'project-1',
-          agentSessionId: 'agent-session-main',
-          memories,
-          createdCount: 1,
-          skippedDuplicateCount: 1,
-          rejectedCount: 1,
-          diagnostics: [
-            {
-              code: 'session_memory_candidate_low_confidence',
-              message: 'Cadence skipped a low-confidence memory candidate.',
-              redaction: {
-                redactionClass: 'public' as const,
-                redacted: false,
-                reason: null,
-              },
-            },
-          ],
-        }
-      },
-    )
-    const onUpdateSessionMemory = vi.fn(async (request: UpdateSessionMemoryRequestDto) => {
-      const current = memories.find((memory) => memory.memoryId === request.memoryId)
-      if (!current) throw new Error('missing memory')
-      const reviewState = request.reviewState ?? current.reviewState
-      const enabled = reviewState === 'approved' ? request.enabled ?? current.enabled : false
-      const updated: SessionMemoryRecordDto = {
-        ...current,
-        reviewState,
-        enabled,
-        updatedAt: '2026-04-26T12:10:00Z',
-      }
-      memories = memories.map((memory) => (memory.memoryId === updated.memoryId ? updated : memory))
-      return updated
-    })
-    const onDeleteSessionMemory = vi.fn(async (request: DeleteSessionMemoryRequestDto) => {
-      memories = memories.filter((memory) => memory.memoryId !== request.memoryId)
-    })
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          project: makeProject({
-            agentSessions: [makeAgentSession({ lastRunId: 'run-1' })],
-            selectedAgentSession: makeAgentSession({ lastRunId: 'run-1' }),
-            selectedAgentSessionId: 'agent-session-main',
-          }),
-        })}
-        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
-        onListSessionMemories={onListSessionMemories}
-        onExtractSessionMemoryCandidates={onExtractSessionMemoryCandidates}
-        onUpdateSessionMemory={onUpdateSessionMemory}
-        onDeleteSessionMemory={onDeleteSessionMemory}
-        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
-      />,
-    )
-
-    expect(await screen.findByText('Memory')).toBeVisible()
-    await waitFor(() =>
-      expect(onListSessionMemories).toHaveBeenCalledWith({
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        includeDisabled: true,
-        includeRejected: false,
-      }),
-    )
-    expect(screen.getByText('Cadence stores reviewed memory in repo-local SQLite.')).toBeVisible()
-    expect(screen.getAllByText('Source run-1 · 1 item').length).toBeGreaterThan(0)
-
-    fireEvent.keyDown(screen.getByLabelText('Memory scope filter'), { key: 'ArrowDown' })
-    fireEvent.click(await screen.findByRole('option', { name: 'Session' }))
-    expect(screen.getByText('Compact replay before extracting memory from very long sessions.')).toBeVisible()
-    expect(screen.queryByText('Cadence stores reviewed memory in repo-local SQLite.')).not.toBeInTheDocument()
-
-    fireEvent.keyDown(screen.getByLabelText('Memory scope filter'), { key: 'ArrowDown' })
-    fireEvent.click(await screen.findByRole('option', { name: 'All scopes' }))
-    fireEvent.keyDown(screen.getByLabelText('Memory kind filter'), { key: 'ArrowDown' })
-    fireEvent.click(await screen.findByRole('option', { name: 'Decisions' }))
-    expect(screen.getByText('Approved memory requires explicit review before provider replay.')).toBeVisible()
-    expect(screen.queryByText('Cadence stores reviewed memory in repo-local SQLite.')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Extract' }))
-    await waitFor(() =>
-      expect(onExtractSessionMemoryCandidates).toHaveBeenCalledWith({
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        runId: 'run-1',
-      }),
-    )
-    expect(await screen.findByText(/Cadence proposed 1 memory candidate/)).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
-    await waitFor(() =>
-      expect(onUpdateSessionMemory).toHaveBeenLastCalledWith({
-        projectId: 'project-1',
-        memoryId: 'memory-decision',
-        reviewState: 'approved',
-        enabled: true,
-      }),
-    )
-    expect(await screen.findByText('Memory approved and enabled.')).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Disable' }))
-    await waitFor(() =>
-      expect(onUpdateSessionMemory).toHaveBeenLastCalledWith({
-        projectId: 'project-1',
-        memoryId: 'memory-decision',
-        enabled: false,
-      }),
-    )
-    expect(await screen.findByText('Memory disabled.')).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Enable' }))
-    await waitFor(() =>
-      expect(onUpdateSessionMemory).toHaveBeenLastCalledWith({
-        projectId: 'project-1',
-        memoryId: 'memory-decision',
-        enabled: true,
-      }),
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Delete memory memory-decision' }))
-    await waitFor(() =>
-      expect(onDeleteSessionMemory).toHaveBeenCalledWith({
-        projectId: 'project-1',
-        memoryId: 'memory-decision',
-      }),
-    )
-    expect(await screen.findByText('Memory deleted.')).toBeVisible()
-    expect(screen.queryByText('Approved memory requires explicit review before provider replay.')).not.toBeInTheDocument()
-    expect(onLoadSessionContextSnapshot.mock.calls.length).toBeGreaterThan(1)
-  })
-
-  it('includes the draft prompt in context preflight and shows over-budget pressure', async () => {
-    const onLoadSessionContextSnapshot = vi.fn(async () =>
-      makeContextSnapshot({
-        budget: {
-          budgetTokens: 1000,
-          estimatedTokens: 1200,
-          estimationSource: 'mixed',
-          pressure: 'over',
-          knownProviderBudget: true,
-        },
-      }),
-    )
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          runtimeRun: makeRuntimeRun({ runId: 'run-1' }),
-          project: makeProject({
-            agentSessions: [makeAgentSession({ lastRunId: 'run-1' })],
-            selectedAgentSession: makeAgentSession({ lastRunId: 'run-1' }),
-            selectedAgentSessionId: 'agent-session-main',
-          }),
-        })}
-        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
-        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
-      />,
-    )
-
-    expect(await screen.findByText('Likely over context budget')).toBeVisible()
-    fireEvent.change(screen.getByLabelText('Agent input'), {
-      target: { value: 'Continue with the largest remaining task.' },
-    })
-
-    await waitFor(() =>
-      expect(onLoadSessionContextSnapshot).toHaveBeenLastCalledWith({
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        runId: 'run-1',
-        providerId: 'openai_codex',
-        modelId: 'openai_codex',
-        pendingPrompt: 'Continue with the largest remaining task.',
-      }),
-    )
-  })
-
-  it('compacts the selected run and shows the compacted replay state', async () => {
-    const onLoadSessionContextSnapshot = vi.fn(async () => makeContextSnapshot())
-    const onCompactSessionHistory = vi.fn(async () => makeCompactSessionHistoryResponse())
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          project: makeProject({
-            agentSessions: [makeAgentSession({ lastRunId: 'run-1' })],
-            selectedAgentSession: makeAgentSession({ lastRunId: 'run-1' }),
-            selectedAgentSessionId: 'agent-session-main',
-          }),
-        })}
-        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
-        onCompactSessionHistory={onCompactSessionHistory}
-        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
-      />,
-    )
-
-    expect(await screen.findByText('Context')).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
-
-    await waitFor(() =>
-      expect(onCompactSessionHistory).toHaveBeenCalledWith({
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        runId: 'run-1',
-        rawTailMessageCount: 8,
-      }),
-    )
-    expect(await screen.findByText('Session compacted')).toBeVisible()
-    expect(screen.getByText(/messages 1-3 across 1 run/)).toBeVisible()
-    expect(screen.getByText('Compacted replay')).toBeVisible()
-    expect(screen.getByText('Compacted history summary')).toBeVisible()
-  })
-
-  it('disables manual compact when the selected session has no run yet', async () => {
-    const onLoadSessionContextSnapshot = vi.fn(async () => makeContextSnapshot({ runId: null }))
-    const onCompactSessionHistory = vi.fn(async () => makeCompactSessionHistoryResponse())
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          project: makeProject({
-            agentSessions: [makeAgentSession({ lastRunId: null })],
-            selectedAgentSession: makeAgentSession({ lastRunId: null }),
-            selectedAgentSessionId: 'agent-session-main',
-          }),
-        })}
-        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
-        onCompactSessionHistory={onCompactSessionHistory}
-        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
-      />,
-    )
-
-    expect(await screen.findByText('Context')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Compact' })).toBeDisabled()
-    expect(onCompactSessionHistory).not.toHaveBeenCalled()
-  })
-
-  it('shows provider compaction failures without changing the loaded snapshot', async () => {
-    const onLoadSessionContextSnapshot = vi.fn(async () => makeContextSnapshot())
-    const onCompactSessionHistory = vi.fn(async () => {
-      throw new Error('Provider refused to summarize pending tool work.')
-    })
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          project: makeProject({
-            agentSessions: [makeAgentSession({ lastRunId: 'run-1' })],
-            selectedAgentSession: makeAgentSession({ lastRunId: 'run-1' }),
-            selectedAgentSessionId: 'agent-session-main',
-          }),
-        })}
-        onLoadSessionContextSnapshot={onLoadSessionContextSnapshot}
-        onCompactSessionHistory={onCompactSessionHistory}
-        onUpdateRuntimeRunControls={vi.fn(async () => makeRuntimeRun({ runId: 'run-1' }))}
-      />,
-    )
-
-    expect(await screen.findByText('Raw history replay')).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
-
-    expect(await screen.findByText('Compact failed')).toBeVisible()
-    expect(screen.getByText('Provider refused to summarize pending tool work.')).toBeVisible()
-    expect(screen.getByText('Raw history replay')).toBeVisible()
-  })
 })

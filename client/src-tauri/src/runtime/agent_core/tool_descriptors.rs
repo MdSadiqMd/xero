@@ -1198,6 +1198,7 @@ pub(crate) fn runtime_controls_from_request(
 ) -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            provider_profile_id: controls.and_then(|controls| controls.provider_profile_id.clone()),
             model_id: controls
                 .map(|controls| controls.model_id.clone())
                 .unwrap_or_else(|| OPENAI_CODEX_PROVIDER_ID.into()),

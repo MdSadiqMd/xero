@@ -9,16 +9,16 @@ use crate::{
         provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult,
         RuntimeSettingsDto,
     },
-    provider_profiles::ProviderProfilesSnapshot,
+    provider_profiles::{ProviderProfileRecord, ProviderProfilesSnapshot},
     runtime::{
-        resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
-        OPENROUTER_PROVIDER_ID,
+        normalize_openai_codex_model_id, resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID,
+        OPENAI_CODEX_DEFAULT_MODEL_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
     },
     state::DesktopState,
 };
 
 const DEFAULT_RUNTIME_PROVIDER_ID: &str = OPENAI_CODEX_PROVIDER_ID;
-const DEFAULT_RUNTIME_MODEL_ID: &str = OPENAI_CODEX_PROVIDER_ID;
+const DEFAULT_RUNTIME_MODEL_ID: &str = OPENAI_CODEX_DEFAULT_MODEL_ID;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -213,18 +213,15 @@ pub(crate) fn validate_runtime_settings_file(
         ));
     }
 
-    if provider.provider_id == OPENAI_CODEX_PROVIDER_ID && model_id != OPENAI_CODEX_PROVIDER_ID {
-        return Err(CommandError::user_fixable(
-            error_code,
-            format!(
-                "Cadence only supports modelId `{OPENAI_CODEX_PROVIDER_ID}` for provider `{OPENAI_CODEX_PROVIDER_ID}`."
-            ),
-        ));
-    }
+    let model_id = if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
+        normalize_openai_codex_model_id(model_id)
+    } else {
+        model_id.to_owned()
+    };
 
     Ok(RuntimeSettingsFile {
         provider_id: provider.provider_id.to_owned(),
-        model_id: model_id.to_owned(),
+        model_id,
         openrouter_api_key_configured: file.openrouter_api_key_configured,
         updated_at: normalize_updated_at(file.updated_at),
     })
@@ -260,18 +257,15 @@ pub(crate) fn runtime_settings_file_from_request(
         ));
     }
 
-    if provider.provider_id == OPENAI_CODEX_PROVIDER_ID && model_id != OPENAI_CODEX_PROVIDER_ID {
-        return Err(CommandError::user_fixable(
-            "runtime_settings_request_invalid",
-            format!(
-                "Cadence only supports modelId `{OPENAI_CODEX_PROVIDER_ID}` for provider `{OPENAI_CODEX_PROVIDER_ID}`."
-            ),
-        ));
-    }
+    let model_id = if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
+        normalize_openai_codex_model_id(model_id)
+    } else {
+        model_id.to_owned()
+    };
 
     Ok(RuntimeSettingsFile {
         provider_id: provider.provider_id.to_owned(),
-        model_id: model_id.to_owned(),
+        model_id,
         openrouter_api_key_configured,
         updated_at: crate::auth::now_timestamp(),
     })
@@ -448,27 +442,34 @@ pub(crate) fn runtime_settings_snapshot_from_provider_profiles(
         )
     })?;
 
+    runtime_settings_snapshot_for_provider_profile(provider_profiles, active_profile)
+}
+
+pub(crate) fn runtime_settings_snapshot_for_provider_profile(
+    provider_profiles: &ProviderProfilesSnapshot,
+    profile: &ProviderProfileRecord,
+) -> CommandResult<RuntimeSettingsSnapshot> {
     let preferred_openrouter_credential = provider_profiles.preferred_openrouter_credential();
     let preferred_anthropic_credential = provider_profiles.preferred_anthropic_credential();
     let active_api_key_credential =
-        provider_profiles.matched_api_key_credential_for_profile(&active_profile.profile_id);
+        provider_profiles.matched_api_key_credential_for_profile(&profile.profile_id);
 
     Ok(RuntimeSettingsSnapshot {
         settings: RuntimeSettingsFile {
-            provider_id: active_profile.provider_id.clone(),
-            model_id: active_profile.model_id.clone(),
+            provider_id: profile.provider_id.clone(),
+            model_id: profile.model_id.clone(),
             openrouter_api_key_configured: provider_profiles.any_openrouter_api_key_configured(),
-            updated_at: active_profile.updated_at.clone(),
+            updated_at: profile.updated_at.clone(),
         },
-        runtime_kind: active_profile.runtime_kind.clone(),
+        runtime_kind: profile.runtime_kind.clone(),
         provider_api_key: active_api_key_credential.map(|entry| entry.api_key.clone()),
         provider_api_key_updated_at: active_api_key_credential
             .map(|entry| entry.updated_at.clone()),
-        preset_id: active_profile.preset_id.clone(),
-        base_url: active_profile.base_url.clone(),
-        api_version: active_profile.api_version.clone(),
-        region: active_profile.region.clone(),
-        project_id: active_profile.project_id.clone(),
+        preset_id: profile.preset_id.clone(),
+        base_url: profile.base_url.clone(),
+        api_version: profile.api_version.clone(),
+        region: profile.region.clone(),
+        project_id: profile.project_id.clone(),
         openrouter_api_key: preferred_openrouter_credential.map(|entry| entry.api_key.clone()),
         openrouter_credentials_updated_at: preferred_openrouter_credential
             .map(|entry| entry.updated_at.clone()),

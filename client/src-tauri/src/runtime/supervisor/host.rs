@@ -168,6 +168,7 @@ impl Default for RuntimeSupervisorLaunchRequest {
             supervisor_binary: None,
             run_controls: RuntimeRunControlStateRecord {
                 active: project_store::RuntimeRunActiveControlSnapshotRecord {
+                    provider_profile_id: None,
                     model_id: "openai_codex".into(),
                     thinking_effort: None,
                     approval_mode: crate::commands::RuntimeRunApprovalModeDto::Suggest,

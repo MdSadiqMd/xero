@@ -157,6 +157,7 @@ fn current_head_sha(repo_root: &Path) -> Option<String> {
 fn yolo_controls() -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            provider_profile_id: None,
             model_id: "test-model".into(),
             thinking_effort: None,
             approval_mode: RuntimeRunApprovalModeDto::Yolo,
@@ -170,6 +171,7 @@ fn yolo_controls() -> RuntimeRunControlStateDto {
 
 fn suggest_controls_input() -> RuntimeRunControlInputDto {
     RuntimeRunControlInputDto {
+        provider_profile_id: None,
         model_id: "test-model".into(),
         thinking_effort: None,
         approval_mode: RuntimeRunApprovalModeDto::Suggest,
@@ -1194,6 +1196,7 @@ fn owned_agent_plan_mode_pauses_before_first_tool_call() {
         run_id: "owned-plan-run-1".into(),
         prompt: "Please inspect the file.\ntool:read src/tracked.txt".into(),
         controls: Some(RuntimeRunControlInputDto {
+            provider_profile_id: None,
             model_id: "fake-model".into(),
             thinking_effort: None,
             approval_mode: RuntimeRunApprovalModeDto::Yolo,

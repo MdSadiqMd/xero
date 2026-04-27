@@ -228,9 +228,10 @@ pub trait ProviderAdapter {
             }],
             tools: Vec::new(),
             turn_index: 0,
-            controls: RuntimeRunControlStateDto {
-                active: RuntimeRunActiveControlSnapshotDto {
-                    model_id: request.model_id.clone(),
+                controls: RuntimeRunControlStateDto {
+                    active: RuntimeRunActiveControlSnapshotDto {
+                        provider_profile_id: None,
+                        model_id: request.model_id.clone(),
                     thinking_effort: None,
                     approval_mode: RuntimeRunApprovalModeDto::Yolo,
                     plan_mode_required: false,
@@ -277,9 +278,10 @@ pub trait ProviderAdapter {
             messages: vec![ProviderMessage::User { content: prompt }],
             tools: Vec::new(),
             turn_index: 0,
-            controls: RuntimeRunControlStateDto {
-                active: RuntimeRunActiveControlSnapshotDto {
-                    model_id: request.model_id.clone(),
+                controls: RuntimeRunControlStateDto {
+                    active: RuntimeRunActiveControlSnapshotDto {
+                        provider_profile_id: None,
+                        model_id: request.model_id.clone(),
                     thinking_effort: None,
                     approval_mode: RuntimeRunApprovalModeDto::Yolo,
                     plan_mode_required: false,

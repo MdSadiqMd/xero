@@ -172,6 +172,7 @@ fn runtime_control_state(
 ) -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            provider_profile_id: None,
             model_id: "model-1".into(),
             thinking_effort: None,
             approval_mode: active,
@@ -180,6 +181,7 @@ fn runtime_control_state(
             applied_at: "2026-04-22T00:00:00Z".into(),
         },
         pending: pending.map(|approval_mode| RuntimeRunPendingControlSnapshotDto {
+            provider_profile_id: None,
             model_id: "model-1".into(),
             thinking_effort: None,
             approval_mode,

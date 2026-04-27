@@ -4,28 +4,9 @@ import { useMemo } from 'react'
 
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
-  ExportSessionTranscriptRequestDto,
-  BranchAgentSessionRequestDto,
-  AgentSessionBranchResponseDto,
-  CompactSessionHistoryRequestDto,
-  CompactSessionHistoryResponseDto,
-  DeleteSessionMemoryRequestDto,
-  ExtractSessionMemoryCandidatesRequestDto,
-  ExtractSessionMemoryCandidatesResponseDto,
-  GetSessionContextSnapshotRequestDto,
-  GetSessionTranscriptRequestDto,
-  ListSessionMemoriesRequestDto,
-  ListSessionMemoriesResponseDto,
-  RewindAgentSessionRequestDto,
   RuntimeRunView,
   RuntimeAutoCompactPreferenceDto,
   RuntimeSessionView,
-  SessionContextSnapshotDto,
-  SessionMemoryRecordDto,
-  SessionTranscriptDto,
-  SessionTranscriptExportResponseDto,
-  SessionTranscriptSearchResultSnippetDto,
-  UpdateSessionMemoryRequestDto,
   UpsertNotificationRouteRequestDto,
 } from '@/src/lib/cadence-model'
 import {
@@ -51,7 +32,7 @@ import {
   isSelectedProviderReadyForSession,
 } from './agent-runtime/composer-helpers'
 import { ComposerDock } from './agent-runtime/composer-dock'
-import { ContextVisualizationSection } from './agent-runtime/context-visualization-section'
+import { EmptySessionState } from './agent-runtime/empty-session-state'
 import {
   getStreamRunId,
   getStreamStatusMeta,
@@ -59,10 +40,6 @@ import {
 } from './agent-runtime/runtime-stream-helpers'
 import { displayValue, formatSequence } from './agent-runtime/shared-helpers'
 import { SetupEmptyState } from './agent-runtime/setup-empty-state'
-import {
-  SessionHistorySection,
-  type SessionHistoryTarget,
-} from './agent-runtime/session-history-section'
 import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-controller'
 import type { SpeechDictationAdapter } from './agent-runtime/use-speech-dictation'
 
@@ -70,7 +47,7 @@ interface AgentRuntimeProps {
   agent: AgentPaneView
   onOpenSettings?: () => void
   onOpenDiagnostics?: () => void
-  onStartLogin?: () => Promise<RuntimeSessionView | null>
+  onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
   onStartAutonomousRun?: () => Promise<unknown>
   onInspectAutonomousRun?: () => Promise<unknown>
   onCancelAutonomousRun?: (runId: string) => Promise<unknown>
@@ -83,7 +60,7 @@ interface AgentRuntimeProps {
     prompt?: string | null
     autoCompact?: RuntimeAutoCompactPreferenceDto | null
   }) => Promise<RuntimeRunView | null>
-  onStartRuntimeSession?: () => Promise<RuntimeSessionView | null>
+  onStartRuntimeSession?: (options?: { providerProfileId?: string | null }) => Promise<RuntimeSessionView | null>
   onStopRuntimeRun?: (runId: string) => Promise<RuntimeRunView | null>
   onSubmitManualCallback?: (flowId: string, manualInput: string) => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
@@ -98,33 +75,6 @@ interface AgentRuntimeProps {
   onUpsertNotificationRoute?: (
     request: Omit<UpsertNotificationRouteRequestDto, 'projectId'>,
   ) => Promise<unknown>
-  historyTarget?: SessionHistoryTarget | null
-  historySearchResult?: SessionTranscriptSearchResultSnippetDto | null
-  onLoadSessionTranscript?: (request: GetSessionTranscriptRequestDto) => Promise<SessionTranscriptDto>
-  onExportSessionTranscript?: (
-    request: ExportSessionTranscriptRequestDto,
-  ) => Promise<SessionTranscriptExportResponseDto>
-  onSaveSessionTranscriptExport?: (request: { path: string; content: string }) => Promise<void>
-  onBranchAgentSession?: (
-    request: Omit<BranchAgentSessionRequestDto, 'projectId'>,
-  ) => Promise<AgentSessionBranchResponseDto>
-  onRewindAgentSession?: (
-    request: Omit<RewindAgentSessionRequestDto, 'projectId'>,
-  ) => Promise<AgentSessionBranchResponseDto>
-  onLoadSessionContextSnapshot?: (
-    request: GetSessionContextSnapshotRequestDto,
-  ) => Promise<SessionContextSnapshotDto>
-  onCompactSessionHistory?: (
-    request: CompactSessionHistoryRequestDto,
-  ) => Promise<CompactSessionHistoryResponseDto>
-  onListSessionMemories?: (
-    request: ListSessionMemoriesRequestDto,
-  ) => Promise<ListSessionMemoriesResponseDto>
-  onExtractSessionMemoryCandidates?: (
-    request: ExtractSessionMemoryCandidatesRequestDto,
-  ) => Promise<ExtractSessionMemoryCandidatesResponseDto>
-  onUpdateSessionMemory?: (request: UpdateSessionMemoryRequestDto) => Promise<SessionMemoryRecordDto>
-  onDeleteSessionMemory?: (request: DeleteSessionMemoryRequestDto) => Promise<void>
   desktopAdapter?: SpeechDictationAdapter
 }
 
@@ -140,19 +90,6 @@ export function AgentRuntime({
   onStartRuntimeSession,
   onResolveOperatorAction,
   onResumeOperatorRun,
-  historyTarget,
-  historySearchResult,
-  onLoadSessionTranscript,
-  onExportSessionTranscript,
-  onSaveSessionTranscriptExport,
-  onBranchAgentSession,
-  onRewindAgentSession,
-  onLoadSessionContextSnapshot,
-  onCompactSessionHistory,
-  onListSessionMemories,
-  onExtractSessionMemoryCandidates,
-  onUpdateSessionMemory,
-  onDeleteSessionMemory,
   desktopAdapter,
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
@@ -204,7 +141,7 @@ export function AgentRuntime({
 
   const controller = useAgentRuntimeController({
     projectId: agent.project.id,
-    selectedModelId,
+    selectedModelSelectionKey: agent.selectedModelSelectionKey ?? agent.selectedModelOption?.selectionKey ?? selectedModelId,
     selectedThinkingEffort: agent.selectedThinkingEffort,
     selectedApprovalMode: agent.selectedApprovalMode,
     selectedPrompt: agent.selectedPrompt,
@@ -309,55 +246,57 @@ export function AgentRuntime({
       !selectedProviderReadyForSession &&
       (!runtimeSession || runtimeSession.isSignedOut || runtimeSession.phase === 'idle'),
   )
+  const hasSessionActivity = Boolean(
+    hasIncompleteRuntimeRunPayload ||
+      renderableRuntimeRun ||
+      controller.recentRunReplacement ||
+      streamIssue ||
+      transcriptItems.length > 0 ||
+      activityItems.length > 0 ||
+      toolCalls.length > 0 ||
+      skillItems.length > 0 ||
+      actionRequiredItems.length > 0 ||
+      runtimeStream?.completion ||
+      runtimeStream?.failure,
+  )
   const promptInputLabel = controller.promptInputAvailable ? 'Agent input' : 'Agent input unavailable'
   const sendButtonLabel = controller.promptInputAvailable ? 'Send message' : 'Send message unavailable'
   const selectedAgentSession = useMemo(() => {
-    const targetSessionId = historyTarget?.agentSessionId ?? agent.project.selectedAgentSessionId
+    const targetSessionId = agent.project.selectedAgentSessionId
     return agent.project.agentSessions.find((session) => session.agentSessionId === targetSessionId) ?? null
-  }, [agent.project.agentSessions, agent.project.selectedAgentSessionId, historyTarget?.agentSessionId])
-  const contextRunId =
-    historyTarget?.runId ?? renderableRuntimeRun?.runId ?? selectedAgentSession?.lastRunId ?? null
-  const contextPendingPrompt = historyTarget?.runId ? '' : controller.draftPrompt
+  }, [agent.project.agentSessions, agent.project.selectedAgentSessionId])
+  const showEmptySessionState = Boolean(
+    !showAgentSetupEmptyState &&
+      !providerMismatch &&
+      runtimeSession?.isAuthenticated &&
+      !hasSessionActivity &&
+      !selectedAgentSession?.lastRunId,
+  )
+  const projectLabel =
+    agent.project.repository?.displayName ?? agent.project.name ?? 'this project'
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
         <div
           className={
-            showAgentSetupEmptyState
+            showAgentSetupEmptyState || showEmptySessionState
               ? 'flex flex-1 items-center justify-center overflow-y-auto scrollbar-thin px-6 py-5'
               : 'flex-1 overflow-y-auto scrollbar-thin px-4 py-4'
           }
         >
           {showAgentSetupEmptyState ? (
             <SetupEmptyState onOpenSettings={onOpenSettings} />
+          ) : showEmptySessionState ? (
+            <EmptySessionState
+              projectLabel={projectLabel}
+              onSelectSuggestion={(prompt) => {
+                controller.handleDraftPromptChange(prompt)
+                controller.promptInputRef.current?.focus()
+              }}
+            />
           ) : (
             <div className="mx-auto flex max-w-4xl flex-col gap-4">
-              <SessionHistorySection
-                projectId={agent.project.id}
-                selectedSession={selectedAgentSession}
-                historyTarget={historyTarget}
-                searchResult={historySearchResult}
-                onLoadTranscript={onLoadSessionTranscript}
-                onExportTranscript={onExportSessionTranscript}
-                onSaveTranscriptExport={onSaveSessionTranscriptExport}
-                onBranchSession={onBranchAgentSession}
-                onRewindSession={onRewindAgentSession}
-              />
-              <ContextVisualizationSection
-                projectId={agent.project.id}
-                selectedSession={selectedAgentSession}
-                runId={contextRunId}
-                providerId={selectedProviderId}
-                modelId={selectedModelId}
-                pendingPrompt={contextPendingPrompt}
-                onLoadContextSnapshot={onLoadSessionContextSnapshot}
-                onCompactSessionHistory={onCompactSessionHistory}
-                onListSessionMemories={onListSessionMemories}
-                onExtractSessionMemoryCandidates={onExtractSessionMemoryCandidates}
-                onUpdateSessionMemory={onUpdateSessionMemory}
-                onDeleteSessionMemory={onDeleteSessionMemory}
-              />
               {hasAgentFeedSurface ? (
                 <AgentFeedSection
                   activityItems={activityItems}

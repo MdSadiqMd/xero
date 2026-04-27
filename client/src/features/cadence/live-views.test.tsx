@@ -178,6 +178,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
     },
     controls: {
       active: {
+        providerProfileId: null,
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
@@ -190,6 +191,7 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
       pending: null,
       selected: {
         source: 'active',
+        providerProfileId: null,
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
@@ -352,6 +354,11 @@ function makeProviderModelCatalog(): AgentProviderModelCatalogView {
     lastRefreshError: null,
     models: [
       {
+        selectionKey: 'openai_codex-default::openai_codex',
+        profileId: 'openai_codex-default',
+        profileLabel: 'OpenAI Codex',
+        providerId: 'openai_codex',
+        providerLabel: 'OpenAI Codex',
         modelId: 'openai_codex',
         label: 'OpenAI Codex',
         displayName: 'OpenAI Codex',

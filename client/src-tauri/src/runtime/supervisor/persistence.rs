@@ -60,6 +60,7 @@ pub(super) fn apply_pending_controls_at_boundary(
     {
         let mut state = shared.lock().expect("sidecar state lock poisoned");
         state.control_state.active = project_store::RuntimeRunActiveControlSnapshotRecord {
+            provider_profile_id: pending.provider_profile_id.clone(),
             model_id: pending.model_id.clone(),
             thinking_effort: pending.thinking_effort.clone(),
             approval_mode: pending.approval_mode.clone(),

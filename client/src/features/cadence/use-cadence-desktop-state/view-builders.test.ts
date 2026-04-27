@@ -356,9 +356,9 @@ describe('view builders', () => {
       openrouterApiKeyConfigured: true,
       providerMismatch: true,
       providerMismatchReason:
-        'Settings now select provider OpenRouter, but the persisted runtime session still reflects OpenAI Codex.',
+        'Configured provider OpenRouter no longer matches the persisted runtime session for OpenAI Codex.',
       providerMismatchRecoveryCopy:
-        'Rebind the selected provider so durable runtime truth matches Settings.',
+        'Rebind this provider so durable runtime truth matches Settings.',
     })
   })
 
@@ -382,9 +382,9 @@ describe('view builders', () => {
       selectedProviderSource: 'provider_profiles',
       providerMismatch: true,
       providerMismatchReason:
-        'Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex.',
+        'Configured provider profile OpenRouter Work (openrouter-work) no longer matches the persisted runtime session for OpenAI Codex.',
       providerMismatchRecoveryCopy:
-        'Rebind the selected profile so durable runtime truth matches Settings.',
+        'Rebind this profile so durable runtime truth matches Settings.',
     })
   })
 
@@ -434,9 +434,9 @@ describe('view builders', () => {
       selectedProviderSource: 'provider_profiles',
       providerMismatch: true,
       providerMismatchReason:
-        'Settings now select provider profile Anthropic Work (anthropic-work), but the persisted runtime session still reflects OpenRouter.',
+        'Configured provider profile Anthropic Work (anthropic-work) no longer matches the persisted runtime session for OpenRouter.',
       providerMismatchRecoveryCopy:
-        'Rebind the selected profile so durable runtime truth matches Settings.',
+        'Rebind this profile so durable runtime truth matches Settings.',
     })
     expect(view?.providerMismatchReason).not.toContain('OpenAI')
   })
@@ -537,9 +537,9 @@ describe('view builders', () => {
       },
       providerMismatch: true,
       providerMismatchReason:
-        'Settings now select provider OpenRouter, but the persisted runtime session still reflects OpenAI Codex.',
+        'Configured provider OpenRouter no longer matches the persisted runtime session for OpenAI Codex.',
       providerMismatchRecoveryCopy:
-        'Rebind the selected provider so durable runtime truth matches Settings.',
+        'Rebind this provider so durable runtime truth matches Settings.',
       runtimeStreamStatus: 'live',
       runtimeStreamStatusLabel: 'Streaming live activity',
       notificationRouteLoadStatus: loadStatus,
@@ -550,13 +550,13 @@ describe('view builders', () => {
       notificationRouteMutationStatus: 'running',
       pendingNotificationRouteId: 'telegram-primary',
       sessionUnavailableReason:
-        'Settings now select provider OpenRouter, but the persisted runtime session still reflects OpenAI Codex. Rebind the selected provider so durable runtime truth matches Settings.',
+        'Configured provider OpenRouter no longer matches the persisted runtime session for OpenAI Codex. Rebind this provider so durable runtime truth matches Settings.',
     })
     expect(result.view?.notificationRoutes).toHaveLength(1)
     expect(result.view?.notificationChannelHealth).toHaveLength(2)
     expect(result.view?.selectedModelOption).toMatchObject({
       modelId: 'openai/gpt-4.1-mini',
-      groupLabel: 'OpenAI',
+      groupLabel: 'OpenRouter',
       thinkingSupported: true,
       defaultThinkingEffort: 'high',
     })
@@ -667,7 +667,7 @@ describe('view builders', () => {
     expect(result.view?.selectedModelOption).toMatchObject({
       modelId: 'llama3.2',
       availability: 'available',
-      groupLabel: 'Ollama',
+      groupLabel: 'Ollama Work · Ollama',
     })
   })
 
@@ -778,12 +778,296 @@ describe('view builders', () => {
     expect(result.view?.providerModelCatalog.models[0]).toMatchObject({
       modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
       availability: 'orphaned',
-      groupLabel: 'Current selection',
+      groupLabel: 'Amazon Bedrock Work · Amazon Bedrock',
     })
     expect(result.view?.selectedModelOption).toMatchObject({
       modelId: 'anthropic.claude-3-7-sonnet-20250219-v1:0',
       availability: 'orphaned',
     })
+  })
+
+  it('buildAgentView combines ready provider-profile catalogs with provider-scoped selection keys', () => {
+    const project = makeProject()
+    const providerProfiles = makeProviderProfiles({
+      activeProfileId: 'openrouter-work',
+      profiles: [
+        {
+          profileId: 'openrouter-work',
+          providerId: 'openrouter',
+          runtimeKind: 'openrouter',
+          label: 'OpenRouter Work',
+          modelId: 'openai/gpt-4.1-mini',
+          presetId: 'openrouter',
+          active: true,
+          readiness: {
+            ready: true,
+            status: 'ready',
+            proof: 'stored_secret',
+            proofUpdatedAt: '2026-04-20T11:58:00Z',
+          },
+          migratedFromLegacy: false,
+          migratedAt: null,
+        },
+        {
+          profileId: 'openai-api-work',
+          providerId: 'openai_api',
+          runtimeKind: 'openai_compatible',
+          label: 'OpenAI API Work',
+          modelId: 'openai/gpt-4.1-mini',
+          presetId: 'openai_api',
+          active: false,
+          readiness: {
+            ready: true,
+            status: 'ready',
+            proof: 'stored_secret',
+            proofUpdatedAt: '2026-04-20T11:59:00Z',
+          },
+          migratedFromLegacy: false,
+          migratedAt: null,
+        },
+      ],
+    })
+    const openRouterCatalog = makeProviderModelCatalog()
+    const openAiApiCatalog = makeProviderModelCatalog({
+      profileId: 'openai-api-work',
+      providerId: 'openai_api',
+      configuredModelId: 'openai/gpt-4.1-mini',
+      models: [
+        {
+          modelId: 'openai/gpt-4.1-mini',
+          displayName: 'GPT-4.1 mini',
+          thinking: {
+            supported: true,
+            effortOptions: ['low', 'medium'],
+            defaultEffort: 'medium',
+          },
+        },
+      ],
+    })
+
+    const result = buildAgentView({
+      project,
+      activePhase: project.phases[0] ?? null,
+      repositoryStatus: makeRepositoryStatus(),
+      providerProfiles,
+      runtimeSession: makeRuntimeSession({ providerId: 'openrouter', runtimeKind: 'openrouter' }),
+      runtimeSettings: makeRuntimeSettings(),
+      providerModelCatalogs: {
+        'openrouter-work': openRouterCatalog,
+        'openai-api-work': openAiApiCatalog,
+      },
+      providerModelCatalogLoadStatuses: {
+        'openrouter-work': 'ready',
+        'openai-api-work': 'ready',
+      },
+      providerModelCatalogLoadErrors: {
+        'openrouter-work': null,
+        'openai-api-work': null,
+      },
+      activeProviderModelCatalog: openRouterCatalog,
+      activeProviderModelCatalogLoadStatus: 'ready',
+      activeProviderModelCatalogLoadError: null,
+      runtimeRun: null,
+      autonomousRun: null,
+      runtimeErrorMessage: null,
+      runtimeRunErrorMessage: null,
+      autonomousRunErrorMessage: null,
+      runtimeStream: null,
+      notificationRoutes: [],
+      notificationRouteLoadStatus: 'idle',
+      notificationRouteError: null,
+      notificationSyncSummary: null,
+      notificationSyncError: null,
+      blockedNotificationSyncPollTarget: null,
+      notificationRouteMutationStatus: 'idle',
+      pendingNotificationRouteId: null,
+      notificationRouteMutationError: null,
+      previousTrustSnapshot: null,
+      operatorActionStatus: 'idle',
+      pendingOperatorActionId: null,
+      operatorActionError: null,
+      autonomousRunActionStatus: 'idle',
+      pendingAutonomousRunAction: null,
+      autonomousRunActionError: null,
+      runtimeRunActionStatus: 'idle',
+      pendingRuntimeRunAction: null,
+      runtimeRunActionError: null,
+    })
+
+    const duplicateModelOptions = result.view?.providerModelCatalog.models.filter(
+      (model) => model.modelId === 'openai/gpt-4.1-mini',
+    )
+
+    expect(result.view?.providerModelCatalog.providerLabel).toBe('Configured providers')
+    expect(duplicateModelOptions).toHaveLength(2)
+    expect(duplicateModelOptions?.map((model) => model.selectionKey)).toEqual([
+      'openrouter-work::openai%2Fgpt-4.1-mini',
+      'openai-api-work::openai%2Fgpt-4.1-mini',
+    ])
+    expect(duplicateModelOptions?.map((model) => model.groupLabel)).toEqual([
+      'OpenRouter Work · OpenRouter',
+      'OpenAI API Work · OpenAI-compatible',
+    ])
+    expect(result.view?.selectedModelSelectionKey).toBe('openrouter-work::openai%2Fgpt-4.1-mini')
+    expect(result.view?.selectedModelOption).toMatchObject({
+      profileId: 'openrouter-work',
+      providerId: 'openrouter',
+      modelId: 'openai/gpt-4.1-mini',
+    })
+  })
+
+  it('buildAgentView keeps runtime-run provider-profile selection over the active Settings profile', () => {
+    const project = makeProject()
+    const providerProfiles = makeProviderProfiles({
+      activeProfileId: 'openrouter-work',
+      profiles: [
+        {
+          profileId: 'openrouter-work',
+          providerId: 'openrouter',
+          runtimeKind: 'openrouter',
+          label: 'OpenRouter Work',
+          modelId: 'openai/gpt-4.1-mini',
+          presetId: 'openrouter',
+          active: true,
+          readiness: {
+            ready: true,
+            status: 'ready',
+            proof: 'stored_secret',
+            proofUpdatedAt: '2026-04-20T11:58:00Z',
+          },
+          migratedFromLegacy: false,
+          migratedAt: null,
+        },
+        {
+          profileId: 'openrouter-personal',
+          providerId: 'openrouter',
+          runtimeKind: 'openrouter',
+          label: 'OpenRouter Personal',
+          modelId: 'openai/gpt-4.1-mini',
+          presetId: 'openrouter',
+          active: false,
+          readiness: {
+            ready: true,
+            status: 'ready',
+            proof: 'stored_secret',
+            proofUpdatedAt: '2026-04-20T11:59:00Z',
+          },
+          migratedFromLegacy: false,
+          migratedAt: null,
+        },
+      ],
+    })
+    const workCatalog = makeProviderModelCatalog()
+    const personalCatalog = makeProviderModelCatalog({
+      profileId: 'openrouter-personal',
+      configuredModelId: 'openai/gpt-4.1-mini',
+      models: [
+        {
+          modelId: 'openai/gpt-4.1-mini',
+          displayName: 'GPT-4.1 Mini Personal',
+          thinking: {
+            supported: true,
+            effortOptions: ['minimal', 'low'],
+            defaultEffort: 'low',
+          },
+        },
+      ],
+    })
+
+    const result = buildAgentView({
+      project,
+      activePhase: project.phases[0] ?? null,
+      repositoryStatus: makeRepositoryStatus(),
+      providerProfiles,
+      runtimeSession: makeRuntimeSession({ providerId: 'openrouter', runtimeKind: 'openrouter' }),
+      runtimeSettings: makeRuntimeSettings(),
+      providerModelCatalogs: {
+        'openrouter-work': workCatalog,
+        'openrouter-personal': personalCatalog,
+      },
+      providerModelCatalogLoadStatuses: {
+        'openrouter-work': 'ready',
+        'openrouter-personal': 'ready',
+      },
+      providerModelCatalogLoadErrors: {
+        'openrouter-work': null,
+        'openrouter-personal': null,
+      },
+      activeProviderModelCatalog: workCatalog,
+      activeProviderModelCatalogLoadStatus: 'ready',
+      activeProviderModelCatalogLoadError: null,
+      runtimeRun: makeRuntimeRun({
+        providerId: 'openrouter',
+        controls: {
+          active: {
+            providerProfileId: 'openrouter-personal',
+            modelId: 'openai/gpt-4.1-mini',
+            thinkingEffort: 'low',
+            thinkingEffortLabel: 'Low',
+            approvalMode: 'suggest',
+            approvalModeLabel: 'Suggest',
+            planModeRequired: false,
+            revision: 1,
+            appliedAt: '2026-04-20T12:00:00Z',
+          },
+          pending: null,
+          selected: {
+            source: 'active',
+            providerProfileId: 'openrouter-personal',
+            modelId: 'openai/gpt-4.1-mini',
+            thinkingEffort: 'low',
+            thinkingEffortLabel: 'Low',
+            approvalMode: 'suggest',
+            approvalModeLabel: 'Suggest',
+            planModeRequired: false,
+            revision: 1,
+            effectiveAt: '2026-04-20T12:00:00Z',
+            queuedPrompt: null,
+            queuedPromptAt: null,
+            hasQueuedPrompt: false,
+          },
+          hasPendingControls: false,
+        },
+      }),
+      autonomousRun: null,
+      runtimeErrorMessage: null,
+      runtimeRunErrorMessage: null,
+      autonomousRunErrorMessage: null,
+      runtimeStream: makeRuntimeStream(),
+      notificationRoutes: [],
+      notificationRouteLoadStatus: 'idle',
+      notificationRouteError: null,
+      notificationSyncSummary: null,
+      notificationSyncError: null,
+      blockedNotificationSyncPollTarget: null,
+      notificationRouteMutationStatus: 'idle',
+      pendingNotificationRouteId: null,
+      notificationRouteMutationError: null,
+      previousTrustSnapshot: null,
+      operatorActionStatus: 'idle',
+      pendingOperatorActionId: null,
+      operatorActionError: null,
+      autonomousRunActionStatus: 'idle',
+      pendingAutonomousRunAction: null,
+      autonomousRunActionError: null,
+      runtimeRunActionStatus: 'idle',
+      pendingRuntimeRunAction: null,
+      runtimeRunActionError: null,
+    })
+
+    expect(result.view).toMatchObject({
+      controlTruthSource: 'runtime_run',
+      selectedModelId: 'openai/gpt-4.1-mini',
+      selectedModelSelectionKey: 'openrouter-personal::openai%2Fgpt-4.1-mini',
+      selectedThinkingEffort: 'low',
+      selectedModelOption: {
+        profileId: 'openrouter-personal',
+        profileLabel: 'OpenRouter Personal',
+        modelId: 'openai/gpt-4.1-mini',
+        defaultThinkingEffort: 'low',
+      },
+    })
+    expect(result.view?.selectedModelThinkingEffortOptions).toEqual(['minimal', 'low'])
   })
 
   it('buildAgentView prefers non-terminal runtime-run controls over provider defaults and keeps active-versus-pending truth separate', () => {
@@ -803,6 +1087,7 @@ describe('view builders', () => {
         providerId: 'openrouter',
         controls: {
           active: {
+            providerProfileId: 'openrouter-work',
             modelId: 'openai/gpt-4.1-mini',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -813,6 +1098,7 @@ describe('view builders', () => {
             appliedAt: '2026-04-20T12:00:00Z',
           },
           pending: {
+            providerProfileId: 'openrouter-work',
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
@@ -827,6 +1113,7 @@ describe('view builders', () => {
           },
           selected: {
             source: 'pending',
+            providerProfileId: 'openrouter-work',
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
@@ -916,6 +1203,7 @@ describe('view builders', () => {
         statusLabel: 'Run stopped',
         controls: {
           active: {
+            providerProfileId: 'openrouter-work',
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
@@ -928,6 +1216,7 @@ describe('view builders', () => {
           pending: null,
           selected: {
             source: 'active',
+            providerProfileId: 'openrouter-work',
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
@@ -1083,14 +1372,14 @@ describe('view builders', () => {
       },
       selectedModelOption: {
         modelId: 'openai/gpt-4.1',
-        groupLabel: 'GitHub Models · OpenAI',
+        groupLabel: 'GitHub Models Work · GitHub Models',
         thinkingSupported: true,
         defaultThinkingEffort: 'medium',
       },
     })
     expect(result.view?.providerModelCatalog.models.map((model) => model.groupLabel)).toEqual([
-      'GitHub Models · OpenAI',
-      'GitHub Models · Meta',
+      'GitHub Models Work · GitHub Models',
+      'GitHub Models Work · GitHub Models',
     ])
     expect(result.view?.messagesUnavailableReason).toContain('GitHub Models')
     expect(result.view?.messagesUnavailableReason).not.toContain('OpenAI-compatible')
@@ -1113,6 +1402,7 @@ describe('view builders', () => {
         providerId: 'github_models',
         controls: {
           active: {
+            providerProfileId: null,
             modelId: 'openai/gpt-4.1',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -1125,6 +1415,7 @@ describe('view builders', () => {
           pending: null,
           selected: {
             source: 'active',
+            providerProfileId: null,
             modelId: 'openai/gpt-4.1',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',

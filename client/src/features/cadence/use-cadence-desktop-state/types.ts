@@ -173,6 +173,11 @@ export type AgentProviderModelCatalogState = 'live' | 'stale' | 'unavailable'
 export type AgentProviderModelAvailability = 'available' | 'orphaned'
 
 export interface AgentProviderModelView {
+  selectionKey: string
+  profileId: string | null
+  profileLabel: string | null
+  providerId: ProviderModelCatalogDto['providerId']
+  providerLabel: string
   modelId: string
   label: string
   displayName: string
@@ -293,6 +298,7 @@ export interface AgentPaneView {
   selectedProviderSource?: SelectedRuntimeProviderSource | null
   controlTruthSource: AgentRunControlTruthSource
   selectedModelId?: string | null
+  selectedModelSelectionKey?: string | null
   selectedThinkingEffort: ProviderModelThinkingEffortDto | null
   selectedApprovalMode: RuntimeRunApprovalModeDto
   selectedPrompt: AgentRunPromptView
@@ -452,14 +458,14 @@ export interface UseCadenceDesktopStateResult {
   deleteProjectEntry: (projectId: string, path: string) => Promise<DeleteProjectEntryResponseDto>
   searchProject: (request: SearchProjectRequestDto) => Promise<SearchProjectResponseDto>
   replaceInProject: (request: ReplaceInProjectRequestDto) => Promise<ReplaceInProjectResponseDto>
-  startOpenAiLogin: () => Promise<RuntimeSessionView | null>
+  startOpenAiLogin: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
   submitOpenAiCallback: (flowId: string, options?: { manualInput?: string | null }) => Promise<RuntimeSessionView | null>
   startAutonomousRun: () => Promise<ProjectDetailView['autonomousRun'] | null>
   inspectAutonomousRun: () => Promise<ProjectDetailView['autonomousRun'] | null>
   cancelAutonomousRun: (runId: string) => Promise<ProjectDetailView['autonomousRun'] | null>
   startRuntimeRun: (options?: RuntimeRunControlMutationRequest) => Promise<RuntimeRunView | null>
   updateRuntimeRunControls: (request?: RuntimeRunControlMutationRequest) => Promise<RuntimeRunView | null>
-  startRuntimeSession: () => Promise<RuntimeSessionView | null>
+  startRuntimeSession: (options?: { providerProfileId?: string | null }) => Promise<RuntimeSessionView | null>
   stopRuntimeRun: (runId: string) => Promise<RuntimeRunView | null>
   logoutRuntimeSession: () => Promise<RuntimeSessionView | null>
   resolveOperatorAction: (

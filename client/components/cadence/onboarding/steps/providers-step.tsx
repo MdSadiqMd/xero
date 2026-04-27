@@ -20,7 +20,6 @@ interface ProvidersStepProps {
   providerProfilesSaveError: OperatorActionErrorView | null
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
-  providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
   runtimeSession?: RuntimeSessionView | null
   hasSelectedProject?: boolean
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
@@ -29,8 +28,7 @@ interface ProvidersStepProps {
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
   onUpsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
-  onSetActiveProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
-  onStartLogin?: () => Promise<RuntimeSessionView | null>
+  onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
 }
 
@@ -42,13 +40,11 @@ export function ProvidersStep({
   providerProfilesSaveError,
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
-  providerModelCatalogLoadErrors,
   runtimeSession = null,
   hasSelectedProject = false,
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
   onUpsertProviderProfile,
-  onSetActiveProviderProfile,
   onStartLogin,
   onLogout,
 }: ProvidersStepProps) {
@@ -56,7 +52,7 @@ export function ProvidersStep({
     <div>
       <StepHeader
         title="Configure providers"
-        description="Provider setup is app-wide. Choose the active profile for new runtime binds without rewriting project runtime history."
+        description="Provider setup is app-wide. Add credentials or sign in once, then choose models from the agent composer."
       />
 
       <div className="mt-7 animate-in fade-in-0 slide-in-from-bottom-1 motion-enter [animation-delay:60ms] [animation-fill-mode:both]">
@@ -68,16 +64,13 @@ export function ProvidersStep({
           providerProfilesSaveError={providerProfilesSaveError}
           providerModelCatalogs={providerModelCatalogs}
           providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-          providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
           onRefreshProviderProfiles={onRefreshProviderProfiles}
           onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
           onUpsertProviderProfile={onUpsertProviderProfile}
-          onSetActiveProviderProfile={onSetActiveProviderProfile}
           runtimeSession={runtimeSession}
           hasSelectedProject={hasSelectedProject}
           onStartLogin={onStartLogin}
           onLogout={onLogout}
-          openAiMissingProjectLabel="Choose a project next"
         />
       </div>
     </div>

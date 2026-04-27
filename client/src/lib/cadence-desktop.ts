@@ -175,6 +175,7 @@ import {
   agentSessionSchema,
   listAgentSessionsRequestSchema,
   listAgentSessionsResponseSchema,
+  startRuntimeSessionRequestSchema,
   startRuntimeRunRequestSchema,
   stopRuntimeRunRequestSchema,
   updateRuntimeRunControlsRequestSchema,
@@ -196,6 +197,7 @@ import {
   type RuntimeSettingsDto,
   type RuntimeUpdatedPayloadDto,
   type StartRuntimeRunRequestDto,
+  type StartRuntimeSessionRequestDto,
   type StopRuntimeRunRequestDto,
   type UpdateAgentSessionRequestDto,
   type UpdateRuntimeRunControlsRequestDto,
@@ -530,6 +532,10 @@ export interface StartRuntimeRunOptions {
   initialPrompt?: string | null
 }
 
+export interface StartRuntimeSessionOptions {
+  providerProfileId?: string | null
+}
+
 export class CadenceDesktopError extends Error {
   code: string
   errorClass: z.infer<typeof commandErrorSchema>['class'] | 'adapter_contract_mismatch' | 'desktop_runtime_unavailable'
@@ -692,7 +698,7 @@ export interface CadenceDesktopAdapter {
     options?: StartRuntimeRunOptions,
   ): Promise<RuntimeRunDto>
   updateRuntimeRunControls(request: UpdateRuntimeRunControlsRequestDto): Promise<RuntimeRunDto>
-  startRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
+  startRuntimeSession(projectId: string, options?: StartRuntimeSessionOptions): Promise<RuntimeSessionDto>
   cancelAutonomousRun(projectId: string, agentSessionId: string, runId: string): Promise<AutonomousRunStateDto>
   stopRuntimeRun(projectId: string, agentSessionId: string, runId: string): Promise<RuntimeRunDto | null>
   logoutRuntimeSession(projectId: string): Promise<RuntimeSessionDto>
@@ -1800,9 +1806,14 @@ export const CadenceDesktopAdapter: CadenceDesktopAdapter = {
     })
   },
 
-  startRuntimeSession(projectId) {
+  startRuntimeSession(projectId, options) {
+    const request: StartRuntimeSessionRequestDto = startRuntimeSessionRequestSchema.parse({
+      projectId,
+      providerProfileId: options?.providerProfileId ?? null,
+    })
+
     return invokeTyped(COMMANDS.startRuntimeSession, runtimeSessionSchema, {
-      request: { projectId },
+      request,
     })
   },
 

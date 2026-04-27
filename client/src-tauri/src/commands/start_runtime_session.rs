@@ -3,7 +3,7 @@ use tauri::{AppHandle, Runtime, State};
 use crate::{
     commands::{
         validate_non_empty, CommandResult, RuntimeAuthPhase, RuntimeDiagnosticDto,
-        RuntimeSessionDto,
+        RuntimeSessionDto, StartRuntimeSessionRequestDto,
     },
     runtime::{bind_provider_runtime_session, RuntimeProviderBindOutcome},
     state::DesktopState,
@@ -23,22 +23,26 @@ use super::{
 pub fn start_runtime_session<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
-    request: crate::commands::ProjectIdRequestDto,
+    request: StartRuntimeSessionRequestDto,
 ) -> CommandResult<RuntimeSessionDto> {
     validate_non_empty(&request.project_id, "projectId")?;
 
     let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
     let current = load_runtime_session_status(state.inner(), &repo_root, &request.project_id)?;
     let original = current.clone();
-    let (current, selection) =
-        match prepare_runtime_session_for_selected_provider(&app, state.inner(), current) {
-            Ok(prepared) => prepared,
-            Err(updated) => {
-                let persisted = persist_runtime_session(&repo_root, &updated)?;
-                emit_runtime_updated(&app, &persisted)?;
-                return Ok(persisted);
-            }
-        };
+    let (current, selection) = match prepare_runtime_session_for_selected_provider(
+        &app,
+        state.inner(),
+        current,
+        request.provider_profile_id.as_deref(),
+    ) {
+        Ok(prepared) => prepared,
+        Err(updated) => {
+            let persisted = persist_runtime_session(&repo_root, &updated)?;
+            emit_runtime_updated(&app, &persisted)?;
+            return Ok(persisted);
+        }
+    };
     let current = reconcile_prepared_runtime_session(
         &app,
         state.inner(),

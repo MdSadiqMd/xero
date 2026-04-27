@@ -158,6 +158,7 @@ fn run_doctor_report_returns_quick_local_contract_with_redacted_dependencies() {
     assert_eq!(
         report.summary.total as usize,
         report.profile_checks.len()
+            + report.dictation_checks.len()
             + report.model_catalog_checks.len()
             + report.runtime_supervisor_checks.len()
             + report.mcp_dependency_checks.len()

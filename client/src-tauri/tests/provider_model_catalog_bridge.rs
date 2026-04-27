@@ -20,6 +20,7 @@ use cadence_desktop_lib::{
     runtime::CadenceDiagnosticStatus,
     state::DesktopState,
 };
+use serde_json::json;
 use tauri::Manager;
 use tempfile::TempDir;
 
@@ -289,7 +290,7 @@ fn get_provider_model_catalog_rejects_blank_and_unknown_profile_ids() {
 }
 
 #[test]
-fn get_provider_model_catalog_projects_openai_codex_as_single_model_truth() {
+fn get_provider_model_catalog_projects_openai_codex_oauth_models() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
 
@@ -305,10 +306,17 @@ fn get_provider_model_catalog_projects_openai_codex_as_single_model_truth() {
 
     assert_eq!(catalog.source, ProviderModelCatalogSourceDto::Live);
     assert_eq!(catalog.profile_id, "openai_codex-default");
-    assert_eq!(catalog.configured_model_id, "openai_codex");
-    assert_eq!(catalog.models.len(), 1);
-    assert_eq!(catalog.models[0].model_id, "openai_codex");
-    assert!(catalog.models[0].thinking.supported);
+    assert_eq!(catalog.configured_model_id, "gpt-5.4");
+    let model_ids = catalog
+        .models
+        .iter()
+        .map(|model| model.model_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        model_ids,
+        vec!["gpt-5.2", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"]
+    );
+    assert!(catalog.models.iter().all(|model| model.thinking.supported));
     assert_eq!(
         catalog.models[0].thinking.default_effort,
         Some(ProviderModelThinkingEffortDto::Medium)
@@ -362,6 +370,20 @@ fn get_provider_model_catalog_discovers_inactive_openrouter_profile_and_persists
         .find(|model| model.model_id == "anthropic/claude-3.7-sonnet")
         .expect("non-reasoning model should be present");
     assert!(!non_reasoning_model.thinking.supported);
+    let serialized_catalog =
+        serde_json::to_value(&catalog).expect("catalog DTO should serialize for IPC");
+    let non_reasoning_payload = serialized_catalog["models"]
+        .as_array()
+        .and_then(|models| {
+            models
+                .iter()
+                .find(|model| model["modelId"] == "anthropic/claude-3.7-sonnet")
+        })
+        .expect("serialized non-reasoning model should be present");
+    assert_eq!(
+        non_reasoning_payload["thinking"]["effortOptions"],
+        json!([])
+    );
 
     let cache = std::fs::read_to_string(catalog_cache_path(&root)).expect("read catalog cache");
     assert!(!cache.contains(secret));

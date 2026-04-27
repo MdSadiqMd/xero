@@ -79,6 +79,8 @@ pub struct RuntimeRunDiagnosticRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunActiveControlSnapshotRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
@@ -92,6 +94,8 @@ pub struct RuntimeRunActiveControlSnapshotRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunPendingControlSnapshotRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
@@ -1635,6 +1639,13 @@ fn validate_runtime_run_control_state(
 fn validate_runtime_run_active_control_snapshot(
     active: &RuntimeRunActiveControlSnapshotRecord,
 ) -> Result<(), CommandError> {
+    if let Some(provider_profile_id) = active.provider_profile_id.as_ref() {
+        validate_non_empty_text(
+            provider_profile_id,
+            "control_state.active.provider_profile_id",
+            "runtime_run_request_invalid",
+        )?;
+    }
     validate_non_empty_text(
         &active.model_id,
         "control_state.active.model_id",
@@ -1659,6 +1670,13 @@ fn validate_runtime_run_pending_control_snapshot(
     pending: &RuntimeRunPendingControlSnapshotRecord,
     active_revision: u32,
 ) -> Result<(), CommandError> {
+    if let Some(provider_profile_id) = pending.provider_profile_id.as_ref() {
+        validate_non_empty_text(
+            provider_profile_id,
+            "control_state.pending.provider_profile_id",
+            "runtime_run_request_invalid",
+        )?;
+    }
     validate_non_empty_text(
         &pending.model_id,
         "control_state.pending.model_id",
@@ -1747,12 +1765,37 @@ pub fn build_runtime_run_control_state_with_plan_mode(
     timestamp: &str,
     initial_prompt: Option<&str>,
 ) -> Result<RuntimeRunControlStateRecord, CommandError> {
+    build_runtime_run_control_state_with_profile(
+        None,
+        model_id,
+        thinking_effort,
+        approval_mode,
+        plan_mode_required,
+        timestamp,
+        initial_prompt,
+    )
+}
+
+pub fn build_runtime_run_control_state_with_profile(
+    provider_profile_id: Option<&str>,
+    model_id: &str,
+    thinking_effort: Option<ProviderModelThinkingEffortDto>,
+    approval_mode: RuntimeRunApprovalModeDto,
+    plan_mode_required: bool,
+    timestamp: &str,
+    initial_prompt: Option<&str>,
+) -> Result<RuntimeRunControlStateRecord, CommandError> {
+    let provider_profile_id = provider_profile_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let model_id = model_id.trim();
     if model_id.is_empty() {
         return Err(CommandError::invalid_request("initialControls.modelId"));
     }
 
     let active = RuntimeRunActiveControlSnapshotRecord {
+        provider_profile_id: provider_profile_id.clone(),
         model_id: model_id.to_owned(),
         thinking_effort,
         approval_mode: approval_mode.clone(),
@@ -1762,6 +1805,7 @@ pub fn build_runtime_run_control_state_with_plan_mode(
     };
     let pending = match initial_prompt {
         Some(prompt) if !prompt.trim().is_empty() => Some(RuntimeRunPendingControlSnapshotRecord {
+            provider_profile_id,
             model_id: active.model_id.clone(),
             thinking_effort: active.thinking_effort.clone(),
             approval_mode,

@@ -1,6 +1,7 @@
 import AVFoundation
 import Darwin
 import Foundation
+import Security
 import Speech
 
 struct CadenceDictationCapabilityStatus: Encodable {
@@ -121,4 +122,49 @@ func legacySpeechAvailability(localeIdentifier: String) -> (runtimeSupported: Bo
     }
 
     return (false, false)
+}
+
+func privacyUsageDescriptionVisibleToTcc(_ key: String) -> Bool {
+    if signedInfoPlistContainsNonEmptyString(key) {
+        return true
+    }
+
+    guard Bundle.main.bundleURL.pathExtension == "app" else {
+        return false
+    }
+
+    return bundleInfoPlistContainsNonEmptyString(key)
+}
+
+private func bundleInfoPlistContainsNonEmptyString(_ key: String) -> Bool {
+    guard let value = Bundle.main.object(forInfoDictionaryKey: key) as? String else {
+        return false
+    }
+
+    return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+}
+
+private func signedInfoPlistContainsNonEmptyString(_ key: String) -> Bool {
+    var dynamicCode: SecCode?
+    guard SecCodeCopySelf(SecCSFlags(), &dynamicCode) == errSecSuccess,
+          let dynamicCode else {
+        return false
+    }
+
+    var staticCode: SecStaticCode?
+    guard SecCodeCopyStaticCode(dynamicCode, SecCSFlags(), &staticCode) == errSecSuccess,
+          let staticCode else {
+        return false
+    }
+
+    var rawInformation: CFDictionary?
+    let flags = SecCSFlags(rawValue: kSecCSSigningInformation)
+    guard SecCodeCopySigningInformation(staticCode, flags, &rawInformation) == errSecSuccess,
+          let information = rawInformation as? [String: Any],
+          let plist = information[kSecCodeInfoPList as String] as? [String: Any],
+          let value = plist[key] as? String else {
+        return false
+    }
+
+    return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 }

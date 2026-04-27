@@ -378,6 +378,29 @@ function makeProviderProfilesFromRuntimeSettings(runtimeSettings: RuntimeSetting
   })
 }
 
+function applyOpenAiRuntimeReadinessToProfiles(
+  providerProfiles: ProviderProfilesDto,
+  runtimeSession: RuntimeSessionDto,
+): ProviderProfilesDto {
+  if (runtimeSession.providerId !== 'openai_codex' || runtimeSession.phase !== 'authenticated') {
+    return providerProfiles
+  }
+
+  return providerProfilesSchema.parse({
+    ...providerProfiles,
+    profiles: providerProfiles.profiles.map((profile) =>
+      profile.profileId === providerProfiles.activeProfileId && profile.providerId === 'openai_codex'
+        ? {
+            ...profile,
+            readiness: makeReadyProviderReadiness(
+              getRequiredCloudProviderPreset('openai_codex', 'applyOpenAiRuntimeReadinessToProfiles'),
+            ),
+          }
+        : profile,
+    ),
+  })
+}
+
 function makeProviderProfile(
   overrides: Partial<ProviderProfileDto> &
     Pick<ProviderProfileDto, 'profileId' | 'providerId' | 'label' | 'modelId'>,
@@ -644,6 +667,7 @@ function makeRuntimeRun(projectId = 'project-1', overrides: Partial<RuntimeRunDt
     },
     controls: {
       active: {
+        providerProfileId: 'openai_codex-default',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
@@ -951,6 +975,12 @@ function createAdapter(options?: {
   let currentProviderProfiles = providerProfilesSchema.parse(
     options?.providerProfiles ?? makeProviderProfilesFromRuntimeSettings(options?.runtimeSettings ?? makeRuntimeSettings()),
   )
+  if (!options?.providerProfiles) {
+    currentProviderProfiles = applyOpenAiRuntimeReadinessToProfiles(
+      currentProviderProfiles,
+      currentRuntimeSession,
+    )
+  }
   let currentRuntimeSettings =
     projectRuntimeSettingsFromProviderProfiles(currentProviderProfiles) ?? options?.runtimeSettings ?? makeRuntimeSettings()
   let currentProviderModelCatalogs: Record<string, ProviderModelCatalogDto> = Object.fromEntries(
@@ -1032,6 +1062,7 @@ function createAdapter(options?: {
     queuedPrompt?: string | null
     queuedPromptAt?: string | null
   }): RuntimeRunDto['controls'] => {
+    const providerProfileId = options.nextControls?.providerProfileId ?? options.base.providerProfileId ?? null
     const modelId = options.nextControls?.modelId ?? options.base.modelId
     const thinkingEffort = options.nextControls?.thinkingEffort ?? options.base.thinkingEffort
     const approvalMode = options.nextControls?.approvalMode ?? options.base.approvalMode
@@ -1039,6 +1070,7 @@ function createAdapter(options?: {
 
     return {
       active: {
+        providerProfileId,
         modelId,
         thinkingEffort,
         approvalMode,
@@ -1049,6 +1081,7 @@ function createAdapter(options?: {
       pending:
         options.queuedAt || options.queuedPrompt != null
           ? {
+              providerProfileId,
               modelId,
               thinkingEffort,
               approvalMode,
@@ -1098,6 +1131,7 @@ function createAdapter(options?: {
           controls: buildRuntimeRunControls({
             base: makeRuntimeRun('project-1').controls.active,
             nextControls: {
+              providerProfileId: request?.controls?.providerProfileId ?? activeProfile.profileId,
               modelId: request?.controls?.modelId ?? activeProfile.modelId,
               thinkingEffort: request?.controls?.thinkingEffort ?? 'medium',
               approvalMode: request?.controls?.approvalMode ?? 'suggest',
@@ -1121,6 +1155,7 @@ function createAdapter(options?: {
     const activeControls = buildRuntimeRunControls({
       base: makeRuntimeRun('project-1').controls.active,
       nextControls: {
+        providerProfileId: options?.initialControls?.providerProfileId ?? activeProfile.profileId,
         modelId: options?.initialControls?.modelId ?? activeProfile.modelId,
         thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
         approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
@@ -2111,14 +2146,19 @@ describe('CadenceApp current UI', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
 
     expect(await screen.findByRole('heading', { name: 'Configure providers' })).toBeVisible()
-    expect(screen.getByText('Provider setup is app-wide. Choose the active profile for new runtime binds without rewriting project runtime history.')).toBeVisible()
-    expect(screen.getByText('Active')).toBeVisible()
-    expect(within(getProviderCard('Anthropic')).getByRole('button', { name: 'Set up' })).toBeVisible()
-    expect(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'Use this' })).toBeVisible()
-    expect(within(getProviderCard('Ollama')).getByRole('button', { name: 'Set up' })).toBeVisible()
-    expect(within(getProviderCard('Amazon Bedrock')).getByRole('button', { name: 'Set up' })).toBeVisible()
-    expect(within(getProviderCard('Google Vertex AI')).getByRole('button', { name: 'Set up' })).toBeVisible()
-    expect(within(getProviderCard('OpenAI Codex')).getByText('Choose a project next')).toBeVisible()
+    expect(screen.getByText('Provider setup is app-wide. Add credentials or sign in once, then choose models from the agent composer.')).toBeVisible()
+    expect(within(getProviderCard('Anthropic')).getByRole('button', { name: 'API key' })).toBeVisible()
+    expect(within(getProviderCard('GitHub Models')).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+    expect(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'API key' })).toBeVisible()
+    expect(within(getProviderCard('Ollama')).getByRole('button', { name: 'Endpoint' })).toBeVisible()
+    expect(within(getProviderCard('Amazon Bedrock')).getByRole('button', { name: 'Cloud config' })).toBeVisible()
+    expect(within(getProviderCard('Google Vertex AI')).getByRole('button', { name: 'Cloud config' })).toBeVisible()
+    const openAiCard = getProviderCard('OpenAI Codex')
+    const openAiSignIn = within(openAiCard).getByRole('button', { name: 'Sign in' })
+    expect(openAiSignIn).toBeVisible()
+    expect(openAiSignIn).toBeDisabled()
+    expect(within(openAiCard).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+    expect(within(openAiCard).queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument()
   })
 
   it('keeps onboarding provider review truthful before OpenAI is connected', async () => {
@@ -2139,7 +2179,7 @@ describe('CadenceApp current UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
 
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
-    expect(screen.getByText(/OpenAI Codex .*active profile/)).toBeVisible()
+    expect(screen.getByText(/OpenAI Codex .*sign in required/)).toBeVisible()
   })
 
   it('keeps onboarding provider review truthful for Anthropic API-key readiness', async () => {
@@ -2374,8 +2414,8 @@ describe('CadenceApp current UI', () => {
     render(<CadenceApp adapter={adapter} />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
-    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Set up' }))
-    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'openai/gpt-4.1-mini' } })
+    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' }))
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-or-v1-test-secret' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -2409,7 +2449,7 @@ describe('CadenceApp current UI', () => {
     render(<CadenceApp adapter={adapter} />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
-    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'API key' }))
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-ant-test-secret' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -2667,7 +2707,7 @@ describe('CadenceApp current UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
 
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'What should we build in Cadence?' })).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
     expect(screen.queryByRole('heading', { name: 'Autonomous run truth' })).not.toBeInTheDocument()
@@ -2818,8 +2858,8 @@ describe('CadenceApp current UI', () => {
       })
     })
 
-    await waitFor(() => expect(screen.getByText('Connected')).toBeVisible())
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible()
+    await waitFor(() => expect(screen.getByText('Signed in')).toBeVisible())
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
 
     act(() => {
       setup.emitRuntimeUpdatedError(
@@ -2856,7 +2896,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'What should we build in Cadence?' })).toBeVisible()
     await waitFor(() => expect(setup.onRuntimeRunUpdated).toHaveBeenCalledTimes(1))
 
     act(() => {
@@ -2991,7 +3031,7 @@ describe('CadenceApp current UI', () => {
       })
     })
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'What should we build in Cadence?' })).toBeVisible())
 
     act(() => {
       setup.emitRuntimeRunUpdated({
@@ -3272,7 +3312,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'What should we build in Cadence?' })).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('gpt-4.1-mini')
 
     fireEvent.change(screen.getByLabelText('Agent input'), {
@@ -3283,6 +3323,7 @@ describe('CadenceApp current UI', () => {
     await waitFor(() =>
       expect(setup.startRuntimeRun).toHaveBeenCalledWith('project-1', 'agent-session-main', {
         initialControls: {
+          providerProfileId: 'openai_api-default',
           modelId: 'gpt-4.1-mini',
           thinkingEffort: 'medium',
           approvalMode: 'suggest',
@@ -3342,7 +3383,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'What should we build in Cadence?' })).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('openai/gpt-4.1')
 
     fireEvent.change(screen.getByLabelText('Agent input'), {
@@ -3353,6 +3394,7 @@ describe('CadenceApp current UI', () => {
     await waitFor(() =>
       expect(setup.startRuntimeRun).toHaveBeenCalledWith('project-1', 'agent-session-main', {
         initialControls: {
+          providerProfileId: 'github_models-default',
           modelId: 'openai/gpt-4.1',
           thinkingEffort: 'medium',
           approvalMode: 'suggest',
@@ -3413,7 +3455,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'What should we build in Cadence?' })).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('llama3.2')
     expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toHaveTextContent('Thinking unavailable')
 
@@ -3425,6 +3467,7 @@ describe('CadenceApp current UI', () => {
     await waitFor(() =>
       expect(setup.startRuntimeRun).toHaveBeenCalledWith('project-1', 'agent-session-main', {
         initialControls: {
+          providerProfileId: 'ollama-default',
           modelId: 'llama3.2',
           thinkingEffort: null,
           approvalMode: 'suggest',
@@ -3436,7 +3479,7 @@ describe('CadenceApp current UI', () => {
     await waitFor(() => expect(screen.getByLabelText('Agent input')).toBeEnabled())
   })
 
-  it('keeps recovered OpenAI Codex run truth visible when Settings drift to Ollama and blocks relaunch under the selected profile', async () => {
+  it('keeps recovered OpenAI Codex run truth visible when the configured profile drifts to Ollama and blocks relaunch', async () => {
     const setup = createAdapter({
       providerProfiles: {
         activeProfileId: 'ollama-default',
@@ -3496,7 +3539,7 @@ describe('CadenceApp current UI', () => {
       'placeholder',
       'Rebind Ollama before trusting new live activity.',
     )
-    expect(screen.getAllByText(/Settings now select provider profile Ollama \(ollama-default\), but the persisted runtime session still reflects OpenAI Codex\./).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Configured provider profile Ollama \(ollama-default\) no longer matches the persisted runtime session for OpenAI Codex\./).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
   })
 
@@ -3516,8 +3559,9 @@ describe('CadenceApp current UI', () => {
     fireEvent.click(screen.getByLabelText('Settings'))
     expect(await screen.findByRole('heading', { name: 'Providers' })).toBeVisible()
     expect(screen.getAllByText('OpenAI Codex').length).toBeGreaterThan(0)
-    expect(screen.getByText('Active')).toBeVisible()
-    expect(screen.getByText('Connected')).toBeVisible()
+    const openAiCard = getProviderCard('OpenAI Codex')
+    expect(within(openAiCard).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+    expect(within(openAiCard).getByText('Signed in')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
@@ -3535,6 +3579,7 @@ describe('CadenceApp current UI', () => {
     await waitFor(() =>
       expect(setup.startRuntimeRun).toHaveBeenCalledWith('project-1', 'agent-session-main', {
         initialControls: {
+          providerProfileId: 'openai_codex-default',
           modelId: 'openai_codex',
           thinkingEffort: 'medium',
           approvalMode: 'suggest',
@@ -3570,6 +3615,7 @@ describe('CadenceApp current UI', () => {
         agentSessionId: 'agent-session-main',
         runId: 'run-1',
         controls: {
+          providerProfileId: 'openai_codex-default',
           modelId: 'openai_codex',
           thinkingEffort: 'medium',
           approvalMode: 'yolo',
@@ -3654,7 +3700,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'What should we build in Cadence?' })).toBeVisible()
 
     fireEvent.change(screen.getByLabelText('Agent input'), {
       target: { value: 'Start before changing approval.' },

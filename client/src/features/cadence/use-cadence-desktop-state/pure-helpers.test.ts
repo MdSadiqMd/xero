@@ -399,7 +399,7 @@ describe('runtime-provider helpers', () => {
         githubSelectedProvider,
       ),
     ).toBe(
-      'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired GitHub Models profile credentials for the selected provider.',
+      'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired GitHub Models profile credentials for the configured provider.',
     )
 
     const mismatchedRuntimeSession = makeRuntimeSession({
@@ -422,6 +422,7 @@ describe('runtime-provider helpers', () => {
           providerId: 'github_models',
           controls: {
             active: {
+              providerProfileId: null,
               modelId: 'openai/gpt-4.1',
               thinkingEffort: 'medium',
               thinkingEffortLabel: 'Medium',
@@ -434,6 +435,7 @@ describe('runtime-provider helpers', () => {
             pending: null,
             selected: {
               source: 'active',
+              providerProfileId: null,
               modelId: 'openai/gpt-4.1',
               thinkingEffort: 'medium',
               thinkingEffortLabel: 'Medium',
@@ -525,7 +527,7 @@ describe('runtime-provider helpers', () => {
         ollamaSelectedProvider,
       ),
     ).toBe(
-      'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired Ollama local-endpoint metadata for the selected provider.',
+      'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired Ollama local-endpoint metadata for the configured provider.',
     )
     expect(
       getAgentMessagesUnavailableReason(

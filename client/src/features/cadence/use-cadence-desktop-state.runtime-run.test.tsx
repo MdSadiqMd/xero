@@ -333,6 +333,7 @@ function makeRuntimeRun(projectId: string, overrides: Partial<RuntimeRunDto> = {
     },
     controls: {
       active: {
+        providerProfileId: 'openai_codex-default',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
@@ -867,6 +868,7 @@ function createMockAdapter(options?: {
         makeRuntimeRun(projectId, {
           controls: {
             active: {
+              providerProfileId: options?.initialControls?.providerProfileId ?? 'openai_codex-default',
               modelId: options?.initialControls?.modelId ?? 'openai_codex',
               thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
               approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
@@ -876,6 +878,7 @@ function createMockAdapter(options?: {
             },
             pending: options?.initialPrompt
               ? {
+                  providerProfileId: options?.initialControls?.providerProfileId ?? 'openai_codex-default',
                   modelId: options?.initialControls?.modelId ?? 'openai_codex',
                   thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
                   approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
@@ -911,6 +914,11 @@ function createMockAdapter(options?: {
         controls: {
           active: currentRun.controls.active,
           pending: {
+            providerProfileId:
+              request.controls?.providerProfileId ??
+              basePending?.providerProfileId ??
+              currentRun.controls.active.providerProfileId ??
+              null,
             modelId: request.controls?.modelId ?? basePending?.modelId ?? currentRun.controls.active.modelId,
             thinkingEffort:
               request.controls?.thinkingEffort ??
@@ -934,7 +942,9 @@ function createMockAdapter(options?: {
       runtimeRuns[request.projectId] = nextRun
       return nextRun
     }),
-    startRuntimeSession: vi.fn(async (projectId: string) => runtimeSessions[projectId]),
+    startRuntimeSession: vi.fn(
+      async (projectId: string, _options?: { providerProfileId?: string | null }) => runtimeSessions[projectId],
+    ),
     cancelAutonomousRun: vi.fn(async (projectId: string, runId: string) => {
       const nextState = makeAutonomousRunState(projectId, {
         runId,
@@ -1476,7 +1486,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
 
     expect(screen.getByTestId('runtime-run-provider-id')).toHaveTextContent('ollama')
     expect(screen.getByTestId('messages-reason')).toHaveTextContent(
-      'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired Ollama local-endpoint metadata for the selected provider.',
+      'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired Ollama local-endpoint metadata for the configured provider.',
     )
     expect(screen.getByTestId('messages-reason')).not.toHaveTextContent('profile credentials')
   })
@@ -1536,7 +1546,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
 
     expect(screen.getByTestId('runtime-run-provider-id')).toHaveTextContent('bedrock')
     expect(screen.getByTestId('messages-reason')).toHaveTextContent(
-      'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired Amazon Bedrock ambient-auth metadata for the selected provider.',
+      'Cadence recovered durable supervised-run state for this project, but live streaming still requires repaired Amazon Bedrock ambient-auth metadata for the configured provider.',
     )
     expect(screen.getByTestId('messages-reason')).not.toHaveTextContent('profile credentials')
   })

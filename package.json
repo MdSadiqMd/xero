@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -n TAURI,LANDING -c magenta,cyan \"pnpm run dev:tauri\" \"pnpm run dev:landing\"",
-    "dev:tauri": "pnpm --dir ./client exec tauri dev",
+    "dev:tauri": "pnpm --dir ./client run tauri:dev",
+    "dev:tauri:ios-grpc": "pnpm --dir ./client run tauri:dev:ios-grpc",
     "dev:landing": "pnpm --dir ./landing run dev --port 3001"
   },
   "devDependencies": {

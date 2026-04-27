@@ -23,7 +23,7 @@ function getSelectedProfileId(selectedProfileId: string | null | undefined, acti
   throw new CadenceDesktopError({
     code: 'provider_profiles_missing',
     errorClass: 'retryable',
-    message: `Cadence could not ${action} because the selected provider profile is unavailable. Refresh Settings and retry.`,
+    message: `Cadence could not ${action} because the provider profile is unavailable. Refresh Settings and retry.`,
     retryable: true,
   })
 }
@@ -145,13 +145,13 @@ export function useOperatorAuthMutations({
     ],
   )
 
-  const startOpenAiLogin = useCallback(async () => {
+  const startOpenAiLogin = useCallback(async (options: { profileId?: string | null } = {}) => {
     const projectId = getActiveProjectId(
       activeProjectIdRef,
       'Select an imported project before starting OpenAI login.',
     )
     const selectedProfileId = getSelectedProfileId(
-      providerProfilesRef.current?.activeProfileId,
+      options.profileId ?? providerProfilesRef.current?.activeProfileId,
       'start OpenAI login',
     )
 
@@ -202,14 +202,16 @@ export function useOperatorAuthMutations({
     [activeProjectIdRef, adapter, applyRuntimeSessionUpdate, providerProfilesRef, syncRuntimeSession],
   )
 
-  const startRuntimeSession = useCallback(async () => {
+  const startRuntimeSession = useCallback(async (options: { providerProfileId?: string | null } = {}) => {
     const projectId = getActiveProjectId(
       activeProjectIdRef,
       'Select an imported project before binding a runtime session.',
     )
 
     try {
-      const response = await adapter.startRuntimeSession(projectId)
+      const response = await adapter.startRuntimeSession(projectId, {
+        providerProfileId: options.providerProfileId ?? null,
+      })
       return applyRuntimeSessionUpdate(mapRuntimeSession(response))
     } catch (error) {
       try {

@@ -785,6 +785,10 @@ fn build_pending_control_snapshot(
         .map(|controls| controls.plan_mode_required)
         .or_else(|| base.map(|pending| pending.plan_mode_required))
         .unwrap_or(control_state.active.plan_mode_required);
+    let provider_profile_id = controls
+        .and_then(|controls| controls.provider_profile_id.clone())
+        .or_else(|| base.and_then(|pending| pending.provider_profile_id.clone()))
+        .or_else(|| control_state.active.provider_profile_id.clone());
 
     let existing_prompt = base.and_then(|pending| pending.queued_prompt.clone());
     let existing_prompt_at = base.and_then(|pending| pending.queued_prompt_at.clone());
@@ -802,6 +806,7 @@ fn build_pending_control_snapshot(
     };
 
     Ok(RuntimeRunPendingControlSnapshotRecord {
+        provider_profile_id,
         model_id,
         thinking_effort,
         approval_mode,

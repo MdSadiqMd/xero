@@ -501,6 +501,7 @@ function makeRuntimeRun(projectId: string, overrides: Partial<RuntimeRunDto> = {
     },
     controls: {
       active: {
+        providerProfileId: 'openai_codex-default',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
@@ -1343,6 +1344,7 @@ function createMockAdapter(options?: {
       const activeControls = currentRun.controls.active
       const pendingControls = request.controls
           ? {
+              providerProfileId: request.controls.providerProfileId ?? activeControls.providerProfileId ?? null,
               modelId: request.controls.modelId,
               thinkingEffort: request.controls.thinkingEffort ?? null,
               approvalMode: request.controls.approvalMode,
@@ -1366,7 +1368,9 @@ function createMockAdapter(options?: {
       return nextRun
     },
   )
-  const startRuntimeSession = vi.fn(async (projectId: string) => makeRuntimeSession(projectId))
+  const startRuntimeSession = vi.fn(async (projectId: string, _options?: { providerProfileId?: string | null }) =>
+    makeRuntimeSession(projectId),
+  )
   const cancelAutonomousRun = vi.fn(async (projectId: string, runId: string) => {
     const nextState = makeAutonomousRunState(projectId, runId)
     nextState.run = {
@@ -2900,7 +2904,9 @@ describe('useCadenceDesktopState', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Start runtime session' }))
 
-    await waitFor(() => expect(setup.startRuntimeSession).toHaveBeenCalledWith('project-1'))
+    await waitFor(() =>
+      expect(setup.startRuntimeSession).toHaveBeenCalledWith('project-1', { providerProfileId: null }),
+    )
     await waitFor(() => expect(screen.getByTestId('auth-phase')).toHaveTextContent('authenticated'))
     expect(screen.getByTestId('session-label')).toHaveTextContent('session-1')
   })
@@ -2929,7 +2935,7 @@ describe('useCadenceDesktopState', () => {
       lastError: {
         code: 'auth_flow_profile_mismatch',
         message:
-          'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of the selected profile `zz-openai-alt`. Retry login for the currently selected profile.',
+          'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of provider profile `zz-openai-alt`. Start a fresh login for that profile.',
         retryable: false,
       },
     })
@@ -2992,7 +2998,7 @@ describe('useCadenceDesktopState', () => {
         code: 'auth_flow_profile_mismatch',
         errorClass: 'user_fixable',
         message:
-          'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of the selected profile `zz-openai-alt`. Retry login for the currently selected profile.',
+          'Cadence rejected auth flow `flow-1` because it was started for provider profile `openai_codex-default` instead of provider profile `zz-openai-alt`. Start a fresh login for that profile.',
         retryable: false,
       }),
     )
@@ -3014,7 +3020,7 @@ describe('useCadenceDesktopState', () => {
       }),
     )
     await waitFor(() =>
-      expect(screen.getByTestId('session-reason')).toHaveTextContent('selected profile `zz-openai-alt`'),
+      expect(screen.getByTestId('session-reason')).toHaveTextContent('provider profile `zz-openai-alt`'),
     )
     expect(screen.getByTestId('auth-phase')).toHaveTextContent('awaiting_browser_callback')
     expect(screen.getByTestId('provider-profiles-selected-profile-id')).toHaveTextContent('zz-openai-alt')
@@ -4050,7 +4056,7 @@ describe('useCadenceDesktopState', () => {
       new CadenceDesktopError({
         code: 'provider_profiles_write_failed',
         errorClass: 'retryable',
-        message: 'Cadence could not save the selected provider profile.',
+        message: 'Cadence could not save the provider profile.',
         retryable: true,
       }),
     )
@@ -4651,16 +4657,16 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('OpenRouter')
     expect(screen.getByTestId('provider-mismatch')).toHaveTextContent('true')
     expect(screen.getByTestId('provider-mismatch-reason')).toHaveTextContent(
-      'Settings now select provider profile OpenRouter (openrouter-default)',
+      'Configured provider profile OpenRouter (openrouter-default) no longer matches the persisted runtime session',
     )
     expect(screen.getByTestId('provider-mismatch-recovery-copy')).toHaveTextContent(
-      'Rebind the selected profile so durable runtime truth matches Settings.',
+      'Rebind this profile so durable runtime truth matches Settings.',
     )
     expect(screen.getByTestId('session-reason')).toHaveTextContent(
-      'Settings now select provider profile OpenRouter (openrouter-default)',
+      'Configured provider profile OpenRouter (openrouter-default) no longer matches the persisted runtime session',
     )
     expect(screen.getByTestId('messages-reason')).toHaveTextContent(
-      'Rebind the selected profile before trusting new stream activity.',
+      'Rebind this profile before trusting new stream activity.',
     )
   })
 
@@ -4752,16 +4758,16 @@ describe('useCadenceDesktopState', () => {
     expect(screen.getByTestId('provider-profiles-selected-profile-label')).toHaveTextContent('Anthropic Work')
     expect(screen.getByTestId('provider-mismatch')).toHaveTextContent('true')
     expect(screen.getByTestId('provider-mismatch-reason')).toHaveTextContent(
-      'Settings now select provider profile Anthropic Work (anthropic-work)',
+      'Configured provider profile Anthropic Work (anthropic-work) no longer matches the persisted runtime session',
     )
     expect(screen.getByTestId('provider-mismatch-recovery-copy')).toHaveTextContent(
-      'Rebind the selected profile so durable runtime truth matches Settings.',
+      'Rebind this profile so durable runtime truth matches Settings.',
     )
     expect(screen.getByTestId('session-reason')).toHaveTextContent(
-      'Settings now select provider profile Anthropic Work (anthropic-work)',
+      'Configured provider profile Anthropic Work (anthropic-work) no longer matches the persisted runtime session',
     )
     expect(screen.getByTestId('messages-reason')).toHaveTextContent(
-      'Rebind the selected profile before trusting new stream activity.',
+      'Rebind this profile before trusting new stream activity.',
     )
     expect(screen.getByTestId('session-reason')).not.toHaveTextContent('OpenAI')
   })

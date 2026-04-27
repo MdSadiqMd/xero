@@ -5,7 +5,7 @@ use tauri::{AppHandle, Runtime, State};
 use crate::{
     commands::{
         get_runtime_settings::{
-            runtime_settings_snapshot_from_provider_profiles, RuntimeSettingsSnapshot,
+            runtime_settings_snapshot_for_provider_profile, RuntimeSettingsSnapshot,
         },
         provider_profiles::load_provider_profiles_snapshot,
         validate_non_empty, CommandError, CommandResult, ProjectIdRequestDto, RuntimeAuthPhase,
@@ -50,16 +50,41 @@ pub(crate) fn reconcile_runtime_session<R: Runtime>(
     repo_root: &Path,
     runtime: RuntimeSessionDto,
 ) -> CommandResult<RuntimeSessionDto> {
+    reconcile_runtime_session_for_profile(app, state, repo_root, runtime, None)
+}
+
+pub(crate) fn reconcile_runtime_session_for_profile<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    repo_root: &Path,
+    runtime: RuntimeSessionDto,
+    selected_profile_id: Option<&str>,
+) -> CommandResult<RuntimeSessionDto> {
+    if selected_profile_id.is_none()
+        && is_transient_phase(&runtime.phase)
+        && runtime
+            .flow_id
+            .as_deref()
+            .and_then(|flow_id| state.active_auth_flows().snapshot(flow_id))
+            .is_some()
+    {
+        return Ok(runtime);
+    }
+
     let original = runtime.clone();
-    let (runtime, selection) =
-        match prepare_runtime_session_for_selected_provider(app, state, runtime) {
-            Ok(prepared) => prepared,
-            Err(updated) => {
-                let persisted = persist_runtime_session(repo_root, &updated)?;
-                emit_runtime_updated(app, &persisted)?;
-                return Ok(persisted);
-            }
-        };
+    let (runtime, selection) = match prepare_runtime_session_for_selected_provider(
+        app,
+        state,
+        runtime,
+        selected_profile_id,
+    ) {
+        Ok(prepared) => prepared,
+        Err(updated) => {
+            let persisted = persist_runtime_session(repo_root, &updated)?;
+            emit_runtime_updated(app, &persisted)?;
+            return Ok(persisted);
+        }
+    };
 
     reconcile_prepared_runtime_session(app, state, repo_root, original, runtime, selection)
 }
@@ -69,6 +94,7 @@ pub(crate) fn prepare_runtime_session_for_selected_provider<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
     runtime: RuntimeSessionDto,
+    selected_profile_id: Option<&str>,
 ) -> Result<(RuntimeSessionDto, RuntimeProviderSelection), RuntimeSessionDto> {
     let provider_profiles = match load_provider_profiles_snapshot(app, state) {
         Ok(snapshot) => snapshot,
@@ -83,7 +109,38 @@ pub(crate) fn prepare_runtime_session_for_selected_provider<R: Runtime>(
         }
     };
 
-    let settings = match runtime_settings_snapshot_from_provider_profiles(&provider_profiles) {
+    let selected_profile = match selected_profile_id
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty())
+    {
+        Some(profile_id) => match provider_profiles.profile(profile_id) {
+            Some(profile) => profile,
+            None => {
+                return Err(signed_out_runtime(
+                    runtime,
+                    "provider_profile_not_found",
+                    &format!("Cadence could not bind the selected runtime because provider profile `{profile_id}` no longer exists."),
+                    false,
+                ));
+            }
+        },
+        None => match provider_profiles.active_profile() {
+            Some(profile) => profile,
+            None => {
+                return Err(signed_out_runtime(
+                    runtime,
+                    "provider_profiles_invalid",
+                    "Cadence could not bind the selected runtime because the active provider profile is missing.",
+                    false,
+                ));
+            }
+        },
+    };
+
+    let settings = match runtime_settings_snapshot_for_provider_profile(
+        &provider_profiles,
+        selected_profile,
+    ) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return Err(signed_out_runtime(
@@ -94,6 +151,7 @@ pub(crate) fn prepare_runtime_session_for_selected_provider<R: Runtime>(
             ));
         }
     };
+    let selected_profile_id = selected_profile.profile_id.clone();
 
     let provider = match resolve_runtime_provider_identity(
         Some(settings.settings.provider_id.as_str()),
@@ -109,13 +167,15 @@ pub(crate) fn prepare_runtime_session_for_selected_provider<R: Runtime>(
             ));
         }
     };
+    let mut selected_provider_profiles = provider_profiles;
+    selected_provider_profiles.metadata.active_profile_id = selected_profile_id;
 
     Ok((
         runtime_with_selected_provider(runtime, provider),
         RuntimeProviderSelection {
             provider,
             settings,
-            provider_profiles,
+            provider_profiles: selected_provider_profiles,
         },
     ))
 }

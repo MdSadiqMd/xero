@@ -16,11 +16,11 @@ pub(crate) use cadence_desktop_lib::{
     commands::{
         start_runtime_session::start_runtime_session, AutonomousSkillCacheStatusDto,
         AutonomousSkillLifecycleResultDto, AutonomousSkillLifecycleStageDto, CommandError,
-        CommandErrorClass, ProjectIdRequestDto, ProjectSummaryDto, ProjectUpdateReason,
-        ProjectUpdatedPayloadDto, RuntimeAuthPhase, RuntimeRunCheckpointKindDto,
-        RuntimeRunTransportLivenessDto, RuntimeSessionDto, RuntimeStreamItemDto,
-        RuntimeStreamItemKind, RuntimeToolCallState, SubscribeRuntimeStreamResponseDto,
-        ToolResultSummaryDto, SUBSCRIBE_RUNTIME_STREAM_COMMAND,
+        CommandErrorClass, ProjectSummaryDto, ProjectUpdateReason, ProjectUpdatedPayloadDto,
+        RuntimeAuthPhase, RuntimeRunCheckpointKindDto, RuntimeRunTransportLivenessDto,
+        RuntimeSessionDto, RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeToolCallState,
+        StartRuntimeSessionRequestDto, SubscribeRuntimeStreamResponseDto, ToolResultSummaryDto,
+        SUBSCRIBE_RUNTIME_STREAM_COMMAND,
     },
     configure_builder_with_state,
     db::{
@@ -245,8 +245,9 @@ pub(crate) fn seed_authenticated_runtime(
     let runtime = start_runtime_session(
         app.handle().clone(),
         app.state::<DesktopState>(),
-        ProjectIdRequestDto {
+        StartRuntimeSessionRequestDto {
             project_id: project_id.into(),
+            provider_profile_id: None,
         },
     )
     .expect("start runtime session");

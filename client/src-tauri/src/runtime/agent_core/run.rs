@@ -872,6 +872,7 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
             run_id: child_run_id.clone(),
             prompt,
             controls: Some(RuntimeRunControlInputDto {
+                provider_profile_id: self.controls.active.provider_profile_id.clone(),
                 model_id,
                 thinking_effort: self.controls.active.thinking_effort.clone(),
                 approval_mode: self.controls.active.approval_mode.clone(),

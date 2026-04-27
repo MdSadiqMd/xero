@@ -31,7 +31,6 @@ function renderSidebar(overrides: Partial<ComponentProps<typeof AgentSessionsSid
   return render(
     <AgentSessionsSidebar
       projectId="project-1"
-      projectLabel="Cadence"
       sessions={sessions}
       selectedSessionId="agent-session-main"
       onSelectSession={vi.fn()}
@@ -71,6 +70,7 @@ describe('AgentSessionsSidebar', () => {
     renderSidebar()
 
     expect(screen.getByText('Main session')).toBeVisible()
+    expect(screen.queryByText('Cadence')).not.toBeInTheDocument()
 
     const separator = screen.getByRole('separator', { name: 'Resize sessions sidebar' })
     const before = Number(separator.getAttribute('aria-valuenow'))

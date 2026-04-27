@@ -897,6 +897,14 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         })
     );
 
+    assert_eq!(
+        serde_json::to_value(
+            cadence_desktop_lib::commands::ProviderProfileReadinessProofDto::OAuthSession
+        )
+        .expect("oauth readiness proof should serialize"),
+        json!("oauth_session")
+    );
+
     let runtime_status = serde_json::to_value(RuntimeAuthStatusDto {
         project_id: "project-1".into(),
         runtime_kind: "openai_codex".into(),
@@ -984,6 +992,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         },
         controls: RuntimeRunControlStateDto {
             active: RuntimeRunActiveControlSnapshotDto {
+                provider_profile_id: Some("openai_codex-default".into()),
                 model_id: "openai_codex".into(),
                 thinking_effort: Some(ProviderModelThinkingEffortDto::Medium),
                 approval_mode: RuntimeRunApprovalModeDto::Suggest,
@@ -992,6 +1001,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                 applied_at: "2026-04-15T23:10:00Z".into(),
             },
             pending: Some(RuntimeRunPendingControlSnapshotDto {
+                provider_profile_id: Some("openai_codex-default".into()),
                 model_id: "openai_codex".into(),
                 thinking_effort: Some(ProviderModelThinkingEffortDto::High),
                 approval_mode: RuntimeRunApprovalModeDto::AutoEdit,
@@ -1039,6 +1049,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             },
             "controls": {
                 "active": {
+                    "providerProfileId": "openai_codex-default",
                     "modelId": "openai_codex",
                     "thinkingEffort": "medium",
                     "approvalMode": "suggest",
@@ -1047,6 +1058,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
                     "appliedAt": "2026-04-15T23:10:00Z"
                 },
                 "pending": {
+                    "providerProfileId": "openai_codex-default",
                     "modelId": "openai_codex",
                     "thinkingEffort": "high",
                     "approvalMode": "auto_edit",
@@ -1097,6 +1109,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             },
             controls: RuntimeRunControlStateDto {
                 active: RuntimeRunActiveControlSnapshotDto {
+                    provider_profile_id: None,
                     model_id: "openai_codex".into(),
                     thinking_effort: Some(ProviderModelThinkingEffortDto::Medium),
                     approval_mode: RuntimeRunApprovalModeDto::Suggest,
@@ -1406,6 +1419,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         project_id: "project-1".into(),
         agent_session_id: "agent-session-main".into(),
         initial_controls: Some(RuntimeRunControlInputDto {
+            provider_profile_id: Some("openai_codex-default".into()),
             model_id: "openai_codex".into(),
             thinking_effort: Some(ProviderModelThinkingEffortDto::High),
             approval_mode: RuntimeRunApprovalModeDto::Yolo,
@@ -1420,6 +1434,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
             "projectId": "project-1",
             "agentSessionId": "agent-session-main",
             "initialControls": {
+                "providerProfileId": "openai_codex-default",
                 "modelId": "openai_codex",
                 "thinkingEffort": "high",
                 "approvalMode": "yolo",
@@ -1433,6 +1448,7 @@ pub(crate) fn serialization_stays_camel_case_for_responses_events_and_errors() {
         project_id: "project-1".into(),
         agent_session_id: "agent-session-main".into(),
         initial_controls: Some(RuntimeRunControlInputDto {
+            provider_profile_id: None,
             model_id: "openai_codex".into(),
             thinking_effort: Some(ProviderModelThinkingEffortDto::Low),
             approval_mode: RuntimeRunApprovalModeDto::Suggest,

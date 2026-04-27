@@ -15,6 +15,7 @@ import {
   type RuntimeRunView,
   type RuntimeSessionView,
 } from '@/src/lib/cadence-model/runtime'
+import type { ProviderProfilesDto } from '@/src/lib/cadence-model/provider-profiles'
 import {
   applyRuntimeStreamIssue,
   createRuntimeStreamFromSubscription,
@@ -80,6 +81,7 @@ interface AttachDesktopRuntimeListenersRefs {
   activeProjectIdRef: MutableRefObject<string | null>
   runtimeSessionsRef: MutableRefObject<RuntimeSessionRecords>
   runtimeRunRefreshKeyRef: MutableRefObject<Record<string, string>>
+  providerProfilesRef: MutableRefObject<ProviderProfilesDto | null>
 }
 
 interface AttachDesktopRuntimeListenersSetters {
@@ -90,6 +92,7 @@ interface AttachDesktopRuntimeListenersSetters {
   setRuntimeSessions: SetState<RuntimeSessionRecords>
   setRuntimeLoadErrors: SetState<RuntimeLoadErrorRecords>
   setRuntimeStreams: SetState<RuntimeStreamRecords>
+  setProviderProfiles: SetState<ProviderProfilesDto | null>
   setErrorMessage: SetState<string | null>
 }
 
@@ -140,6 +143,39 @@ function getRuntimeStreamIssue(
   }
 
   return fallback
+}
+
+function applyOpenAiRuntimeReadiness(
+  providerProfiles: ProviderProfilesDto | null,
+  updatedAt: string | null,
+): ProviderProfilesDto | null {
+  if (!providerProfiles?.activeProfileId) {
+    return providerProfiles
+  }
+
+  let changed = false
+  const profiles = providerProfiles.profiles.map((profile) => {
+    if (profile.profileId !== providerProfiles.activeProfileId || profile.providerId !== 'openai_codex') {
+      return profile
+    }
+
+    if (profile.readiness.ready && profile.readiness.proof === 'oauth_session') {
+      return profile
+    }
+
+    changed = true
+    return {
+      ...profile,
+      readiness: {
+        ready: true,
+        status: 'ready' as const,
+        proof: 'oauth_session' as const,
+        proofUpdatedAt: updatedAt,
+      },
+    }
+  })
+
+  return changed ? { ...providerProfiles, profiles } : providerProfiles
 }
 
 export function clearRuntimeMetadataRefresh(
@@ -339,6 +375,17 @@ export async function attachDesktopRuntimeListeners({
 
       if (!nextRuntime.isAuthenticated) {
         setters.setRuntimeStreams((currentStreams) => removeProjectRecord(currentStreams, payload.projectId))
+      }
+
+      if (nextRuntime.providerId === 'openai_codex' && nextRuntime.isAuthenticated) {
+        const nextProviderProfiles = applyOpenAiRuntimeReadiness(
+          refs.providerProfilesRef.current,
+          nextRuntime.updatedAt,
+        )
+        if (nextProviderProfiles !== refs.providerProfilesRef.current) {
+          refs.providerProfilesRef.current = nextProviderProfiles
+          setters.setProviderProfiles(nextProviderProfiles)
+        }
       }
 
       if (refs.activeProjectIdRef.current !== payload.projectId) {

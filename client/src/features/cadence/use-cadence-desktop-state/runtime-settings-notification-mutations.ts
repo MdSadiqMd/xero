@@ -226,7 +226,7 @@ export function useRuntimeSettingsNotificationMutations({
         return response
       } catch (error) {
         setProviderProfilesSaveError(
-          getOperatorActionError(error, 'Cadence could not save the selected provider profile.'),
+          getOperatorActionError(error, 'Cadence could not save the provider profile.'),
         )
 
         try {

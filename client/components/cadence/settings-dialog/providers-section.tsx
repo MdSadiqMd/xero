@@ -25,7 +25,6 @@ export interface ProvidersSectionProps {
   providerProfilesSaveError: OperatorActionErrorView | null
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
-  providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
   onRefreshProviderModelCatalog?: (
     profileId: string,
@@ -36,8 +35,7 @@ export interface ProvidersSectionProps {
     options?: { includeNetwork?: boolean },
   ) => Promise<ProviderProfileDiagnosticsDto>
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
-  onSetActiveProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
-  onStartLogin?: () => Promise<RuntimeSessionView | null>
+  onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
 }
 
@@ -51,12 +49,10 @@ export function ProvidersSection({
   providerProfilesSaveError,
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
-  providerModelCatalogLoadErrors,
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
   onCheckProviderProfile,
   onUpsertProviderProfile,
-  onSetActiveProviderProfile,
   onStartLogin,
   onLogout,
 }: ProvidersSectionProps) {
@@ -64,7 +60,7 @@ export function ProvidersSection({
     <div className="flex flex-col gap-6">
       <SectionHeader
         title="Providers"
-        description="Pick a provider, manage its API key, and choose a model."
+        description="Configure provider credentials, endpoints, readiness checks, and catalog discovery."
       />
 
       <ProviderProfileForm
@@ -75,17 +71,14 @@ export function ProvidersSection({
         providerProfilesSaveError={providerProfilesSaveError}
         providerModelCatalogs={providerModelCatalogs}
         providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-        providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
         onRefreshProviderProfiles={onRefreshProviderProfiles}
         onRefreshProviderModelCatalog={active ? onRefreshProviderModelCatalog : undefined}
         onCheckProviderProfile={active ? onCheckProviderProfile : undefined}
         onUpsertProviderProfile={onUpsertProviderProfile}
-        onSetActiveProviderProfile={onSetActiveProviderProfile}
         runtimeSession={agent?.runtimeSession ?? null}
         hasSelectedProject={Boolean(agent?.repositoryPath?.trim())}
         onStartLogin={onStartLogin}
         onLogout={onLogout}
-        openAiMissingProjectLabel="Open a project"
       />
     </div>
   )

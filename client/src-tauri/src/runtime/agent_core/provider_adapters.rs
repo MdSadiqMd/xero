@@ -26,8 +26,8 @@ use crate::{
         redaction::find_prohibited_persistence_content,
         ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID,
         GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
-        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
-        VERTEX_PROVIDER_ID,
+        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_DEFAULT_MODEL_ID, OPENAI_CODEX_PROVIDER_ID,
+        OPENROUTER_PROVIDER_ID, VERTEX_PROVIDER_ID,
     },
 };
 
@@ -1548,7 +1548,7 @@ impl Default for OpenAiResponsesProviderConfig {
     fn default() -> Self {
         Self {
             provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
-            model_id: "gpt-5.2-codex".into(),
+            model_id: OPENAI_CODEX_DEFAULT_MODEL_ID.into(),
             base_url: "https://api.openai.com/v1".into(),
             api_key: String::new(),
             timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
@@ -1611,6 +1611,7 @@ mod tests {
             turn_index: 0,
             controls: RuntimeRunControlStateDto {
                 active: RuntimeRunActiveControlSnapshotDto {
+                    provider_profile_id: None,
                     model_id: "model".into(),
                     thinking_effort: None,
                     approval_mode: RuntimeRunApprovalModeDto::Yolo,
@@ -1788,7 +1789,7 @@ mod tests {
         let configs = vec![
             AgentProviderConfig::OpenAiResponses(OpenAiResponsesProviderConfig {
                 provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
-                model_id: "gpt-5.2-codex".into(),
+                model_id: OPENAI_CODEX_DEFAULT_MODEL_ID.into(),
                 base_url: "https://api.openai.com/v1".into(),
                 api_key: "test-key".into(),
                 timeout_ms: 1_000,

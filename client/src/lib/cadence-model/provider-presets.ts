@@ -34,7 +34,7 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     description: 'Cadence-managed OpenAI OAuth profile used for desktop-authenticated runtime binds.',
     defaultProfileId: 'openai_codex-default',
     defaultProfileLabel: 'OpenAI Codex',
-    defaultModelId: 'openai_codex',
+    defaultModelId: 'gpt-5.4',
     presetId: null,
     authMode: 'oauth',
     baseUrlMode: 'none',

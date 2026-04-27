@@ -145,7 +145,7 @@ final class CadenceModernDictationEngine {
         _ = privacyMode
         try Task.checkCancellation()
 
-        let permissions = await requestPermissions()
+        let permissions = try await requestPermissions()
         emit([
             "kind": "permission",
             "microphone": permissions.microphone,
@@ -590,12 +590,22 @@ final class CadenceModernDictationEngine {
         }
     }
 
-    private func requestPermissions() async -> (microphone: String, speech: String) {
+    private func requestPermissions() async throws -> (microphone: String, speech: String) {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            try ensurePrivacyPromptCanRun(
+                key: "NSMicrophoneUsageDescription",
+                code: "dictation_microphone_permission_prompt_unavailable",
+                label: "microphone"
+            )
             _ = await AVCaptureDevice.requestAccess(for: .audio)
         }
 
         if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+            try ensurePrivacyPromptCanRun(
+                key: "NSSpeechRecognitionUsageDescription",
+                code: "dictation_speech_permission_prompt_unavailable",
+                label: "speech recognition"
+            )
             _ = await withCheckedContinuation { continuation in
                 SFSpeechRecognizer.requestAuthorization { status in
                     continuation.resume(returning: status)
@@ -604,6 +614,16 @@ final class CadenceModernDictationEngine {
         }
 
         return (microphonePermissionState(), speechPermissionState())
+    }
+
+    private func ensurePrivacyPromptCanRun(key: String, code: String, label: String) throws {
+        guard privacyUsageDescriptionVisibleToTcc(key) else {
+            throw CadenceModernDictationError(
+                code: code,
+                message: "Cadence cannot request \(label) permission because macOS cannot see the app privacy usage string. Restart with pnpm run dev:tauri so the dev runner signs the Tauri binary, or use a bundled Cadence build.",
+                retryable: false
+            )
+        }
     }
 
     private func validatePermissions(_ permissions: (microphone: String, speech: String)) throws {

@@ -79,11 +79,11 @@ function validateRuntimeProviderModel(
   payload: { providerId: z.infer<typeof runtimeProviderIdSchema>; modelId: string },
   ctx: z.RefinementCtx,
 ): void {
-  if (payload.providerId === 'openai_codex' && payload.modelId !== 'openai_codex') {
+  if (payload.providerId === 'openai_codex' && payload.modelId.trim().length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['modelId'],
-      message: 'Cadence only supports modelId `openai_codex` for provider `openai_codex`.',
+      message: 'Cadence requires a modelId for provider `openai_codex`.',
     })
   }
 }

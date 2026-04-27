@@ -38,6 +38,43 @@ pub fn start_openai_login<R: Runtime>(
     .map_err(command_error_from_auth)?;
     let repo_root = resolve_project_root(&app, state.inner(), &request.project_id)?;
     let current = load_runtime_session_status(state.inner(), &repo_root, &request.project_id)?;
+    if is_login_in_progress(&current) {
+        if current.provider_id != provider.provider_id {
+            return Err(command_error_from_auth(AuthFlowError::terminal(
+                "auth_flow_provider_mismatch",
+                current.phase.clone(),
+                format!(
+                    "Cadence already has an in-flight `{}` login for this project. Finish or clear it before starting `{}`.",
+                    current.provider_id, provider.provider_id
+                ),
+            )));
+        }
+
+        if let Some(in_flight_profile_id) = current
+            .flow_id
+            .as_deref()
+            .and_then(|flow_id| state.inner().active_auth_flows().snapshot(flow_id))
+            .map(|snapshot| snapshot.profile_id)
+        {
+            if in_flight_profile_id != request.profile_id {
+                let error = AuthFlowError::terminal(
+                    "auth_flow_profile_mismatch",
+                    current.phase.clone(),
+                    format!(
+                        "Cadence already has an in-flight `{}` login for provider profile `{}` on this project. Finish or cancel it before starting login for `{}`.",
+                        provider.provider_id, in_flight_profile_id, request.profile_id
+                    ),
+                );
+                let failed = runtime_session_with_auth_error(&current, &error);
+                let persisted = persist_runtime_session(&repo_root, &failed)?;
+                emit_runtime_updated(&app, &persisted)?;
+                return Err(command_error_from_auth(error));
+            }
+
+            return Ok(current);
+        }
+    }
+
     let current = reconcile_runtime_session(&app, state.inner(), &repo_root, current)?;
 
     if is_login_in_progress(&current) {

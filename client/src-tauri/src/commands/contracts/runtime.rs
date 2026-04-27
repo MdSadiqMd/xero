@@ -96,6 +96,8 @@ pub enum RuntimeRunApprovalModeDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunControlInputDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
@@ -107,6 +109,8 @@ pub struct RuntimeRunControlInputDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunActiveControlSnapshotDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
@@ -120,6 +124,8 @@ pub struct RuntimeRunActiveControlSnapshotDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunPendingControlSnapshotDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<ProviderModelThinkingEffortDto>,
@@ -340,6 +346,7 @@ pub enum ProviderProfileReadinessStatusDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderProfileReadinessProofDto {
+    #[serde(rename = "oauth_session", alias = "o_auth_session")]
     OAuthSession,
     StoredSecret,
     Local,
@@ -431,7 +438,7 @@ pub struct ProviderModelCatalogDiagnosticDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderModelThinkingCapabilityDto {
     pub supported: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub effort_options: Vec<ProviderModelThinkingEffortDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_effort: Option<ProviderModelThinkingEffortDto>,
@@ -593,6 +600,14 @@ pub struct StartRuntimeRunRequestDto {
     pub initial_controls: Option<RuntimeRunControlInputDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartRuntimeSessionRequestDto {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

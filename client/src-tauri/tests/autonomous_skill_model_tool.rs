@@ -104,6 +104,7 @@ impl AutonomousSkillSource for FixtureSkillSource {
 fn runtime_controls() -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            provider_profile_id: None,
             model_id: "test-model".into(),
             thinking_effort: None,
             approval_mode: RuntimeRunApprovalModeDto::Yolo,

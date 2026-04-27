@@ -451,7 +451,7 @@ fn auth_flow_profile_mismatch_error(
         "auth_flow_profile_mismatch",
         RuntimeAuthPhase::Failed,
         format!(
-            "Cadence rejected auth flow `{flow_id}` because it was started for provider profile `{actual_profile_id}` instead of the selected profile `{requested_profile_id}`. Retry login for the currently selected profile."
+            "Cadence rejected auth flow `{flow_id}` because it was started for provider profile `{actual_profile_id}` instead of provider profile `{requested_profile_id}`. Start a fresh login for that profile."
         ),
     )
 }

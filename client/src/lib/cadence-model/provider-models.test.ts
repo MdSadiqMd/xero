@@ -114,19 +114,19 @@ describe('provider-models', () => {
     expect(lastSuccessAfterFetch.success).toBe(false)
   })
 
-  it('keeps OpenAI Codex pinned to the truthful single-model contract', () => {
+  it('accepts OpenAI Codex catalogs with real Codex OAuth model ids', () => {
     const valid = providerModelCatalogSchema.safeParse({
       profileId: 'openai_codex-default',
       providerId: 'openai_codex',
-      configuredModelId: 'openai_codex',
+      configuredModelId: 'gpt-5.4',
       source: 'live',
       fetchedAt: '2026-04-21T12:00:00Z',
       lastSuccessAt: '2026-04-21T12:00:00Z',
       lastRefreshError: null,
       models: [
         {
-          modelId: 'openai_codex',
-          displayName: 'OpenAI Codex',
+          modelId: 'gpt-5.4',
+          displayName: 'GPT-5.4',
           thinking: {
             supported: true,
             effortOptions: ['low', 'medium', 'high'],
@@ -136,28 +136,6 @@ describe('provider-models', () => {
       ],
     })
     expect(valid.success).toBe(true)
-
-    const invalid = providerModelCatalogSchema.safeParse({
-      profileId: 'openai_codex-default',
-      providerId: 'openai_codex',
-      configuredModelId: 'gpt-5',
-      source: 'live',
-      fetchedAt: '2026-04-21T12:00:00Z',
-      lastSuccessAt: '2026-04-21T12:00:00Z',
-      lastRefreshError: null,
-      models: [
-        {
-          modelId: 'gpt-5',
-          displayName: 'GPT-5',
-          thinking: {
-            supported: true,
-            effortOptions: ['low', 'medium', 'high'],
-            defaultEffort: 'medium',
-          },
-        },
-      ],
-    })
-    expect(invalid.success).toBe(false)
   })
 
   it('accepts Anthropic catalogs with truthful Claude thinking payloads and rejects malformed thinking rows', () => {

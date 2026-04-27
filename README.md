@@ -166,12 +166,12 @@ pnpm --dir client lint        # ESLint
 ### Tauri desktop commands
 
 ```bash
-pnpm --dir client exec tauri dev
+pnpm --dir client run tauri:dev
 pnpm --dir client exec tauri build
 pnpm --dir client exec tauri build --debug
 
 # enable live emulator H.264 decode support
-pnpm --dir client exec tauri dev --features emulator-live
+pnpm --dir client run tauri:dev -- --features emulator-live
 ```
 
 ### Rust backend checks/tests

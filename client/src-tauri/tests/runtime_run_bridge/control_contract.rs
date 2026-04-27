@@ -88,6 +88,7 @@ pub(crate) fn queued_runtime_controls_apply_on_next_model_boundary_and_recover_r
             agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id.clone(),
             controls: Some(RuntimeRunControlInputDto {
+                provider_profile_id: running.controls.active.provider_profile_id.clone(),
                 model_id: running.controls.active.model_id.clone(),
                 thinking_effort: running.controls.active.thinking_effort.clone(),
                 approval_mode: RuntimeRunApprovalModeDto::AutoEdit,
@@ -254,6 +255,7 @@ pub(crate) fn queued_runtime_controls_duplicate_boundary_is_idempotent() {
             agent_session_id: "agent-session-main".into(),
             run_id: launched.run.run_id.clone(),
             controls: Some(RuntimeRunControlInputDto {
+                provider_profile_id: running.controls.active.provider_profile_id.clone(),
                 model_id: running.controls.active.model_id.clone(),
                 thinking_effort: running.controls.active.thinking_effort.clone(),
                 approval_mode: RuntimeRunApprovalModeDto::Yolo,

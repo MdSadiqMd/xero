@@ -14,10 +14,10 @@ use cadence_desktop_lib::{
         get_runtime_run::get_runtime_run, start_autonomous_run::start_autonomous_run,
         start_runtime_session::start_runtime_session, AutonomousRunRecoveryStateDto,
         AutonomousRunStateDto, AutonomousRunStatusDto, CancelAutonomousRunRequestDto,
-        GetAutonomousRunRequestDto, GetRuntimeRunRequestDto, ProjectIdRequestDto,
-        RepositoryDiffScope, RuntimeAuthPhase, RuntimeRunActiveControlSnapshotDto,
-        RuntimeRunApprovalModeDto, RuntimeRunControlStateDto, RuntimeRunDto, RuntimeRunStatusDto,
-        RuntimeRunTransportLivenessDto, StartAutonomousRunRequestDto,
+        GetAutonomousRunRequestDto, GetRuntimeRunRequestDto, RepositoryDiffScope, RuntimeAuthPhase,
+        RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
+        RuntimeRunDto, RuntimeRunStatusDto, RuntimeRunTransportLivenessDto,
+        StartAutonomousRunRequestDto, StartRuntimeSessionRequestDto,
     },
     configure_builder_with_state, db,
     git::repository::{ensure_cadence_excluded, CanonicalRepository},
@@ -88,6 +88,7 @@ fn runtime_with_approval(
     .expect("build autonomous tool runtime for imported repo")
     .with_runtime_run_controls(RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            provider_profile_id: None,
             model_id: "model-1".into(),
             thinking_effort: None,
             approval_mode,
@@ -207,8 +208,9 @@ fn seed_authenticated_runtime(
     let runtime = start_runtime_session(
         app.handle().clone(),
         app.state::<DesktopState>(),
-        ProjectIdRequestDto {
+        StartRuntimeSessionRequestDto {
             project_id: project_id.into(),
+            provider_profile_id: None,
         },
     )
     .expect("start runtime session");

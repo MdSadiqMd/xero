@@ -12,9 +12,9 @@ use crate::{
         },
     },
     commands::{
-        get_runtime_session::reconcile_runtime_session,
+        get_runtime_session::reconcile_runtime_session_for_profile,
         get_runtime_settings::{
-            runtime_settings_file_from_request, runtime_settings_snapshot_from_provider_profiles,
+            runtime_settings_file_from_request, runtime_settings_snapshot_for_provider_profile,
         },
         provider_profiles::load_provider_profiles_snapshot,
         CommandError, CommandResult, RuntimeAuthPhase, RuntimeRunActiveControlSnapshotDto,
@@ -25,7 +25,7 @@ use crate::{
         RUNTIME_RUN_UPDATED_EVENT,
     },
     db::project_store::{
-        self, build_runtime_run_control_state_with_plan_mode, RuntimeRunCheckpointKind,
+        self, build_runtime_run_control_state_with_profile, RuntimeRunCheckpointKind,
         RuntimeRunCheckpointRecord, RuntimeRunControlStateRecord, RuntimeRunDiagnosticRecord,
         RuntimeRunRecord, RuntimeRunSnapshotRecord, RuntimeRunStatus, RuntimeRunTransportLiveness,
         RuntimeRunTransportRecord, RuntimeRunUpsertRecord,
@@ -38,15 +38,15 @@ use crate::{
     provider_profiles::ProviderProfileReadinessStatus,
     runtime::{
         create_owned_agent_run, drive_owned_agent_run, launch_detached_runtime_supervisor,
-        openai_codex_provider, probe_runtime_run, resolve_runtime_shell_selection,
-        AgentProviderConfig, AnthropicProviderConfig, AutonomousToolRuntime, BedrockProviderConfig,
-        OpenAiCompatibleProviderConfig, OpenAiResponsesProviderConfig, OwnedAgentRunRequest,
-        RuntimeSupervisorLaunchContext, RuntimeSupervisorLaunchEnv, RuntimeSupervisorLaunchRequest,
-        RuntimeSupervisorProbeRequest, VertexProviderConfig, ANTHROPIC_PROVIDER_ID,
-        AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
-        GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
-        OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID, OWNED_AGENT_RUNTIME_KIND,
-        OWNED_AGENT_SUPERVISOR_KIND, VERTEX_PROVIDER_ID,
+        normalize_openai_codex_model_id, openai_codex_provider, probe_runtime_run,
+        resolve_runtime_shell_selection, AgentProviderConfig, AnthropicProviderConfig,
+        AutonomousToolRuntime, BedrockProviderConfig, OpenAiCompatibleProviderConfig,
+        OpenAiResponsesProviderConfig, OwnedAgentRunRequest, RuntimeSupervisorLaunchContext,
+        RuntimeSupervisorLaunchEnv, RuntimeSupervisorLaunchRequest, RuntimeSupervisorProbeRequest,
+        VertexProviderConfig, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID,
+        GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
+        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
+        OWNED_AGENT_RUNTIME_KIND, OWNED_AGENT_SUPERVISOR_KIND, VERTEX_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -60,7 +60,6 @@ pub(crate) const DEFAULT_RUNTIME_RUN_STARTUP_TIMEOUT: Duration = Duration::from_
 pub(crate) const DEFAULT_RUNTIME_RUN_CONTROL_TIMEOUT: Duration = Duration::from_millis(750);
 pub(crate) const DEFAULT_RUNTIME_RUN_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(4);
 const DEFAULT_OPENAI_RESPONSES_BASE_URL: &str = "https://api.openai.com/v1";
-const OPENAI_CODEX_DEFAULT_MODEL_ID: &str = "gpt-5.2-codex";
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
 pub(crate) struct RuntimeRunLaunchOutcome {
@@ -263,6 +262,7 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
         .as_ref()
         .filter(|snapshot| is_reconnectable_owned_runtime_run(snapshot))
     {
+        reject_runtime_run_provider_profile_switch(existing, requested_controls.as_ref())?;
         return Ok(RuntimeRunLaunchOutcome {
             repo_root,
             snapshot: existing.clone(),
@@ -286,7 +286,7 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
         }
     }
 
-    let active_profile = load_active_provider_profile_selection(app, state)?;
+    let active_profile = load_provider_profile_selection(app, state, requested_controls.as_ref())?;
     let run_controls = resolve_owned_runtime_run_control_state(
         &active_profile,
         requested_controls.as_ref(),
@@ -447,6 +447,7 @@ pub(crate) fn launch_or_reconnect_detached_runtime_run<R: Runtime>(
         snapshot.run.supervisor_kind != OWNED_AGENT_SUPERVISOR_KIND
             && is_reconnectable_runtime_run(snapshot)
     }) {
+        reject_runtime_run_provider_profile_switch(existing, requested_controls.as_ref())?;
         return Ok(RuntimeRunLaunchOutcome {
             repo_root,
             snapshot: existing.clone(),
@@ -454,7 +455,7 @@ pub(crate) fn launch_or_reconnect_detached_runtime_run<R: Runtime>(
         });
     }
 
-    let active_profile = load_active_provider_profile_selection(app, state)?;
+    let active_profile = load_provider_profile_selection(app, state, requested_controls.as_ref())?;
     if let Some(existing) = current
         .as_ref()
         .filter(|snapshot| requires_matching_provider_for_new_launch(snapshot))
@@ -486,7 +487,13 @@ pub(crate) fn launch_or_reconnect_detached_runtime_run<R: Runtime>(
         ));
     }
 
-    let runtime = reconcile_runtime_session(app, state, &repo_root, runtime)?;
+    let runtime = reconcile_runtime_session_for_profile(
+        app,
+        state,
+        &repo_root,
+        runtime,
+        Some(&active_profile.profile_id),
+    )?;
     ensure_runtime_run_auth_ready(&runtime.phase)?;
     let session_id = runtime.session_id.clone().ok_or_else(|| {
         CommandError::retryable(
@@ -499,6 +506,7 @@ pub(crate) fn launch_or_reconnect_detached_runtime_run<R: Runtime>(
     let run_controls = resolve_initial_runtime_run_control_state(
         app,
         state,
+        &active_profile,
         requested_controls.as_ref(),
         initial_prompt.as_deref(),
     )?;
@@ -506,6 +514,7 @@ pub(crate) fn launch_or_reconnect_detached_runtime_run<R: Runtime>(
     let prepared_launch = prepare_runtime_supervisor_launch(
         app,
         state,
+        &active_profile,
         &runtime,
         &session_id,
         &run_controls,
@@ -548,9 +557,16 @@ pub(crate) fn normalize_requested_runtime_run_controls<R: Runtime>(
     state: &DesktopState,
     requested_controls: &RuntimeRunControlInputDto,
 ) -> CommandResult<RuntimeRunControlInputDto> {
-    let control_state =
-        resolve_initial_runtime_run_control_state(app, state, Some(requested_controls), None)?;
+    let active_profile = load_provider_profile_selection(app, state, Some(requested_controls))?;
+    let control_state = resolve_initial_runtime_run_control_state(
+        app,
+        state,
+        &active_profile,
+        Some(requested_controls),
+        None,
+    )?;
     Ok(RuntimeRunControlInputDto {
+        provider_profile_id: control_state.active.provider_profile_id,
         model_id: control_state.active.model_id,
         thinking_effort: control_state.active.thinking_effort,
         approval_mode: control_state.active.approval_mode,
@@ -568,13 +584,28 @@ pub(crate) fn resolve_owned_agent_provider_config<R: Runtime>(
     }
 
     let provider_profiles = load_provider_profiles_snapshot(app, state)?;
-    let active_profile = provider_profiles.active_profile().ok_or_else(|| {
-        CommandError::user_fixable(
-            "provider_profiles_invalid",
-            "Cadence could not resolve the owned-agent provider because the active provider profile is missing.",
-        )
-    })?;
-    let runtime_settings = runtime_settings_snapshot_from_provider_profiles(&provider_profiles)?;
+    let requested_profile_id = requested_controls
+        .and_then(|controls| controls.provider_profile_id.as_deref())
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty());
+    let active_profile = match requested_profile_id {
+        Some(profile_id) => provider_profiles.profile(profile_id).ok_or_else(|| {
+            CommandError::user_fixable(
+                "provider_profile_not_found",
+                format!(
+                    "Cadence could not resolve the owned-agent provider because provider profile `{profile_id}` is missing.",
+                ),
+            )
+        })?,
+        None => provider_profiles.active_profile().ok_or_else(|| {
+            CommandError::user_fixable(
+                "provider_profiles_invalid",
+                "Cadence could not resolve the owned-agent provider because the active provider profile is missing.",
+            )
+        })?,
+    };
+    let runtime_settings =
+        runtime_settings_snapshot_for_provider_profile(&provider_profiles, active_profile)?;
     let model_id = requested_controls
         .map(|controls| controls.model_id.trim().to_owned())
         .filter(|model_id| !model_id.is_empty())
@@ -783,15 +814,6 @@ pub(crate) fn resolve_owned_agent_provider_config<R: Runtime>(
     }
 }
 
-fn normalize_openai_codex_model_id(model_id: &str) -> String {
-    let model_id = model_id.trim();
-    if model_id.is_empty() || model_id == OPENAI_CODEX_PROVIDER_ID {
-        OPENAI_CODEX_DEFAULT_MODEL_ID.into()
-    } else {
-        model_id.into()
-    }
-}
-
 fn is_openai_responses_model(model_id: &str) -> bool {
     let normalized = model_id.trim().to_ascii_lowercase();
     normalized.contains("codex") || normalized.starts_with("gpt-5")
@@ -873,7 +895,8 @@ fn resolve_owned_runtime_run_control_state(
         .map(|controls| controls.plan_mode_required)
         .unwrap_or(false);
 
-    build_runtime_run_control_state_with_plan_mode(
+    build_runtime_run_control_state_with_profile(
+        Some(&active_profile.profile_id),
         &model_id,
         thinking_effort,
         approval_mode,
@@ -969,6 +992,10 @@ pub(crate) fn update_owned_runtime_run_controls(
         .as_ref()
         .map(|controls| controls.model_id.clone())
         .unwrap_or_else(|| active.model_id.clone());
+    let provider_profile_id = controls
+        .as_ref()
+        .and_then(|controls| controls.provider_profile_id.as_deref())
+        .or(active.provider_profile_id.as_deref());
     let thinking_effort = controls
         .as_ref()
         .and_then(|controls| controls.thinking_effort.clone())
@@ -981,7 +1008,8 @@ pub(crate) fn update_owned_runtime_run_controls(
         .as_ref()
         .map(|controls| controls.plan_mode_required)
         .unwrap_or(active.plan_mode_required);
-    let run_controls = build_runtime_run_control_state_with_plan_mode(
+    let run_controls = build_runtime_run_control_state_with_profile(
+        provider_profile_id,
         &model_id,
         thinking_effort,
         approval_mode,
@@ -1005,17 +1033,43 @@ pub(crate) fn update_owned_runtime_run_controls(
     )
 }
 
-fn load_active_provider_profile_selection<R: Runtime>(
+fn load_provider_profile_selection<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
+    requested_controls: Option<&RuntimeRunControlInputDto>,
 ) -> CommandResult<ActiveProviderProfileSelection> {
     let provider_profiles = load_provider_profiles_snapshot(app, state)?;
-    let active_profile = provider_profiles.active_profile().ok_or_else(|| {
-        CommandError::user_fixable(
-            "provider_profiles_invalid",
-            "Cadence could not determine the active provider profile before launching or reconnecting a runtime run.",
-        )
-    })?;
+    let requested_profile_id = requested_controls
+        .and_then(|controls| controls.provider_profile_id.as_deref())
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty());
+    let active_profile = match requested_profile_id {
+        Some(profile_id) => provider_profiles.profile(profile_id).ok_or_else(|| {
+            CommandError::user_fixable(
+                "provider_profile_not_found",
+                format!(
+                    "Cadence could not determine the selected provider profile `{profile_id}` before launching or reconnecting a runtime run.",
+                ),
+            )
+        })?,
+        None => provider_profiles.active_profile().ok_or_else(|| {
+            CommandError::user_fixable(
+                "provider_profiles_invalid",
+                "Cadence could not determine the active provider profile before launching or reconnecting a runtime run.",
+            )
+        })?,
+    };
+
+    let readiness = active_profile.readiness(&provider_profiles.credentials);
+    if !readiness.ready {
+        return Err(CommandError::user_fixable(
+            "provider_profile_not_ready",
+            format!(
+                "Cadence cannot launch a runtime run with provider profile `{}` because it is not ready.",
+                active_profile.profile_id
+            ),
+        ));
+    }
 
     Ok(ActiveProviderProfileSelection {
         profile_id: active_profile.profile_id.clone(),
@@ -1055,6 +1109,37 @@ fn runtime_supervisor_session_provider_mismatch(
             runtime.provider_id,
         ),
     )
+}
+
+fn reject_runtime_run_provider_profile_switch(
+    snapshot: &RuntimeRunSnapshotRecord,
+    requested_controls: Option<&RuntimeRunControlInputDto>,
+) -> CommandResult<()> {
+    let requested_profile_id = requested_controls
+        .and_then(|controls| controls.provider_profile_id.as_deref())
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty());
+    let active_profile_id = snapshot
+        .controls
+        .active
+        .provider_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty());
+
+    if let (Some(requested), Some(active)) = (requested_profile_id, active_profile_id) {
+        if requested != active {
+            return Err(CommandError::user_fixable(
+                "runtime_run_provider_profile_switch_blocked",
+                format!(
+                    "Cadence cannot switch active runtime run `{}` from provider profile `{active}` to `{requested}`. Stop the current run before changing providers.",
+                    snapshot.run.run_id
+                ),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn ensure_runtime_run_auth_ready(phase: &RuntimeAuthPhase) -> CommandResult<()> {
@@ -1098,16 +1183,10 @@ pub(super) fn runtime_reason_dto(
 fn resolve_initial_runtime_run_control_state<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
+    active_profile: &ActiveProviderProfileSelection,
     requested_controls: Option<&RuntimeRunControlInputDto>,
     initial_prompt: Option<&str>,
 ) -> CommandResult<RuntimeRunControlStateRecord> {
-    let provider_profiles = load_provider_profiles_snapshot(app, state)?;
-    let active_profile = provider_profiles.active_profile().ok_or_else(|| {
-        CommandError::user_fixable(
-            "provider_profiles_invalid",
-            "Cadence could not derive runtime-run controls because the active provider profile is missing.",
-        )
-    })?;
     let catalog = load_provider_model_catalog(app, state, &active_profile.profile_id, false)?;
     let model_id = resolve_initial_runtime_run_model_id(
         active_profile.provider_id.as_str(),
@@ -1124,7 +1203,8 @@ fn resolve_initial_runtime_run_control_state<R: Runtime>(
         .unwrap_or(false);
     let timestamp = crate::auth::now_timestamp();
 
-    build_runtime_run_control_state_with_plan_mode(
+    build_runtime_run_control_state_with_profile(
+        Some(&active_profile.profile_id),
         &model_id,
         thinking_effort,
         approval_mode,
@@ -1137,18 +1217,24 @@ fn resolve_initial_runtime_run_control_state<R: Runtime>(
 fn prepare_runtime_supervisor_launch<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
+    selected_profile: &ActiveProviderProfileSelection,
     runtime: &crate::commands::RuntimeSessionDto,
     session_id: &str,
     run_controls: &RuntimeRunControlStateRecord,
     run_id: &str,
 ) -> CommandResult<PreparedRuntimeSupervisorLaunch> {
     let provider_profiles = load_provider_profiles_snapshot(app, state)?;
-    let active_profile = provider_profiles.active_profile().ok_or_else(|| {
-        CommandError::user_fixable(
-            "provider_profiles_invalid",
-            "Cadence could not launch a runtime run because the active provider profile is missing.",
-        )
-    })?;
+    let active_profile = provider_profiles
+        .profile(&selected_profile.profile_id)
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "provider_profile_not_found",
+                format!(
+                "Cadence could not launch a runtime run because provider profile `{}` is missing.",
+                selected_profile.profile_id
+            ),
+            )
+        })?;
 
     if active_profile.provider_id != runtime.provider_id {
         return Err(CommandError::user_fixable(
@@ -1192,8 +1278,9 @@ fn prepare_runtime_supervisor_launch<R: Runtime>(
             }
         }
 
-        let runtime_settings = runtime_settings_snapshot_from_provider_profiles(&provider_profiles)
-            .map_err(|error| CommandError::user_fixable(error.code, error.message))?;
+        let runtime_settings =
+            runtime_settings_snapshot_for_provider_profile(&provider_profiles, active_profile)
+                .map_err(|error| CommandError::user_fixable(error.code, error.message))?;
         let profile_input = AnthropicFamilyProfileInput::from(&runtime_settings);
         let launch_vars =
             resolve_anthropic_family_launch_env(&profile_input).map_err(command_error_from_auth)?;
@@ -1408,6 +1495,7 @@ fn runtime_run_control_state_dto(
 ) -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            provider_profile_id: controls.active.provider_profile_id.clone(),
             model_id: controls.active.model_id.clone(),
             thinking_effort: controls.active.thinking_effort.clone(),
             approval_mode: controls.active.approval_mode.clone(),
@@ -1419,6 +1507,7 @@ fn runtime_run_control_state_dto(
             .pending
             .as_ref()
             .map(|pending| RuntimeRunPendingControlSnapshotDto {
+                provider_profile_id: pending.provider_profile_id.clone(),
                 model_id: pending.model_id.clone(),
                 thinking_effort: pending.thinking_effort.clone(),
                 approval_mode: pending.approval_mode.clone(),

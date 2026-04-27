@@ -355,9 +355,9 @@ export function getProviderMismatchCopy(
   const selectionScope = selectedProvider.profileId ? 'profile' : 'provider'
 
   return {
-    reason: `Settings now select ${selectionNoun} ${getSelectedRuntimeIdentityLabel(selectedProvider)}, but the persisted runtime session still reflects ${getRuntimeProviderLabel(runtimeSession.providerId)}.`,
-    sessionRecoveryCopy: `Rebind the selected ${selectionScope} so durable runtime truth matches Settings.`,
-    streamRecoveryCopy: `Rebind the selected ${selectionScope} before trusting new stream activity.`,
+    reason: `Configured ${selectionNoun} ${getSelectedRuntimeIdentityLabel(selectedProvider)} no longer matches the persisted runtime session for ${getRuntimeProviderLabel(runtimeSession.providerId)}.`,
+    sessionRecoveryCopy: `Rebind this ${selectionScope} so durable runtime truth matches Settings.`,
+    streamRecoveryCopy: `Rebind this ${selectionScope} before trusting new stream activity.`,
   }
 }
 
@@ -418,30 +418,30 @@ export function getAgentSessionUnavailableReason(
         : `Cadence is authenticated as ${runtimeSession.accountLabel}.`
     case 'awaiting_browser_callback':
       return selectedConfiguredProvider
-        ? `Cadence surfaced a browser-auth phase while ${selectedConfiguredProvider.providerLabel} is selected. Rebind the runtime from the Agent tab or switch providers in Settings.`
+        ? `Cadence surfaced a browser-auth phase while ${selectedConfiguredProvider.providerLabel} is configured. Rebind the runtime from the Agent tab or choose another model in the Agent composer.`
         : 'Cadence started the OpenAI login flow and is waiting for the browser callback to return.'
     case 'awaiting_manual_input':
       return selectedConfiguredProvider
-        ? `Cadence surfaced a manual-auth phase while ${selectedConfiguredProvider.providerLabel} is selected. Rebind the runtime from the Agent tab or switch providers in Settings.`
+        ? `Cadence surfaced a manual-auth phase while ${selectedConfiguredProvider.providerLabel} is configured. Rebind the runtime from the Agent tab or choose another model in the Agent composer.`
         : 'Cadence is waiting for the pasted OpenAI redirect URL to finish login for this project.'
     case 'starting':
       return selectedConfiguredProvider
-        ? `Cadence is validating the selected ${selectedConfiguredProvider.providerLabel} ${getValidatedConfiguredProviderBindingLabel(selectedConfiguredProvider)} and binding a runtime session for this project.`
+        ? `Cadence is validating the configured ${selectedConfiguredProvider.providerLabel} ${getValidatedConfiguredProviderBindingLabel(selectedConfiguredProvider)} and binding a runtime session for this project.`
         : 'Cadence is opening the OpenAI login flow for this project.'
     case 'exchanging_code':
       return selectedConfiguredProvider
-        ? `Cadence is completing the selected ${selectedConfiguredProvider.providerLabel} runtime bind for this project.`
+        ? `Cadence is completing the configured ${selectedConfiguredProvider.providerLabel} runtime bind for this project.`
         : 'Cadence is exchanging the OpenAI authorization code for a project-bound session.'
     case 'refreshing':
       return selectedConfiguredProvider
-        ? `Cadence is revalidating the selected ${selectedConfiguredProvider.providerLabel} binding for this project.`
+        ? `Cadence is revalidating the configured ${selectedConfiguredProvider.providerLabel} binding for this project.`
         : 'Cadence is refreshing the stored OpenAI auth session for this project.'
     case 'idle':
       if (selectedConfiguredProvider) {
         if (selectedConfiguredProvider.readinessStatus === 'malformed') {
           return getRepairConfiguredProviderCopy(
             selectedConfiguredProvider,
-            ' before Cadence can bind the selected provider for this imported project.',
+            ' before Cadence can bind the configured provider for this imported project.',
           )
         }
 
@@ -453,7 +453,7 @@ export function getAgentSessionUnavailableReason(
           : getSetupConfiguredProviderCopy(
               selectedConfiguredProvider,
               selectedProvider.providerId,
-              ' before Cadence can bind the selected provider for this imported project.',
+              ' before Cadence can bind the configured provider for this imported project.',
             )
       }
 
@@ -488,7 +488,7 @@ export function getAgentRuntimeRunUnavailableReason(
     }
 
     if (providerMismatchCopy) {
-      return `${providerMismatchCopy.reason} Rebind the selected ${selectedProvider.profileId ? 'profile' : 'provider'} before launching a supervised harness run for this project.`
+      return `${providerMismatchCopy.reason} Rebind this ${selectedProvider.profileId ? 'profile' : 'provider'} before launching a supervised harness run for this project.`
     }
 
     if (selectedConfiguredProvider) {
@@ -550,7 +550,7 @@ export function getAgentMessagesUnavailableReason(
     if (selectedConfiguredProvider) {
       if (selectedConfiguredProvider.readinessStatus === 'malformed') {
         return runtimeRun
-          ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires ${getRecoveredRepairConfiguredProviderRequirement(selectedConfiguredProvider)} for the selected provider.`
+          ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires ${getRecoveredRepairConfiguredProviderRequirement(selectedConfiguredProvider)} for the configured provider.`
           : getRepairConfiguredProviderCopy(
               selectedConfiguredProvider,
               ' before Cadence can establish a runtime session for this imported project.',
@@ -558,7 +558,7 @@ export function getAgentMessagesUnavailableReason(
       }
 
       return runtimeRun
-        ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires a ${selectedConfiguredProvider.providerLabel} runtime bind for the selected provider.`
+        ? `Cadence recovered durable supervised-run state for this project, but live streaming still requires a ${selectedConfiguredProvider.providerLabel} runtime bind for the configured provider.`
         : selectedConfiguredProvider.ready
           ? getBindConfiguredProviderCopy(
               selectedConfiguredProvider,

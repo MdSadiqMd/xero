@@ -412,14 +412,9 @@ function makeProvidersStepProps(overrides: Partial<Parameters<typeof ProvidersSt
       'openai_codex-default': 'ready' as const,
       'openrouter-default': 'ready' as const,
     },
-    providerModelCatalogLoadErrors: {
-      'openai_codex-default': null,
-      'openrouter-default': null,
-    },
     onRefreshProviderProfiles: vi.fn(async () => makeProviderProfiles()),
     onRefreshProviderModelCatalog: vi.fn(async (profileId: string) => makeProviderModelCatalog(profileId)),
     onUpsertProviderProfile: vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles()),
-    onSetActiveProviderProfile: vi.fn(async (_profileId: string) => makeProviderProfiles()),
     ...overrides,
   }
 }
@@ -438,7 +433,7 @@ function getProviderCard(label: string): HTMLElement {
 }
 
 describe('ProvidersStep', () => {
-  it('renders migrated active profiles, keeps saved keys blank, and validates label/model edits', async () => {
+  it('renders migrated provider profiles, keeps saved keys blank, and validates label edits', async () => {
     const onUpsertProviderProfile = vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles())
 
     render(
@@ -449,18 +444,17 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    expect(screen.getByText('Active')).toBeVisible()
+    expect(screen.queryByText('Active')).not.toBeInTheDocument()
     expect(screen.getByText('Ready')).toBeVisible()
     expect(screen.getByText('GitHub Models')).toBeVisible()
 
-    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Edit' }))
+    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' }))
 
     const labelInput = screen.getByLabelText('Profile label') as HTMLInputElement
-    const modelSelector = screen.getByLabelText('Model')
     const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
 
     expect(labelInput).toHaveValue('OpenRouter')
-    expect(modelSelector).toHaveTextContent('OpenAI GPT-4.1 Mini · openai/gpt-4.1-mini')
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
     expect(keyInput).toHaveValue('')
 
     fireEvent.change(labelInput, { target: { value: '   ' } })
@@ -468,8 +462,6 @@ describe('ProvidersStep', () => {
     expect(screen.getByText('Profile label is required.')).toBeVisible()
 
     fireEvent.change(labelInput, { target: { value: 'Team OpenRouter' } })
-    fireEvent.keyDown(modelSelector, { key: 'ArrowDown' })
-    fireEvent.click(await screen.findByRole('option', { name: 'Claude 3.5 Sonnet · openrouter/anthropic/claude-3.5-sonnet' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
@@ -478,14 +470,14 @@ describe('ProvidersStep', () => {
         providerId: 'openrouter',
         runtimeKind: 'openrouter',
         label: 'Team OpenRouter',
-        modelId: 'openrouter/anthropic/claude-3.5-sonnet',
+        modelId: 'openai/gpt-4.1-mini',
         presetId: 'openrouter',
         baseUrl: null,
         apiVersion: null,
         region: null,
         projectId: null,
         apiKey: null,
-        activate: true,
+        activate: false,
       }),
     )
   })
@@ -501,12 +493,12 @@ describe('ProvidersStep', () => {
     const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
       const anthropicReady = typeof request.apiKey === 'string' && request.apiKey.trim().length > 0
       providerProfiles = makeProviderProfiles({
-        activeProfileId: request.activate ? 'anthropic-default' : providerProfiles.activeProfileId,
+        activeProfileId: providerProfiles.activeProfileId,
         profiles: [
           makeOpenAiProfile({ active: false }),
-          makeOpenRouterProfile({ active: !request.activate }),
+          makeOpenRouterProfile({ active: true }),
           makeAnthropicProfile({
-            active: Boolean(request.activate),
+            active: false,
             label: request.label,
             modelId: request.modelId,
             readiness: anthropicReady
@@ -537,39 +529,9 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'Use this' }))
+    expect(within(getProviderCard('Anthropic')).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
 
-    await waitFor(() =>
-      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
-        profileId: 'anthropic-default',
-        providerId: 'anthropic',
-        runtimeKind: 'anthropic',
-        label: 'Anthropic',
-        modelId: 'claude-3-7-sonnet-latest',
-        presetId: 'anthropic',
-        baseUrl: null,
-        apiVersion: null,
-        region: null,
-        projectId: null,
-        apiKey: null,
-        activate: true,
-      }),
-    )
-
-    rerender(
-      <ProvidersStep
-        {...makeProvidersStepProps({
-          providerProfiles,
-          onRefreshProviderProfiles: vi.fn(async () => providerProfiles),
-          onUpsertProviderProfile,
-        })}
-      />,
-    )
-
-    expect(within(getProviderCard('Anthropic')).getByText('Active')).toBeVisible()
-    expect(within(getProviderCard('Anthropic')).getByText('Needs key')).toBeVisible()
-
-    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'API key' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(screen.getByText('Anthropic requires an API key.')).toBeVisible()
 
@@ -589,7 +551,7 @@ describe('ProvidersStep', () => {
         region: null,
         projectId: null,
         apiKey: secret,
-        activate: true,
+        activate: false,
       }),
     )
 
@@ -603,7 +565,7 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'Edit' }))
+    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'API key' }))
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
@@ -620,7 +582,7 @@ describe('ProvidersStep', () => {
         region: null,
         projectId: null,
         apiKey: '',
-        activate: true,
+        activate: false,
       }),
     )
   })
@@ -637,12 +599,12 @@ describe('ProvidersStep', () => {
     const onUpsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
       const githubReady = typeof request.apiKey === 'string' && request.apiKey.trim().length > 0
       providerProfiles = makeProviderProfiles({
-        activeProfileId: request.activate ? 'github_models-default' : providerProfiles.activeProfileId,
+        activeProfileId: providerProfiles.activeProfileId,
         profiles: [
           makeOpenAiProfile({ active: false }),
-          makeOpenRouterProfile({ active: !request.activate }),
+          makeOpenRouterProfile({ active: true }),
           makeGithubProfile({
-            active: Boolean(request.activate),
+            active: false,
             label: request.label,
             modelId: request.modelId,
             readiness: githubReady
@@ -663,7 +625,7 @@ describe('ProvidersStep', () => {
       return providerProfiles
     })
 
-    const { rerender } = render(
+    render(
       <ProvidersStep
         {...makeProvidersStepProps({
           providerProfiles,
@@ -673,39 +635,9 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    fireEvent.click(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'Use this' }))
+    expect(within(getProviderCard('GitHub Models')).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
 
-    await waitFor(() =>
-      expect(onUpsertProviderProfile).toHaveBeenCalledWith({
-        profileId: 'github_models-default',
-        providerId: 'github_models',
-        runtimeKind: 'openai_compatible',
-        label: 'GitHub Models',
-        modelId: 'openai/gpt-4.1',
-        presetId: 'github_models',
-        baseUrl: null,
-        apiVersion: null,
-        region: null,
-        projectId: null,
-        apiKey: null,
-        activate: true,
-      }),
-    )
-
-    rerender(
-      <ProvidersStep
-        {...makeProvidersStepProps({
-          providerProfiles,
-          onRefreshProviderProfiles: vi.fn(async () => providerProfiles),
-          onUpsertProviderProfile,
-        })}
-      />,
-    )
-
-    expect(within(getProviderCard('GitHub Models')).getByText('Active')).toBeVisible()
-    expect(within(getProviderCard('GitHub Models')).getByText('Needs key')).toBeVisible()
-
-    fireEvent.click(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('GitHub Models')).getByRole('button', { name: 'API key' }))
     const keyInput = screen.getByLabelText('API Key') as HTMLInputElement
     expect(keyInput).toHaveValue('')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -727,7 +659,7 @@ describe('ProvidersStep', () => {
         region: null,
         projectId: null,
         apiKey: secret,
-        activate: true,
+        activate: false,
       }),
     )
   })
@@ -743,7 +675,7 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    fireEvent.click(within(getProviderCard('Ollama')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('Ollama')).getByRole('button', { name: 'Endpoint' }))
 
     expect(
       screen.getByText('Cadence treats Ollama as a local endpoint. No app-local API key is stored for this provider profile.'),
@@ -784,7 +716,7 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    fireEvent.click(within(getProviderCard('Amazon Bedrock')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('Amazon Bedrock')).getByRole('button', { name: 'Cloud config' }))
 
     expect(
       screen.getByText('Cadence uses ambient desktop credentials for Amazon Bedrock. No app-local API key is stored for this provider profile.'),
@@ -827,7 +759,7 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    fireEvent.click(within(getProviderCard('Google Vertex AI')).getByRole('button', { name: 'Set up' }))
+    fireEvent.click(within(getProviderCard('Google Vertex AI')).getByRole('button', { name: 'Cloud config' }))
 
     expect(
       screen.getByText('Cadence uses ambient desktop credentials for Google Vertex AI. No app-local API key is stored for this provider profile.'),
@@ -864,49 +796,28 @@ describe('ProvidersStep', () => {
     )
   })
 
-  it('switches active profile truth without leaving stale active badges behind', async () => {
-    let providerProfiles = makeProviderProfiles({
+  it('does not render provider selection controls or active badges', () => {
+    const providerProfiles = makeProviderProfiles({
       activeProfileId: 'openai_codex-default',
       profiles: [makeOpenAiProfile({ active: true }), makeOpenRouterProfile({ active: false, migratedFromLegacy: false, migratedAt: null })],
     })
 
-    const onSetActiveProviderProfile = vi.fn(async (_profileId: string) => {
-      providerProfiles = makeProviderProfiles({
-        activeProfileId: 'openrouter-default',
-        profiles: [makeOpenAiProfile({ active: false }), makeOpenRouterProfile({ active: true, migratedFromLegacy: false, migratedAt: null })],
-      })
-      return providerProfiles
-    })
-
-    const { rerender } = render(
+    render(
       <ProvidersStep
         {...makeProvidersStepProps({
           providerProfiles,
           onRefreshProviderProfiles: vi.fn(async () => providerProfiles),
           onUpsertProviderProfile: vi.fn(async (_request: UpsertProviderProfileRequestDto) => providerProfiles),
-          onSetActiveProviderProfile,
         })}
       />,
     )
 
-    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'Use this' }))
-    await waitFor(() => expect(onSetActiveProviderProfile).toHaveBeenCalledWith('openrouter-default'))
-
-    rerender(
-      <ProvidersStep
-        {...makeProvidersStepProps({
-          providerProfiles,
-          onRefreshProviderProfiles: vi.fn(async () => providerProfiles),
-          onUpsertProviderProfile: vi.fn(async (_request: UpsertProviderProfileRequestDto) => providerProfiles),
-          onSetActiveProviderProfile,
-        })}
-      />,
-    )
-
-    expect(screen.getAllByText('Active')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Active')).not.toBeInTheDocument()
+    expect(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' })).toBeVisible()
   })
 
-  it('scopes OpenAI auth copy to the selected profile and uses onboarding project guidance when no project is selected', () => {
+  it('keeps OpenAI auth scoped to sign-in controls and disables them until a project is selected', () => {
     render(
       <ProvidersStep
         {...makeProvidersStepProps({
@@ -930,11 +841,18 @@ describe('ProvidersStep', () => {
       />,
     )
 
-    expect(screen.getByText('Choose a project next')).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
+    const openAiCard = getProviderCard('OpenAI Codex')
+    const openAiSignIn = within(openAiCard).getByRole('button', { name: 'Sign in' })
+    expect(openAiSignIn).toBeVisible()
+    expect(openAiSignIn).toBeDisabled()
+    expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(1)
+    expect(screen.queryByText('OpenAI Alt')).not.toBeInTheDocument()
+    expect(screen.queryByText('Choose a project next')).not.toBeInTheDocument()
+    expect(within(openAiCard).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
+    expect(within(openAiCard).queryByRole('button', { name: 'API key' })).not.toBeInTheDocument()
   })
 
-  it('shows the shared selected-profile mismatch recovery copy without forking onboarding provider logic', () => {
+  it('keeps runtime mismatch recovery copy out of provider setup cards', () => {
     render(
       <ProvidersStep
         {...makeProvidersStepProps({
@@ -972,15 +890,13 @@ describe('ProvidersStep', () => {
     )
 
     expect(
-      screen.getByText(
-        'Settings now select provider profile OpenRouter Work (openrouter-work), but the persisted runtime session still reflects OpenAI Codex.',
+      screen.queryByText(
+        'Configured provider profile OpenRouter Work (openrouter-work) no longer matches the persisted runtime session for OpenAI Codex.',
       ),
-    ).toBeVisible()
-    expect(
-      screen.getByText('Rebind the selected profile so durable runtime truth matches Settings.'),
-    ).toBeVisible()
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText('Rebind this profile so durable runtime truth matches Settings.')).not.toBeInTheDocument()
     expect(screen.getByText('OpenRouter Work')).toBeVisible()
-    expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Active')).not.toBeInTheDocument()
   })
 
   it('shows typed save errors while keeping the last truthful provider snapshot visible', () => {
@@ -989,14 +905,14 @@ describe('ProvidersStep', () => {
         {...makeProvidersStepProps({
           providerProfilesSaveError: {
             code: 'provider_profiles_write_failed',
-            message: 'Cadence could not save the selected provider profile.',
+            message: 'Cadence could not save the provider profile.',
             retryable: true,
           },
         })}
       />,
     )
 
-    expect(screen.getByText('Cadence could not save the selected provider profile.')).toBeVisible()
+    expect(screen.getByText('Cadence could not save the provider profile.')).toBeVisible()
     expect(screen.getByText('OpenRouter')).toBeVisible()
     expect(screen.getByText('OpenAI Codex')).toBeVisible()
     expect(screen.getByText('Ready')).toBeVisible()

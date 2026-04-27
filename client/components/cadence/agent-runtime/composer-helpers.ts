@@ -76,11 +76,11 @@ function formatComposerRevision(value: number | null | undefined): string {
 
 export function getComposerModelGroups(
   models: AgentPaneView['providerModelCatalog']['models'],
-  currentModelId: string | null | undefined = null,
+  currentSelectionKey: string | null | undefined = null,
 ): ComposerModelGroup[] {
-  const currentModel = getComposerModelOption(models, currentModelId)
+  const currentModel = getComposerModelOption(models, currentSelectionKey)
   const visibleModels =
-    currentModel && !models.some((model) => model.modelId === currentModel.modelId)
+    currentModel && !models.some((model) => model.selectionKey === currentModel.selectionKey)
       ? [currentModel, ...models]
       : models
   const groups = new Map<string, ComposerModelGroup>()
@@ -88,7 +88,7 @@ export function getComposerModelGroups(
   for (const model of visibleModels) {
     const existingGroup = groups.get(model.groupId)
     const nextItem: ComposerModelOption = {
-      value: model.modelId,
+      value: model.selectionKey,
       label: model.availability === 'orphaned' ? `${model.label} · unavailable` : model.label,
     }
 
@@ -109,18 +109,23 @@ export function getComposerModelGroups(
 
 export function getComposerModelOption(
   models: AgentPaneView['providerModelCatalog']['models'],
-  modelId: string | null | undefined,
+  selectionKey: string | null | undefined,
 ): AgentPaneView['selectedModelOption'] {
-  const trimmedModelId = modelId?.trim() ?? ''
-  if (trimmedModelId.length === 0) {
+  const trimmedSelectionKey = selectionKey?.trim() ?? ''
+  if (trimmedSelectionKey.length === 0) {
     return null
   }
 
   return (
-    models.find((model) => model.modelId === trimmedModelId) ?? {
-      modelId: trimmedModelId,
-      label: trimmedModelId,
-      displayName: trimmedModelId,
+    models.find((model) => model.selectionKey === trimmedSelectionKey || model.modelId === trimmedSelectionKey) ?? {
+      selectionKey: trimmedSelectionKey,
+      profileId: null,
+      profileLabel: null,
+      providerId: 'openai_codex',
+      providerLabel: 'Runtime provider',
+      modelId: trimmedSelectionKey,
+      label: trimmedSelectionKey,
+      displayName: trimmedSelectionKey,
       groupId: 'current_selection',
       groupLabel: 'Current selection',
       availability: 'orphaned',
@@ -173,16 +178,17 @@ export function resolveComposerThinkingSelection(
 
 export function getComposerControlInput(options: {
   models: AgentPaneView['providerModelCatalog']['models']
-  modelId: string | null | undefined
+  selectionKey: string | null | undefined
   thinkingEffort: ProviderModelThinkingEffortDto | null | undefined
   approvalMode: RuntimeRunApprovalModeDto
 }): RuntimeRunControlInputDto | null {
-  const model = getComposerModelOption(options.models, options.modelId)
+  const model = getComposerModelOption(options.models, options.selectionKey)
   if (!model) {
     return null
   }
 
   return {
+    providerProfileId: model.profileId,
     modelId: model.modelId,
     thinkingEffort: resolveComposerThinkingSelection(model, options.thinkingEffort),
     approvalMode: options.approvalMode,
@@ -515,7 +521,7 @@ export function getComposerPlaceholder(
   if (options.providerMismatch) {
     return selectedProviderAuthMode && selectedProviderAuthMode !== 'oauth'
       ? `Rebind ${selectedProviderLabel} before trusting new live activity.`
-      : 'Rebind the selected provider before trusting new live activity.'
+      : 'Rebind this provider before trusting new live activity.'
   }
 
   if (!runtimeSession.isAuthenticated) {

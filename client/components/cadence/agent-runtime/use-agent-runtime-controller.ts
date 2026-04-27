@@ -32,7 +32,7 @@ export interface PendingOperatorIntent {
 
 interface UseAgentRuntimeControllerOptions {
   projectId: string
-  selectedModelId: string | null
+  selectedModelSelectionKey: string | null
   selectedThinkingEffort: ComposerThinkingLevel
   selectedApprovalMode: RuntimeRunApprovalModeDto
   selectedPrompt: AgentPaneView['selectedPrompt']
@@ -57,7 +57,7 @@ interface UseAgentRuntimeControllerOptions {
     controls?: RuntimeRunControlInputDto | null
     prompt?: string | null
   }) => Promise<RuntimeRunView | null>
-  onStartRuntimeSession?: () => Promise<RuntimeSessionView | null>
+  onStartRuntimeSession?: (options?: { providerProfileId?: string | null }) => Promise<RuntimeSessionView | null>
   onUpdateRuntimeRunControls?: (request?: {
     controls?: RuntimeRunControlInputDto | null
     prompt?: string | null
@@ -103,7 +103,7 @@ function readStoredAutoCompactEnabled(): boolean {
 
 export function useAgentRuntimeController({
   projectId,
-  selectedModelId,
+  selectedModelSelectionKey,
   selectedThinkingEffort,
   selectedApprovalMode,
   selectedPrompt,
@@ -132,7 +132,7 @@ export function useAgentRuntimeController({
   onResumeOperatorRun,
 }: UseAgentRuntimeControllerOptions) {
   const [draftPrompt, setDraftPrompt] = useState('')
-  const [draftModelId, setDraftModelId] = useState<string | null>(selectedModelId)
+  const [draftModelSelectionKey, setDraftModelSelectionKey] = useState<string | null>(selectedModelSelectionKey)
   const [draftThinkingEffort, setDraftThinkingEffort] = useState<ComposerThinkingLevel>(selectedThinkingEffort)
   const [draftApprovalMode, setDraftApprovalMode] = useState<RuntimeRunApprovalModeDto>(selectedApprovalMode)
   const [runtimeSessionBindInFlight, setRuntimeSessionBindInFlight] = useState(false)
@@ -151,18 +151,18 @@ export function useAgentRuntimeController({
   const lastSeenRuntimeRunIdRef = useRef<string | null>(renderableRuntimeRun?.runId ?? null)
   const draftPromptRef = useRef(draftPrompt)
 
-  const effectiveModelId = renderableRuntimeRun ? selectedModelId : draftModelId
+  const effectiveModelSelectionKey = renderableRuntimeRun ? selectedModelSelectionKey : draftModelSelectionKey
   const effectiveThinkingEffort = renderableRuntimeRun ? selectedThinkingEffort : draftThinkingEffort
   const effectiveApprovalMode = renderableRuntimeRun ? selectedApprovalMode : draftApprovalMode
   const selectedControlInput = useMemo(
     () =>
       getComposerControlInput({
         models: availableModels,
-        modelId: effectiveModelId,
+        selectionKey: effectiveModelSelectionKey,
         thinkingEffort: effectiveThinkingEffort,
         approvalMode: effectiveApprovalMode,
       }),
-    [availableModels, effectiveApprovalMode, effectiveModelId, effectiveThinkingEffort],
+    [availableModels, effectiveApprovalMode, effectiveModelSelectionKey, effectiveThinkingEffort],
   )
 
   const trimmedDraftPrompt = draftPrompt.trim()
@@ -218,16 +218,16 @@ export function useAgentRuntimeController({
 
   useEffect(() => {
     if (renderableRuntimeRun) {
-      setDraftModelId(selectedModelId)
+      setDraftModelSelectionKey(selectedModelSelectionKey)
       setDraftThinkingEffort(selectedThinkingEffort)
       setDraftApprovalMode(selectedApprovalMode)
       return
     }
 
-    setDraftModelId(selectedModelId)
+    setDraftModelSelectionKey(selectedModelSelectionKey)
     setDraftThinkingEffort(selectedThinkingEffort)
     setDraftApprovalMode(selectedApprovalMode)
-  }, [projectId, renderableRuntimeRun?.runId, selectedApprovalMode, selectedModelId, selectedThinkingEffort])
+  }, [projectId, renderableRuntimeRun?.runId, selectedApprovalMode, selectedModelSelectionKey, selectedThinkingEffort])
 
   useEffect(() => {
     if (runtimeRunActionError) {
@@ -381,14 +381,16 @@ export function useAgentRuntimeController({
         }
 
         setRuntimeSessionBindInFlight(true)
-        const boundRuntimeSession = await onStartRuntimeSession()
+        const boundRuntimeSession = await onStartRuntimeSession({
+          providerProfileId: selectedControlInput?.providerProfileId ?? null,
+        })
         setRuntimeSessionBindInFlight(false)
 
         if (!boundRuntimeSession?.isAuthenticated) {
           const message = boundRuntimeSession?.isLoginInProgress
             ? 'Finish provider sign-in, then send again.'
             : boundRuntimeSession?.lastError?.message?.trim() ||
-              'Cadence could not authenticate the selected provider. Check the provider setup and try again.'
+              'Cadence could not authenticate the configured provider. Check the provider setup and try again.'
           setRuntimeRunActionMessage(message)
           return
         }
@@ -476,7 +478,7 @@ export function useAgentRuntimeController({
   function handleComposerModelChange(value: string) {
     if (!renderableRuntimeRun) {
       const selectedModel = getComposerModelOption(availableModels, value)
-      setDraftModelId(value)
+      setDraftModelSelectionKey(value)
       setDraftThinkingEffort(resolveComposerThinkingSelection(selectedModel, draftThinkingEffort))
       return
     }
@@ -484,7 +486,7 @@ export function useAgentRuntimeController({
     void queueRuntimeRunControls(
       getComposerControlInput({
         models: availableModels,
-        modelId: value,
+        selectionKey: value,
         thinkingEffort: selectedThinkingEffort,
         approvalMode: selectedApprovalMode,
       }),
@@ -492,7 +494,7 @@ export function useAgentRuntimeController({
   }
 
   function handleComposerThinkingLevelChange(value: ProviderModelThinkingEffortDto) {
-    const selectedModel = getComposerModelOption(availableModels, effectiveModelId)
+    const selectedModel = getComposerModelOption(availableModels, effectiveModelSelectionKey)
     if (!selectedModel?.thinkingSupported || !selectedModel.thinkingEffortOptions.includes(value)) {
       return
     }
@@ -505,7 +507,7 @@ export function useAgentRuntimeController({
     void queueRuntimeRunControls(
       getComposerControlInput({
         models: availableModels,
-        modelId: effectiveModelId,
+        selectionKey: effectiveModelSelectionKey,
         thinkingEffort: value,
         approvalMode: effectiveApprovalMode,
       }),
@@ -521,7 +523,7 @@ export function useAgentRuntimeController({
     void queueRuntimeRunControls(
       getComposerControlInput({
         models: availableModels,
-        modelId: effectiveModelId,
+        selectionKey: effectiveModelSelectionKey,
         thinkingEffort: effectiveThinkingEffort,
         approvalMode: value,
       }),
@@ -610,7 +612,7 @@ export function useAgentRuntimeController({
   return {
     draftPrompt,
     autoCompactEnabled,
-    composerModelId: effectiveModelId,
+    composerModelId: effectiveModelSelectionKey,
     composerThinkingEffort: effectiveThinkingEffort,
     composerApprovalMode: effectiveApprovalMode,
     promptInputAvailable,

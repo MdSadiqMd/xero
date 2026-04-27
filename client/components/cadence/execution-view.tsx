@@ -53,7 +53,6 @@ function EditorView({
 }: ExecutionViewProps) {
   const projectId = execution.project.id
   const projectLabel = execution.project.repository?.displayName ?? execution.project.name
-  const explorerSubtitle = execution.project.repository?.rootPath ?? execution.branchLabel ?? null
   const {
     tree,
     openTabs,
@@ -191,8 +190,6 @@ function EditorView({
         />
       ) : (
         <ExplorerPane
-          projectLabel={projectLabel}
-          subtitle={explorerSubtitle}
           searchQuery={searchQuery}
           isTreeLoading={isTreeLoading}
           workspaceError={workspaceError}

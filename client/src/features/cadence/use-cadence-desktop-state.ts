@@ -93,6 +93,7 @@ import {
   buildExecutionView,
   buildWorkflowView,
 } from './use-cadence-desktop-state/view-builders'
+import { getCloudProviderAuthMode } from '@/src/lib/cadence-model/provider-presets'
 import type {
   AgentPaneView,
   AgentTrustSnapshotView,
@@ -301,6 +302,10 @@ function getProviderModelCatalogDependencyKeys(
       getProviderModelCatalogDependencyKey(profile),
     ]),
   )
+}
+
+function shouldRefreshProviderModelCatalog(profile: ProviderProfilesDto['profiles'][number]): boolean {
+  return profile.readiness.ready || getCloudProviderAuthMode(profile.providerId) === 'oauth'
 }
 
 export function useCadenceDesktopState(
@@ -1069,6 +1074,7 @@ export function useCadenceDesktopState(
         activeProjectIdRef,
         runtimeSessionsRef,
         runtimeRunRefreshKeyRef,
+        providerProfilesRef,
       },
       setters: {
         setProjects,
@@ -1078,6 +1084,7 @@ export function useCadenceDesktopState(
         setRuntimeSessions,
         setRuntimeLoadErrors,
         setRuntimeStreams,
+        setProviderProfiles,
         setErrorMessage,
       },
       handleAdapterEventError,
@@ -1462,29 +1469,30 @@ export function useCadenceDesktopState(
     }
 
     const nextActiveProviderProfileId = providerProfiles?.activeProfileId ?? null
-    const activeProviderProfileChanged = activeProviderProfileIdRef.current !== nextActiveProviderProfileId
 
     providerModelCatalogDependencyKeysRef.current = nextDependencyKeys
     activeProviderProfileIdRef.current = nextActiveProviderProfileId
 
-    if (!nextActiveProviderProfileId) {
-      return
-    }
+    const readyProfileIds =
+      providerProfiles?.profiles
+        .filter(shouldRefreshProviderModelCatalog)
+        .map((profile) => profile.profileId) ?? []
 
-    const activeProfileInvalidated = invalidatedProfileIds.includes(nextActiveProviderProfileId)
-    const activeCatalog = providerModelCatalogsRef.current[nextActiveProviderProfileId] ?? null
-    const activeLoadStatus = providerModelCatalogLoadStatusesRef.current[nextActiveProviderProfileId] ?? 'idle'
+    for (const profileId of readyProfileIds) {
+      const profileInvalidated = invalidatedProfileIds.includes(profileId)
+      const catalog = providerModelCatalogsRef.current[profileId] ?? null
+      const loadStatus = providerModelCatalogLoadStatusesRef.current[profileId] ?? 'idle'
 
-    if (
-      activeProfileInvalidated ||
-      activeProviderProfileChanged ||
-      !activeCatalog ||
-      activeLoadStatus === 'error' ||
-      activeLoadStatus === 'idle'
-    ) {
-      void refreshProviderModelCatalog(nextActiveProviderProfileId, {
-        force: activeProfileInvalidated,
-      }).catch(() => undefined)
+      if (
+        profileInvalidated ||
+        !catalog ||
+        loadStatus === 'error' ||
+        loadStatus === 'idle'
+      ) {
+        void refreshProviderModelCatalog(profileId, {
+          force: profileInvalidated,
+        }).catch(() => undefined)
+      }
     }
   }, [providerProfiles, refreshProviderModelCatalog])
 
@@ -1617,6 +1625,9 @@ export function useCadenceDesktopState(
         providerProfiles,
         runtimeSession: activeRuntimeSession,
         runtimeSettings,
+        providerModelCatalogs,
+        providerModelCatalogLoadStatuses,
+        providerModelCatalogLoadErrors,
         activeProviderModelCatalog,
         activeProviderModelCatalogLoadStatus,
         activeProviderModelCatalogLoadError,
@@ -1654,6 +1665,9 @@ export function useCadenceDesktopState(
       activeNotificationSyncSummary,
       activePhase,
       activeProject,
+      providerModelCatalogs,
+      providerModelCatalogLoadErrors,
+      providerModelCatalogLoadStatuses,
       activeProviderModelCatalog,
       activeProviderModelCatalogLoadError,
       activeProviderModelCatalogLoadStatus,

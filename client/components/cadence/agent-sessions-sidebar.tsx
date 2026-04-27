@@ -49,7 +49,6 @@ import type { SessionTranscriptSearchResultSnippetDto } from '@/src/lib/cadence-
 
 interface AgentSessionsSidebarProps {
   projectId: string | null
-  projectLabel: string | null
   sessions: readonly AgentSessionView[]
   selectedSessionId: string | null
   onSelectSession: (agentSessionId: string) => void
@@ -137,7 +136,6 @@ interface SessionEntry {
 
 export function AgentSessionsSidebar({
   projectId,
-  projectLabel,
   sessions,
   selectedSessionId,
   onSelectSession,
@@ -449,9 +447,6 @@ export function AgentSessionsSidebar({
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
               Sessions
             </span>
-            {projectLabel ? (
-              <p className="truncate text-[11px] text-foreground/85">{projectLabel}</p>
-            ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
             <button

@@ -33,15 +33,14 @@ use crate::{
     runtime::{
         ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID,
         GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
-        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
-        VERTEX_PROVIDER_ID,
+        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENAI_CODEX_SUPPORTED_MODEL_IDS,
+        OPENROUTER_PROVIDER_ID, VERTEX_PROVIDER_ID,
     },
     state::DesktopState,
 };
 
 pub const PROVIDER_MODEL_CATALOG_CACHE_FILE_NAME: &str = "provider-model-catalogs.json";
 const PROVIDER_MODEL_CATALOG_CACHE_SCHEMA_VERSION: u32 = 1;
-const OPENAI_CODEX_MODEL_DISPLAY_NAME: &str = "OpenAI Codex";
 const PROVIDER_MODEL_CACHE_OPERATION: &str = "provider_model_catalog_cache";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -484,15 +483,25 @@ fn refresh_provider_model_catalog(
 }
 
 fn openai_codex_projection() -> Vec<ProviderModelRecord> {
-    vec![ProviderModelRecord {
-        model_id: OPENAI_CODEX_PROVIDER_ID.into(),
-        display_name: OPENAI_CODEX_MODEL_DISPLAY_NAME.into(),
-        thinking: supported_thinking_capability(vec![
-            ProviderModelThinkingEffort::Low,
-            ProviderModelThinkingEffort::Medium,
-            ProviderModelThinkingEffort::High,
-        ]),
-    }]
+    OPENAI_CODEX_SUPPORTED_MODEL_IDS
+        .iter()
+        .map(|model_id| ProviderModelRecord {
+            model_id: (*model_id).into(),
+            display_name: match *model_id {
+                "gpt-5.2" => "GPT-5.2",
+                "gpt-5.3-codex" => "GPT-5.3 Codex",
+                "gpt-5.3-codex-spark" => "GPT-5.3 Codex Spark",
+                "gpt-5.4" => "GPT-5.4",
+                other => other,
+            }
+            .into(),
+            thinking: supported_thinking_capability(vec![
+                ProviderModelThinkingEffort::Low,
+                ProviderModelThinkingEffort::Medium,
+                ProviderModelThinkingEffort::High,
+            ]),
+        })
+        .collect()
 }
 
 fn normalize_openrouter_models(models: Vec<OpenRouterDiscoveredModel>) -> Vec<ProviderModelRecord> {

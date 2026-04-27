@@ -15,6 +15,8 @@ const IDB_COMPANION_VERSION: &str = "1.1.8";
 const IDB_COMPANION_SHA256: &str =
     "3b72cc6a9a5b1a22a188205a84090d3a294347a846180efd755cf1a3c848e3e7";
 const IDB_COMPANION_DIR: &str = "idb-companion.universal";
+const BUILD_COOKIE_IMPORTER_ENV: &str = "CADENCE_BUILD_COOKIE_IMPORTER";
+const SKIP_COOKIE_IMPORTER_ENV: &str = "CADENCE_SKIP_COOKIE_IMPORTER";
 
 fn main() {
     configure_custom_cfgs();
@@ -50,6 +52,7 @@ fn compile_dictation_shim() {
     println!("cargo:rustc-link-lib=framework=Speech");
     println!("cargo:rustc-link-lib=framework=AVFoundation");
     println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=framework=Security");
 
     if std::env::var_os("CADENCE_SKIP_DICTATION_SHIM").is_some() {
         println!(
@@ -224,6 +227,8 @@ fn build_cookie_importer() {
     let helper_manifest = manifest_dir.join("crates/cookie-importer/Cargo.toml");
     println!("cargo:rerun-if-changed=crates/cookie-importer/Cargo.toml");
     println!("cargo:rerun-if-changed=crates/cookie-importer/src/main.rs");
+    println!("cargo:rerun-if-env-changed={BUILD_COOKIE_IMPORTER_ENV}");
+    println!("cargo:rerun-if-env-changed={SKIP_COOKIE_IMPORTER_ENV}");
 
     // OUT_DIR looks like .../target/<profile>/build/cadence-desktop-<hash>/out.
     // Walk up three levels to reach the parent of target/<profile>/, then the
@@ -236,6 +241,28 @@ fn build_cookie_importer() {
         .to_path_buf();
 
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    let helper_target = manifest_dir
+        .join("crates/cookie-importer/target")
+        .join(&profile)
+        .join(binary_name());
+    let destination = profile_dir.join(binary_name());
+
+    if std::env::var_os(SKIP_COOKIE_IMPORTER_ENV).is_some() {
+        return;
+    }
+
+    if std::env::var_os(BUILD_COOKIE_IMPORTER_ENV).is_none() {
+        if helper_target.exists() {
+            copy_cookie_importer(&helper_target, &destination);
+        } else {
+            println!(
+                "cargo:warning=skipping cookie-importer sidecar build; set {BUILD_COOKIE_IMPORTER_ENV}=1 to build it or prebuild {}",
+                helper_target.display()
+            );
+        }
+        return;
+    }
+
     let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string()));
     cmd.arg("build")
         .arg("--manifest-path")
@@ -251,16 +278,15 @@ fn build_cookie_importer() {
         panic!("failed to build cookie-importer (exit {status:?})");
     }
 
-    let helper_target = manifest_dir
-        .join("crates/cookie-importer/target")
-        .join(&profile)
-        .join(binary_name());
     if !helper_target.exists() {
         panic!("cookie-importer build succeeded but binary not found at {helper_target:?}");
     }
 
-    let destination = profile_dir.join(binary_name());
-    std::fs::copy(&helper_target, &destination).unwrap_or_else(|error| {
+    copy_cookie_importer(&helper_target, &destination);
+}
+
+fn copy_cookie_importer(helper_target: &Path, destination: &Path) {
+    std::fs::copy(helper_target, destination).unwrap_or_else(|error| {
         panic!("failed to copy cookie-importer to {destination:?}: {error}")
     });
 }

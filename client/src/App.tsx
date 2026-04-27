@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AgentRuntime } from '@/components/cadence/agent-runtime'
-import type { SessionHistoryTarget } from '@/components/cadence/agent-runtime/session-history-section'
+import { SetupEmptyState } from '@/components/cadence/agent-runtime/setup-empty-state'
 import { AgentSessionsSidebar } from '@/components/cadence/agent-sessions-sidebar'
 import { ArchivedSessionsDialog } from '@/components/cadence/archived-sessions-dialog'
 import { type View } from '@/components/cadence/data'
@@ -23,9 +23,6 @@ import { VcsSidebar } from '@/components/cadence/vcs-sidebar'
 import { CadenceDesktopAdapter as DefaultCadenceDesktopAdapter, type CadenceDesktopAdapter } from '@/src/lib/cadence-desktop'
 import { mapAgentSession } from '@/src/lib/cadence-model/runtime'
 import type {
-  AgentSessionBranchResponseDto,
-  BranchAgentSessionRequestDto,
-  RewindAgentSessionRequestDto,
   SessionTranscriptSearchResultSnippetDto,
 } from '@/src/lib/cadence-model/session-context'
 import { type RepositoryDiffScope } from '@/src/lib/cadence-model/project'
@@ -75,7 +72,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     providerProfilesSaveError,
     providerModelCatalogs,
     providerModelCatalogLoadStatuses,
-    providerModelCatalogLoadErrors,
     doctorReport,
     doctorReportStatus,
     doctorReportError,
@@ -122,7 +118,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     checkProviderProfile,
     runDoctorReport,
     upsertProviderProfile,
-    setActiveProviderProfile,
     refreshMcpRegistry,
     upsertMcpServer,
     removeMcpServer,
@@ -155,9 +150,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const [pendingAgentSessionId, setPendingAgentSessionId] = useState<string | null>(null)
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
   const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(false)
-  const [historyTarget, setHistoryTarget] = useState<SessionHistoryTarget | null>(null)
-  const [historySearchResult, setHistorySearchResult] =
-    useState<SessionTranscriptSearchResultSnippetDto | null>(null)
   const [gamesOpen, setGamesOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [iosOpen, setIosOpen] = useState(false)
@@ -367,11 +359,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     }
   }, [isLoading, onboardingDismissed, projects.length])
 
-  useEffect(() => {
-    setHistoryTarget(null)
-    setHistorySearchResult(null)
-  }, [activeProjectId])
-
   const handleSelectAgentSession = (agentSessionId: string) => {
     if (!activeProject) return
     if (agentSessionId === activeProject.selectedAgentSessionId) return
@@ -403,74 +390,9 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
   const handleOpenSearchResult = (result: SessionTranscriptSearchResultSnippetDto) => {
     if (!activeProject) return
     setActiveView('agent')
-    setHistorySearchResult(result)
-    setHistoryTarget({
-      agentSessionId: result.agentSessionId,
-      runId: result.runId === 'session' ? null : result.runId,
-      source: 'search',
-      nonce: Date.now(),
-    })
     if (!result.archived && result.agentSessionId !== activeProject.selectedAgentSessionId) {
       handleSelectAgentSession(result.agentSessionId)
     }
-  }
-
-  const handleBranchAgentSession = async (
-    request: Omit<BranchAgentSessionRequestDto, 'projectId'>,
-  ): Promise<AgentSessionBranchResponseDto> => {
-    if (!activeProject || !resolvedAdapter.branchAgentSession) {
-      throw new Error('Cadence cannot branch sessions until an imported project is selected.')
-    }
-
-    const response = await resolvedAdapter.branchAgentSession({
-      ...request,
-      projectId: activeProject.id,
-      selected: request.selected ?? true,
-    })
-    setPendingAgentSessionId(response.session.agentSessionId)
-    try {
-      await selectAgentSession(response.session.agentSessionId)
-      setActiveView('agent')
-      setHistorySearchResult(null)
-      setHistoryTarget({
-        agentSessionId: response.session.agentSessionId,
-        runId: response.replayRunId,
-        source: 'session',
-        nonce: Date.now(),
-      })
-    } finally {
-      setPendingAgentSessionId(null)
-    }
-    return response
-  }
-
-  const handleRewindAgentSession = async (
-    request: Omit<RewindAgentSessionRequestDto, 'projectId'>,
-  ): Promise<AgentSessionBranchResponseDto> => {
-    if (!activeProject || !resolvedAdapter.rewindAgentSession) {
-      throw new Error('Cadence cannot rewind sessions until an imported project is selected.')
-    }
-
-    const response = await resolvedAdapter.rewindAgentSession({
-      ...request,
-      projectId: activeProject.id,
-      selected: request.selected ?? true,
-    })
-    setPendingAgentSessionId(response.session.agentSessionId)
-    try {
-      await selectAgentSession(response.session.agentSessionId)
-      setActiveView('agent')
-      setHistorySearchResult(null)
-      setHistoryTarget({
-        agentSessionId: response.session.agentSessionId,
-        runId: response.replayRunId,
-        source: 'session',
-        nonce: Date.now(),
-      })
-    } finally {
-      setPendingAgentSessionId(null)
-    }
-    return response
   }
 
   const renderBody = () => {
@@ -489,6 +411,23 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     }
 
     if (!activeProject) {
+      if (activeView === 'agent') {
+        const hasReadyProvider = Boolean(
+          (providerProfiles?.profiles ?? []).some((profile) => profile.readiness.ready),
+        )
+        return (
+          <div className="flex flex-1 items-center justify-center overflow-y-auto scrollbar-thin px-6 py-5">
+            <SetupEmptyState
+              kind={hasReadyProvider ? 'no-project' : 'no-provider'}
+              onOpenSettings={() => openSettings('providers')}
+              onImportProject={() => void importProject()}
+              isImportingProject={isImporting}
+              isDesktopRuntime={isDesktopRuntime}
+            />
+          </div>
+        )
+      }
+
       return (
         <NoProjectEmptyState
           isDesktopRuntime={isDesktopRuntime}
@@ -513,7 +452,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
       <>
         <AgentSessionsSidebar
           projectId={activeProject.id}
-          projectLabel={activeProject.name}
           sessions={activeProject.agentSessions}
           selectedSessionId={activeProject.selectedAgentSessionId}
           onSelectSession={handleSelectAgentSession}
@@ -603,35 +541,18 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
                 }
                 onRefreshNotificationRoutes={(options) => refreshNotificationRoutes(options)}
                 onRetryStream={() => retry()}
-                onStartLogin={() => startOpenAiLogin()}
+                onStartLogin={(options) => startOpenAiLogin(options)}
                 onStartAutonomousRun={() => startAutonomousRun()}
                 onInspectAutonomousRun={() => inspectAutonomousRun()}
                 onCancelAutonomousRun={(runId) => cancelAutonomousRun(runId)}
                 onStartRuntimeRun={(options) => startRuntimeRun(options)}
                 onUpdateRuntimeRunControls={(request) => updateRuntimeRunControls(request)}
-                onStartRuntimeSession={() => startRuntimeSession()}
+                onStartRuntimeSession={(options) => startRuntimeSession(options)}
                 onStopRuntimeRun={(runId) => stopRuntimeRun(runId)}
                 onSubmitManualCallback={(flowId, manualInput) =>
                   submitOpenAiCallback(flowId, { manualInput })
                 }
                 onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
-                historyTarget={historyTarget}
-                historySearchResult={historySearchResult}
-                onLoadSessionTranscript={resolvedAdapter.getSessionTranscript?.bind(resolvedAdapter)}
-                onExportSessionTranscript={resolvedAdapter.exportSessionTranscript?.bind(resolvedAdapter)}
-                onSaveSessionTranscriptExport={resolvedAdapter.saveSessionTranscriptExport?.bind(resolvedAdapter)}
-                onBranchAgentSession={
-                  resolvedAdapter.branchAgentSession ? handleBranchAgentSession : undefined
-                }
-                onRewindAgentSession={
-                  resolvedAdapter.rewindAgentSession ? handleRewindAgentSession : undefined
-                }
-                onLoadSessionContextSnapshot={resolvedAdapter.getSessionContextSnapshot?.bind(resolvedAdapter)}
-                onCompactSessionHistory={resolvedAdapter.compactSessionHistory?.bind(resolvedAdapter)}
-                onListSessionMemories={resolvedAdapter.listSessionMemories?.bind(resolvedAdapter)}
-                onExtractSessionMemoryCandidates={resolvedAdapter.extractSessionMemoryCandidates?.bind(resolvedAdapter)}
-                onUpdateSessionMemory={resolvedAdapter.updateSessionMemory?.bind(resolvedAdapter)}
-                onDeleteSessionMemory={resolvedAdapter.deleteSessionMemory?.bind(resolvedAdapter)}
               />
             </div>
           ) : null}
@@ -705,7 +626,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           providerProfilesSaveError={providerProfilesSaveError}
           providerModelCatalogs={providerModelCatalogs}
           providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-          providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
           runtimeSession={agentView?.runtimeSession ?? null}
           project={onboardingProject}
           isImporting={isImporting}
@@ -721,8 +641,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
             refreshProviderModelCatalog(profileId, options)
           }
           onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
-          onSetActiveProviderProfile={(profileId) => setActiveProviderProfile(profileId)}
-          onStartLogin={() => startOpenAiLogin()}
+          onStartLogin={(options) => startOpenAiLogin(options)}
           onLogout={() => logoutRuntimeSession()}
           onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
           onComplete={() => {
@@ -828,7 +747,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         providerProfilesSaveError={providerProfilesSaveError}
         providerModelCatalogs={providerModelCatalogs}
         providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-        providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
         onRefreshProviderProfiles={(options) => refreshProviderProfiles(options)}
         onRefreshProviderModelCatalog={(profileId, options) =>
           refreshProviderModelCatalog(profileId, options)
@@ -840,8 +758,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         onRunDoctorReport={(request) => runDoctorReport(request)}
         dictationAdapter={resolvedAdapter}
         onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
-        onSetActiveProviderProfile={(profileId) => setActiveProviderProfile(profileId)}
-        onStartLogin={() => startOpenAiLogin()}
+        onStartLogin={(options) => startOpenAiLogin(options)}
         onLogout={() => logoutRuntimeSession()}
         onUpsertNotificationRoute={(request) =>
           upsertNotificationRoute({ ...request, updatedAt: new Date().toISOString() })

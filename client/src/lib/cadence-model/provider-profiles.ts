@@ -60,12 +60,21 @@ function normalizeObjectAliases(
 }
 
 function normalizeProviderProfileReadinessPayload(value: unknown): unknown {
-  return normalizeObjectAliases(value, {
+  const normalized = normalizeObjectAliases(value, {
     ready: ['ready'],
     status: ['status'],
     proof: ['proof'],
     proofUpdatedAt: ['proofUpdatedAt', 'proof_updated_at'],
   })
+
+  if (isRecord(normalized) && normalized.proof === 'o_auth_session') {
+    return {
+      ...normalized,
+      proof: 'oauth_session',
+    }
+  }
+
+  return normalized
 }
 
 function normalizeProviderProfilePayload(value: unknown): unknown {
@@ -134,11 +143,11 @@ function validateRuntimeProviderModel(
   payload: { providerId: z.infer<typeof runtimeProviderIdSchema>; modelId: string },
   ctx: z.RefinementCtx,
 ): void {
-  if (payload.providerId === 'openai_codex' && payload.modelId !== 'openai_codex') {
+  if (payload.providerId === 'openai_codex' && payload.modelId.trim().length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['modelId'],
-      message: 'Cadence only supports modelId `openai_codex` for provider `openai_codex`.',
+      message: 'Cadence requires a modelId for provider `openai_codex`.',
     })
   }
 }

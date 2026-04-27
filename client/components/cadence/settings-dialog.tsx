@@ -127,7 +127,6 @@ export interface SettingsDialogProps {
   providerProfilesSaveError: OperatorActionErrorView | null
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
-  providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
   onRefreshProviderModelCatalog?: (
     profileId: string,
@@ -143,8 +142,7 @@ export interface SettingsDialogProps {
   onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<CadenceDoctorReportDto>
   dictationAdapter?: DictationSettingsAdapter
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
-  onSetActiveProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
-  onStartLogin?: () => Promise<RuntimeSessionView | null>
+  onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
   onUpsertNotificationRoute?: (req: Omit<UpsertNotificationRouteRequestDto, "projectId" | "updatedAt">) => Promise<unknown>
   mcpRegistry?: McpRegistryDto | null
@@ -194,7 +192,6 @@ export function SettingsDialog({
   providerProfilesSaveError,
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
-  providerModelCatalogLoadErrors,
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
   onCheckProviderProfile,
@@ -204,7 +201,6 @@ export function SettingsDialog({
   onRunDoctorReport,
   dictationAdapter,
   onUpsertProviderProfile,
-  onSetActiveProviderProfile,
   onStartLogin,
   onLogout,
   onUpsertNotificationRoute,
@@ -302,7 +298,7 @@ export function SettingsDialog({
                         aria-current={active ? "page" : undefined}
                         onClick={() => setSection(id)}
                         className={cn(
-                          "group relative flex items-center gap-2 px-3 py-2 text-left text-[12.5px] leading-tight transition-colors",
+                          "group relative flex items-center gap-2 px-3 py-2.5 text-left text-[12.5px] leading-tight transition-colors",
                           active
                             ? "text-foreground"
                             : "text-muted-foreground hover:text-foreground",
@@ -332,7 +328,7 @@ export function SettingsDialog({
           <div className="flex flex-1 flex-col overflow-y-auto scrollbar-thin">
             <div
               key={section}
-              className="flex flex-1 flex-col gap-5 px-6 py-5 animate-in fade-in-0 motion-enter"
+              className="flex flex-1 flex-col gap-5 py-5 pl-6 pr-14 animate-in fade-in-0 motion-enter"
             >
               {section === "providers" ? (
                 <ProvidersSection
@@ -345,12 +341,10 @@ export function SettingsDialog({
                   providerProfilesSaveError={providerProfilesSaveError}
                   providerModelCatalogs={providerModelCatalogs}
                   providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-                  providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
                   onRefreshProviderProfiles={onRefreshProviderProfiles}
                   onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
                   onCheckProviderProfile={onCheckProviderProfile}
                   onUpsertProviderProfile={onUpsertProviderProfile}
-                  onSetActiveProviderProfile={onSetActiveProviderProfile}
                   onStartLogin={onStartLogin}
                   onLogout={onLogout}
                 />

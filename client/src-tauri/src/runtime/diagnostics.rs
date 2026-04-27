@@ -666,7 +666,6 @@ fn provider_profile_metadata_diagnostics(
 
     match profile.provider_id.as_str() {
         OPENAI_CODEX_PROVIDER_ID => {
-            require_model_id(profile, OPENAI_CODEX_PROVIDER_ID, &mut checks)?;
             require_absent(
                 profile,
                 "presetId",
@@ -858,27 +857,6 @@ fn provider_profile_metadata_diagnostics(
     }
 
     Ok(checks)
-}
-
-fn require_model_id(
-    profile: &ProviderProfileRecord,
-    expected: &str,
-    checks: &mut Vec<CadenceDiagnosticCheck>,
-) -> CommandResult<()> {
-    if profile.model_id.trim() == expected {
-        return Ok(());
-    }
-
-    checks.push(metadata_failed(
-        profile,
-        "provider_profile_model_invalid",
-        &format!(
-            "Provider profile `{}` must use model id `{expected}` for `{}`.",
-            profile.profile_id, profile.provider_id
-        ),
-        "Resave this provider profile from Providers settings.",
-    )?);
-    Ok(())
 }
 
 fn require_preset_id(

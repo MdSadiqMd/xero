@@ -2558,6 +2558,31 @@ describe('cadence-model', () => {
       },
     })
 
+    expect(
+      providerProfilesSchema.parse({
+        active_profile_id: 'openai_codex-default',
+        profiles: [
+          {
+            profile_id: 'openai_codex-default',
+            provider_id: 'openai_codex',
+            runtime_kind: 'openai_codex',
+            label: 'OpenAI Codex',
+            model_id: 'openai_codex',
+            active: true,
+            readiness: {
+              ready: true,
+              status: 'ready',
+              proof: 'o_auth_session',
+              proof_updated_at: '2026-04-16T14:05:00Z',
+            },
+            migrated_from_legacy: false,
+            migrated_at: null,
+          },
+        ],
+        migration: null,
+      }).profiles[0]?.readiness.proof,
+    ).toBe('oauth_session')
+
     expect(() =>
       providerProfilesSchema.parse({
         ...makeProviderProfiles(),
@@ -2964,10 +2989,10 @@ describe('cadence-model', () => {
     expect(() =>
       runtimeSettingsSchema.parse({
         providerId: 'openai_codex',
-        modelId: 'openai/gpt-4.1-mini',
+        modelId: '   ',
         openrouterApiKeyConfigured: false,
       }),
-    ).toThrow(/openai_codex/)
+    ).toThrow(/modelId/)
 
     expect(() =>
       runtimeSettingsSchema.parse({
@@ -2995,9 +3020,9 @@ describe('cadence-model', () => {
     expect(() =>
       upsertRuntimeSettingsRequestSchema.parse({
         providerId: 'openai_codex',
-        modelId: 'openai/gpt-4.1-mini',
+        modelId: '   ',
       }),
-    ).toThrow(/openai_codex/)
+    ).toThrow()
 
     expect(() =>
       runtimeUpdatedPayloadSchema.parse({

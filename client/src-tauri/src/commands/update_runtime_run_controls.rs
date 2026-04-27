@@ -59,6 +59,8 @@ pub fn update_runtime_run_controls<R: Runtime + 'static>(
         ));
     }
 
+    reject_provider_profile_change(existing, request.controls.as_ref())?;
+
     if existing.run.supervisor_kind == crate::runtime::OWNED_AGENT_SUPERVISOR_KIND {
         let auto_compact = auto_compact_preference(request.auto_compact.clone())?;
         let after = update_owned_runtime_run_controls(
@@ -217,11 +219,43 @@ fn runtime_run_controls_as_input(
     snapshot: &RuntimeRunSnapshotRecord,
 ) -> crate::commands::RuntimeRunControlInputDto {
     crate::commands::RuntimeRunControlInputDto {
+        provider_profile_id: snapshot.controls.active.provider_profile_id.clone(),
         model_id: snapshot.controls.active.model_id.clone(),
         thinking_effort: snapshot.controls.active.thinking_effort.clone(),
         approval_mode: snapshot.controls.active.approval_mode.clone(),
         plan_mode_required: snapshot.controls.active.plan_mode_required,
     }
+}
+
+fn reject_provider_profile_change(
+    existing: &RuntimeRunSnapshotRecord,
+    controls: Option<&crate::commands::RuntimeRunControlInputDto>,
+) -> CommandResult<()> {
+    let requested_profile_id = controls
+        .and_then(|controls| controls.provider_profile_id.as_deref())
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty());
+    let active_profile_id = existing
+        .controls
+        .active
+        .provider_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|profile_id| !profile_id.is_empty());
+
+    if let (Some(requested), Some(active)) = (requested_profile_id, active_profile_id) {
+        if requested != active {
+            return Err(CommandError::user_fixable(
+                "runtime_run_provider_profile_switch_blocked",
+                format!(
+                    "Cadence cannot switch active runtime run `{}` from provider profile `{active}` to `{requested}`. Stop the current run before changing providers.",
+                    existing.run.run_id
+                ),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn normalized_prompt(prompt: Option<&str>) -> Option<String> {

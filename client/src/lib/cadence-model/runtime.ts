@@ -49,11 +49,11 @@ function validateRuntimeSettingsProviderModel(
   payload: { providerId: z.infer<typeof runtimeProviderIdSchema>; modelId: string },
   ctx: z.RefinementCtx,
 ): void {
-  if (payload.providerId === 'openai_codex' && payload.modelId !== 'openai_codex') {
+  if (payload.providerId === 'openai_codex' && payload.modelId.trim().length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['modelId'],
-      message: 'Cadence only supports modelId `openai_codex` for provider `openai_codex`.',
+      message: 'Cadence requires a modelId for provider `openai_codex`.',
     })
   }
 }
@@ -156,6 +156,7 @@ export const runtimeRunCheckpointSchema = z
 
 export const runtimeRunControlInputSchema = z
   .object({
+    providerProfileId: nonEmptyOptionalTextSchema,
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
     approvalMode: runtimeRunApprovalModeSchema,
@@ -173,6 +174,7 @@ export const runtimeAutoCompactPreferenceSchema = z
 
 export const runtimeRunActiveControlSnapshotSchema = z
   .object({
+    providerProfileId: nonEmptyOptionalTextSchema,
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
     approvalMode: runtimeRunApprovalModeSchema,
@@ -184,6 +186,7 @@ export const runtimeRunActiveControlSnapshotSchema = z
 
 export const runtimeRunPendingControlSnapshotSchema = z
   .object({
+    providerProfileId: nonEmptyOptionalTextSchema,
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
     approvalMode: runtimeRunApprovalModeSchema,
@@ -376,6 +379,13 @@ export const startRuntimeRunRequestSchema = z
   })
   .strict()
 
+export const startRuntimeSessionRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    providerProfileId: nonEmptyOptionalTextSchema,
+  })
+  .strict()
+
 export const getRuntimeRunRequestSchema = z
   .object({
     projectId: z.string().trim().min(1),
@@ -448,6 +458,7 @@ export type RuntimeRunDto = z.infer<typeof runtimeRunSchema>
 export type RuntimeRunUpdatedPayloadDto = z.infer<typeof runtimeRunUpdatedPayloadSchema>
 export type GetRuntimeRunRequestDto = z.infer<typeof getRuntimeRunRequestSchema>
 export type StartRuntimeRunRequestDto = z.infer<typeof startRuntimeRunRequestSchema>
+export type StartRuntimeSessionRequestDto = z.infer<typeof startRuntimeSessionRequestSchema>
 export type UpdateRuntimeRunControlsRequestDto = z.infer<typeof updateRuntimeRunControlsRequestSchema>
 export type StopRuntimeRunRequestDto = z.infer<typeof stopRuntimeRunRequestSchema>
 
@@ -492,6 +503,7 @@ export interface RuntimeRunCheckpointView {
 }
 
 export interface RuntimeRunControlInputView {
+  providerProfileId: string | null
   modelId: string
   thinkingEffort: RuntimeRunThinkingEffortDto | null
   thinkingEffortLabel: string
@@ -703,6 +715,7 @@ function getAgentSessionStatusLabel(status: AgentSessionStatusDto): string {
 
 function mapRuntimeRunControlInput(control: RuntimeRunControlInputDto): RuntimeRunControlInputView {
   return {
+    providerProfileId: normalizeOptionalText(control.providerProfileId),
     modelId: normalizeText(control.modelId, 'model-unavailable'),
     thinkingEffort: control.thinkingEffort ?? null,
     thinkingEffortLabel: getRuntimeRunThinkingEffortLabel(control.thinkingEffort ?? null),

@@ -18,8 +18,8 @@ import type {
   ProviderProfilesSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import {
-  getActiveProviderProfile,
   type ProviderModelCatalogDto,
+  type ProviderProfileDto,
   type ProviderProfilesDto,
   type RuntimeSessionView,
   type UpsertNotificationRouteRequestDto,
@@ -46,63 +46,76 @@ interface ImportedProjectView {
   path: string
 }
 
+function getReadyProviderProfiles(providerProfiles: ProviderProfilesDto | null): ProviderProfileDto[] {
+  return (providerProfiles?.profiles ?? []).filter((profile) => profile.readiness.ready)
+}
+
 function getProviderReview(providerProfiles: ProviderProfilesDto | null, runtimeSession: RuntimeSessionView | null) {
-  const activeProfile = getActiveProviderProfile(providerProfiles)
-  if (!activeProfile) {
+  const profiles = providerProfiles?.profiles ?? []
+  const readyProfiles = getReadyProviderProfiles(providerProfiles)
+  const connectedOpenAiProfile =
+    runtimeSession?.providerId === "openai_codex" && runtimeSession.isAuthenticated
+      ? readyProfiles.find((profile) => profile.providerId === "openai_codex") ?? null
+      : null
+  const reviewProfile = connectedOpenAiProfile ?? readyProfiles[0] ?? profiles[0] ?? null
+
+  if (!reviewProfile) {
     return {
       ready: false,
       value: "No provider set up yet",
     }
   }
 
-  const preset = getCloudProviderPreset(activeProfile.providerId)
-  const connectionSuffix = ` · ${formatProviderConnectionLabel(activeProfile)}`
+  const preset = getCloudProviderPreset(reviewProfile.providerId)
+  const connectionSuffix = ` · ${formatProviderConnectionLabel(reviewProfile)}`
+  const additionalReadySuffix =
+    reviewProfile.readiness.ready && readyProfiles.length > 1 ? ` · ${readyProfiles.length - 1} more ready` : ""
 
   switch (preset?.authMode) {
     case 'api_key':
-      return activeProfile.readiness.ready
+      return reviewProfile.readiness.ready
         ? {
             ready: true,
-            value: `${activeProfile.label}${connectionSuffix} · API key saved`,
+            value: `${reviewProfile.label}${connectionSuffix} · API key saved${additionalReadySuffix}`,
           }
         : {
             ready: false,
-            value: `${activeProfile.label}${connectionSuffix} · API key required`,
+            value: `${reviewProfile.label}${connectionSuffix} · API key required`,
           }
     case 'local':
-      return activeProfile.readiness.ready
+      return reviewProfile.readiness.ready
         ? {
             ready: true,
-            value: `${activeProfile.label}${connectionSuffix} · local endpoint ready`,
+            value: `${reviewProfile.label}${connectionSuffix} · local endpoint ready${additionalReadySuffix}`,
           }
         : {
             ready: false,
-            value: `${activeProfile.label}${connectionSuffix} · local profile needs repair`,
+            value: `${reviewProfile.label}${connectionSuffix} · local profile needs repair`,
           }
     case 'ambient':
-      return activeProfile.readiness.ready
+      return reviewProfile.readiness.ready
         ? {
             ready: true,
-            value: `${activeProfile.label}${connectionSuffix} · ambient auth ready`,
+            value: `${reviewProfile.label}${connectionSuffix} · ambient auth ready${additionalReadySuffix}`,
           }
         : {
             ready: false,
-            value: `${activeProfile.label}${connectionSuffix} · ambient profile needs repair`,
+            value: `${reviewProfile.label}${connectionSuffix} · ambient profile needs repair`,
           }
     default:
       break
   }
 
-  const isOpenAiConnected = Boolean(runtimeSession?.providerId === "openai_codex" && runtimeSession.isAuthenticated)
-
-  return isOpenAiConnected
+  return connectedOpenAiProfile
     ? {
         ready: true,
-        value: `${activeProfile.label} · connected`,
+        value: `${reviewProfile.label} · signed in${additionalReadySuffix}`,
       }
     : {
-        ready: true,
-        value: `${activeProfile.label}${connectionSuffix} · active profile`,
+        ready: reviewProfile.readiness.ready,
+        value: reviewProfile.readiness.ready
+          ? `${reviewProfile.label}${connectionSuffix} · ready${additionalReadySuffix}`
+          : `${reviewProfile.label}${connectionSuffix} · sign in required`,
       }
 }
 
@@ -114,7 +127,6 @@ export interface OnboardingFlowProps {
   providerProfilesSaveError: OperatorActionErrorView | null
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
-  providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
   runtimeSession: RuntimeSessionView | null
   project: ImportedProjectView | null
   isImporting: boolean
@@ -131,8 +143,7 @@ export interface OnboardingFlowProps {
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
   onUpsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
-  onSetActiveProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
-  onStartLogin?: () => Promise<RuntimeSessionView | null>
+  onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
   onUpsertNotificationRoute: (
     request: Omit<UpsertNotificationRouteRequestDto, "projectId">,
@@ -149,7 +160,6 @@ export function OnboardingFlow({
   providerProfilesSaveError,
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
-  providerModelCatalogLoadErrors,
   runtimeSession,
   project,
   isImporting,
@@ -163,7 +173,6 @@ export function OnboardingFlow({
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
   onUpsertProviderProfile,
-  onSetActiveProviderProfile,
   onStartLogin,
   onLogout,
   onUpsertNotificationRoute,
@@ -235,13 +244,11 @@ export function OnboardingFlow({
               providerProfilesSaveError={providerProfilesSaveError}
               providerModelCatalogs={providerModelCatalogs}
               providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-              providerModelCatalogLoadErrors={providerModelCatalogLoadErrors}
               runtimeSession={runtimeSession}
               hasSelectedProject={Boolean(project?.path?.trim())}
               onRefreshProviderProfiles={onRefreshProviderProfiles}
               onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
               onUpsertProviderProfile={onUpsertProviderProfile}
-              onSetActiveProviderProfile={onSetActiveProviderProfile}
               onStartLogin={onStartLogin}
               onLogout={onLogout}
             />

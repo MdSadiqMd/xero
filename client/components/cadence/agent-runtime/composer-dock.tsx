@@ -1,5 +1,5 @@
-import { Activity, ArrowUp, Brain, LoaderCircle, Mic, ShieldCheck, Sparkles } from 'lucide-react'
-import type { KeyboardEvent, RefObject } from 'react'
+import { Activity, ArrowUp, Brain, CheckIcon, ChevronDownIcon, LoaderCircle, Mic, ShieldCheck, Sparkles } from 'lucide-react'
+import { Fragment, useMemo, useState, type KeyboardEvent, type RefObject } from 'react'
 
 import type {
   OperatorActionErrorView,
@@ -12,12 +12,19 @@ import type {
 } from '@/src/lib/cadence-model'
 import { Button } from '@/components/ui/button'
 import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+} from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -156,26 +163,12 @@ export function ComposerDock({
             <div className="border-t border-border/40 bg-background/20 px-2 py-1.5">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto pb-0.5">
-                  <Select disabled={!hasComposerModelOptions || controlsDisabled} value={composerModelId ?? ''} onValueChange={onComposerModelChange}>
-                    <SelectTrigger aria-label="Model selector" className={composerInlineSelectTriggerClassName} size="sm">
-                      <SelectValue placeholder="Model not configured" />
-                    </SelectTrigger>
-                    <SelectContent className={composerInlineSelectContentClassName}>
-                      {composerModelGroups.map((group, index) => (
-                        <div key={group.id}>
-                          {index > 0 ? <SelectSeparator /> : null}
-                          <SelectGroup>
-                            <SelectLabel>{group.label}</SelectLabel>
-                            {group.items.map((model) => (
-                              <SelectItem key={model.value} value={model.value}>
-                                {model.label}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </div>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <ModelSelectorCombobox
+                    disabled={!hasComposerModelOptions || controlsDisabled}
+                    groups={composerModelGroups}
+                    value={composerModelId}
+                    onChange={onComposerModelChange}
+                  />
                   <Select
                     disabled={!hasThinkingOptions || controlsDisabled}
                     value={composerThinkingLevel ?? ''}
@@ -327,5 +320,80 @@ export function ComposerDock({
         </div>
       </div>
     </div>
+  )
+}
+
+interface ModelSelectorComboboxProps {
+  disabled: boolean
+  groups: ComposerModelGroup[]
+  value: string | null
+  onChange: (value: string) => void
+}
+
+function ModelSelectorCombobox({ disabled, groups, value, onChange }: ModelSelectorComboboxProps) {
+  const [open, setOpen] = useState(false)
+  const selectedLabel = useMemo(() => {
+    for (const group of groups) {
+      const match = group.items.find((item) => item.value === value)
+      if (match) return match.label
+    }
+    return null
+  }, [groups, value])
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          role="combobox"
+          aria-label="Model selector"
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          data-state={open ? 'open' : 'closed'}
+          data-placeholder={selectedLabel ? undefined : ''}
+          disabled={disabled}
+          className={cn(
+            composerInlineSelectTriggerClassName,
+            'flex w-fit min-w-0 items-center justify-between whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+        >
+          <span className="line-clamp-1 truncate">{selectedLabel ?? 'Model not configured'}</span>
+          <ChevronDownIcon aria-hidden="true" className="opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className={cn('w-72 p-0', composerInlineSelectContentClassName)}
+      >
+        <Command>
+          <CommandInput placeholder="Search models..." />
+          <CommandList>
+            <CommandEmpty>No models found.</CommandEmpty>
+            {groups.map((group, index) => (
+              <Fragment key={group.id}>
+                {index > 0 ? <CommandSeparator /> : null}
+                <CommandGroup heading={group.label}>
+                  {group.items.map((item) => (
+                    <CommandItem
+                      key={item.value}
+                      value={`${group.label} ${item.label}`}
+                      onSelect={() => {
+                        onChange(item.value)
+                        setOpen(false)
+                      }}
+                    >
+                      <span className="line-clamp-1 truncate">{item.label}</span>
+                      {value === item.value ? (
+                        <CheckIcon aria-hidden="true" className="ml-auto size-3.5" />
+                      ) : null}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </Fragment>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }

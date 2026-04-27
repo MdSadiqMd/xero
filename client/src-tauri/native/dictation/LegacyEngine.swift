@@ -130,14 +130,14 @@ final class CadenceLegacyDictationEngine {
             )
         }
 
-        let permissions = requestPermissions()
-        emit([
-            "kind": "permission",
-            "microphone": permissions.microphone,
-            "speech": permissions.speech,
-        ])
-
         do {
+            let permissions = try requestPermissions()
+            emit([
+                "kind": "permission",
+                "microphone": permissions.microphone,
+                "speech": permissions.speech,
+            ])
+
             try validatePermissions(permissions)
 
             let requestedLocale = Locale(identifier: localeIdentifier)
@@ -215,8 +215,13 @@ final class CadenceLegacyDictationEngine {
         return .success()
     }
 
-    private func requestPermissions() -> (microphone: String, speech: String) {
+    private func requestPermissions() throws -> (microphone: String, speech: String) {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            try ensurePrivacyPromptCanRun(
+                key: "NSMicrophoneUsageDescription",
+                code: "dictation_microphone_permission_prompt_unavailable",
+                label: "microphone"
+            )
             let semaphore = DispatchSemaphore(value: 0)
             AVCaptureDevice.requestAccess(for: .audio) { _ in
                 semaphore.signal()
@@ -225,6 +230,11 @@ final class CadenceLegacyDictationEngine {
         }
 
         if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+            try ensurePrivacyPromptCanRun(
+                key: "NSSpeechRecognitionUsageDescription",
+                code: "dictation_speech_permission_prompt_unavailable",
+                label: "speech recognition"
+            )
             let semaphore = DispatchSemaphore(value: 0)
             SFSpeechRecognizer.requestAuthorization { _ in
                 semaphore.signal()
@@ -233,6 +243,16 @@ final class CadenceLegacyDictationEngine {
         }
 
         return (microphonePermissionState(), speechPermissionState())
+    }
+
+    private func ensurePrivacyPromptCanRun(key: String, code: String, label: String) throws {
+        guard privacyUsageDescriptionVisibleToTcc(key) else {
+            throw CadenceLegacyDictationError(
+                code: code,
+                message: "Cadence cannot request \(label) permission because macOS cannot see the app privacy usage string. Restart with pnpm run dev:tauri so the dev runner signs the Tauri binary, or use a bundled Cadence build.",
+                retryable: false
+            )
+        }
     }
 
     private func validatePermissions(_ permissions: (microphone: String, speech: String)) throws {

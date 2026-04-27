@@ -34,6 +34,18 @@ pub const ANTHROPIC_RUNTIME_KIND: &str = ANTHROPIC_PROVIDER_ID;
 pub const OPENAI_CODEX_AUTH_STORE_FILE_NAME: &str = "openai-auth.json";
 pub const OPENROUTER_AUTH_STORE_FILE_NAME: &str = "openrouter-credentials.json";
 pub const ANTHROPIC_AUTH_STORE_FILE_NAME: &str = "provider-profile-credentials.json";
+pub const OPENAI_CODEX_DEFAULT_MODEL_ID: &str = "gpt-5.4";
+pub const OPENAI_CODEX_SUPPORTED_MODEL_IDS: &[&str] =
+    &["gpt-5.2", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.4"];
+
+pub fn normalize_openai_codex_model_id(model_id: &str) -> String {
+    let model_id = model_id.trim();
+    if model_id.is_empty() || model_id == OPENAI_CODEX_PROVIDER_ID {
+        OPENAI_CODEX_DEFAULT_MODEL_ID.into()
+    } else {
+        model_id.into()
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RuntimeProviderFamily {
