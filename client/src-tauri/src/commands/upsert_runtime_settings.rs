@@ -1,15 +1,14 @@
 use tauri::{AppHandle, Runtime, State};
 
 use crate::{
-    commands::{
-        provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult,
-        RuntimeSettingsDto, UpsertRuntimeSettingsRequestDto,
-    },
+    commands::{CommandError, CommandResult, RuntimeSettingsDto, UpsertRuntimeSettingsRequestDto},
+    global_db::open_global_database,
     provider_profiles::{
         build_anthropic_default_profile, build_openai_default_profile,
-        build_openrouter_default_profile, persist_provider_profiles_snapshot,
-        ProviderApiKeyCredentialEntry, ProviderProfileCredentialLink, ProviderProfileRecord,
-        ProviderProfilesSnapshot, ANTHROPIC_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        build_openrouter_default_profile, load_provider_profiles_or_default,
+        persist_provider_profiles_to_db, ProviderApiKeyCredentialEntry,
+        ProviderProfileCredentialLink, ProviderProfileRecord, ProviderProfilesSnapshot,
+        ANTHROPIC_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID,
         OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
     },
     runtime::{ANTHROPIC_PROVIDER_ID, OPENROUTER_PROVIDER_ID},
@@ -24,18 +23,10 @@ pub fn upsert_runtime_settings<R: Runtime>(
     state: State<'_, DesktopState>,
     request: UpsertRuntimeSettingsRequestDto,
 ) -> CommandResult<RuntimeSettingsDto> {
-    let provider_profiles_path = state.provider_profiles_file(&app)?;
-    let provider_profile_credentials_path = state.provider_profile_credential_store_file(&app)?;
-
-    let current = load_provider_profiles_snapshot(&app, state.inner())?;
-
+    let mut connection = open_global_database(&state.global_db_path(&app)?)?;
+    let current = load_provider_profiles_or_default(&connection)?;
     let next = apply_runtime_settings_update(&current, &request)?;
-    persist_provider_profiles_snapshot(
-        &provider_profiles_path,
-        &provider_profile_credentials_path,
-        &next,
-    )?;
-
+    persist_provider_profiles_to_db(&mut connection, &next)?;
     runtime_settings_dto_from_provider_profiles(&next)
 }
 

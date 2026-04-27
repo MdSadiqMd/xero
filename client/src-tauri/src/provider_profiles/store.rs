@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::Path,
 };
 
@@ -8,10 +7,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
-    commands::{
-        get_runtime_settings::{remove_file_if_exists, write_json_file_atomically},
-        CommandError, CommandResult,
-    },
+    commands::{CommandError, CommandResult},
     runtime::{
         normalize_openai_codex_model_id, resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID,
         AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
@@ -134,11 +130,11 @@ pub struct ProviderProfileCredentialsFile {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LegacyProviderProfileCredentialsFile {
+pub(crate) struct LegacyProviderProfileCredentialsFile {
     #[serde(default)]
-    openrouter_api_keys: Vec<ProviderApiKeyCredentialEntry>,
+    pub(crate) openrouter_api_keys: Vec<ProviderApiKeyCredentialEntry>,
     #[serde(default)]
-    anthropic_api_keys: Vec<ProviderApiKeyCredentialEntry>,
+    pub(crate) anthropic_api_keys: Vec<ProviderApiKeyCredentialEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,91 +337,7 @@ pub fn default_provider_profiles_snapshot() -> ProviderProfilesSnapshot {
     }
 }
 
-pub fn load_provider_profiles_from_paths(
-    metadata_path: &Path,
-    credentials_path: &Path,
-) -> CommandResult<Option<ProviderProfilesSnapshot>> {
-    let metadata_exists = metadata_path.exists();
-    let credentials_exists = credentials_path.exists();
-
-    if !metadata_exists && !credentials_exists {
-        return Ok(None);
-    }
-
-    if !metadata_exists && credentials_exists {
-        return Err(CommandError::user_fixable(
-            "provider_profiles_contract_failed",
-            format!(
-                "Cadence found provider-profile credentials at {} without the matching provider-profile metadata file at {}.",
-                credentials_path.display(),
-                metadata_path.display()
-            ),
-        ));
-    }
-
-    let metadata = read_provider_profiles_metadata_file(metadata_path)?.expect("metadata exists");
-    let credentials = read_provider_profile_credentials_file(credentials_path)?.unwrap_or_default();
-
-    Ok(Some(validate_provider_profiles_contract(
-        metadata,
-        credentials,
-        metadata_path,
-        credentials_path,
-    )?))
-}
-
-pub(crate) fn read_provider_profiles_metadata_file(
-    path: &Path,
-) -> CommandResult<Option<ProviderProfilesMetadataFile>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let contents = fs::read_to_string(path).map_err(|error| {
-        CommandError::retryable(
-            "provider_profiles_read_failed",
-            format!(
-                "Cadence could not read the app-local provider-profile metadata file at {}: {error}",
-                path.display()
-            ),
-        )
-    })?;
-
-    let parsed = serde_json::from_str::<ProviderProfilesMetadataFile>(&contents).map_err(|error| {
-        CommandError::user_fixable(
-            "provider_profiles_decode_failed",
-            format!(
-                "Cadence could not decode the app-local provider-profile metadata file at {}: {error}",
-                path.display()
-            ),
-        )
-    })?;
-
-    Ok(Some(parsed))
-}
-
-pub(crate) fn read_provider_profile_credentials_file(
-    path: &Path,
-) -> CommandResult<Option<ProviderProfileCredentialsFile>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let contents = fs::read_to_string(path).map_err(|error| {
-        CommandError::retryable(
-            "provider_profile_credentials_read_failed",
-            format!(
-                "Cadence could not read the app-local provider-profile credential file at {}: {error}",
-                path.display()
-            ),
-        )
-    })?;
-
-    let parsed = decode_provider_profile_credentials_file(&contents, path)?;
-    Ok(Some(parsed))
-}
-
-fn decode_provider_profile_credentials_file(
+pub(crate) fn decode_provider_profile_credentials_file(
     contents: &str,
     path: &Path,
 ) -> CommandResult<ProviderProfileCredentialsFile> {
@@ -567,115 +479,6 @@ pub(crate) fn validate_provider_profiles_contract(
         metadata,
         credentials,
     })
-}
-
-pub(crate) fn persist_provider_profiles_snapshot(
-    metadata_path: &Path,
-    credentials_path: &Path,
-    next: &ProviderProfilesSnapshot,
-) -> CommandResult<()> {
-    let next = normalize_snapshot_for_persist(next.clone())?;
-
-    let previous_metadata = snapshot_existing_file(metadata_path, "provider_profiles")?;
-    let previous_credentials =
-        snapshot_existing_file(credentials_path, "provider_profile_credentials")?;
-
-    let metadata_json = serialize_pretty_json(&next.metadata, "provider_profiles")?;
-    write_json_file_atomically(metadata_path, &metadata_json, "provider_profiles")?;
-
-    let credential_result = if next.credentials.api_keys.is_empty() {
-        remove_file_if_exists(credentials_path, "provider_profile_credentials")
-    } else {
-        let credentials_json =
-            serialize_pretty_json(&next.credentials, "provider_profile_credentials")?;
-        write_json_file_atomically(
-            credentials_path,
-            &credentials_json,
-            "provider_profile_credentials",
-        )
-    };
-
-    if let Err(error) = credential_result {
-        return match restore_file_snapshot(
-            metadata_path,
-            previous_metadata.as_deref(),
-            "provider_profiles_rollback",
-        ) {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(CommandError::retryable(
-                "provider_profiles_rollback_failed",
-                format!(
-                    "Cadence failed to persist provider-profile credentials after writing metadata, and then could not restore the previous metadata file at {}: {}. Original credential error: {}",
-                    metadata_path.display(),
-                    rollback_error.message,
-                    error.message
-                ),
-            )),
-        };
-    }
-
-    if let Err(error) = validate_provider_profiles_contract(
-        next.metadata.clone(),
-        next.credentials.clone(),
-        metadata_path,
-        credentials_path,
-    ) {
-        let metadata_rollback = restore_file_snapshot(
-            metadata_path,
-            previous_metadata.as_deref(),
-            "provider_profiles_rollback",
-        );
-        let credentials_rollback = restore_file_snapshot(
-            credentials_path,
-            previous_credentials.as_deref(),
-            "provider_profile_credentials_rollback",
-        );
-
-        return match (metadata_rollback, credentials_rollback) {
-            (Ok(()), Ok(())) => Err(error),
-            (metadata_result, credentials_result) => Err(CommandError::retryable(
-                "provider_profiles_rollback_failed",
-                format!(
-                    "Cadence rejected the persisted provider-profile state after writing it and could not fully restore the previous files (metadata rollback: {}; credential rollback: {}). Validation error: {}",
-                    rollback_message(metadata_result),
-                    rollback_message(credentials_result),
-                    error.message
-                ),
-            )),
-        };
-    }
-
-    Ok(())
-}
-
-pub(crate) fn snapshot_existing_file(
-    path: &Path,
-    operation: &str,
-) -> CommandResult<Option<Vec<u8>>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    fs::read(path).map(Some).map_err(|error| {
-        CommandError::retryable(
-            format!("{operation}_read_failed"),
-            format!(
-                "Cadence could not snapshot the existing file at {} before updating it: {error}",
-                path.display()
-            ),
-        )
-    })
-}
-
-pub(crate) fn restore_file_snapshot(
-    path: &Path,
-    snapshot: Option<&[u8]>,
-    operation: &str,
-) -> CommandResult<()> {
-    match snapshot {
-        Some(bytes) => write_json_file_atomically(path, bytes, operation),
-        None => remove_file_if_exists(path, operation),
-    }
 }
 
 pub(crate) fn build_openai_default_profile(
@@ -1508,7 +1311,7 @@ fn ensure_all_credentials_reference_profiles<'a>(
     Ok(())
 }
 
-fn normalize_snapshot_for_persist(
+pub(crate) fn normalize_snapshot_for_persist(
     snapshot: ProviderProfilesSnapshot,
 ) -> CommandResult<ProviderProfilesSnapshot> {
     let mut validated = validate_provider_profiles_contract(
@@ -1528,24 +1331,6 @@ fn normalize_snapshot_for_persist(
         .sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
 
     Ok(validated)
-}
-
-fn rollback_message(result: CommandResult<()>) -> String {
-    match result {
-        Ok(()) => "ok".into(),
-        Err(error) => format!("{}: {}", error.code, error.message),
-    }
-}
-
-fn serialize_pretty_json<T: Serialize>(value: &T, operation: &str) -> CommandResult<Vec<u8>> {
-    serde_json::to_vec_pretty(value).map_err(|error| {
-        CommandError::system_fault(
-            format!("{operation}_serialize_failed"),
-            format!(
-                "Cadence could not serialize the app-local provider-profile update for {operation}: {error}"
-            ),
-        )
-    })
 }
 
 fn normalize_updated_at(value: String) -> String {

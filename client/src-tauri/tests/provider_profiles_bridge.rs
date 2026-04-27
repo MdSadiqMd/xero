@@ -2,17 +2,45 @@ use std::path::{Path, PathBuf};
 
 use cadence_desktop_lib::{
     auth::{persist_openai_codex_session, StoredOpenAiCodexSession},
+    commands::CommandResult,
     db::{database_path_for_repo, import_project},
     git::repository::CanonicalRepository,
+    global_db::open_global_database,
     provider_profiles::{
-        load_or_migrate_provider_profiles_from_paths, ProviderProfileCredentialLink,
-        ProviderProfileReadinessProof, ProviderProfileReadinessStatus,
-        ANTHROPIC_DEFAULT_PROFILE_ID, GITHUB_MODELS_DEFAULT_PROFILE_ID,
-        OPENAI_CODEX_DEFAULT_PROFILE_ID, OPENROUTER_DEFAULT_PROFILE_ID,
-        OPENROUTER_FALLBACK_MODEL_ID,
+        import_legacy_provider_profiles, load_provider_profiles_or_default,
+        ProviderProfileCredentialLink, ProviderProfileReadinessProof,
+        ProviderProfileReadinessStatus, ProviderProfilesSnapshot, ANTHROPIC_DEFAULT_PROFILE_ID,
+        GITHUB_MODELS_DEFAULT_PROFILE_ID, OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
     },
     state::ImportFailpoints,
 };
+
+/// Test helper preserving the historical `load_or_migrate_provider_profiles_from_paths` shape
+/// while routing through the Phase 2 importer + SQLite store. Each call uses an isolated DB so
+/// the legacy fixtures fully drive the snapshot returned to the caller.
+fn load_or_migrate_provider_profiles_from_paths(
+    metadata_path: &Path,
+    credentials_path: &Path,
+    legacy_settings_path: &Path,
+    legacy_openrouter_credentials_path: &Path,
+    legacy_openai_auth_path: &Path,
+) -> CommandResult<ProviderProfilesSnapshot> {
+    let parent = metadata_path
+        .parent()
+        .expect("metadata path must have a parent dir for the global DB");
+    let database_path = parent.join("cadence.db");
+    let mut connection = open_global_database(&database_path)?;
+    import_legacy_provider_profiles(
+        &mut connection,
+        metadata_path,
+        credentials_path,
+        legacy_settings_path,
+        legacy_openrouter_credentials_path,
+        legacy_openai_auth_path,
+    )?;
+    load_provider_profiles_or_default(&connection)
+}
 
 #[derive(Debug)]
 struct TestPaths {
@@ -179,7 +207,7 @@ fn openai_only_legacy_state_migrates_to_redacted_profile_store() {
         openai_profile.readiness(&snapshot.credentials).status,
         ProviderProfileReadinessStatus::Ready
     );
-    assert!(paths.provider_profiles_path.exists());
+    assert!(!paths.provider_profiles_path.exists());
     assert!(!paths.provider_profile_credentials_path.exists());
     assert!(paths.legacy_openai_auth_path.exists());
 }
@@ -227,8 +255,8 @@ fn openrouter_only_legacy_state_migrates_and_removes_legacy_files() {
         openrouter_profile.readiness(&snapshot.credentials).status,
         ProviderProfileReadinessStatus::Ready
     );
-    assert!(paths.provider_profiles_path.exists());
-    assert!(paths.provider_profile_credentials_path.exists());
+    assert!(!paths.provider_profiles_path.exists());
+    assert!(!paths.provider_profile_credentials_path.exists());
     assert!(!paths.legacy_settings_path.exists());
     assert!(!paths.legacy_openrouter_credentials_path.exists());
 }
@@ -273,8 +301,6 @@ fn both_providers_migrate_once_and_repo_local_sqlite_stays_secret_free() {
         &paths.legacy_openai_auth_path,
     )
     .expect("migrate dual-provider legacy state");
-    let metadata_after_first =
-        std::fs::read(&paths.provider_profiles_path).expect("read provider profile metadata bytes");
 
     let second = load_or_migrate_provider_profiles_from_paths(
         &paths.provider_profiles_path,
@@ -284,11 +310,8 @@ fn both_providers_migrate_once_and_repo_local_sqlite_stays_secret_free() {
         &paths.legacy_openai_auth_path,
     )
     .expect("reload migrated provider profiles");
-    let metadata_after_second =
-        std::fs::read(&paths.provider_profiles_path).expect("read provider profile metadata bytes");
 
     assert_eq!(first, second);
-    assert_eq!(metadata_after_first, metadata_after_second);
     assert_eq!(
         first.metadata.active_profile_id,
         OPENAI_CODEX_DEFAULT_PROFILE_ID
@@ -321,14 +344,15 @@ fn both_providers_migrate_once_and_repo_local_sqlite_stays_secret_free() {
 }
 
 #[test]
-fn migration_rolls_back_new_store_and_keeps_legacy_files_when_credential_write_fails() {
+fn migration_keeps_legacy_files_when_global_database_open_fails() {
     let root = tempfile::tempdir().expect("temp dir");
     let blocked_parent = root.path().join("blocked-parent");
     std::fs::write(&blocked_parent, "not-a-directory").expect("create blocking file");
 
-    let provider_profiles_path = root.path().join("app-data").join("provider-profiles.json");
-    let provider_profile_credentials_path =
-        blocked_parent.join("provider-profile-credentials.json");
+    // Point the metadata path at a directory that cannot be created, which forces the global
+    // database open (and therefore the importer) to fail before any legacy file is touched.
+    let provider_profiles_path = blocked_parent.join("provider-profiles.json");
+    let provider_profile_credentials_path = blocked_parent.join("provider-profile-credentials.json");
     let legacy_settings_path = root.path().join("app-data").join("runtime-settings.json");
     let legacy_openrouter_credentials_path = root
         .path()
@@ -360,12 +384,9 @@ fn migration_rolls_back_new_store_and_keeps_legacy_files_when_credential_write_f
         &legacy_openrouter_credentials_path,
         &legacy_openai_auth_path,
     )
-    .expect_err("credential write failure should roll back migration");
+    .expect_err("global database open failure should abort the importer");
 
-    assert_eq!(
-        error.code,
-        "provider_profile_credentials_directory_unavailable"
-    );
+    assert_eq!(error.code, "global_database_dir_unavailable");
     assert!(!provider_profiles_path.exists());
     assert!(legacy_settings_path.exists());
     assert!(legacy_openrouter_credentials_path.exists());

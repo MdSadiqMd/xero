@@ -9,8 +9,9 @@ use crate::{
         ProviderProfilesMigrationDto, SetActiveProviderProfileRequestDto,
         UpsertProviderProfileRequestDto,
     },
+    global_db::open_global_database,
     provider_profiles::{
-        load_or_migrate_provider_profiles_from_paths, persist_provider_profiles_snapshot,
+        load_provider_profiles_or_default, persist_provider_profiles_to_db,
         ProviderApiKeyCredentialEntry, ProviderProfileCredentialLink,
         ProviderProfileReadinessProof, ProviderProfileReadinessStatus, ProviderProfileRecord,
         ProviderProfilesSnapshot,
@@ -38,15 +39,10 @@ pub fn upsert_provider_profile<R: Runtime>(
     state: State<'_, DesktopState>,
     request: UpsertProviderProfileRequestDto,
 ) -> CommandResult<ProviderProfilesDto> {
-    let provider_profiles_path = state.provider_profiles_file(&app)?;
-    let provider_profile_credentials_path = state.provider_profile_credential_store_file(&app)?;
-    let current = load_provider_profiles_snapshot(&app, state.inner())?;
+    let mut connection = open_global_database(&state.global_db_path(&app)?)?;
+    let current = load_provider_profiles_or_default(&connection)?;
     let next = apply_provider_profile_upsert(&current, &request)?;
-    persist_provider_profiles_snapshot(
-        &provider_profiles_path,
-        &provider_profile_credentials_path,
-        &next,
-    )?;
+    persist_provider_profiles_to_db(&mut connection, &next)?;
     Ok(provider_profiles_dto_from_snapshot(&next))
 }
 
@@ -56,15 +52,10 @@ pub fn set_active_provider_profile<R: Runtime>(
     state: State<'_, DesktopState>,
     request: SetActiveProviderProfileRequestDto,
 ) -> CommandResult<ProviderProfilesDto> {
-    let provider_profiles_path = state.provider_profiles_file(&app)?;
-    let provider_profile_credentials_path = state.provider_profile_credential_store_file(&app)?;
-    let current = load_provider_profiles_snapshot(&app, state.inner())?;
+    let mut connection = open_global_database(&state.global_db_path(&app)?)?;
+    let current = load_provider_profiles_or_default(&connection)?;
     let next = apply_active_profile_switch(&current, &request.profile_id)?;
-    persist_provider_profiles_snapshot(
-        &provider_profiles_path,
-        &provider_profile_credentials_path,
-        &next,
-    )?;
+    persist_provider_profiles_to_db(&mut connection, &next)?;
     Ok(provider_profiles_dto_from_snapshot(&next))
 }
 
@@ -123,21 +114,8 @@ pub(crate) fn load_provider_profiles_snapshot<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
 ) -> CommandResult<ProviderProfilesSnapshot> {
-    let provider_profiles_path = state.provider_profiles_file(app)?;
-    let provider_profile_credentials_path = state.provider_profile_credential_store_file(app)?;
-    let legacy_settings_path = state.runtime_settings_file(app)?;
-    let legacy_openrouter_credentials_path = state.openrouter_credential_file(app)?;
-    let legacy_openai_auth_path = state
-        .auth_store_file(app)
-        .map_err(map_auth_store_error_to_command_error)?;
-
-    load_or_migrate_provider_profiles_from_paths(
-        &provider_profiles_path,
-        &provider_profile_credentials_path,
-        &legacy_settings_path,
-        &legacy_openrouter_credentials_path,
-        &legacy_openai_auth_path,
-    )
+    let connection = open_global_database(&state.global_db_path(app)?)?;
+    load_provider_profiles_or_default(&connection)
 }
 
 pub(crate) fn provider_profiles_dto_from_snapshot(

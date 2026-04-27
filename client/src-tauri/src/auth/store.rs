@@ -6,12 +6,12 @@ use tauri::{AppHandle, Runtime};
 use super::{now_timestamp, AuthFlowError, OPENAI_CODEX_PROVIDER_ID};
 use crate::{
     commands::{CommandError, RuntimeAuthPhase},
+    global_db::open_global_database,
     provider_profiles::{
-        build_openai_default_profile, load_or_migrate_provider_profiles_from_paths,
-        persist_provider_profiles_snapshot, ProviderProfileCredentialLink,
-        ProviderProfilesSnapshot, OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        build_openai_default_profile, load_provider_profiles_or_default,
+        persist_provider_profiles_to_db, ProviderProfileCredentialLink, ProviderProfilesSnapshot,
+        OPENAI_CODEX_DEFAULT_PROFILE_ID,
     },
-    runtime::openai_codex_provider,
     state::DesktopState,
 };
 
@@ -127,13 +127,10 @@ pub fn sync_openai_profile_link<R: Runtime>(
     preferred_profile_id: Option<&str>,
     session: Option<&StoredOpenAiCodexSession>,
 ) -> Result<(), AuthFlowError> {
-    let provider_profiles_path = state
-        .provider_profiles_file(app)
+    let mut connection = open_global_database(&state.global_db_path(app).map_err(map_command_error_to_auth_error)?)
         .map_err(map_command_error_to_auth_error)?;
-    let provider_profile_credentials_path = state
-        .provider_profile_credential_store_file(app)
-        .map_err(map_command_error_to_auth_error)?;
-    let mut snapshot = load_provider_profiles_snapshot(app, state)?;
+    let mut snapshot =
+        load_provider_profiles_or_default(&connection).map_err(map_provider_profiles_error)?;
 
     let next_link = session.map(openai_profile_link_from_session).transpose()?;
     let target_profile_ids =
@@ -160,12 +157,8 @@ pub fn sync_openai_profile_link<R: Runtime>(
     }
 
     snapshot.metadata.updated_at = updated_at;
-    persist_provider_profiles_snapshot(
-        &provider_profiles_path,
-        &provider_profile_credentials_path,
-        &snapshot,
-    )
-    .map_err(map_provider_profiles_error)
+    persist_provider_profiles_to_db(&mut connection, &snapshot)
+        .map_err(map_provider_profiles_error)
 }
 
 pub fn ensure_openai_profile_target<R: Runtime>(
@@ -183,29 +176,13 @@ fn load_provider_profiles_snapshot<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
 ) -> Result<ProviderProfilesSnapshot, AuthFlowError> {
-    let provider_profiles_path = state
-        .provider_profiles_file(app)
-        .map_err(map_command_error_to_auth_error)?;
-    let provider_profile_credentials_path = state
-        .provider_profile_credential_store_file(app)
-        .map_err(map_command_error_to_auth_error)?;
-    let legacy_settings_path = state
-        .runtime_settings_file(app)
-        .map_err(map_command_error_to_auth_error)?;
-    let legacy_openrouter_credentials_path = state
-        .openrouter_credential_file(app)
-        .map_err(map_command_error_to_auth_error)?;
-    let legacy_openai_auth_path =
-        state.auth_store_file_for_provider(app, openai_codex_provider())?;
-
-    load_or_migrate_provider_profiles_from_paths(
-        &provider_profiles_path,
-        &provider_profile_credentials_path,
-        &legacy_settings_path,
-        &legacy_openrouter_credentials_path,
-        &legacy_openai_auth_path,
+    let connection = open_global_database(
+        &state
+            .global_db_path(app)
+            .map_err(map_command_error_to_auth_error)?,
     )
-    .map_err(map_provider_profiles_error)
+    .map_err(map_command_error_to_auth_error)?;
+    load_provider_profiles_or_default(&connection).map_err(map_provider_profiles_error)
 }
 
 fn validate_target_openai_profile(

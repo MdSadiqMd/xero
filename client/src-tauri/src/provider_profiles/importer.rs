@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::{fs, path::Path};
+
+use rusqlite::Connection;
 
 use crate::{
     auth::{load_latest_openai_codex_session, AuthFlowError, StoredOpenAiCodexSession},
@@ -11,47 +13,191 @@ use crate::{
     runtime::{OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID},
 };
 
-use super::store::{
-    build_openai_default_profile, build_openrouter_default_profile,
-    default_provider_profiles_snapshot, load_provider_profiles_from_paths,
-    persist_provider_profiles_snapshot, restore_file_snapshot, snapshot_existing_file,
-    OpenRouterProfileCredentialEntry, ProviderProfileCredentialLink,
-    ProviderProfileCredentialsFile, ProviderProfilesMetadataFile, ProviderProfilesMigrationState,
-    ProviderProfilesSnapshot, OPENAI_CODEX_DEFAULT_PROFILE_ID, OPENROUTER_DEFAULT_PROFILE_ID,
-    OPENROUTER_FALLBACK_MODEL_ID,
+use super::{
+    sql::persist_provider_profiles_to_db,
+    store::{
+        build_openai_default_profile, build_openrouter_default_profile,
+        decode_provider_profile_credentials_file, validate_provider_profiles_contract,
+        OpenRouterProfileCredentialEntry, ProviderProfileCredentialLink,
+        ProviderProfileCredentialsFile, ProviderProfilesMetadataFile,
+        ProviderProfilesMigrationState, ProviderProfilesSnapshot, OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
+    },
 };
 
 const LEGACY_MIGRATION_SOURCE: &str = "legacy_runtime_settings_v1";
 
-pub fn load_or_migrate_provider_profiles_from_paths(
+/// Imports legacy provider-profile JSON state into the global SQLite database.
+///
+/// Idempotent: if the global DB already has a metadata row, this returns Ok(()) without doing
+/// anything. Otherwise it tries:
+///   1. Current-schema JSON (`provider-profiles.json` + `provider-profile-credentials.json`)
+///   2. Pre-profiles legacy (runtime-settings.json + openrouter-credentials.json + openai-auth.json)
+/// If neither is found, the function returns Ok(()) and the application creates a default
+/// snapshot on first read.
+///
+/// JSON files are deleted only after a successful SQL write.
+pub fn import_legacy_provider_profiles(
+    connection: &mut Connection,
     metadata_path: &Path,
     credentials_path: &Path,
     legacy_settings_path: &Path,
     legacy_openrouter_credentials_path: &Path,
     legacy_openai_auth_path: &Path,
-) -> CommandResult<ProviderProfilesSnapshot> {
-    if let Some(snapshot) = load_provider_profiles_from_paths(metadata_path, credentials_path)? {
-        return Ok(snapshot);
+) -> CommandResult<()> {
+    if metadata_row_exists(connection)? {
+        return Ok(());
     }
 
-    let Some(snapshot) = build_legacy_provider_profiles_snapshot(
+    let snapshot = if let Some(snapshot) =
+        load_provider_profiles_from_paths(metadata_path, credentials_path)?
+    {
+        Some((snapshot, ImportedFrom::Current))
+    } else if let Some(snapshot) = build_legacy_provider_profiles_snapshot(
         legacy_settings_path,
         legacy_openrouter_credentials_path,
         legacy_openai_auth_path,
-    )?
-    else {
-        return Ok(default_provider_profiles_snapshot());
+    )? {
+        Some((snapshot, ImportedFrom::Legacy))
+    } else {
+        None
     };
 
-    persist_migrated_provider_profiles(
+    let Some((snapshot, source)) = snapshot else {
+        return Ok(());
+    };
+
+    persist_provider_profiles_to_db(connection, &snapshot)?;
+
+    match source {
+        ImportedFrom::Current => {
+            remove_file_if_exists(metadata_path)?;
+            remove_file_if_exists(credentials_path)?;
+        }
+        ImportedFrom::Legacy => {
+            remove_file_if_exists(legacy_settings_path)?;
+            remove_file_if_exists(legacy_openrouter_credentials_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+enum ImportedFrom {
+    Current,
+    Legacy,
+}
+
+fn metadata_row_exists(connection: &Connection) -> CommandResult<bool> {
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM provider_profiles_metadata WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            CommandError::retryable(
+                "provider_profiles_read_failed",
+                format!("Cadence could not probe provider_profiles_metadata: {error}"),
+            )
+        })?;
+    Ok(count > 0)
+}
+
+fn load_provider_profiles_from_paths(
+    metadata_path: &Path,
+    credentials_path: &Path,
+) -> CommandResult<Option<ProviderProfilesSnapshot>> {
+    let metadata_exists = metadata_path.exists();
+    let credentials_exists = credentials_path.exists();
+
+    if !metadata_exists && !credentials_exists {
+        return Ok(None);
+    }
+
+    if !metadata_exists && credentials_exists {
+        return Err(CommandError::user_fixable(
+            "provider_profiles_contract_failed",
+            format!(
+                "Cadence found provider-profile credentials at {} without the matching provider-profile metadata file at {}.",
+                credentials_path.display(),
+                metadata_path.display()
+            ),
+        ));
+    }
+
+    let metadata = read_metadata_file(metadata_path)?.expect("metadata exists");
+    let credentials = read_credentials_file(credentials_path)?.unwrap_or_default();
+
+    Ok(Some(validate_provider_profiles_contract(
+        metadata,
+        credentials,
         metadata_path,
         credentials_path,
-        legacy_settings_path,
-        legacy_openrouter_credentials_path,
-        &snapshot,
-    )?;
+    )?))
+}
 
-    Ok(snapshot)
+fn read_metadata_file(path: &Path) -> CommandResult<Option<ProviderProfilesMetadataFile>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(path).map_err(|error| {
+        CommandError::retryable(
+            "provider_profiles_read_failed",
+            format!(
+                "Cadence could not read the app-local provider-profile metadata file at {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+
+    let parsed = serde_json::from_str::<ProviderProfilesMetadataFile>(&contents).map_err(|error| {
+        CommandError::user_fixable(
+            "provider_profiles_decode_failed",
+            format!(
+                "Cadence could not decode the app-local provider-profile metadata file at {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+
+    Ok(Some(parsed))
+}
+
+fn read_credentials_file(path: &Path) -> CommandResult<Option<ProviderProfileCredentialsFile>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(path).map_err(|error| {
+        CommandError::retryable(
+            "provider_profile_credentials_read_failed",
+            format!(
+                "Cadence could not read the app-local provider-profile credential file at {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+
+    Ok(Some(decode_provider_profile_credentials_file(
+        &contents, path,
+    )?))
+}
+
+fn remove_file_if_exists(path: &Path) -> CommandResult<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    fs::remove_file(path).map_err(|error| {
+        CommandError::retryable(
+            "provider_profiles_legacy_cleanup_failed",
+            format!(
+                "Cadence imported {} into the global database but could not delete the legacy file: {error}",
+                path.display()
+            ),
+        )
+    })
 }
 
 fn build_legacy_provider_profiles_snapshot(
@@ -181,87 +327,6 @@ fn build_legacy_provider_profiles_snapshot(
     }))
 }
 
-fn persist_migrated_provider_profiles(
-    metadata_path: &Path,
-    credentials_path: &Path,
-    legacy_settings_path: &Path,
-    legacy_openrouter_credentials_path: &Path,
-    snapshot: &ProviderProfilesSnapshot,
-) -> CommandResult<()> {
-    let previous_metadata = snapshot_existing_file(metadata_path, "provider_profiles")?;
-    let previous_credentials =
-        snapshot_existing_file(credentials_path, "provider_profile_credentials")?;
-    let previous_legacy_settings =
-        snapshot_existing_file(legacy_settings_path, "provider_profiles_migration")?;
-    let previous_legacy_openrouter_credentials = snapshot_existing_file(
-        legacy_openrouter_credentials_path,
-        "provider_profiles_migration",
-    )?;
-
-    persist_provider_profiles_snapshot(metadata_path, credentials_path, snapshot)?;
-
-    let cleanup_result = (|| -> CommandResult<()> {
-        restore_file_snapshot(
-            legacy_settings_path,
-            None,
-            "provider_profiles_migration_cleanup",
-        )?;
-        restore_file_snapshot(
-            legacy_openrouter_credentials_path,
-            None,
-            "provider_profiles_migration_cleanup",
-        )?;
-        Ok(())
-    })();
-
-    if let Err(error) = cleanup_result {
-        let metadata_rollback = restore_file_snapshot(
-            metadata_path,
-            previous_metadata.as_deref(),
-            "provider_profiles_rollback",
-        );
-        let credentials_rollback = restore_file_snapshot(
-            credentials_path,
-            previous_credentials.as_deref(),
-            "provider_profile_credentials_rollback",
-        );
-        let legacy_settings_rollback = restore_file_snapshot(
-            legacy_settings_path,
-            previous_legacy_settings.as_deref(),
-            "provider_profiles_migration_rollback",
-        );
-        let legacy_openrouter_rollback = restore_file_snapshot(
-            legacy_openrouter_credentials_path,
-            previous_legacy_openrouter_credentials.as_deref(),
-            "provider_profiles_migration_rollback",
-        );
-
-        return match (
-            metadata_rollback,
-            credentials_rollback,
-            legacy_settings_rollback,
-            legacy_openrouter_rollback,
-        ) {
-            (Ok(()), Ok(()), Ok(()), Ok(())) => Err(error),
-            (metadata_result, credentials_result, settings_result, openrouter_result) => {
-                Err(CommandError::retryable(
-                    "provider_profiles_migration_rollback_failed",
-                    format!(
-                        "Cadence failed to finalize legacy provider-profile migration and could not fully restore the previous app-local file set (metadata rollback: {}; credential rollback: {}; runtime-settings rollback: {}; openrouter-credentials rollback: {}). Cleanup error: {}",
-                        rollback_message(metadata_result),
-                        rollback_message(credentials_result),
-                        rollback_message(settings_result),
-                        rollback_message(openrouter_result),
-                        error.message
-                    ),
-                ))
-            }
-        };
-    }
-
-    Ok(())
-}
-
 fn openai_session_link(
     legacy_openai_auth_path: &Path,
     session: Option<&StoredOpenAiCodexSession>,
@@ -342,12 +407,5 @@ fn map_auth_store_error(error: AuthFlowError) -> CommandError {
         CommandError::retryable(code, error.message)
     } else {
         CommandError::user_fixable(code, error.message)
-    }
-}
-
-fn rollback_message(result: CommandResult<()>) -> String {
-    match result {
-        Ok(()) => "ok".into(),
-        Err(error) => format!("{}: {}", error.code, error.message),
     }
 }
