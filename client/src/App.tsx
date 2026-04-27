@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AgentRuntime } from '@/components/cadence/agent-runtime'
 import { SetupEmptyState } from '@/components/cadence/agent-runtime/setup-empty-state'
 import { AgentSessionsSidebar } from '@/components/cadence/agent-sessions-sidebar'
@@ -37,7 +37,44 @@ export interface CadenceAppProps {
 
 export function CadenceApp({ adapter }: CadenceAppProps) {
   const resolvedAdapter = adapter ?? DefaultCadenceDesktopAdapter
-  const [activeView, setActiveView] = useState<View>('phases')
+  const [activeView, setActiveViewRaw] = useState<View>('phases')
+
+  // Tab switches simultaneously trigger the cross-fade of view panes AND the
+  // auto-collapse of the project rail / sessions sidebar (both via useEffect
+  // below). Animating the sidebar widths at the same time as heavy view
+  // contents (CodeMirror, agent UI, phase view) re-layout produces visible
+  // jitter on slower hosts, so we mark the document as `data-layout-shifting`
+  // for one frame around the change. CSS in globals.css disables the
+  // `.sidebar-motion-island` width transitions while the attribute is set —
+  // sidebars snap to their new widths instantly, leaving only the cheap
+  // GPU-driven pane cross-fade animating on the main thread. User-initiated
+  // toggles (e.g. clicking the rail collapse button) still animate normally.
+  const layoutShiftFrameRef = useRef<number | null>(null)
+  const setActiveView = useCallback((view: View) => {
+    setActiveViewRaw((current) => {
+      if (current === view) return current
+      if (typeof window !== 'undefined') {
+        document.documentElement.dataset.layoutShifting = 'true'
+        if (layoutShiftFrameRef.current !== null) {
+          window.cancelAnimationFrame(layoutShiftFrameRef.current)
+        }
+        layoutShiftFrameRef.current = window.requestAnimationFrame(() => {
+          layoutShiftFrameRef.current = window.requestAnimationFrame(() => {
+            delete document.documentElement.dataset.layoutShifting
+            layoutShiftFrameRef.current = null
+          })
+        })
+      }
+      return view
+    })
+  }, [])
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && layoutShiftFrameRef.current !== null) {
+        window.cancelAnimationFrame(layoutShiftFrameRef.current)
+      }
+    }
+  }, [])
   const {
     projects,
     activeProject,
@@ -445,7 +482,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     const isExecutionVisible = activeView === 'execution'
     const getViewPaneClassName = (visible: boolean) =>
       cn(
-        'absolute inset-0 flex min-h-0 min-w-0 transform-gpu overflow-hidden transition-[opacity,transform] motion-standard',
+        'view-pane absolute inset-0 flex min-h-0 min-w-0 transform-gpu overflow-hidden transition-[opacity,transform] motion-standard',
         visible
           ? 'z-10 translate-x-0 opacity-100'
           : 'pointer-events-none z-0 translate-x-2 opacity-0',

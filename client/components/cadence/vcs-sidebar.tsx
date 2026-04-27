@@ -178,16 +178,18 @@ export function VcsSidebar(props: VcsSidebarProps) {
         transition={contentTransition}
       />
       <motion.aside
-        animate={{ width: renderedWidth, x: open ? 0 : renderedWidth }}
+        animate={{ x: open ? 0 : renderedWidth }}
         aria-hidden={!open}
         aria-label="Source control panel"
         className={cn(
-          "fixed top-11 bottom-8 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl will-change-[transform,width]",
+          "gpu-layer fixed top-11 bottom-8 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl",
         )}
         initial={false}
         inert={!open ? true : undefined}
         style={{
           width: renderedWidth,
+          contain: "layout paint style",
+          willChange: "transform",
         }}
         transition={widthTransition}
       >

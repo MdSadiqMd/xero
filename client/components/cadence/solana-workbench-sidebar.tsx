@@ -19,11 +19,10 @@ import {
   Wallet,
   Zap,
 } from "lucide-react"
-import { motion } from "motion/react"
 import { cn } from "@/lib/utils"
 import {
   useDeferredSidebarActivation,
-  useSidebarMotion,
+  useSidebarWidthMotion,
 } from "@/lib/sidebar-motion"
 import {
   Breadcrumb,
@@ -111,7 +110,7 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
     active: workbenchActive,
   } = useDeferredSidebarActivation(open)
   const targetWidth = open ? width : 0
-  const { widthTransition } = useSidebarMotion(isResizing)
+  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
   const widthRef = useRef(width)
   widthRef.current = width
 
@@ -554,17 +553,20 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
   const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label ?? "Personas"
 
   return (
-    <motion.aside
-      animate={{ borderLeftWidth: open ? 1 : 0, width: targetWidth }}
+    <aside
       aria-hidden={!open}
       className={cn(
-        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar will-change-[width]",
+        widthMotion.islandClassName,
+        "relative flex shrink-0 flex-col overflow-hidden bg-sidebar",
+        open ? "border-l border-border/80" : "border-l-0",
       )}
-      initial={false}
       inert={!open ? true : undefined}
-      onAnimationComplete={activateWorkbenchAfterAnimation}
-      style={{ width: targetWidth }}
-      transition={widthTransition}
+      onTransitionEnd={(event) => {
+        if (event.target === event.currentTarget && event.propertyName === "width") {
+          activateWorkbenchAfterAnimation()
+        }
+      }}
+      style={widthMotion.style}
     >
       <div
         aria-label="Resize Solana workbench sidebar"
@@ -952,7 +954,7 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
       </div>
       </div>
       </div>
-    </motion.aside>
+    </aside>
   )
 }
 

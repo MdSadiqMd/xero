@@ -721,7 +721,7 @@ export function CadenceShell({
   return (
     <div className="cadence-window-shell flex h-screen flex-col overflow-hidden bg-background text-foreground select-none">
       {titlebar}
-      <main className="flex min-h-0 flex-1">{children}</main>
+      <main className="shell-main-row flex min-h-0 flex-1">{children}</main>
       <StatusFooter
         git={footer?.git}
         spend={footer?.spend}

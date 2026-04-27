@@ -164,15 +164,19 @@ export function UsageStatsSidebar(props: UsageStatsSidebarProps) {
         transition={contentTransition}
       />
       <motion.aside
-        animate={{ width, x: open ? 0 : width }}
+        animate={{ x: open ? 0 : width }}
         aria-hidden={!open}
         aria-label="Project usage statistics"
         className={cn(
-          "fixed top-11 bottom-8 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl will-change-[transform,width]",
+          "gpu-layer fixed top-11 bottom-8 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl",
         )}
         initial={false}
         inert={!open ? true : undefined}
-        style={{ width }}
+        style={{
+          width,
+          contain: "layout paint style",
+          willChange: "transform",
+        }}
         transition={widthTransition}
       >
         <div

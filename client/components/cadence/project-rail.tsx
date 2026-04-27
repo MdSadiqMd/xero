@@ -11,7 +11,7 @@ import { Archive, Loader2, MoreHorizontal, PanelLeftOpen, Plus, RefreshCw, Trash
 import { motion, type Transition } from 'motion/react'
 
 import { cn } from '@/lib/utils'
-import { useSidebarMotion } from '@/lib/sidebar-motion'
+import { useSidebarMotion, useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import {
   AgentSessionsSidebarItem,
   readPinnedSessionIds,
@@ -129,8 +129,8 @@ export function ProjectRail({
   const {
     contentTransition: railContentTransition,
     layoutTransition: railLayoutTransition,
-    widthTransition: railWidthTransition,
   } = useSidebarMotion(isResizing)
+  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
   const widthRef = useRef(width)
   widthRef.current = width
 
@@ -194,16 +194,14 @@ export function ProjectRail({
   }, [collapsed])
 
   return (
-    <motion.aside
-      animate={{ width: targetWidth }}
+    <aside
       className={cn(
-        'motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-r border-border/80 bg-sidebar will-change-[width]',
+        widthMotion.islandClassName,
+        'relative flex shrink-0 flex-col overflow-hidden border-r border-border/80 bg-sidebar',
         collapsed && 'w-11',
       )}
       data-collapsed={collapsed ? 'true' : 'false'}
-      initial={false}
-      style={{ width: targetWidth }}
-      transition={railWidthTransition}
+      style={widthMotion.style}
     >
       {!collapsed ? (
         <div
@@ -360,7 +358,7 @@ export function ProjectRail({
           </motion.span>
         </motion.div>
       )}
-    </motion.aside>
+    </aside>
   )
 }
 

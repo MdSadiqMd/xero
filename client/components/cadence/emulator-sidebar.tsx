@@ -10,11 +10,10 @@ import {
   Smartphone,
   X,
 } from "lucide-react"
-import { motion } from "motion/react"
 import { cn } from "@/lib/utils"
 import {
   useDeferredSidebarActivation,
-  useSidebarMotion,
+  useSidebarWidthMotion,
 } from "@/lib/sidebar-motion"
 import {
   useEmulatorSession,
@@ -98,7 +97,7 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
     active: sessionActive,
   } = useDeferredSidebarActivation(open)
   const targetWidth = open ? width : 0
-  const { widthTransition } = useSidebarMotion(isResizing)
+  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
   const widthRef = useRef(width)
   widthRef.current = width
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
@@ -263,18 +262,21 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
   )
 
   return (
-    <motion.aside
-      animate={{ borderLeftWidth: open ? 1 : 0, width: targetWidth }}
+    <aside
       aria-hidden={!open}
       aria-label={meta.label}
       className={cn(
-        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar will-change-[width]",
+        widthMotion.islandClassName,
+        "relative flex shrink-0 flex-col overflow-hidden bg-sidebar",
+        open ? "border-l border-border/80" : "border-l-0",
       )}
-      initial={false}
       inert={!open ? true : undefined}
-      onAnimationComplete={activateSessionAfterAnimation}
-      style={{ width: targetWidth }}
-      transition={widthTransition}
+      onTransitionEnd={(event) => {
+        if (event.target === event.currentTarget && event.propertyName === "width") {
+          activateSessionAfterAnimation()
+        }
+      }}
+      style={widthMotion.style}
     >
       <div
         aria-label={meta.ariaResize}
@@ -390,7 +392,7 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
         platform={platform}
       />
       </div>
-    </motion.aside>
+    </aside>
   )
 }
 

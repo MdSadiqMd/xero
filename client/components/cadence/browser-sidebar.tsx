@@ -12,9 +12,8 @@ import {
   RotateCw,
   X,
 } from "lucide-react"
-import { motion } from "motion/react"
 import { cn } from "@/lib/utils"
-import { useSidebarMotion } from "@/lib/sidebar-motion"
+import { useSidebarWidthMotion } from "@/lib/sidebar-motion"
 import {
   useCookieImport,
   type CookieImportStatus,
@@ -140,7 +139,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const [navError, setNavError] = useState<string | null>(null)
   const [showCookieBanner, setShowCookieBanner] = useState(false)
   const targetWidth = open ? width : 0
-  const { widthTransition } = useSidebarMotion(isResizing)
+  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
   const {
     browsers: cookieBrowsers,
     status: importStatus,
@@ -510,16 +509,15 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const showTabs = tabs.length > 0
 
   return (
-    <motion.aside
-      animate={{ borderLeftWidth: open ? 1 : 0, width: targetWidth }}
+    <aside
       aria-hidden={!open}
       className={cn(
-        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar will-change-[width]",
+        widthMotion.islandClassName,
+        "relative flex shrink-0 flex-col overflow-hidden bg-sidebar",
+        open ? "border-l border-border/80" : "border-l-0",
       )}
-      initial={false}
       inert={!open ? true : undefined}
-      style={{ width: targetWidth }}
-      transition={widthTransition}
+      style={widthMotion.style}
     >
       <div
         aria-label="Resize browser sidebar"
@@ -671,7 +669,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
         ) : null}
       </div>
       </div>
-    </motion.aside>
+    </aside>
   )
 }
 

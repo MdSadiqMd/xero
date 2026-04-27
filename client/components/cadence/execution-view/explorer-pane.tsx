@@ -8,10 +8,9 @@ import {
   type ReactNode,
 } from 'react'
 import { ChevronRight, FilePlus, FolderPlus, RotateCcw, Search, X } from 'lucide-react'
-import { motion } from 'motion/react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { useSidebarMotion } from '@/lib/sidebar-motion'
+import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import type { FileSystemNode } from '@/src/lib/file-system-tree'
 import { FileTree } from '../file-tree'
 
@@ -94,7 +93,7 @@ export function ExplorerPane({
   const [width, setWidth] = useState(() => readPersistedWidth() ?? DEFAULT_WIDTH)
   const [maxWidth, setMaxWidth] = useState(viewportMaxWidth)
   const [isResizing, setIsResizing] = useState(false)
-  const { widthTransition } = useSidebarMotion(isResizing)
+  const widthMotion = useSidebarWidthMotion(width, { isResizing })
   const widthRef = useRef(width)
   widthRef.current = width
 
@@ -158,14 +157,12 @@ export function ExplorerPane({
   }, [])
 
   return (
-    <motion.aside
-      animate={{ width }}
+    <aside
       className={cn(
-        'motion-layout-island relative flex shrink-0 flex-col border-r border-border bg-sidebar will-change-[width]',
+        widthMotion.islandClassName,
+        'relative flex shrink-0 flex-col border-r border-border bg-sidebar',
       )}
-      initial={false}
-      style={{ width }}
-      transition={widthTransition}
+      style={widthMotion.style}
     >
       <div
         aria-label="Resize explorer sidebar"
@@ -257,7 +254,7 @@ export function ExplorerPane({
           onCopyPath={onCopyPath}
         />
       )}
-    </motion.aside>
+    </aside>
   )
 }
 

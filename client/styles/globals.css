@@ -527,6 +527,59 @@
   .motion-layout-island {
     contain: layout style;
   }
+
+  /* Sidebar islands are flex siblings of the main content; when their width
+   * animates, the browser would normally reflow + repaint everything in the
+   * row. `contain: layout paint style` isolates layout/paint to the sidebar
+   * subtree, `transform: translateZ(0)` promotes it to its own GPU layer, and
+   * `will-change: width` hints to the browser to keep that layer hot during
+   * the transition.
+   *
+   * Pair this class with the inline `transition: width …` style returned by
+   * `useSidebarWidthMotion`. CSS-driven transitions on width are noticeably
+   * smoother than JS spring loops for this layout pattern — the browser
+   * handles timing in C++ and skips the React reconciliation pass per frame. */
+  .sidebar-motion-island {
+    contain: layout paint style;
+    transform: translateZ(0);
+    will-change: width;
+    isolation: isolate;
+  }
+
+  /* Apply to elements that animate transform/opacity for slides — keeps them
+   * on their own composite layer so the browser can re-composite without
+   * repainting. */
+  .gpu-layer {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+  }
+
+  /* Containment for the main content area so a sidebar's width change
+   * doesn't propagate paint invalidation up to the root and back down through
+   * heavy children (editors, file trees, agent UIs). */
+  .shell-main-row {
+    contain: layout paint;
+  }
+
+  /* When `<html>` carries `data-layout-shifting`, the harness is in the
+   * middle of a tab switch (or another change that shifts multiple sidebars
+   * + the main content at once). Snap sidebar widths instead of animating
+   * them — the smooth pane cross-fade is enough visual feedback, and the
+   * extra simultaneous layout work was causing visible jitter on slower
+   * hosts. User-initiated toggles still animate normally. */
+  html[data-layout-shifting='true'] .sidebar-motion-island {
+    transition: none !important;
+  }
+
+  /* Keep inactive view panes from re-laying out their heavy children every
+   * frame as the main content's width changes during a sidebar animation.
+   * `contain: layout paint` isolates internal layout/paint; combined with
+   * the panes already using transform-gpu, the inactive panes stay on their
+   * own composite layer and don't fight the active pane for main-thread
+   * time. */
+  .view-pane {
+    contain: layout paint;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -23,10 +23,8 @@ import {
   Search,
   Trash2,
 } from 'lucide-react'
-import { motion } from 'motion/react'
-
 import { cn } from '@/lib/utils'
-import { useSidebarMotion } from '@/lib/sidebar-motion'
+import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -168,7 +166,7 @@ export function AgentSessionsSidebar({
   const [renameError, setRenameError] = useState<string | null>(null)
   const [pendingRename, setPendingRename] = useState(false)
   const targetWidth = collapsed ? 0 : width
-  const { widthTransition } = useSidebarMotion(isResizing)
+  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
   const widthRef = useRef(width)
   widthRef.current = width
 
@@ -420,17 +418,15 @@ export function AgentSessionsSidebar({
   )
 
   return (
-    <motion.aside
-      animate={{ borderRightWidth: collapsed ? 0 : 1, width: targetWidth }}
+    <aside
       aria-hidden={collapsed}
       className={cn(
-        'motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar will-change-[width]',
-        collapsed && 'w-0',
+        widthMotion.islandClassName,
+        'relative flex shrink-0 flex-col overflow-hidden bg-sidebar',
+        collapsed ? 'border-r-0' : 'border-r border-border',
       )}
-      initial={false}
       inert={collapsed ? true : undefined}
-      style={{ width: targetWidth }}
-      transition={widthTransition}
+      style={widthMotion.style}
     >
       {!collapsed ? (
         <div
@@ -637,7 +633,7 @@ export function AgentSessionsSidebar({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </motion.aside>
+    </aside>
   )
 }
 

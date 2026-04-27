@@ -4,7 +4,7 @@ import { useCallback, useMemo, useRef, useState } from "react"
 import { ChevronRight, Play, Search } from "lucide-react"
 import { motion } from "motion/react"
 import { cn } from "@/lib/utils"
-import { useSidebarMotion } from "@/lib/sidebar-motion"
+import { useSidebarMotion, useSidebarWidthMotion } from "@/lib/sidebar-motion"
 import { Asteroids } from "./games/asteroids"
 import { Breakout } from "./games/breakout"
 import { Galaga } from "./games/galaga"
@@ -303,7 +303,8 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
   const [isResizing, setIsResizing] = useState(false)
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null)
   const targetWidth = open ? width : 0
-  const { contentTransition, widthTransition } = useSidebarMotion(isResizing)
+  const { contentTransition } = useSidebarMotion(isResizing)
+  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
   const widthRef = useRef(width)
   widthRef.current = width
   const widthBeforeSelectRef = useRef<number | null>(null)
@@ -386,16 +387,15 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
   }, [query])
 
   return (
-    <motion.aside
-      animate={{ borderLeftWidth: open ? 1 : 0, width: targetWidth }}
+    <aside
       aria-hidden={!open}
       className={cn(
-        "motion-layout-island relative flex shrink-0 flex-col overflow-hidden border-l border-border/80 bg-sidebar will-change-[width]",
+        widthMotion.islandClassName,
+        "relative flex shrink-0 flex-col overflow-hidden bg-sidebar",
+        open ? "border-l border-border/80" : "border-l-0",
       )}
-      initial={false}
       inert={!open ? true : undefined}
-      style={{ width: targetWidth }}
-      transition={widthTransition}
+      style={widthMotion.style}
     >
       <div
         aria-label="Resize arcade sidebar"
@@ -438,7 +438,7 @@ export function GamesSidebar({ open }: GamesSidebarProps) {
         )}
       </motion.div>
       </div>
-    </motion.aside>
+    </aside>
   )
 }
 
