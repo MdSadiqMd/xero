@@ -8,6 +8,7 @@ use crate::{
         OpenAiCompatibleAuthConfig, OpenRouterAuthConfig,
     },
     commands::CommandError,
+    global_db::global_database_path,
     notifications::NOTIFICATION_CREDENTIAL_STORE_FILE_NAME,
     provider_models::{
         ProviderModelCatalogRefreshRegistry, PROVIDER_MODEL_CATALOG_CACHE_FILE_NAME,
@@ -43,6 +44,7 @@ pub struct RuntimeStreamFailpoints {
 
 #[derive(Debug, Clone, Default)]
 pub struct DesktopState {
+    global_db_path_override: Option<PathBuf>,
     registry_file_override: Option<PathBuf>,
     auth_store_file_override: Option<PathBuf>,
     notification_credential_store_file_override: Option<PathBuf>,
@@ -72,6 +74,11 @@ pub struct DesktopState {
 }
 
 impl DesktopState {
+    pub fn with_global_db_path_override(mut self, path: PathBuf) -> Self {
+        self.global_db_path_override = Some(path);
+        self
+    }
+
     pub fn with_registry_file_override(mut self, path: PathBuf) -> Self {
         self.registry_file_override = Some(path);
         self
@@ -256,6 +263,17 @@ impl DesktopState {
                 format!("Cadence could not resolve the app-data directory: {error}"),
             )
         })
+    }
+
+    pub fn global_db_path<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+    ) -> Result<PathBuf, CommandError> {
+        if let Some(path) = &self.global_db_path_override {
+            return Ok(path.clone());
+        }
+
+        Ok(global_database_path(&self.app_data_dir(app)?))
     }
 
     pub fn autonomous_skill_cache_dir<R: Runtime>(

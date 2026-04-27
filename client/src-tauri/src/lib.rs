@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod commands;
 pub mod db;
+pub mod global_db;
 pub mod mcp;
 pub mod notifications;
 pub mod provider_models;
