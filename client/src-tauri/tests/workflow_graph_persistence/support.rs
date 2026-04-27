@@ -41,6 +41,7 @@ pub(crate) fn seed_project(
         deletions: 0,
     };
 
+    db::configure_project_database_paths(&root.path().join("app-data").join("cadence.db"));
     db::import_project(&repository, &ImportFailpoints::default()).expect("import project");
     canonical_root
 }

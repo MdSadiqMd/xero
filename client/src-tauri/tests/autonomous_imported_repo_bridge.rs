@@ -50,12 +50,12 @@ fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::MockRuntime> {
 }
 
 fn create_state(root: &TempDir) -> (DesktopState, PathBuf) {
-    let registry_path = root.path().join("app-data").join("project-registry.json");
-    let auth_store_path = root.path().join("app-data").join("openai-auth.json");
+    let global_db_path = root.path().join("app-data").join("cadence.db");
+    let auth_store_path = global_db_path.clone();
 
     (
         DesktopState::default()
-            .with_registry_file_override(registry_path)
+            .with_global_db_path_override(global_db_path)
             .with_auth_store_file_override(auth_store_path.clone())
             .with_autonomous_skill_cache_dir_override(
                 root.path().join("app-data").join("autonomous-skills"),
@@ -167,13 +167,14 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
     ensure_cadence_excluded(&repository, app.state::<DesktopState>().import_failpoints())
         .expect("exclude .cadence from imported repo git status");
 
-    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
-        .expect("import imported repo into repo-local db");
-
     let registry_path = app
         .state::<DesktopState>()
         .registry_file(&app.handle().clone())
         .expect("registry path");
+    db::configure_project_database_paths(&registry_path);
+    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
+        .expect("import imported repo into repo-local db");
+
     registry::replace_projects(
         &registry_path,
         vec![RegistryProjectRecord {

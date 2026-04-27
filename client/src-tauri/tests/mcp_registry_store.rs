@@ -2,26 +2,32 @@ use std::path::{Path, PathBuf};
 
 use cadence_desktop_lib::{
     commands::CommandError,
+    global_db::open_global_database,
     mcp::{
         apply_mcp_registry_import, default_mcp_registry, load_mcp_registry_from_path,
         parse_mcp_registry_import_file, persist_mcp_registry, McpConnectionDiagnostic,
         McpConnectionState, McpConnectionStatus, McpEnvironmentReference, McpRegistry,
-        McpServerRecord, McpTransport, MCP_REGISTRY_FILE_NAME,
+        McpServerRecord, McpTransport,
     },
 };
 use serde_json::json;
 
 fn registry_path(root: &tempfile::TempDir) -> PathBuf {
-    root.path().join("app-data").join(MCP_REGISTRY_FILE_NAME)
+    root.path().join("app-data").join("cadence.db")
 }
 
-fn write_json(path: &Path, value: serde_json::Value) {
-    std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent dir");
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(&value).expect("serialize json"),
-    )
-    .expect("write json file");
+fn write_registry_payload_rows(path: &Path, rows: Vec<serde_json::Value>) {
+    let connection = open_global_database(path).expect("open global database");
+    for (index, row) in rows.into_iter().enumerate() {
+        let payload = serde_json::to_string(&row).expect("serialize registry row");
+        let server_id = format!("fixture-row-{index}");
+        connection
+            .execute(
+                "INSERT INTO mcp_registry (server_id, payload, updated_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![server_id, payload, "2026-04-23T23:00:00Z"],
+            )
+            .expect("insert registry row");
+    }
 }
 
 fn stale_connection() -> McpConnectionState {
@@ -58,14 +64,14 @@ fn load_bootstraps_default_registry_when_file_is_missing() {
 
     assert_eq!(registry.version, 1);
     assert!(registry.servers.is_empty());
-    assert!(!path.exists());
+    assert!(path.exists());
 }
 
 #[test]
-fn load_accepts_empty_registry_file_bootstrap_shape() {
+fn load_accepts_empty_global_database_bootstrap_shape() {
     let root = tempfile::tempdir().expect("temp dir");
     let path = registry_path(&root);
-    write_json(&path, json!({}));
+    open_global_database(&path).expect("create empty global database");
 
     let registry = load_mcp_registry_from_path(&path).expect("load empty registry bootstrap");
 
@@ -148,18 +154,14 @@ fn load_rejects_blank_server_id() {
     let root = tempfile::tempdir().expect("temp dir");
     let path = registry_path(&root);
 
-    write_json(
+    write_registry_payload_rows(
         &path,
-        json!({
-            "version": 1,
-            "updatedAt": "2026-04-23T23:00:00Z",
-            "servers": [{
-                "id": "   ",
-                "name": "Bad",
-                "transport": {"kind": "stdio", "command": "node"},
-                "updatedAt": "2026-04-23T23:00:00Z"
-            }]
-        }),
+        vec![json!({
+            "id": "   ",
+            "name": "Bad",
+            "transport": {"kind": "stdio", "command": "node"},
+            "updatedAt": "2026-04-23T23:00:00Z"
+        })],
     );
 
     let error = load_mcp_registry_from_path(&path).expect_err("blank server id should fail");
@@ -173,18 +175,14 @@ fn load_rejects_unsupported_transport_url_scheme() {
     let root = tempfile::tempdir().expect("temp dir");
     let path = registry_path(&root);
 
-    write_json(
+    write_registry_payload_rows(
         &path,
-        json!({
-            "version": 1,
-            "updatedAt": "2026-04-23T23:00:00Z",
-            "servers": [{
-                "id": "bad-http",
-                "name": "Bad",
-                "transport": {"kind": "http", "url": "ftp://mcp.example.com"},
-                "updatedAt": "2026-04-23T23:00:00Z"
-            }]
-        }),
+        vec![json!({
+            "id": "bad-http",
+            "name": "Bad",
+            "transport": {"kind": "http", "url": "ftp://mcp.example.com"},
+            "updatedAt": "2026-04-23T23:00:00Z"
+        })],
     );
 
     let error =
@@ -199,26 +197,22 @@ fn load_rejects_duplicate_server_ids() {
     let root = tempfile::tempdir().expect("temp dir");
     let path = registry_path(&root);
 
-    write_json(
+    write_registry_payload_rows(
         &path,
-        json!({
-            "version": 1,
-            "updatedAt": "2026-04-23T23:00:00Z",
-            "servers": [
-                {
-                    "id": "dupe",
-                    "name": "First",
-                    "transport": {"kind": "stdio", "command": "node"},
-                    "updatedAt": "2026-04-23T23:00:00Z"
-                },
-                {
-                    "id": "dupe",
-                    "name": "Second",
-                    "transport": {"kind": "stdio", "command": "node"},
-                    "updatedAt": "2026-04-23T23:00:00Z"
-                }
-            ]
-        }),
+        vec![
+            json!({
+                "id": "dupe",
+                "name": "First",
+                "transport": {"kind": "stdio", "command": "node"},
+                "updatedAt": "2026-04-23T23:00:00Z"
+            }),
+            json!({
+                "id": "dupe",
+                "name": "Second",
+                "transport": {"kind": "stdio", "command": "node"},
+                "updatedAt": "2026-04-23T23:00:00Z"
+            }),
+        ],
     );
 
     let error = load_mcp_registry_from_path(&path).expect_err("duplicate server id should fail");
@@ -338,12 +332,12 @@ fn persist_returns_typed_error_when_registry_parent_is_not_a_directory() {
     let root = tempfile::tempdir().expect("temp dir");
     let blocked_parent = root.path().join("blocked-parent");
     std::fs::write(&blocked_parent, "not-a-directory").expect("write blocking file");
-    let path = blocked_parent.join(MCP_REGISTRY_FILE_NAME);
+    let path = blocked_parent.join("cadence.db");
 
     let error = persist_mcp_registry(&path, &default_mcp_registry())
         .expect_err("write should fail when parent is a file");
 
-    assert_eq!(error.code, "mcp_registry_directory_unavailable");
+    assert_eq!(error.code, "global_database_dir_unavailable");
 }
 
 #[test]
@@ -355,7 +349,7 @@ fn persist_returns_typed_error_when_atomic_persist_target_is_directory() {
     let error = persist_mcp_registry(&path, &default_mcp_registry())
         .expect_err("persist should fail when destination is a directory");
 
-    assert_eq!(error.code, "mcp_registry_write_failed");
+    assert_eq!(error.code, "global_database_open_failed");
 }
 
 #[test]

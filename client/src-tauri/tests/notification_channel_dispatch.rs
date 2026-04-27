@@ -156,6 +156,7 @@ fn seed_project(root: &TempDir, project_id: &str, repo_name: &str) -> PathBuf {
         deletions: 0,
     };
 
+    db::configure_project_database_paths(&root.path().join("app-data").join("cadence.db"));
     db::import_project(&repository, DesktopState::default().import_failpoints())
         .expect("import seeded project");
 

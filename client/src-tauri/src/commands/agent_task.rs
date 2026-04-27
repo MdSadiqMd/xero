@@ -458,6 +458,7 @@ fn locate_agent_run<R: Runtime>(
     run_id: &str,
 ) -> CommandResult<LocatedAgentRun> {
     let registry_path = state.registry_file(app)?;
+    crate::db::configure_project_database_paths(&registry_path);
     let registry = read_registry(&registry_path)?;
     for project in registry.projects {
         let repo_root = PathBuf::from(&project.root_path);

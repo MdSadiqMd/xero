@@ -287,7 +287,12 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
         }
     }
 
-    let active_profile = load_provider_profile_selection(app, state, requested_controls.as_ref())?;
+    let active_profile = load_provider_profile_selection(
+        app,
+        state,
+        requested_controls.as_ref(),
+        state.owned_agent_provider_config_override().is_none(),
+    )?;
     let run_controls = resolve_owned_runtime_run_control_state(
         &active_profile,
         requested_controls.as_ref(),
@@ -456,7 +461,8 @@ pub(crate) fn launch_or_reconnect_detached_runtime_run<R: Runtime>(
         });
     }
 
-    let active_profile = load_provider_profile_selection(app, state, requested_controls.as_ref())?;
+    let active_profile =
+        load_provider_profile_selection(app, state, requested_controls.as_ref(), true)?;
     if let Some(existing) = current
         .as_ref()
         .filter(|snapshot| requires_matching_provider_for_new_launch(snapshot))
@@ -558,7 +564,12 @@ pub(crate) fn normalize_requested_runtime_run_controls<R: Runtime>(
     state: &DesktopState,
     requested_controls: &RuntimeRunControlInputDto,
 ) -> CommandResult<RuntimeRunControlInputDto> {
-    let active_profile = load_provider_profile_selection(app, state, Some(requested_controls))?;
+    let active_profile = load_provider_profile_selection(
+        app,
+        state,
+        Some(requested_controls),
+        state.owned_agent_provider_config_override().is_none(),
+    )?;
     let control_state = resolve_initial_runtime_run_control_state(
         app,
         state,
@@ -1033,6 +1044,7 @@ fn load_provider_profile_selection<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
     requested_controls: Option<&RuntimeRunControlInputDto>,
+    require_ready_profile: bool,
 ) -> CommandResult<ActiveProviderProfileSelection> {
     let provider_profiles = load_provider_profiles_snapshot(app, state)?;
     let requested_profile_id = requested_controls
@@ -1055,6 +1067,14 @@ fn load_provider_profile_selection<R: Runtime>(
             )
         })?,
     };
+
+    if !require_ready_profile {
+        return Ok(ActiveProviderProfileSelection {
+            profile_id: active_profile.profile_id.clone(),
+            provider_id: active_profile.provider_id.clone(),
+            model_id: active_profile.model_id.clone(),
+        });
+    }
 
     if active_profile.provider_id == OPENAI_CODEX_PROVIDER_ID {
         let auth_store_path = state
@@ -1264,6 +1284,10 @@ fn prepare_runtime_supervisor_launch<R: Runtime>(
     }
 
     let mut launch_env = RuntimeSupervisorLaunchEnv::default();
+    launch_env.insert(
+        crate::runtime::supervisor::CADENCE_GLOBAL_DB_PATH_ENV,
+        state.global_db_path(app)?.to_string_lossy().to_string(),
+    );
     if matches!(
         runtime.provider_id.as_str(),
         ANTHROPIC_PROVIDER_ID | BEDROCK_PROVIDER_ID | VERTEX_PROVIDER_ID

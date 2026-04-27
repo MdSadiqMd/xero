@@ -9,6 +9,10 @@ use cadence_desktop_lib::{
     configure_builder_with_state,
     db::{self, project_store},
     git::repository::CanonicalRepository,
+    mcp::{
+        persist_mcp_registry, McpConnectionDiagnostic, McpConnectionState, McpConnectionStatus,
+        McpRegistry, McpServerRecord, McpTransport,
+    },
     registry::{self, RegistryProjectRecord},
     runtime::{CadenceDiagnosticStatus, CadenceDiagnosticSubject, CadenceDoctorReportMode},
     state::DesktopState,
@@ -25,6 +29,7 @@ fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::MockRuntime> {
 fn create_state(root: &TempDir) -> DesktopState {
     let app_data = root.path().join("app-data");
     DesktopState::default()
+        .with_global_db_path_override(app_data.join("cadence.db"))
         .with_registry_file_override(app_data.join("project-registry.json"))
         .with_auth_store_file_override(app_data.join("openai-auth.json"))
         .with_provider_profiles_file_override(app_data.join("provider-profiles.json"))
@@ -89,13 +94,14 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
         deletions: 0,
     };
 
-    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
-        .expect("import project into repo-local db");
-
     let registry_path = app
         .state::<DesktopState>()
         .registry_file(&app.handle().clone())
         .expect("registry path");
+    db::configure_project_database_paths(&registry_path);
+    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
+        .expect("import project into repo-local db");
+
     registry::replace_projects(
         &registry_path,
         vec![RegistryProjectRecord {
@@ -119,29 +125,33 @@ fn run_doctor_report_returns_quick_local_contract_with_redacted_dependencies() {
         .state::<DesktopState>()
         .mcp_registry_file(&app.handle().clone())
         .expect("mcp registry path");
-    std::fs::create_dir_all(mcp_registry_path.parent().expect("mcp parent"))
-        .expect("create mcp parent");
-    std::fs::write(
+    persist_mcp_registry(
         &mcp_registry_path,
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "version": 1,
-            "updatedAt": "2026-04-26T12:00:00Z",
-            "servers": [{
-                "id": "linear",
-                "name": "Linear",
-                "transport": { "kind": "stdio", "command": "linear-mcp", "args": [] },
-                "connection": {
-                    "status": "failed",
-                    "diagnostic": {
-                        "code": "mcp_server_secret_probe_failed",
-                        "message": "Server launch failed with token sk-mcp-do-not-leak at /Users/sn0w/.config/linear",
-                        "retryable": true
-                    }
+        &McpRegistry {
+            version: 1,
+            updated_at: "2026-04-26T12:00:00Z".into(),
+            servers: vec![McpServerRecord {
+                id: "linear".into(),
+                name: "Linear".into(),
+                transport: McpTransport::Stdio {
+                    command: "linear-mcp".into(),
+                    args: Vec::new(),
                 },
-                "updatedAt": "2026-04-26T12:00:00Z"
-            }]
-        }))
-        .expect("serialize mcp registry"),
+                env: Vec::new(),
+                cwd: None,
+                connection: McpConnectionState {
+                    status: McpConnectionStatus::Failed,
+                    diagnostic: Some(McpConnectionDiagnostic {
+                        code: "mcp_server_secret_probe_failed".into(),
+                        message: "Server launch failed with token sk-mcp-do-not-leak at /Users/sn0w/.config/linear".into(),
+                        retryable: true,
+                    }),
+                    last_checked_at: Some("2026-04-26T12:00:00Z".into()),
+                    last_healthy_at: None,
+                },
+                updated_at: "2026-04-26T12:00:00Z".into(),
+            }],
+        },
     )
     .expect("write mcp registry");
 

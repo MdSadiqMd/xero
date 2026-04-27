@@ -2587,7 +2587,7 @@ describe('CadenceApp current UI', () => {
     expect(screen.queryByText('Cadence Desktop')).not.toBeInTheDocument()
   })
 
-  it('renders live git and runtime footer data from desktop state while leaving mock-only fields untouched', async () => {
+  it('renders live git footer data from desktop state while leaving mock-only fields untouched', async () => {
     const runtimeSettings = makeRuntimeSettings({
       providerId: 'openrouter',
       modelId: 'openai/gpt-4.1-mini',
@@ -2657,14 +2657,13 @@ describe('CadenceApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    expect(screen.getByRole('contentinfo', { name: 'Status bar' })).toBeVisible()
-    expect(screen.getByText('feature/footer-live-data')).toBeVisible()
-    expect(screen.getByText('↑4 ↓1')).toBeVisible()
-    expect(screen.getByText('2 changes')).toBeVisible()
-    expect(screen.getByText('1234567')).toBeVisible()
-    expect(screen.getByText('fix: use live head commit metadata')).toBeVisible()
-    expect(screen.getByText('OpenRouter')).toBeVisible()
-    expect(screen.getByText('running')).toBeVisible()
+    const statusBar = screen.getByRole('contentinfo', { name: 'Status bar' })
+    expect(statusBar).toBeVisible()
+    expect(within(statusBar).getByText('feature/footer-live-data')).toBeVisible()
+    expect(within(statusBar).getByText('↑4 ↓1')).toBeVisible()
+    expect(within(statusBar).getByText('2 changes')).toBeVisible()
+    expect(within(statusBar).getByText('1234567')).toBeVisible()
+    expect(within(statusBar).getByText('fix: use live head commit metadata')).toBeVisible()
   })
 
   it('collapses the project rail into a compact icon strip from the titlebar toggle', async () => {

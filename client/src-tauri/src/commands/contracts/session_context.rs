@@ -1106,6 +1106,7 @@ pub fn run_transcript_from_agent_snapshot(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_transcript_from_runtime_stream_items(
     project_id: impl Into<String>,
     agent_session_id: impl Into<String>,

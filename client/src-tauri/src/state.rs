@@ -9,9 +9,7 @@ use crate::{
     },
     commands::CommandError,
     global_db::global_database_path,
-    provider_models::{
-        ProviderModelCatalogRefreshRegistry, PROVIDER_MODEL_CATALOG_CACHE_FILE_NAME,
-    },
+    provider_models::ProviderModelCatalogRefreshRegistry,
     provider_profiles::{PROVIDER_PROFILES_FILE_NAME, PROVIDER_PROFILE_CREDENTIAL_STORE_FILE_NAME},
     runtime::{
         openai_codex_provider, AgentProviderConfig, AgentRunSupervisor, AutonomousWebConfig,
@@ -256,10 +254,7 @@ impl DesktopState {
         })
     }
 
-    pub fn global_db_path<R: Runtime>(
-        &self,
-        app: &AppHandle<R>,
-    ) -> Result<PathBuf, CommandError> {
+    pub fn global_db_path<R: Runtime>(&self, app: &AppHandle<R>) -> Result<PathBuf, CommandError> {
         if let Some(path) = &self.global_db_path_override {
             return Ok(path.clone());
         }

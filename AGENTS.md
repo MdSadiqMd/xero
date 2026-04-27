@@ -3,3 +3,4 @@
 - When executing python commands, ALWAYS use python3
 - You CANNOT open this app in a browers, this is a Tauri app
 - Only run one Cargo caommand at a time to avoid the lock
+- `.cadence/` is legacy repo-local state. New project state belongs under the OS app-data directory.

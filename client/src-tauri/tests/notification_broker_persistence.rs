@@ -34,6 +34,7 @@ fn seed_project(root: &TempDir, project_id: &str, repository_id: &str, repo_name
         deletions: 0,
     };
 
+    db::configure_project_database_paths(&root.path().join("app-data").join("cadence.db"));
     let state = DesktopState::default();
     db::import_project(&repository, state.import_failpoints()).expect("import project");
 

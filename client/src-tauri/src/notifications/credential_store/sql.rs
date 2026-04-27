@@ -2,10 +2,7 @@ use std::path::Path;
 
 use rusqlite::{params, Connection};
 
-use crate::{
-    global_db::open_global_database,
-    notifications::NotificationAdapterError,
-};
+use crate::{global_db::open_global_database, notifications::NotificationAdapterError};
 
 use super::file_store::{
     NotificationCredentialStoreEntry, NotificationCredentialStoreFile,

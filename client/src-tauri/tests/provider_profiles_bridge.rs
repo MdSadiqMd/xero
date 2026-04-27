@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use cadence_desktop_lib::{
     auth::{persist_openai_codex_session, StoredOpenAiCodexSession},
     commands::CommandResult,
-    db::{database_path_for_repo, import_project},
+    db::{self, database_path_for_repo, import_project},
     git::repository::CanonicalRepository,
     global_db::open_global_database,
     provider_profiles::{
@@ -123,6 +123,7 @@ fn seed_repo_database(root: &tempfile::TempDir) -> PathBuf {
         deletions: 0,
     };
 
+    db::configure_project_database_paths(&root.path().join("app-data").join("cadence.db"));
     import_project(&repository, &ImportFailpoints::default()).expect("import repo into db");
     database_path_for_repo(&canonical_root)
 }
@@ -352,7 +353,8 @@ fn migration_keeps_legacy_files_when_global_database_open_fails() {
     // Point the metadata path at a directory that cannot be created, which forces the global
     // database open (and therefore the importer) to fail before any legacy file is touched.
     let provider_profiles_path = blocked_parent.join("provider-profiles.json");
-    let provider_profile_credentials_path = blocked_parent.join("provider-profile-credentials.json");
+    let provider_profile_credentials_path =
+        blocked_parent.join("provider-profile-credentials.json");
     let legacy_settings_path = root.path().join("app-data").join("runtime-settings.json");
     let legacy_openrouter_credentials_path = root
         .path()

@@ -168,7 +168,7 @@ impl BrowserDiagnostics {
                 options
                     .level
                     .map(normalized_level)
-                    .map_or(true, |level| entry.level == level)
+                    .is_none_or(|level| entry.level == level)
             }));
         }
         selected.sort_by_key(|entry| entry.sequence);

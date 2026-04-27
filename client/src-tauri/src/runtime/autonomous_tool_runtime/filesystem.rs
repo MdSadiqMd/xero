@@ -1862,7 +1862,7 @@ fn compact_text_diff(path: &str, before: &str, after: &str) -> String {
             output.push_str(" ...\n");
             return output;
         }
-        output.push_str(" ");
+        output.push(' ');
         output.push_str(&truncate_chars(line, 240));
         output.push('\n');
         emitted += 1;
@@ -1872,7 +1872,7 @@ fn compact_text_diff(path: &str, before: &str, after: &str) -> String {
             output.push_str(" ...\n");
             return output;
         }
-        output.push_str("-");
+        output.push('-');
         output.push_str(&truncate_chars(line, 240));
         output.push('\n');
         emitted += 1;
@@ -1882,7 +1882,7 @@ fn compact_text_diff(path: &str, before: &str, after: &str) -> String {
             output.push_str(" ...\n");
             return output;
         }
-        output.push_str("+");
+        output.push('+');
         output.push_str(&truncate_chars(line, 240));
         output.push('\n');
         emitted += 1;
@@ -1892,7 +1892,7 @@ fn compact_text_diff(path: &str, before: &str, after: &str) -> String {
             output.push_str(" ...\n");
             return output;
         }
-        output.push_str(" ");
+        output.push(' ');
         output.push_str(&truncate_chars(line, 240));
         output.push('\n');
         emitted += 1;

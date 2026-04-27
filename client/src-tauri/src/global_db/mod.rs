@@ -190,7 +190,10 @@ mod tests {
                     |row| row.get(0),
                 )
                 .unwrap_or(0);
-            assert_eq!(count, 1, "expected table `{table}` to exist after migration");
+            assert_eq!(
+                count, 1,
+                "expected table `{table}` to exist after migration"
+            );
         }
     }
 
@@ -261,7 +264,10 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("count remaining credentials");
-        assert_eq!(remaining, 0, "credentials should cascade-delete with profile");
+        assert_eq!(
+            remaining, 0,
+            "credentials should cascade-delete with profile"
+        );
     }
 
     #[test]
@@ -293,6 +299,9 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("count remaining repositories");
-        assert_eq!(remaining, 0, "repositories should cascade with project delete");
+        assert_eq!(
+            remaining, 0,
+            "repositories should cascade with project delete"
+        );
     }
 }

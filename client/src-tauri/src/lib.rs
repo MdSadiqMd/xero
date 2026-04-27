@@ -48,12 +48,13 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
                 let app_handle = app.handle().clone();
                 let desktop_state = app_handle.state::<state::DesktopState>();
                 if let Ok(app_data_dir) = desktop_state.app_data_dir(&app_handle) {
+                    let global_db_path = desktop_state
+                        .global_db_path(&app_handle)
+                        .unwrap_or_else(|_| app_data_dir.join(global_db::GLOBAL_DATABASE_FILE_NAME));
+                    db::configure_project_database_paths(&global_db_path);
+
                     let paths = global_db::LegacyJsonImportPaths {
-                        global_db: desktop_state
-                            .global_db_path(&app_handle)
-                            .unwrap_or_else(|_| {
-                                app_data_dir.join(global_db::GLOBAL_DATABASE_FILE_NAME)
-                            }),
+                        global_db: global_db_path,
                         provider_profiles: app_data_dir
                             .join(provider_profiles::PROVIDER_PROFILES_FILE_NAME),
                         provider_profile_credentials: app_data_dir

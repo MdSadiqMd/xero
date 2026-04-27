@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
-use rusqlite_migration::{Migrations, M};
+use rusqlite::Transaction;
+use rusqlite_migration::{HookResult, Migrations, M};
 
 pub fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
@@ -257,42 +258,7 @@ pub fn migrations() -> &'static Migrations<'static> {
                     ON workflow_transition_events(project_id, from_node_id, to_node_id);
                 "#,
             ),
-            M::up(
-                r#"
-                ALTER TABLE operator_approvals
-                    ADD COLUMN gate_node_id TEXT CHECK (gate_node_id IS NULL OR gate_node_id <> '');
-                ALTER TABLE operator_approvals
-                    ADD COLUMN gate_key TEXT CHECK (gate_key IS NULL OR gate_key <> '');
-                ALTER TABLE operator_approvals
-                    ADD COLUMN transition_from_node_id TEXT CHECK (transition_from_node_id IS NULL OR transition_from_node_id <> '');
-                ALTER TABLE operator_approvals
-                    ADD COLUMN transition_to_node_id TEXT CHECK (transition_to_node_id IS NULL OR transition_to_node_id <> '');
-                ALTER TABLE operator_approvals
-                    ADD COLUMN transition_kind TEXT CHECK (transition_kind IS NULL OR transition_kind <> '');
-                ALTER TABLE operator_approvals
-                    ADD COLUMN user_answer TEXT CHECK (user_answer IS NULL OR user_answer <> '');
-
-                CREATE INDEX IF NOT EXISTS idx_operator_approvals_project_gate_status_updated
-                    ON operator_approvals(
-                        project_id,
-                        gate_node_id,
-                        gate_key,
-                        status,
-                        updated_at DESC,
-                        created_at DESC
-                    );
-
-                CREATE INDEX IF NOT EXISTS idx_operator_approvals_project_transition_target
-                    ON operator_approvals(
-                        project_id,
-                        transition_from_node_id,
-                        transition_to_node_id,
-                        transition_kind,
-                        status,
-                        updated_at DESC
-                    );
-                "#,
-            ),
+            M::up_with_hook("", add_operator_approval_gate_link_columns),
             M::up(
                 r#"
                 CREATE TABLE IF NOT EXISTS runtime_runs (
@@ -1879,8 +1845,115 @@ pub fn migrations() -> &'static Migrations<'static> {
                     ON agent_usage(project_id, provider_id, model_id);
                 "#,
             ),
+            M::up(
+                r#"
+                CREATE TABLE IF NOT EXISTS meta (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    project_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+                    CHECK (project_id <> '')
+                );
+                "#,
+            ),
         ])
     });
 
     &MIGRATIONS
+}
+
+fn add_operator_approval_gate_link_columns(transaction: &Transaction<'_>) -> HookResult {
+    add_column_if_missing(
+        transaction,
+        "operator_approvals",
+        "gate_node_id",
+        "TEXT CHECK (gate_node_id IS NULL OR gate_node_id <> '')",
+    )?;
+    add_column_if_missing(
+        transaction,
+        "operator_approvals",
+        "gate_key",
+        "TEXT CHECK (gate_key IS NULL OR gate_key <> '')",
+    )?;
+    add_column_if_missing(
+        transaction,
+        "operator_approvals",
+        "transition_from_node_id",
+        "TEXT CHECK (transition_from_node_id IS NULL OR transition_from_node_id <> '')",
+    )?;
+    add_column_if_missing(
+        transaction,
+        "operator_approvals",
+        "transition_to_node_id",
+        "TEXT CHECK (transition_to_node_id IS NULL OR transition_to_node_id <> '')",
+    )?;
+    add_column_if_missing(
+        transaction,
+        "operator_approvals",
+        "transition_kind",
+        "TEXT CHECK (transition_kind IS NULL OR transition_kind <> '')",
+    )?;
+    add_column_if_missing(
+        transaction,
+        "operator_approvals",
+        "user_answer",
+        "TEXT CHECK (user_answer IS NULL OR user_answer <> '')",
+    )?;
+
+    transaction.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_operator_approvals_project_gate_status_updated
+            ON operator_approvals(
+                project_id,
+                gate_node_id,
+                gate_key,
+                status,
+                updated_at DESC,
+                created_at DESC
+            );
+
+        CREATE INDEX IF NOT EXISTS idx_operator_approvals_project_transition_target
+            ON operator_approvals(
+                project_id,
+                transition_from_node_id,
+                transition_to_node_id,
+                transition_kind,
+                status,
+                updated_at DESC
+            );
+        "#,
+    )?;
+
+    Ok(())
+}
+
+fn add_column_if_missing(
+    transaction: &Transaction<'_>,
+    table_name: &str,
+    column_name: &str,
+    column_definition: &str,
+) -> rusqlite::Result<()> {
+    if table_has_column(transaction, table_name, column_name)? {
+        return Ok(());
+    }
+
+    transaction.execute_batch(&format!(
+        "ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition};"
+    ))
+}
+
+fn table_has_column(
+    transaction: &Transaction<'_>,
+    table_name: &str,
+    column_name: &str,
+) -> rusqlite::Result<bool> {
+    let mut statement = transaction.prepare(&format!("PRAGMA table_info({table_name})"))?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column_name {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

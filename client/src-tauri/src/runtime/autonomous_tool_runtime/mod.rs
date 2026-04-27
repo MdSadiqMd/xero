@@ -544,6 +544,7 @@ impl AutonomousToolRuntime {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_skill_tool_config(
         mut self,
         project_id: impl Into<String>,
@@ -1569,10 +1570,6 @@ pub struct AutonomousToolResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", tag = "kind")]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Tool outputs are serialized at the command boundary; boxing would add churn without reducing retained payload size."
-)]
 pub enum AutonomousToolOutput {
     Read(AutonomousReadOutput),
     Search(AutonomousSearchOutput),

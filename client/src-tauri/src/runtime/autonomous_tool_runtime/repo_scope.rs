@@ -257,6 +257,7 @@ pub fn resolve_imported_repo_root_from_registry(
     registry_path: &Path,
     project_id: &str,
 ) -> CommandResult<PathBuf> {
+    crate::db::configure_project_database_paths(registry_path);
     let registry = registry::read_registry(registry_path)?;
     let mut live_root_records = Vec::new();
     let mut candidates = Vec::new();

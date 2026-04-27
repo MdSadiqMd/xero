@@ -28,12 +28,12 @@ use cadence_desktop_lib::{
         AutonomousLspRequest, AutonomousMacosAutomationAction, AutonomousMacosAutomationRequest,
         AutonomousMcpAction, AutonomousMcpRequest, AutonomousNotebookEditRequest,
         AutonomousProcessManagerAction, AutonomousProcessManagerRequest,
-        AutonomousProcessOwnershipScope, AutonomousReadRequest, AutonomousSearchRequest,
-        AutonomousSubagentRequest, AutonomousSubagentType, AutonomousTodoAction,
-        AutonomousTodoRequest, AutonomousToolAccessAction, AutonomousToolAccessRequest,
-        AutonomousToolOutput, AutonomousToolRequest, AutonomousToolRuntime,
-        AutonomousToolRuntimeLimits, AutonomousToolSearchRequest, AutonomousWebConfig,
-        AutonomousWebFetchContentKind, AutonomousWebFetchRequest,
+        AutonomousProcessOwnershipScope, AutonomousReadMode, AutonomousReadRequest,
+        AutonomousSearchRequest, AutonomousSubagentRequest, AutonomousSubagentType,
+        AutonomousTodoAction, AutonomousTodoRequest, AutonomousToolAccessAction,
+        AutonomousToolAccessRequest, AutonomousToolOutput, AutonomousToolRequest,
+        AutonomousToolRuntime, AutonomousToolRuntimeLimits, AutonomousToolSearchRequest,
+        AutonomousWebConfig, AutonomousWebFetchContentKind, AutonomousWebFetchRequest,
         AutonomousWebSearchProviderConfig, AutonomousWebSearchRequest, AutonomousWriteRequest,
     },
     state::DesktopState,
@@ -89,13 +89,14 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
     ensure_cadence_excluded(&repository, app.state::<DesktopState>().import_failpoints())
         .expect("exclude .cadence from seeded repo git status");
 
-    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
-        .expect("import project into repo-local db");
-
     let registry_path = app
         .state::<DesktopState>()
         .registry_file(&app.handle().clone())
         .expect("registry path");
+    db::configure_project_database_paths(&registry_path);
+    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
+        .expect("import project into repo-local db");
+
     registry::replace_projects(
         &registry_path,
         vec![RegistryProjectRecord {
@@ -540,7 +541,7 @@ fn tool_runtime_process_manager_phase_four_controls_owned_processes() {
     let process_id = match start.output {
         AutonomousToolOutput::ProcessManager(output) => {
             assert_eq!(output.action, AutonomousProcessManagerAction::Start);
-            assert_eq!(output.phase, "phase_4_restart_groups_async_jobs");
+            assert_eq!(output.phase, "phase_5_system_process_visibility");
             assert!(output.spawned);
             assert_eq!(output.processes.len(), 1);
             assert!(output
@@ -1734,7 +1735,7 @@ fn tool_runtime_rejects_malformed_inputs_and_reports_error_paths_deterministical
         .read(AutonomousReadRequest {
             path: "binary.bin".into(),
             system_path: false,
-            mode: None,
+            mode: Some(AutonomousReadMode::Text),
             start_line: None,
             line_count: None,
             byte_offset: None,
@@ -2326,7 +2327,7 @@ fn tool_runtime_search_and_find_skip_symlink_escapes() {
 
 #[cfg(unix)]
 #[test]
-fn tool_runtime_search_reports_unreadable_directories() {
+fn tool_runtime_search_skips_unreadable_directories() {
     use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir().expect("temp dir");
@@ -2349,9 +2350,9 @@ fn tool_runtime_search_reports_unreadable_directories() {
     permissions.set_mode(0o000);
     fs::set_permissions(&blocked_dir, permissions).expect("lock blocked dir");
 
-    let error = runtime
+    let result = runtime
         .search(search_request("needle", None))
-        .expect_err("unreadable directories should fail deterministically");
+        .expect("unreadable directories should be skipped deterministically");
 
     let mut restore = fs::metadata(&blocked_dir)
         .expect("blocked dir metadata for restore")
@@ -2359,8 +2360,13 @@ fn tool_runtime_search_reports_unreadable_directories() {
     restore.set_mode(0o755);
     fs::set_permissions(&blocked_dir, restore).expect("restore blocked dir permissions");
 
-    assert_eq!(error.code, "autonomous_tool_search_read_dir_failed");
-    assert!(error.retryable);
+    match result.output {
+        AutonomousToolOutput::Search(output) => {
+            assert!(output.matches.is_empty());
+            assert_eq!(output.total_matches, Some(0));
+        }
+        other => panic!("unexpected unreadable-dir search output: {other:?}"),
+    }
 }
 
 #[test]

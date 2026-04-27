@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
 };
@@ -23,10 +22,7 @@ use crate::{
         },
         openrouter::{fetch_openrouter_models, OpenRouterDiscoveredModel},
     },
-    commands::{
-        get_runtime_settings::write_json_file_atomically,
-        provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult,
-    },
+    commands::{provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult},
     provider_profiles::{
         ProviderProfileReadinessStatus, ProviderProfileRecord, ProviderProfilesSnapshot,
     },
@@ -40,8 +36,6 @@ use crate::{
 };
 
 pub const PROVIDER_MODEL_CATALOG_CACHE_FILE_NAME: &str = "provider-model-catalogs.json";
-const PROVIDER_MODEL_CATALOG_CACHE_SCHEMA_VERSION: u32 = 1;
-const PROVIDER_MODEL_CACHE_OPERATION: &str = "provider_model_catalog_cache";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -154,15 +148,6 @@ struct ProviderModelCatalogRefreshContext {
     cache_path: PathBuf,
     cache_write_allowed: bool,
     cache_read_diagnostic: Option<ProviderModelCatalogDiagnostic>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProviderModelCatalogCacheFile {
-    #[serde(default = "provider_model_catalog_cache_schema_version")]
-    version: u32,
-    #[serde(default)]
-    catalogs: BTreeMap<String, CachedProviderModelCatalogRow>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -895,7 +880,9 @@ fn load_provider_model_catalog_cache(path: &Path) -> ProviderModelCatalogCacheLo
             load.write_allowed = false;
             load.file_error = Some(ProviderModelCatalogDiagnostic {
                 code: "provider_model_catalog_cache_read_failed".into(),
-                message: format!("Cadence could not read provider-model catalog cache rows: {error}"),
+                message: format!(
+                    "Cadence could not read provider-model catalog cache rows: {error}"
+                ),
                 retryable: true,
             });
             return load;
@@ -907,7 +894,8 @@ fn load_provider_model_catalog_cache(path: &Path) -> ProviderModelCatalogCacheLo
             Ok((profile_id, payload)) => {
                 match serde_json::from_str::<CachedProviderModelCatalogRow>(&payload) {
                     Ok(parsed) => {
-                        if let Err(error) = validate_cached_catalog_row(path, &profile_id, &parsed) {
+                        if let Err(error) = validate_cached_catalog_row(path, &profile_id, &parsed)
+                        {
                             load.write_allowed = false;
                             load.row_errors.insert(profile_id, error);
                         } else {
@@ -933,7 +921,9 @@ fn load_provider_model_catalog_cache(path: &Path) -> ProviderModelCatalogCacheLo
                 load.write_allowed = false;
                 load.file_error = Some(ProviderModelCatalogDiagnostic {
                     code: "provider_model_catalog_cache_read_failed".into(),
-                    message: format!("Cadence could not decode provider-model catalog cache row: {error}"),
+                    message: format!(
+                        "Cadence could not decode provider-model catalog cache row: {error}"
+                    ),
                     retryable: true,
                 });
                 return load;
@@ -1204,8 +1194,4 @@ fn normalized_optional_string(value: Option<&str>) -> Option<String> {
             Some(trimmed.to_owned())
         }
     })
-}
-
-const fn provider_model_catalog_cache_schema_version() -> u32 {
-    PROVIDER_MODEL_CATALOG_CACHE_SCHEMA_VERSION
 }

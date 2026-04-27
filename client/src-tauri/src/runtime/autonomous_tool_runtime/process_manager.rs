@@ -3,6 +3,7 @@ use std::{
     env, fs,
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
+    path::PathBuf,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicU32, AtomicU64, Ordering},
@@ -633,10 +634,6 @@ impl OwnedProcess {
             .output_artifact
             .lock()
             .map_err(process_output_lock_error)?;
-        if artifact.is_some() {
-            return Ok(artifact.clone());
-        }
-
         let durable = self
             .durable_output
             .lock()
@@ -655,7 +652,10 @@ impl OwnedProcess {
                 ),
             )
         })?;
-        let path = dir.join(format!("{}.log", marker_safe(&self.process_id)));
+        let path = artifact
+            .as_ref()
+            .map(|artifact| PathBuf::from(&artifact.path))
+            .unwrap_or_else(|| self.async_job_artifact_path(&dir));
         fs::write(&path, text.as_bytes()).map_err(|error| {
             CommandError::system_fault(
                 "autonomous_tool_process_manager_artifact_failed",
@@ -672,6 +672,15 @@ impl OwnedProcess {
             redacted,
         });
         Ok(artifact.clone())
+    }
+
+    fn async_job_artifact_path(&self, dir: &std::path::Path) -> PathBuf {
+        dir.join(format!(
+            "{}-{}-{}.log",
+            marker_safe(&self.process_id),
+            self.pid,
+            marker_safe(&self.started_at)
+        ))
     }
 
     fn metadata(&self) -> CommandResult<AutonomousProcessMetadata> {
@@ -2351,7 +2360,7 @@ impl AutonomousToolRuntime {
             .list()?
             .into_iter()
             .filter(|process| process.is_async_job())
-            .filter(|process| group.map_or(true, |group| process.group.as_deref() == Some(group)))
+            .filter(|process| group.is_none_or(|group| process.group.as_deref() == Some(group)))
             .collect::<Vec<_>>();
         Ok(jobs)
     }
@@ -2905,17 +2914,17 @@ struct ExternalSignal {
 fn list_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
     #[cfg(target_os = "linux")]
     {
-        return linux_system_processes();
+        linux_system_processes()
     }
 
     #[cfg(target_os = "macos")]
     {
-        return macos_system_processes();
+        macos_system_processes()
     }
 
     #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
-        return ps_system_processes();
+        ps_system_processes()
     }
 
     #[cfg(not(unix))]
@@ -3334,17 +3343,17 @@ fn system_ports_by_pid(ports: Vec<SystemPortInfo>) -> BTreeMap<u32, Vec<u16>> {
 fn list_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
     #[cfg(target_os = "linux")]
     {
-        return linux_system_ports();
+        linux_system_ports()
     }
 
     #[cfg(target_os = "macos")]
     {
-        return lsof_system_ports();
+        lsof_system_ports()
     }
 
     #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
-        return lsof_system_ports();
+        lsof_system_ports()
     }
 
     #[cfg(not(unix))]
@@ -3715,10 +3724,10 @@ fn signal_external_pid(pid: u32, signal: i32) -> CommandResult<()> {
             return Ok(());
         }
         let error = std::io::Error::last_os_error();
-        return Err(CommandError::retryable(
+        Err(CommandError::retryable(
             "autonomous_tool_process_manager_system_signal_failed",
             format!("Cadence could not signal external PID {pid}: {error}"),
-        ));
+        ))
     }
     #[cfg(not(unix))]
     {
@@ -4859,9 +4868,9 @@ fn sanitize_process_output(bytes: &[u8], truncated: bool) -> SanitizedProcessOut
     for line in collapsed.lines() {
         if find_prohibited_persistence_content(line).is_some() {
             redacted = true;
-            if !sanitized_lines
+            if sanitized_lines
                 .last()
-                .is_some_and(|last| *last == REDACTED_PROCESS_OUTPUT_SUMMARY)
+                .is_none_or(|last| *last != REDACTED_PROCESS_OUTPUT_SUMMARY)
             {
                 sanitized_lines.push(REDACTED_PROCESS_OUTPUT_SUMMARY);
             }

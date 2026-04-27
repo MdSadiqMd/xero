@@ -29,6 +29,5 @@ pub use store::{
 };
 
 pub(crate) use store::{
-    build_anthropic_default_profile, build_openai_default_profile,
-    build_openrouter_default_profile,
+    build_anthropic_default_profile, build_openai_default_profile, build_openrouter_default_profile,
 };

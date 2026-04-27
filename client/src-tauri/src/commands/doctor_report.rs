@@ -744,6 +744,7 @@ fn collect_project_runtime_checks<R: Runtime>(
         }
     };
 
+    crate::db::configure_project_database_paths(&registry_path);
     let registry = match registry::read_registry(&registry_path) {
         Ok(registry) => registry,
         Err(error) => {

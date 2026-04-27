@@ -12,7 +12,7 @@ use cadence_desktop_lib::{
     commands::{
         RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
     },
-    db::project_store,
+    db::{self, project_store},
     mcp::{
         persist_mcp_registry, McpConnectionDiagnostic, McpConnectionState, McpConnectionStatus,
         McpEnvironmentReference, McpRegistry, McpServerRecord, McpTransport,
@@ -181,10 +181,11 @@ fn write_skill(root: &Path, directory: &str, name: &str, description: &str) {
 }
 
 fn init_project_state(repo_root: &Path) {
-    let cadence_dir = repo_root.join(".cadence");
-    fs::create_dir_all(&cadence_dir).expect("create .cadence");
-    let mut connection =
-        Connection::open(cadence_dir.join("state.db")).expect("open project state db");
+    db::configure_project_database_paths(&repo_root.join("app-data").join("cadence.db"));
+    let database_path = db::database_path_for_repo(repo_root);
+    fs::create_dir_all(database_path.parent().expect("project state parent"))
+        .expect("create project state dir");
+    let mut connection = Connection::open(database_path).expect("open project state db");
     cadence_desktop_lib::db::migrations::migrations()
         .to_latest(&mut connection)
         .expect("migrate project state db");

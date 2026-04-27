@@ -31,9 +31,10 @@ use super::{
     validate_runtime_supervisor_launch_context, write_json_line, PtyEventNormalizer,
     RuntimeSupervisorSidecarArgs, SharedPtyWriter, SidecarSharedState, SupervisorEventHub,
     ANTHROPIC_API_KEY_ENV, BEDROCK_BASE_URL_ENV, BEDROCK_DEFAULT_REGION_ENV, BEDROCK_ENABLE_ENV,
-    BEDROCK_REGION_ENV, CADENCE_AGENT_SESSION_ID_ENV, CADENCE_RUNTIME_FLOW_ID_ENV,
-    CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV, CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV,
-    CADENCE_RUNTIME_MODEL_ID_ENV, CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
+    BEDROCK_REGION_ENV, CADENCE_AGENT_SESSION_ID_ENV, CADENCE_GLOBAL_DB_PATH_ENV,
+    CADENCE_RUNTIME_FLOW_ID_ENV, CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV,
+    CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV, CADENCE_RUNTIME_MODEL_ID_ENV,
+    CADENCE_RUNTIME_PROVIDER_ID_ENV, CADENCE_RUNTIME_SESSION_ID_ENV,
     CADENCE_RUNTIME_THINKING_EFFORT_ENV, HEARTBEAT_INTERVAL, OPENAI_API_KEY_ENV,
     OPENAI_API_VERSION_ENV, OPENAI_BASE_URL_ENV, TERMINAL_ATTACH_GRACE_PERIOD, VERTEX_BASE_URL_ENV,
     VERTEX_ENABLE_ENV, VERTEX_PROJECT_ENV, VERTEX_REGION_ENV,
@@ -465,6 +466,7 @@ fn apply_launch_context_to_child_environment(
     builder.env_remove(CADENCE_RUNTIME_FLOW_ID_ENV);
     builder.env_remove(CADENCE_RUNTIME_MODEL_ID_ENV);
     builder.env_remove(CADENCE_RUNTIME_THINKING_EFFORT_ENV);
+    builder.env_remove(CADENCE_GLOBAL_DB_PATH_ENV);
     builder.env_remove(CADENCE_RUNTIME_MCP_CONFIG_PATH_ENV);
     builder.env_remove(CADENCE_RUNTIME_MCP_CONTRACT_REQUIRED_ENV);
     builder.env_remove(ANTHROPIC_API_KEY_ENV);
@@ -567,36 +569,45 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
     if let Err(error) = validate_inherited_launch_environment(&args.launch_context) {
         return emit_startup_error(error);
     }
+    configure_project_database_paths_from_env();
 
-    let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|_| {
+    let listener = match TcpListener::bind(("127.0.0.1", 0)).map_err(|_| {
         CommandError::retryable(
             "runtime_supervisor_bind_failed",
             "Cadence could not bind the detached PTY supervisor control listener.",
         )
-    })?;
-    listener.set_nonblocking(true).map_err(|_| {
+    }) {
+        Ok(listener) => listener,
+        Err(error) => return emit_startup_error(error),
+    };
+    if let Err(error) = listener.set_nonblocking(true).map_err(|_| {
         CommandError::retryable(
             "runtime_supervisor_bind_failed",
             "Cadence could not configure the detached PTY supervisor control listener.",
         )
-    })?;
-    let endpoint = listener
-        .local_addr()
-        .map_err(|_| {
-            CommandError::retryable(
-                "runtime_supervisor_bind_failed",
-                "Cadence could not read the detached PTY supervisor control listener address.",
-            )
-        })?
-        .to_string();
+    }) {
+        return emit_startup_error(error);
+    }
+    let endpoint = match listener.local_addr().map_err(|_| {
+        CommandError::retryable(
+            "runtime_supervisor_bind_failed",
+            "Cadence could not read the detached PTY supervisor control listener address.",
+        )
+    }) {
+        Ok(endpoint) => endpoint.to_string(),
+        Err(error) => return emit_startup_error(error),
+    };
 
     let pty_system = native_pty_system();
-    let pair = pty_system.openpty(PtySize::default()).map_err(|_| {
+    let pair = match pty_system.openpty(PtySize::default()).map_err(|_| {
         CommandError::retryable(
             "runtime_supervisor_pty_failed",
             "Cadence could not allocate a PTY for the detached supervisor.",
         )
-    })?;
+    }) {
+        Ok(pair) => pair,
+        Err(error) => return emit_startup_error(error),
+    };
     let mut builder = CommandBuilder::new(&args.program);
     builder.args(&args.args);
     builder.cwd(&args.repo_root);
@@ -641,7 +652,7 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
     let mut killer = child.clone_killer();
     let started_at = now_timestamp();
 
-    let initial_snapshot = project_store::upsert_runtime_run(
+    let initial_snapshot = match project_store::upsert_runtime_run(
         &args.repo_root,
         &RuntimeRunUpsertRecord {
             run: RuntimeRunRecord {
@@ -666,14 +677,19 @@ fn run_supervisor_sidecar(args: RuntimeSupervisorSidecarArgs) -> Result<(), Comm
             checkpoint: None,
             control_state: Some(args.run_controls.clone()),
         },
-    )
-    .map_err(|_| {
-        let _ = killer.kill();
-        CommandError::retryable(
-            "runtime_supervisor_persist_failed",
-            "Cadence could not persist detached supervisor startup metadata.",
-        )
-    })?;
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            let _ = killer.kill();
+            return emit_startup_error(CommandError::retryable(
+                "runtime_supervisor_persist_failed",
+                format!(
+                    "Cadence could not persist detached supervisor startup metadata: {}",
+                    error.message
+                ),
+            ));
+        }
+    };
 
     let shared = Arc::new(Mutex::new(SidecarSharedState {
         project_id: args.project_id.clone(),
@@ -776,6 +792,18 @@ fn emit_startup_message(message: &SupervisorStartupMessage) -> Result<(), Comman
             "Cadence could not emit the detached PTY supervisor startup handshake.",
         )
     })
+}
+
+fn configure_project_database_paths_from_env() {
+    let Some(global_db_path) = std::env::var(CADENCE_GLOBAL_DB_PATH_ENV)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+
+    crate::db::configure_project_database_paths(std::path::Path::new(&global_db_path));
 }
 
 fn spawn_pty_reader(

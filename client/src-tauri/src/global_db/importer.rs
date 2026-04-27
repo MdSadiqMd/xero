@@ -174,7 +174,10 @@ pub fn import_legacy_provider_model_catalog_cache(
         .unwrap_or_default();
 
     if catalogs.is_empty() {
-        remove_legacy(legacy_path, "provider_model_catalog_cache_legacy_cleanup_failed")?;
+        remove_legacy(
+            legacy_path,
+            "provider_model_catalog_cache_legacy_cleanup_failed",
+        )?;
         return Ok(());
     }
 
@@ -208,12 +211,17 @@ pub fn import_legacy_provider_model_catalog_cache(
             })?;
     }
 
-    remove_legacy(legacy_path, "provider_model_catalog_cache_legacy_cleanup_failed")
+    remove_legacy(
+        legacy_path,
+        "provider_model_catalog_cache_legacy_cleanup_failed",
+    )
 }
 
 fn singleton_table_populated(connection: &Connection, table: &str) -> CommandResult<bool> {
     let row: Option<i64> = connection
-        .query_row(&format!("SELECT 1 FROM {table} WHERE id = 1"), [], |row| row.get(0))
+        .query_row(&format!("SELECT 1 FROM {table} WHERE id = 1"), [], |row| {
+            row.get(0)
+        })
         .optional()
         .map_err(|error| {
             CommandError::retryable(
@@ -226,7 +234,9 @@ fn singleton_table_populated(connection: &Connection, table: &str) -> CommandRes
 
 fn registry_table_populated(connection: &Connection, table: &str) -> CommandResult<bool> {
     let count: i64 = connection
-        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+        .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })
         .map_err(|error| {
             CommandError::retryable(
                 format!("{table}_read_failed"),

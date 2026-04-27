@@ -4,6 +4,7 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::{
     commands::{CommandResult, ListProjectsResponseDto},
+    db,
     db::project_store,
     registry,
     state::DesktopState,
@@ -12,6 +13,7 @@ use crate::{
 pub(crate) fn load_projects_from_registry(
     registry_path: &Path,
 ) -> CommandResult<ListProjectsResponseDto> {
+    db::configure_project_database_paths(registry_path);
     let registry = registry::read_registry(registry_path)?;
 
     let mut projects = Vec::new();

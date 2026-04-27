@@ -84,7 +84,13 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
     ensure_cadence_excluded(&repository, app.state::<DesktopState>().import_failpoints())
         .expect("exclude .cadence from seeded repo git status");
 
-    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
+    let desktop_state = app.state::<DesktopState>();
+    let global_db_path = desktop_state
+        .global_db_path(&app.handle().clone())
+        .expect("global db path");
+    db::configure_project_database_paths(&global_db_path);
+
+    db::import_project(&repository, desktop_state.import_failpoints())
         .expect("import project into repo-local db");
 
     let registry_path = app

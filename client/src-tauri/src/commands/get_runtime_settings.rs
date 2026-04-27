@@ -330,22 +330,6 @@ pub(crate) fn write_json_file_atomically(
     Ok(())
 }
 
-pub(crate) fn remove_file_if_exists(path: &Path, operation: &str) -> CommandResult<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    fs::remove_file(path).map_err(|error| {
-        CommandError::retryable(
-            format!("{operation}_write_failed"),
-            format!(
-                "Cadence could not remove the app-local settings file at {}: {error}",
-                path.display()
-            ),
-        )
-    })
-}
-
 pub(crate) fn default_runtime_settings_snapshot() -> RuntimeSettingsSnapshot {
     RuntimeSettingsSnapshot {
         settings: RuntimeSettingsFile {

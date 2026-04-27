@@ -72,13 +72,14 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> s
     };
     ensure_cadence_excluded(&repository, app.state::<DesktopState>().import_failpoints())
         .expect("exclude .cadence");
-    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
-        .expect("import project");
-
     let registry_path = app
         .state::<DesktopState>()
         .registry_file(&app.handle().clone())
         .expect("registry path");
+    db::configure_project_database_paths(&registry_path);
+    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
+        .expect("import project");
+
     registry::replace_projects(
         &registry_path,
         vec![RegistryProjectRecord {
@@ -109,6 +110,7 @@ fn seed_run(repo_root: &Path, run_id: &str, provider_id: &str, model_id: &str, s
     .expect("insert run");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn seed_usage(
     repo_root: &Path,
     run_id: &str,

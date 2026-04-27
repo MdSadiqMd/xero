@@ -9,8 +9,7 @@ use super::{
         clear_openai_codex_sessions as sql_clear, load_latest_openai_codex_session as sql_latest,
         load_openai_codex_session_by_account as sql_load_by_account,
         load_openai_codex_session_by_session_id as sql_load_by_session,
-        remove_openai_codex_session as sql_remove,
-        upsert_openai_codex_session as sql_upsert,
+        remove_openai_codex_session as sql_remove, upsert_openai_codex_session as sql_upsert,
     },
     AuthFlowError, OPENAI_CODEX_PROVIDER_ID,
 };
@@ -109,8 +108,12 @@ pub fn sync_openai_profile_link<R: Runtime>(
     preferred_profile_id: Option<&str>,
     session: Option<&StoredOpenAiCodexSession>,
 ) -> Result<(), AuthFlowError> {
-    let mut connection = open_global_database(&state.global_db_path(app).map_err(map_command_error_to_auth_error)?)
-        .map_err(map_command_error_to_auth_error)?;
+    let mut connection = open_global_database(
+        &state
+            .global_db_path(app)
+            .map_err(map_command_error_to_auth_error)?,
+    )
+    .map_err(map_command_error_to_auth_error)?;
     let mut snapshot =
         load_provider_profiles_or_default(&connection).map_err(map_provider_profiles_error)?;
 
@@ -139,8 +142,7 @@ pub fn sync_openai_profile_link<R: Runtime>(
     }
 
     snapshot.metadata.updated_at = updated_at;
-    persist_provider_profiles_to_db(&mut connection, &snapshot)
-        .map_err(map_provider_profiles_error)
+    persist_provider_profiles_to_db(&mut connection, &snapshot).map_err(map_provider_profiles_error)
 }
 
 pub fn ensure_openai_profile_target<R: Runtime>(

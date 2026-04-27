@@ -303,13 +303,14 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
         deletions: 0,
     };
 
-    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
-        .expect("import project into repo-local db");
-
     let registry_path = app
         .state::<DesktopState>()
         .registry_file(&app.handle().clone())
         .expect("registry path");
+    db::configure_project_database_paths(&registry_path);
+    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
+        .expect("import project into repo-local db");
+
     registry::replace_projects(
         &registry_path,
         vec![RegistryProjectRecord {

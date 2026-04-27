@@ -7,7 +7,7 @@ use crate::{
         PROJECT_UPDATED_EVENT, REPOSITORY_STATUS_CHANGED_EVENT,
     },
     db,
-    git::repository::{ensure_cadence_excluded, resolve_repository},
+    git::repository::resolve_repository,
     registry::{self, RegistryProjectRecord},
     state::DesktopState,
 };
@@ -21,10 +21,10 @@ pub fn import_repository<R: Runtime>(
     validate_non_empty(&request.path, "path")?;
 
     let repository = resolve_repository(&request.path)?;
-    ensure_cadence_excluded(&repository, state.import_failpoints())?;
+    let registry_path = state.registry_file(&app)?;
+    db::configure_project_database_paths(&registry_path);
 
     let imported = db::import_project(&repository, state.import_failpoints())?;
-    let registry_path = state.registry_file(&app)?;
     let _registry_snapshot = registry::upsert_project(
         &registry_path,
         RegistryProjectRecord {

@@ -9,10 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     auth::now_timestamp,
-    commands::{
-        get_runtime_settings::{remove_file_if_exists, write_json_file_atomically},
-        CommandError, CommandResult,
-    },
+    commands::{CommandError, CommandResult},
 };
 
 use super::{
@@ -580,27 +577,6 @@ fn root_id_hash(path: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     hex[..12].to_owned()
-}
-
-fn snapshot_existing_file(path: &Path) -> CommandResult<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(CommandError::retryable(
-            "skill_source_settings_read_failed",
-            format!(
-                "Cadence could not snapshot the app-local skill source settings file at {} before updating it: {error}",
-                path.display()
-            ),
-        )),
-    }
-}
-
-fn restore_file_snapshot(path: &Path, snapshot: Option<&[u8]>) -> CommandResult<()> {
-    match snapshot {
-        Some(bytes) => write_json_file_atomically(path, bytes, "skill_source_settings_rollback"),
-        None => remove_file_if_exists(path, "skill_source_settings_rollback"),
-    }
 }
 
 fn normalize_required(value: &str, field: &'static str) -> CommandResult<String> {

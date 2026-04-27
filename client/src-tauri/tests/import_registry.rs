@@ -14,15 +14,22 @@ use cadence_desktop_lib::{
         REPOSITORY_STATUS_CHANGED_EVENT,
     },
     configure_builder_with_state,
-    db::migrations::migrations,
-    registry::{self, ProjectRegistry, RegistryProjectRecord},
+    db::{self, migrations::migrations},
+    registry::{self, ProjectRegistry},
     state::{DesktopState, ImportFailpoints},
 };
 use git2::{IndexAddOption, Repository, Signature, StatusOptions};
 use rusqlite::{params, Connection};
-use rusqlite_migration::SchemaVersion;
 use tauri::{Listener, Manager};
 use tempfile::TempDir;
+
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[derive(Clone, Default)]
 struct EventRecorder {
@@ -63,7 +70,7 @@ fn attach_event_recorders(app: &tauri::App<tauri::test::MockRuntime>) -> EventRe
 }
 
 fn registry_path(root: &TempDir) -> PathBuf {
-    root.path().join("app-data").join("project-registry.json")
+    root.path().join("app-data").join("cadence.db")
 }
 
 fn create_state(registry_root: &TempDir) -> DesktopState {
@@ -207,17 +214,11 @@ fn commit_all(repository: &Repository, message: &str) {
 }
 
 fn read_registry(path: &Path) -> ProjectRegistry {
-    let contents = fs::read_to_string(path).expect("read registry");
-    serde_json::from_str(&contents).expect("parse registry")
+    registry::read_registry(path).expect("read registry")
 }
 
 fn database_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(".cadence").join("state.db")
-}
-
-fn common_exclude_path(repo_root: &Path) -> PathBuf {
-    let repository = Repository::open(repo_root).expect("open repository");
-    repository.commondir().join("info").join("exclude")
+    db::database_path_for_repo(repo_root)
 }
 
 fn assert_database_rows(repo_root: &Path, project_id: &str, repository_id: &str, root_path: &str) {
@@ -329,7 +330,8 @@ fn repository_status_paths(repo_root: &Path) -> Vec<String> {
 }
 
 #[test]
-fn import_repository_bootstraps_repo_local_state_and_registry_idempotently() {
+fn import_repository_bootstraps_app_data_state_and_registry_idempotently() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let repository_root = init_git_repo();
     let app = build_mock_app(create_state(&registry_root));
@@ -350,17 +352,6 @@ fn import_repository_bootstraps_repo_local_state_and_registry_idempotently() {
             .to_string_lossy()
     );
     assert!(database_path(repository_root.path()).exists());
-
-    let exclude_contents =
-        fs::read_to_string(common_exclude_path(repository_root.path())).expect("read git exclude");
-    let cadence_entries = exclude_contents
-        .lines()
-        .filter(|line| line.trim() == ".cadence/")
-        .count();
-    assert_eq!(
-        cadence_entries, 1,
-        "Cadence exclude entry should be deduplicated"
-    );
 
     let registry = read_registry(&registry_path(&registry_root));
     assert_eq!(registry.version, 1);
@@ -410,6 +401,7 @@ fn import_repository_bootstraps_repo_local_state_and_registry_idempotently() {
 
 #[test]
 fn import_repository_canonicalizes_nested_and_symlinked_paths_to_one_repo() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let repository_root = init_git_repo();
     let nested_dir = repository_root.path().join("nested").join("deeper");
@@ -449,6 +441,7 @@ fn import_repository_canonicalizes_nested_and_symlinked_paths_to_one_repo() {
 
 #[test]
 fn import_repository_rejects_empty_missing_and_non_git_paths_without_creating_state() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let app = build_mock_app(create_state(&registry_root));
 
@@ -473,22 +466,8 @@ fn import_repository_rejects_empty_missing_and_non_git_paths_without_creating_st
 }
 
 #[test]
-fn import_repository_surfaces_exclude_migration_and_registry_failures() {
-    let exclude_failure_root = tempfile::tempdir().expect("registry temp dir");
-    let exclude_repo = init_git_repo();
-    let exclude_app = build_mock_app(create_state(&exclude_failure_root).with_failpoints(
-        ImportFailpoints {
-            fail_exclude_write: true,
-            ..ImportFailpoints::default()
-        },
-    ));
-
-    let exclude_error = import_with_app(&exclude_app, exclude_repo.path())
-        .expect_err("exclude failpoint should fail import");
-    assert_eq!(exclude_error.code, "git_exclude_write_failed");
-    assert!(!database_path(exclude_repo.path()).exists());
-    assert!(!registry_path(&exclude_failure_root).exists());
-
+fn import_repository_surfaces_migration_and_registry_failures() {
+    let _guard = test_lock();
     let migration_registry_root = tempfile::tempdir().expect("registry temp dir");
     let migration_repo = init_git_repo();
     let migration_app = build_mock_app(create_state(&migration_registry_root).with_failpoints(
@@ -502,7 +481,9 @@ fn import_repository_surfaces_exclude_migration_and_registry_failures() {
         .expect_err("migration failpoint should fail import");
     assert_eq!(migration_error.code, "state_database_migration_failed");
     assert!(!database_path(migration_repo.path()).exists());
-    assert!(!registry_path(&migration_registry_root).exists());
+    assert!(read_registry(&registry_path(&migration_registry_root))
+        .projects
+        .is_empty());
 
     let registry_failure_root = tempfile::tempdir().expect("registry temp dir");
     let registry_repo = init_git_repo();
@@ -518,20 +499,28 @@ fn import_repository_surfaces_exclude_migration_and_registry_failures() {
     assert_eq!(registry_error.code, "registry_write_failed");
     assert!(
         database_path(registry_repo.path()).exists(),
-        "repo-local db should exist even when registry persistence fails"
+        "project state db should exist even when registry persistence fails"
     );
-    assert!(!registry_path(&registry_failure_root).exists());
+    assert!(read_registry(&registry_path(&registry_failure_root))
+        .projects
+        .is_empty());
 }
 
 #[test]
-fn import_repository_reuses_preexisting_repo_local_database() {
+fn import_repository_reuses_preexisting_app_data_database() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let repository_root = init_git_repo();
-    let cadence_dir = repository_root.path().join(".cadence");
-    fs::create_dir_all(&cadence_dir).expect("create Cadence dir");
+    let app = build_mock_app(create_state(&registry_root));
 
-    let mut connection =
-        Connection::open(database_path(repository_root.path())).expect("open sqlite db");
+    let project_database_path = database_path(repository_root.path());
+    fs::create_dir_all(
+        project_database_path
+            .parent()
+            .expect("project state parent"),
+    )
+    .expect("create project state dir");
+    let mut connection = Connection::open(&project_database_path).expect("open sqlite db");
     migrations()
         .to_latest(&mut connection)
         .expect("migrate preexisting database");
@@ -546,7 +535,6 @@ fn import_repository_reuses_preexisting_repo_local_database() {
         .expect("insert sentinel row");
     drop(connection);
 
-    let app = build_mock_app(create_state(&registry_root));
     let response = import_with_app(&app, repository_root.path()).expect("import succeeds");
 
     assert_database_rows(
@@ -556,8 +544,7 @@ fn import_repository_reuses_preexisting_repo_local_database() {
         &response.repository.root_path,
     );
 
-    let connection =
-        Connection::open(database_path(repository_root.path())).expect("open sqlite db");
+    let connection = Connection::open(&project_database_path).expect("open sqlite db");
     let sentinel: String = connection
         .query_row("SELECT value FROM sentinel LIMIT 1", [], |row| row.get(0))
         .expect("sentinel row should survive import");
@@ -591,13 +578,15 @@ fn import_repository_reuses_preexisting_repo_local_database() {
 }
 
 #[test]
-fn import_repository_quarantines_repo_local_database_from_newer_builds() {
+fn import_repository_reuses_app_data_database_with_existing_user_version() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let repository_root = init_git_repo();
-    let cadence_dir = repository_root.path().join(".cadence");
-    fs::create_dir_all(&cadence_dir).expect("create Cadence dir");
+    let app = build_mock_app(create_state(&registry_root));
 
     let database_path = database_path(repository_root.path());
+    fs::create_dir_all(database_path.parent().expect("project state parent"))
+        .expect("create project state dir");
     let connection = Connection::open(&database_path).expect("open sqlite db");
     connection
         .execute(
@@ -613,9 +602,8 @@ fn import_repository_quarantines_repo_local_database_from_newer_builds() {
         .expect("set future schema version");
     drop(connection);
 
-    let app = build_mock_app(create_state(&registry_root));
     let response = import_with_app(&app, repository_root.path())
-        .expect("import should recover from a newer repo-local database");
+        .expect("import should reuse the existing project state database");
 
     assert_database_rows(
         repository_root.path(),
@@ -625,12 +613,6 @@ fn import_repository_quarantines_repo_local_database_from_newer_builds() {
     );
 
     let fresh_connection = Connection::open(&database_path).expect("open fresh sqlite db");
-    assert!(matches!(
-        migrations()
-            .current_version(&fresh_connection)
-            .expect("read fresh schema version"),
-        SchemaVersion::Inside(_)
-    ));
     let sentinel_tables: i64 = fresh_connection
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sentinel'",
@@ -639,57 +621,24 @@ fn import_repository_quarantines_repo_local_database_from_newer_builds() {
         )
         .expect("count fresh sentinel tables");
     assert_eq!(
-        sentinel_tables, 0,
-        "fresh import should rebuild the repo-local database"
+        sentinel_tables, 1,
+        "import should preserve unrelated tables in an existing project state database"
     );
 
-    let backups = fs::read_dir(&cadence_dir)
-        .expect("read cadence dir")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("state.db.incompatible-v999"))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        backups.len(),
-        1,
-        "exactly one incompatible backup should be created for the newer database"
-    );
-
-    let backup_connection = Connection::open(&backups[0]).expect("open backup sqlite db");
-    assert!(matches!(
-        migrations()
-            .current_version(&backup_connection)
-            .expect("read backup schema version"),
-        SchemaVersion::Outside(_)
-    ));
-    let sentinel: String = backup_connection
+    let sentinel: String = fresh_connection
         .query_row("SELECT value FROM sentinel LIMIT 1", [], |row| row.get(0))
-        .expect("backup sentinel row should survive quarantine");
+        .expect("sentinel row should survive import");
     assert_eq!(sentinel, "future-state");
 }
 
 #[test]
-fn import_repository_keeps_git_worktrees_clean_via_common_exclude() {
+fn import_repository_keeps_git_worktrees_clean_without_repo_local_state() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
-    let (_workspace_root, main_repo_root, worktree_root) = init_git_worktree();
+    let (_workspace_root, _main_repo_root, worktree_root) = init_git_worktree();
     let app = build_mock_app(create_state(&registry_root));
 
     let response = import_with_app(&app, &worktree_root).expect("worktree import succeeds");
-
-    let exclude_contents =
-        fs::read_to_string(common_exclude_path(&main_repo_root)).expect("read common exclude");
-    let cadence_entries = exclude_contents
-        .lines()
-        .filter(|line| line.trim() == ".cadence/")
-        .count();
-    assert_eq!(
-        cadence_entries, 1,
-        "Cadence exclude entry should live in the common git dir"
-    );
 
     let git_status_paths = repository_status_paths(&worktree_root);
     assert!(
@@ -707,49 +656,36 @@ fn import_repository_keeps_git_worktrees_clean_via_common_exclude() {
 }
 
 #[test]
-fn import_repository_handles_malformed_registry_and_read_only_repo_failures() {
-    let registry_root = tempfile::tempdir().expect("registry temp dir");
-    let repository_root = init_git_repo();
-    let registry_file = registry_path(&registry_root);
-    if let Some(parent) = registry_file.parent() {
-        fs::create_dir_all(parent).expect("create registry dir");
-    }
-    fs::write(&registry_file, "{ definitely not json }").expect("write malformed registry");
-
-    let app = build_mock_app(create_state(&registry_root));
-    let response = import_with_app(&app, repository_root.path())
-        .expect("import should recover malformed registry");
-    let recovered_registry = read_registry(&registry_file);
-    assert_eq!(recovered_registry.projects.len(), 1);
-    assert_eq!(
-        recovered_registry.projects[0].project_id,
-        response.project.id
-    );
-    assert!(registry_file.with_extension("json.corrupt").exists());
-
+fn import_repository_does_not_write_repo_local_state() {
+    let _guard = test_lock();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
+        let registry_root = tempfile::tempdir().expect("registry temp dir");
         let read_only_repo = init_git_repo();
         fs::set_permissions(read_only_repo.path(), fs::Permissions::from_mode(0o555))
             .expect("make repo root read-only");
 
-        let read_only_registry_root = tempfile::tempdir().expect("registry temp dir");
-        let read_only_app = build_mock_app(create_state(&read_only_registry_root));
-        let read_only_error = import_with_app(&read_only_app, read_only_repo.path())
-            .expect_err("read-only repo should fail import");
+        let read_only_app = build_mock_app(create_state(&registry_root));
+        let response = import_with_app(&read_only_app, read_only_repo.path())
+            .expect("read-only repo should import because state lives in app data");
 
         fs::set_permissions(read_only_repo.path(), fs::Permissions::from_mode(0o755))
             .expect("restore repo permissions");
 
-        assert_eq!(read_only_error.code, "cadence_state_dir_unavailable");
-        assert!(!registry_path(&read_only_registry_root).exists());
+        assert!(database_path(read_only_repo.path()).exists());
+        assert!(!read_only_repo.path().join(".cadence").exists());
+
+        let registry = read_registry(&registry_path(&registry_root));
+        assert_eq!(registry.projects.len(), 1);
+        assert_eq!(registry.projects[0].project_id, response.project.id);
     }
 }
 
 #[test]
 fn list_projects_reopens_valid_imports_and_prunes_deleted_roots() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let app = build_mock_app(create_state(&registry_root));
     let primary_repo = init_git_repo();
@@ -759,32 +695,6 @@ fn list_projects_reopens_valid_imports_and_prunes_deleted_roots() {
         import_with_app(&app, primary_repo.path()).expect("primary import succeeds");
     let deleted_import =
         import_with_app(&app, deleted_repo.path()).expect("secondary import succeeds");
-
-    let registry_file = registry_path(&registry_root);
-    let duplicate_record = RegistryProjectRecord {
-        project_id: primary_import.project.id.clone(),
-        repository_id: primary_import.repository.id.clone(),
-        root_path: primary_import.repository.root_path.clone(),
-    };
-    let malformed_record = serde_json::json!({
-        "projectId": "malformed",
-        "rootPath": primary_import.repository.root_path,
-    });
-
-    fs::write(
-        &registry_file,
-        serde_json::to_vec_pretty(&serde_json::json!({
-            "version": 1,
-            "projects": [
-                duplicate_record,
-                read_registry(&registry_file).projects[0].clone(),
-                read_registry(&registry_file).projects[1].clone(),
-                malformed_record,
-            ],
-        }))
-        .expect("serialize registry fixture"),
-    )
-    .expect("write registry fixture");
 
     fs::remove_dir_all(deleted_repo.path()).expect("delete imported repo root");
     overwrite_project_summary_counts(primary_repo.path(), &primary_import.project.id, 9, 4, 3);
@@ -801,7 +711,8 @@ fn list_projects_reopens_valid_imports_and_prunes_deleted_roots() {
     assert_eq!(response.projects[0].completed_phases, 0);
     assert_eq!(response.projects[0].active_phase, 0);
 
-    let pruned_registry = registry::read_registry(&registry_file).expect("read pruned registry");
+    let pruned_registry =
+        registry::read_registry(&registry_path(&registry_root)).expect("read pruned registry");
     assert!(pruned_registry
         .projects
         .iter()
@@ -809,8 +720,8 @@ fn list_projects_reopens_valid_imports_and_prunes_deleted_roots() {
 }
 
 #[test]
-fn remove_project_hides_registry_entry_without_touching_repo_local_state_and_reimport_restores_it()
-{
+fn remove_project_hides_registry_entry_without_touching_project_state_and_reimport_restores_it() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let app = build_mock_app(create_state(&registry_root));
     let repository_root = init_git_repo();
@@ -819,7 +730,7 @@ fn remove_project_hides_registry_entry_without_touching_repo_local_state_and_rei
     let database_path = database_path(repository_root.path());
     assert!(
         database_path.exists(),
-        "repo-local database should exist after import"
+        "project state database should exist after import"
     );
 
     let remove_response =
@@ -827,7 +738,7 @@ fn remove_project_hides_registry_entry_without_touching_repo_local_state_and_rei
     assert!(remove_response.projects.is_empty());
     assert!(
         database_path.exists(),
-        "remove should keep the repo-local database intact"
+        "remove should keep the project state database intact"
     );
 
     let registry = read_registry(&registry_path(&registry_root));
@@ -847,7 +758,7 @@ fn remove_project_hides_registry_entry_without_touching_repo_local_state_and_rei
     assert_eq!(reimported.project.id, imported.project.id);
     assert!(
         database_path.exists(),
-        "reimport should reuse the existing repo-local database"
+        "reimport should reuse the existing project state database"
     );
 
     let listed_after_reimport = list_with_app(&app).expect("list after reimport succeeds");
@@ -857,6 +768,7 @@ fn remove_project_hides_registry_entry_without_touching_repo_local_state_and_rei
 
 #[test]
 fn get_project_snapshot_derives_zero_phase_counts_after_workflow_phase_table_removal() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let repository_root = init_git_repo();
     let app = build_mock_app(create_state(&registry_root));
@@ -887,6 +799,7 @@ fn get_project_snapshot_derives_zero_phase_counts_after_workflow_phase_table_rem
 
 #[test]
 fn get_project_snapshot_returns_truthful_zero_phase_state_and_typed_missing_db_errors() {
+    let _guard = test_lock();
     let registry_root = tempfile::tempdir().expect("registry temp dir");
     let repository_root = init_git_repo();
     let app = build_mock_app(create_state(&registry_root));
@@ -904,10 +817,10 @@ fn get_project_snapshot_returns_truthful_zero_phase_state_and_typed_missing_db_e
         Some(imported.repository.id.as_str())
     );
 
-    fs::remove_file(database_path(repository_root.path())).expect("remove repo-local db");
+    fs::remove_file(database_path(repository_root.path())).expect("remove project state db");
 
     let missing_db_error = snapshot_with_app(&app, &imported.project.id)
-        .expect_err("snapshot should fail when repo-local state db is missing");
+        .expect_err("snapshot should fail when project state db is missing");
     assert_eq!(missing_db_error.code, "project_state_unavailable");
     assert!(missing_db_error
         .message

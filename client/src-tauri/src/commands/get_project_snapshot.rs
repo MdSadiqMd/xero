@@ -7,6 +7,7 @@ use crate::{
         validate_non_empty, CommandError, CommandResult, ProjectIdRequestDto,
         ProjectSnapshotResponseDto,
     },
+    db,
     db::project_store,
     registry::{self, RegistryProjectRecord},
     state::DesktopState,
@@ -26,6 +27,7 @@ pub fn get_project_snapshot<R: Runtime>(
     validate_non_empty(&request.project_id, "projectId")?;
 
     let registry_path = state.registry_file(&app)?;
+    db::configure_project_database_paths(&registry_path);
     let registry = registry::read_registry(&registry_path)?;
     let mut live_root_records = Vec::new();
     let mut snapshot_candidates = Vec::new();

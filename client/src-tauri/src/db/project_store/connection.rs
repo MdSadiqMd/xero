@@ -22,7 +22,7 @@ fn open_state_database(repo_root: &Path, database_path: &Path) -> Result<Connect
         return Err(CommandError::retryable(
             "project_state_unavailable",
             format!(
-                "Imported project at {} is missing repo-local state at {}.",
+                "Imported project at {} is missing project state at {}.",
                 repo_root.display(),
                 database_path.display()
             ),
@@ -33,7 +33,7 @@ fn open_state_database(repo_root: &Path, database_path: &Path) -> Result<Connect
         CommandError::retryable(
             "project_state_open_failed",
             format!(
-                "Cadence could not open the repo-local database at {} for {}: {error}",
+                "Cadence could not open the project state database at {} for {}: {error}",
                 database_path.display(),
                 repo_root.display()
             ),
@@ -53,7 +53,7 @@ pub(crate) fn open_project_database(
         CommandError::retryable(
             "project_state_migration_failed",
             format!(
-                "Cadence could not migrate the repo-local selected-project state at {}: {error}",
+                "Cadence could not migrate selected-project state at {}: {error}",
                 database_path.display()
             ),
         )
@@ -70,7 +70,7 @@ pub(crate) fn open_runtime_database(
         CommandError::retryable(
             "runtime_session_migration_failed",
             format!(
-                "Cadence could not migrate the repo-local runtime-session tables at {}: {error}",
+                "Cadence could not migrate runtime-session tables at {}: {error}",
                 database_path.display()
             ),
         )

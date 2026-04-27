@@ -9,9 +9,8 @@ use rusqlite_migration::{Migrations, M};
 /// Phase 2 of the storage refactor ports each store onto these tables; until
 /// then the schema is created but no code reads or writes it.
 pub fn migrations() -> &'static Migrations<'static> {
-    static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
-        Migrations::new(vec![M::up(INITIAL_SCHEMA_SQL)])
-    });
+    static MIGRATIONS: LazyLock<Migrations<'static>> =
+        LazyLock::new(|| Migrations::new(vec![M::up(INITIAL_SCHEMA_SQL)]));
     &MIGRATIONS
 }
 

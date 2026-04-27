@@ -1,11 +1,15 @@
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::{LazyLock, RwLock},
     time::Duration,
 };
 
 use rusqlite::{params, Connection};
 use rusqlite_migration::{Error as MigrationError, MigrationDefinitionError};
+use sha2::{Digest, Sha256};
 
 use crate::{
     commands::{CommandError, ProjectSummaryDto, RepositorySummaryDto},
@@ -17,8 +21,23 @@ use crate::{
 pub mod migrations;
 pub mod project_store;
 
-const CADENCE_DIRECTORY: &str = ".cadence";
 const STATE_DATABASE_FILE: &str = "state.db";
+const PROJECTS_DIRECTORY: &str = "projects";
+const APP_DATA_DIRECTORY_NAME: &str = "dev.sn0w.cadence";
+
+#[derive(Debug, Clone, Default)]
+struct ProjectDatabasePathConfig {
+    project_root: Option<PathBuf>,
+    registry_path: Option<PathBuf>,
+    repo_root_to_database_path: HashMap<PathBuf, PathBuf>,
+}
+
+static PROJECT_DATABASE_PATH_CONFIG: LazyLock<RwLock<ProjectDatabasePathConfig>> =
+    LazyLock::new(|| RwLock::new(ProjectDatabasePathConfig::default()));
+thread_local! {
+    static THREAD_PROJECT_DATABASE_PATH_CONFIG: RefCell<ProjectDatabasePathConfig> =
+        RefCell::new(ProjectDatabasePathConfig::default());
+}
 
 #[derive(Debug, Clone)]
 pub struct ImportedProjectRecord {
@@ -27,25 +46,61 @@ pub struct ImportedProjectRecord {
     pub database_path: PathBuf,
 }
 
+pub fn configure_project_database_paths(global_db_path: &Path) {
+    let project_root = project_database_root_for_global_db(global_db_path);
+    let registry_path = global_db_path.to_path_buf();
+
+    let mut config = PROJECT_DATABASE_PATH_CONFIG
+        .write()
+        .expect("project database path config lock poisoned");
+    config.project_root = Some(project_root.clone());
+    config.registry_path = Some(registry_path.clone());
+    drop(config);
+
+    THREAD_PROJECT_DATABASE_PATH_CONFIG.with(|thread_config| {
+        let mut config = thread_config.borrow_mut();
+        config.project_root = Some(project_root);
+        config.registry_path = Some(registry_path);
+        config.repo_root_to_database_path.clear();
+    });
+}
+
+pub fn database_path_for_project(project_id: &str) -> PathBuf {
+    configured_database_path_for_project(project_id)
+        .unwrap_or_else(|| default_database_path_for_project(project_id))
+}
+
+pub fn database_path_for_project_in_app_data(app_data_dir: &Path, project_id: &str) -> PathBuf {
+    app_data_dir
+        .join(PROJECTS_DIRECTORY)
+        .join(project_id)
+        .join(STATE_DATABASE_FILE)
+}
+
 pub fn database_path_for_repo(repo_root: &Path) -> PathBuf {
-    repo_root.join(CADENCE_DIRECTORY).join(STATE_DATABASE_FILE)
+    database_path_for_registered_repo(repo_root)
+        .unwrap_or_else(|| database_path_for_project(&stable_project_id_for_repo_root(repo_root)))
 }
 
 pub fn import_project(
     repository: &CanonicalRepository,
     failpoints: &ImportFailpoints,
 ) -> Result<ImportedProjectRecord, CommandError> {
-    let cadence_directory = repository.root_path.join(CADENCE_DIRECTORY);
-    let database_path = cadence_directory.join(STATE_DATABASE_FILE);
-    let cadence_directory_existed = cadence_directory.exists();
+    let database_path = configured_database_path_for_project(&repository.project_id)
+        .unwrap_or_else(|| fallback_database_path_for_unconfigured_import(&repository.project_id));
+    let database_directory = database_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let database_directory_existed = database_directory.exists();
     let database_existed = database_path.exists();
 
-    fs::create_dir_all(&cadence_directory).map_err(|error| {
+    fs::create_dir_all(&database_directory).map_err(|error| {
         CommandError::retryable(
-            "cadence_state_dir_unavailable",
+            "project_state_dir_unavailable",
             format!(
-                "Cadence could not prepare the repo-local state directory at {}: {error}",
-                cadence_directory.display()
+                "Cadence could not prepare the project state directory at {}: {error}",
+                database_directory.display()
             ),
         )
     })?;
@@ -57,7 +112,7 @@ pub fn import_project(
         if failpoints.fail_migration {
             return Err(CommandError::system_fault(
                 "state_database_migration_failed",
-                "Test failpoint forced the repo-local migration to fail before any rows were written.",
+                "Test failpoint forced the project-state migration to fail before any rows were written.",
             ));
         }
 
@@ -109,11 +164,13 @@ pub fn import_project(
 
     if import_result.is_err() {
         cleanup_partial_state(
-            &cadence_directory,
+            &database_directory,
             &database_path,
-            cadence_directory_existed,
+            database_directory_existed,
             database_existed,
         );
+    } else {
+        register_project_database_path(&repository.root_path, &database_path);
     }
 
     import_result
@@ -144,7 +201,7 @@ fn open_database_connection(database_path: &Path) -> Result<Connection, CommandE
         CommandError::retryable(
             "state_database_open_failed",
             format!(
-                "Cadence could not open the repo-local database at {}: {error}",
+                "Cadence could not open the project state database at {}: {error}",
                 database_path.display()
             ),
         )
@@ -155,7 +212,7 @@ fn state_database_migration_error(database_path: &Path, error: MigrationError) -
     CommandError::system_fault(
         "state_database_migration_failed",
         format!(
-            "Cadence could not migrate the repo-local database at {}: {error}",
+            "Cadence could not migrate the project state database at {}: {error}",
             database_path.display()
         ),
     )
@@ -184,7 +241,7 @@ fn quarantine_incompatible_database(
         CommandError::retryable(
             "state_database_backup_failed",
             format!(
-                "Cadence found repo-local state from a newer build at {} but could not move it aside to {}: {error}",
+                "Cadence found project state from a newer build at {} but could not move it aside to {}: {error}",
                 database_path.display(),
                 backup_path.display(),
             ),
@@ -308,6 +365,24 @@ fn persist_import_rows(
 
     transaction
         .execute(
+            r#"
+            INSERT INTO meta (id, project_id, updated_at)
+            VALUES (1, ?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                updated_at = excluded.updated_at
+            "#,
+            params![repository.project_id],
+        )
+        .map_err(|error| {
+            CommandError::system_fault(
+                "project_meta_persist_failed",
+                format!("Cadence could not persist the project-state metadata row: {error}"),
+            )
+        })?;
+
+    transaction
+        .execute(
             "UPDATE agent_sessions SET selected = 0 WHERE project_id = ?1",
             params![repository.project_id],
         )
@@ -359,9 +434,9 @@ fn persist_import_rows(
 }
 
 fn cleanup_partial_state(
-    cadence_directory: &Path,
+    database_directory: &Path,
     database_path: &Path,
-    cadence_directory_existed: bool,
+    database_directory_existed: bool,
     database_existed: bool,
 ) {
     if !database_existed {
@@ -372,7 +447,131 @@ fn cleanup_partial_state(
         let _ = fs::remove_file(shm_path);
     }
 
-    if !cadence_directory_existed {
-        let _ = fs::remove_dir(cadence_directory);
+    if !database_directory_existed {
+        let _ = fs::remove_dir(database_directory);
     }
+}
+
+fn project_database_root_for_global_db(global_db_path: &Path) -> PathBuf {
+    global_db_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(PROJECTS_DIRECTORY)
+}
+
+fn configured_database_path_for_project(project_id: &str) -> Option<PathBuf> {
+    let thread_path = THREAD_PROJECT_DATABASE_PATH_CONFIG.with(|thread_config| {
+        thread_config
+            .borrow()
+            .project_root
+            .as_ref()
+            .map(|root| root.join(project_id).join(STATE_DATABASE_FILE))
+    });
+    if thread_path.is_some() {
+        return thread_path;
+    }
+
+    let config = PROJECT_DATABASE_PATH_CONFIG
+        .read()
+        .expect("project database path config lock poisoned");
+    config
+        .project_root
+        .as_ref()
+        .map(|root| root.join(project_id).join(STATE_DATABASE_FILE))
+}
+
+fn default_database_path_for_project(project_id: &str) -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(APP_DATA_DIRECTORY_NAME)
+        .join(PROJECTS_DIRECTORY)
+        .join(project_id)
+        .join(STATE_DATABASE_FILE)
+}
+
+fn database_path_for_registered_repo(repo_root: &Path) -> Option<PathBuf> {
+    let normalized_repo_root = normalize_repo_root(repo_root);
+
+    if let Some(database_path) = THREAD_PROJECT_DATABASE_PATH_CONFIG.with(|thread_config| {
+        thread_config
+            .borrow()
+            .repo_root_to_database_path
+            .get(&normalized_repo_root)
+            .cloned()
+    }) {
+        return Some(database_path);
+    }
+
+    if let Some(project_id) = {
+        let config = PROJECT_DATABASE_PATH_CONFIG
+            .read()
+            .expect("project database path config lock poisoned");
+        config
+            .repo_root_to_database_path
+            .get(&normalized_repo_root)
+            .cloned()
+    } {
+        return Some(project_id);
+    }
+
+    let registry_path = THREAD_PROJECT_DATABASE_PATH_CONFIG
+        .with(|thread_config| thread_config.borrow().registry_path.clone())
+        .or_else(|| {
+            let config = PROJECT_DATABASE_PATH_CONFIG
+                .read()
+                .expect("project database path config lock poisoned");
+            config.registry_path.clone()
+        })?;
+
+    let registry = crate::registry::read_registry(&registry_path).ok()?;
+    let record = registry
+        .projects
+        .into_iter()
+        .find(|record| normalize_repo_root(Path::new(&record.root_path)) == normalized_repo_root)?;
+
+    let database_path = configured_database_path_for_project(&record.project_id)?;
+    register_project_database_path(&normalized_repo_root, &database_path);
+    Some(database_path)
+}
+
+fn register_project_database_path(repo_root: &Path, database_path: &Path) {
+    let normalized_repo_root = normalize_repo_root(repo_root);
+    THREAD_PROJECT_DATABASE_PATH_CONFIG.with(|thread_config| {
+        thread_config
+            .borrow_mut()
+            .repo_root_to_database_path
+            .insert(normalized_repo_root.clone(), database_path.to_path_buf());
+    });
+
+    let mut config = PROJECT_DATABASE_PATH_CONFIG
+        .write()
+        .expect("project database path config lock poisoned");
+    config
+        .repo_root_to_database_path
+        .insert(normalized_repo_root, database_path.to_path_buf());
+}
+
+fn normalize_repo_root(repo_root: &Path) -> PathBuf {
+    fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf())
+}
+
+fn stable_project_id_for_repo_root(repo_root: &Path) -> String {
+    let root_path_string = normalize_repo_root(repo_root)
+        .to_string_lossy()
+        .into_owned();
+    let digest = Sha256::digest(root_path_string.as_bytes());
+    let short = digest
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("project_{short}")
+}
+
+fn fallback_database_path_for_unconfigured_import(project_id: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join(APP_DATA_DIRECTORY_NAME)
+        .join(PROJECTS_DIRECTORY)
+        .join(project_id)
+        .join(STATE_DATABASE_FILE)
 }

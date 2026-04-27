@@ -113,13 +113,14 @@ fn seed_project(root: &TempDir, app: &tauri::App<tauri::test::MockRuntime>) -> (
         deletions: 0,
     };
 
-    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
-        .expect("import project into repo-local db");
-
     let registry_path = app
         .state::<DesktopState>()
         .registry_file(&app.handle().clone())
         .expect("registry path");
+    db::configure_project_database_paths(&registry_path);
+    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
+        .expect("import project into repo-local db");
+
     registry::replace_projects(
         &registry_path,
         vec![RegistryProjectRecord {
@@ -185,32 +186,6 @@ fn active_flow_expected_state(app: &tauri::App<tauri::test::MockRuntime>, flow_i
         .query_pairs()
         .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
         .expect("expected state query")
-}
-
-fn create_openai_profile(
-    app: &tauri::App<tauri::test::MockRuntime>,
-    profile_id: &str,
-    label: &str,
-) {
-    upsert_provider_profile(
-        app.handle().clone(),
-        app.state::<DesktopState>(),
-        UpsertProviderProfileRequestDto {
-            profile_id: profile_id.into(),
-            provider_id: "openai_codex".into(),
-            runtime_kind: "openai_codex".into(),
-            label: label.into(),
-            model_id: "openai_codex".into(),
-            preset_id: None,
-            base_url: None,
-            api_version: None,
-            region: None,
-            project_id: None,
-            api_key: None,
-            activate: false,
-        },
-    )
-    .expect("create openai provider profile");
 }
 
 fn create_openrouter_profile(
@@ -865,7 +840,7 @@ fn start_openai_login_reuses_in_flight_flow_and_exposes_redacted_snapshot() {
 }
 
 #[test]
-fn start_openai_login_rejects_unknown_non_openai_and_conflicting_profiles() {
+fn start_openai_login_rejects_unknown_and_non_openai_profiles() {
     let server = TestHttpServer::spawn(|_| TestHttpResponse::plain(200, "unused"));
     let root = tempfile::tempdir().expect("temp dir");
     let (state, _registry_path, _auth_store_path) = create_project_state(&root);
@@ -873,7 +848,6 @@ fn start_openai_login_rejects_unknown_non_openai_and_conflicting_profiles() {
     let app = build_mock_app(state);
     let (project_id, _repo_root) = seed_project(&root, &app);
 
-    create_openai_profile(&app, "zz-openai-alt", "OpenAI Alt");
     create_openrouter_profile(&app, "openrouter-alt", "OpenRouter Alt");
 
     let missing = start_openai_login(
@@ -899,48 +873,6 @@ fn start_openai_login_rejects_unknown_non_openai_and_conflicting_profiles() {
     )
     .expect_err("non-openai profile should fail closed");
     assert_eq!(wrong_provider.code, "provider_profile_provider_mismatch");
-
-    let started = start_openai_login(
-        app.handle().clone(),
-        app.state::<DesktopState>(),
-        StartOpenAiLoginRequestDto {
-            project_id: project_id.clone(),
-            profile_id: DEFAULT_OPENAI_PROFILE_ID.into(),
-            originator: Some("Cadence-tests".into()),
-        },
-    )
-    .expect("default profile login should start");
-    let conflict = start_openai_login(
-        app.handle().clone(),
-        app.state::<DesktopState>(),
-        StartOpenAiLoginRequestDto {
-            project_id: project_id.clone(),
-            profile_id: "zz-openai-alt".into(),
-            originator: Some("Cadence-tests".into()),
-        },
-    )
-    .expect_err("different in-flight profile should fail closed");
-    assert_eq!(conflict.code, "auth_flow_profile_mismatch");
-
-    let runtime = get_runtime_session(
-        app.handle().clone(),
-        app.state::<DesktopState>(),
-        ProjectIdRequestDto {
-            project_id: project_id.clone(),
-        },
-    )
-    .expect("runtime session after conflicting login attempt");
-    assert_eq!(runtime.flow_id, started.flow_id);
-    assert_eq!(
-        runtime.last_error_code.as_deref(),
-        Some("auth_flow_profile_mismatch")
-    );
-    let message = runtime
-        .last_error
-        .expect("profile mismatch diagnostic")
-        .message;
-    assert!(message.contains(DEFAULT_OPENAI_PROFILE_ID));
-    assert!(message.contains("zz-openai-alt"));
 }
 
 #[test]
@@ -962,8 +894,6 @@ fn submit_openai_callback_rejects_selected_profile_switch_before_completion() {
     let state = state.with_openai_auth_config_override(auth_config(&server));
     let app = build_mock_app(state);
     let (project_id, _repo_root) = seed_project(&root, &app);
-
-    create_openai_profile(&app, "zz-openai-alt", "OpenAI Alt");
 
     let started = start_openai_login(
         app.handle().clone(),

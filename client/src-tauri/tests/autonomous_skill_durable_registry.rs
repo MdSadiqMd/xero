@@ -93,6 +93,7 @@ impl AutonomousSkillSource for FixtureSkillSource {
 }
 
 fn seed_project(root: &TempDir, project_id: &str) -> PathBuf {
+    db::configure_project_database_paths(&root.path().join("app-data").join("cadence.db"));
     let repo_root = root.path().join("repo");
     std::fs::create_dir_all(&repo_root).expect("create repo root");
     let canonical_root = std::fs::canonicalize(&repo_root).expect("canonical repo root");

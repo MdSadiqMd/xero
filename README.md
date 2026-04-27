@@ -50,7 +50,7 @@ It combines:
 - **Frontend:** React 19, TypeScript, Vite, Vitest, ShadCN/Radix UI, Tailwind CSS
 - **Desktop host:** Tauri v2
 - **Backend:** Rust (command surface + orchestration + persistence)
-- **Storage:** SQLite (repo-local + app-level JSON stores)
+- **Storage:** SQLite under the OS app-data directory
 
 ### Landing site (`landing/`)
 
@@ -283,26 +283,19 @@ CADENCE_AUTONOMOUS_WEB_SEARCH_BEARER_TOKEN=...
 
 ## Persistence Model
 
-### Imported repository state
+### SQLite state
 
-When a repo is imported, Cadence creates:
+Cadence stores application and project state under the OS app-data directory:
 
-- `<repo>/.cadence/state.db` (SQLite)
+- `cadence.db` for global state
+- `projects/<project-id>/state.db` for per-project state
 
-Cadence also ensures `.cadence/` is excluded in that repo’s `.git/info/exclude`.
+New imports do not create `<repo>/.cadence/`. That directory is legacy.
 
-### App-level state (OS app data dir)
+### App-level JSON state
 
-Cadence stores app-level JSON files like:
+Cadence also stores UI/runtime-adjacent JSON files like:
 
-- `project-registry.json`
-- `runtime-settings.json`
-- `mcp-registry.json`
-- `provider-profiles.json`
-- `provider-profile-credentials.json`
-- `provider-model-catalogs.json`
-- `notification-credentials.json`
-- `openrouter-credentials.json`
 - `window-state.json`
 
 Solana stores also use OS data dirs under `cadence/solana/...` for personas/snapshots.

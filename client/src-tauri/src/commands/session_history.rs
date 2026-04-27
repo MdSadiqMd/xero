@@ -616,7 +616,7 @@ fn build_session_context_snapshot(
         });
     let provider_id = latest_snapshot
         .map(|snapshot| snapshot.run.provider_id.as_str())
-        .or_else(|| request_provider_id)
+        .or(request_provider_id)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or(session.last_provider_id.as_deref())
@@ -624,7 +624,7 @@ fn build_session_context_snapshot(
         .to_string();
     let model_id = latest_snapshot
         .map(|snapshot| snapshot.run.model_id.as_str())
-        .or_else(|| request_model_id)
+        .or(request_model_id)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(UNAVAILABLE_CONTEXT_ID)
@@ -772,6 +772,7 @@ fn build_session_context_snapshot(
     Ok(snapshot)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compact_session_history_with_provider(
     repo_root: &Path,
     project_id: &str,

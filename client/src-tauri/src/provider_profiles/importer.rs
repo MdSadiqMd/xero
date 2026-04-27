@@ -33,8 +33,8 @@ const LEGACY_MIGRATION_SOURCE: &str = "legacy_runtime_settings_v1";
 /// anything. Otherwise it tries:
 ///   1. Current-schema JSON (`provider-profiles.json` + `provider-profile-credentials.json`)
 ///   2. Pre-profiles legacy (runtime-settings.json + openrouter-credentials.json + openai-auth.json)
-/// If neither is found, the function returns Ok(()) and the application creates a default
-/// snapshot on first read.
+///      If neither is found, the function returns Ok(()) and the application creates a default
+///      snapshot on first read.
 ///
 /// JSON files are deleted only after a successful SQL write.
 pub fn import_legacy_provider_profiles(
@@ -53,14 +53,13 @@ pub fn import_legacy_provider_profiles(
         load_provider_profiles_from_paths(metadata_path, credentials_path)?
     {
         Some((snapshot, ImportedFrom::Current))
-    } else if let Some(snapshot) = build_legacy_provider_profiles_snapshot(
-        legacy_settings_path,
-        legacy_openrouter_credentials_path,
-        legacy_openai_auth_path,
-    )? {
-        Some((snapshot, ImportedFrom::Legacy))
     } else {
-        None
+        build_legacy_provider_profiles_snapshot(
+            legacy_settings_path,
+            legacy_openrouter_credentials_path,
+            legacy_openai_auth_path,
+        )?
+        .map(|snapshot| (snapshot, ImportedFrom::Legacy))
     };
 
     let Some((snapshot, source)) = snapshot else {

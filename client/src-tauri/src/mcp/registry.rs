@@ -10,10 +10,7 @@ use url::Url;
 
 use crate::{
     auth::now_timestamp,
-    commands::{
-        get_runtime_settings::{remove_file_if_exists, write_json_file_atomically},
-        CommandError, CommandResult,
-    },
+    commands::{CommandError, CommandResult},
 };
 
 pub const MCP_REGISTRY_FILE_NAME: &str = "mcp-registry.json";
@@ -213,10 +210,7 @@ pub fn persist_mcp_registry(path: &Path, next: &McpRegistry) -> CommandResult<Mc
             .collect::<Vec<_>>()
             .join(", ");
         tx.execute(
-            format!(
-                "DELETE FROM mcp_registry WHERE server_id NOT IN ({placeholders})"
-            )
-            .as_str(),
+            format!("DELETE FROM mcp_registry WHERE server_id NOT IN ({placeholders})").as_str(),
             rusqlite::params_from_iter(surviving_ids.iter()),
         )
         .map_err(map_mcp_registry_write_error)?;
@@ -226,7 +220,10 @@ pub fn persist_mcp_registry(path: &Path, next: &McpRegistry) -> CommandResult<Mc
         let payload = serde_json::to_string(server).map_err(|error| {
             CommandError::system_fault(
                 "mcp_registry_serialize_failed",
-                format!("Cadence could not serialize MCP server `{}`: {error}", server.id),
+                format!(
+                    "Cadence could not serialize MCP server `{}`: {error}",
+                    server.id
+                ),
             )
         })?;
         tx.execute(
@@ -685,28 +682,5 @@ fn default_connection_state() -> McpConnectionState {
         }),
         last_checked_at: None,
         last_healthy_at: None,
-    }
-}
-
-fn snapshot_existing_file(path: &Path) -> CommandResult<Option<Vec<u8>>> {
-    if !path.exists() || path.is_dir() {
-        return Ok(None);
-    }
-
-    fs::read(path).map(Some).map_err(|error| {
-        CommandError::retryable(
-            "mcp_registry_read_failed",
-            format!(
-                "Cadence could not snapshot the app-local MCP registry file at {} before updating it: {error}",
-                path.display()
-            ),
-        )
-    })
-}
-
-fn restore_file_snapshot(path: &Path, snapshot: Option<&[u8]>) -> CommandResult<()> {
-    match snapshot {
-        Some(bytes) => write_json_file_atomically(path, bytes, "mcp_registry_rollback"),
-        None => remove_file_if_exists(path, "mcp_registry_rollback"),
     }
 }

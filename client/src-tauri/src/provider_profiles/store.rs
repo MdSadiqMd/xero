@@ -608,8 +608,7 @@ fn validate_provider_profiles_metadata(
         validated_profiles.push(validated);
     }
 
-    let validated_profiles =
-        dedupe_profiles_by_provider_id(validated_profiles, active_profile_id);
+    let validated_profiles = dedupe_profiles_by_provider_id(validated_profiles, active_profile_id);
 
     let next_active_profile_id = if validated_profiles
         .iter()

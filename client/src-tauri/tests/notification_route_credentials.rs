@@ -68,13 +68,14 @@ fn seed_project(
         deletions: 0,
     };
 
-    db::import_project(&repository, DesktopState::default().import_failpoints())
-        .expect("import seeded project");
-
     let registry_path = app
         .state::<DesktopState>()
         .registry_file(app.handle())
         .expect("registry path");
+    db::configure_project_database_paths(&registry_path);
+    db::import_project(&repository, app.state::<DesktopState>().import_failpoints())
+        .expect("import seeded project");
+
     registry::replace_projects(
         &registry_path,
         vec![RegistryProjectRecord {
@@ -354,7 +355,7 @@ fn list_notification_routes_marks_missing_store_as_fail_closed_with_typed_diagno
 }
 
 #[test]
-fn list_notification_routes_marks_unreadable_store_as_unavailable_with_typed_diagnostics() {
+fn list_notification_routes_returns_typed_error_when_global_database_is_unavailable() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(&root);
     let project_id = "project-1";
@@ -372,41 +373,27 @@ fn list_notification_routes_marks_unreadable_store_as_unavailable_with_typed_dia
         .state::<DesktopState>()
         .notification_credential_store_file(app.handle())
         .expect("credential store path");
-    fs::create_dir_all(&credential_store_path).expect("create unreadable credential store path");
+    fs::remove_file(&credential_store_path).expect("remove seeded global database");
+    let _ = fs::remove_file(credential_store_path.with_extension("db-wal"));
+    let _ = fs::remove_file(credential_store_path.with_extension("db-shm"));
+    fs::create_dir_all(&credential_store_path).expect("replace global database with directory");
 
-    let response = list_notification_routes(
+    let error = list_notification_routes(
         app.handle().clone(),
         app.state::<DesktopState>(),
         ListNotificationRoutesRequestDto {
             project_id: project_id.into(),
         },
     )
-    .expect("list notification routes");
+    .expect_err("listing routes should fail when the global database cannot be opened");
 
-    assert_eq!(response.routes.len(), 1);
-
-    let readiness = response.routes[0]
-        .credential_readiness
-        .as_ref()
-        .expect("readiness should be projected");
-    assert!(!readiness.ready);
-    assert_eq!(
-        readiness.status,
-        NotificationRouteCredentialReadinessStatusDto::Unavailable
-    );
-    assert_eq!(
-        readiness
-            .diagnostic
-            .as_ref()
-            .map(|diagnostic| diagnostic.code.as_str()),
-        Some("global_database_open_failed")
-    );
+    assert_eq!(error.code, "global_database_open_failed");
 }
 
 // Phase 2.3 moved notification credentials into the global SQLite database, so the malformed-
 // JSON branch this test used to exercise is no longer reachable. The corresponding malformed
 // behavior under SQLite (corrupt DB header) is exercised by lower-level rusqlite open errors,
-// which are already covered by the unreadable-store test above.
+// which are already covered by the global-database-unavailable test above.
 #[test]
 #[ignore]
 fn list_notification_routes_marks_malformed_store_as_fail_closed_with_typed_diagnostics() {

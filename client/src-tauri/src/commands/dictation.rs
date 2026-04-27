@@ -1,6 +1,6 @@
 use std::{
     ffi::{c_char, c_void, CStr, CString},
-    fmt, fs,
+    fmt,
     path::Path,
     ptr::NonNull,
     str::FromStr,
@@ -178,9 +178,7 @@ impl DictationState {
         let Ok(mut inner) = self.inner.lock() else {
             return None;
         };
-        let Some(active) = inner.active.as_ref() else {
-            return None;
-        };
+        let active = inner.active.as_ref()?;
         if active.session_id != session_id {
             return None;
         }

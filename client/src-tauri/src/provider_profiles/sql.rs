@@ -61,17 +61,14 @@ pub fn load_provider_profiles_from_db(
     let profiles = load_profiles(connection)?;
     let credentials = load_api_key_credentials(connection)?;
 
-    let migration = match migration_source {
-        Some(source) => Some(ProviderProfilesMigrationState {
-            source,
-            migrated_at: migration_migrated_at.unwrap_or_default(),
-            runtime_settings_updated_at: migration_runtime_settings_updated_at,
-            openrouter_credentials_updated_at: migration_openrouter_credentials_updated_at,
-            openai_auth_updated_at: migration_openai_auth_updated_at,
-            openrouter_model_inferred: migration_openrouter_model_inferred.map(|value| value != 0),
-        }),
-        None => None,
-    };
+    let migration = migration_source.map(|source| ProviderProfilesMigrationState {
+        source,
+        migrated_at: migration_migrated_at.unwrap_or_default(),
+        runtime_settings_updated_at: migration_runtime_settings_updated_at,
+        openrouter_credentials_updated_at: migration_openrouter_credentials_updated_at,
+        openai_auth_updated_at: migration_openai_auth_updated_at,
+        openrouter_model_inferred: migration_openrouter_model_inferred.map(|value| value != 0),
+    });
 
     let metadata = ProviderProfilesMetadataFile {
         version: PROVIDER_PROFILES_SCHEMA_VERSION,
@@ -258,9 +255,8 @@ fn write_profiles(tx: &Transaction<'_>, profiles: &[ProviderProfileRecord]) -> C
         .map(|(index, _)| format!("?{}", index + 1))
         .collect::<Vec<_>>()
         .join(", ");
-    let delete_sql = format!(
-        "DELETE FROM provider_profiles WHERE profile_id NOT IN ({placeholders})"
-    );
+    let delete_sql =
+        format!("DELETE FROM provider_profiles WHERE profile_id NOT IN ({placeholders})");
     tx.execute(
         delete_sql.as_str(),
         rusqlite::params_from_iter(surviving_ids.iter()),
@@ -311,7 +307,11 @@ fn write_profiles(tx: &Transaction<'_>, profiles: &[ProviderProfileRecord]) -> C
                 link_account_id,
                 link_session_id,
                 link_updated_at,
-                if profile.migrated_from_legacy { 1_i64 } else { 0_i64 },
+                if profile.migrated_from_legacy {
+                    1_i64
+                } else {
+                    0_i64
+                },
                 profile.migrated_at,
                 profile.updated_at,
             ],
@@ -429,7 +429,12 @@ fn build_credential_link(
 
 fn credential_link_columns(
     link: Option<&ProviderProfileCredentialLink>,
-) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     match link {
         Some(ProviderProfileCredentialLink::OpenAiCodex {
             account_id,
@@ -441,24 +446,15 @@ fn credential_link_columns(
             Some(session_id.clone()),
             Some(updated_at.clone()),
         ),
-        Some(ProviderProfileCredentialLink::ApiKey { updated_at }) => (
-            Some("api_key".into()),
-            None,
-            None,
-            Some(updated_at.clone()),
-        ),
-        Some(ProviderProfileCredentialLink::Local { updated_at }) => (
-            Some("local".into()),
-            None,
-            None,
-            Some(updated_at.clone()),
-        ),
-        Some(ProviderProfileCredentialLink::Ambient { updated_at }) => (
-            Some("ambient".into()),
-            None,
-            None,
-            Some(updated_at.clone()),
-        ),
+        Some(ProviderProfileCredentialLink::ApiKey { updated_at }) => {
+            (Some("api_key".into()), None, None, Some(updated_at.clone()))
+        }
+        Some(ProviderProfileCredentialLink::Local { updated_at }) => {
+            (Some("local".into()), None, None, Some(updated_at.clone()))
+        }
+        Some(ProviderProfileCredentialLink::Ambient { updated_at }) => {
+            (Some("ambient".into()), None, None, Some(updated_at.clone()))
+        }
         None => (None, None, None, None),
     }
 }
@@ -502,7 +498,13 @@ mod tests {
         let loaded = load_provider_profiles_from_db(&connection)
             .expect("load")
             .expect("snapshot present");
-        assert_eq!(loaded.metadata.active_profile_id, snapshot.metadata.active_profile_id);
-        assert_eq!(loaded.metadata.profiles.len(), snapshot.metadata.profiles.len());
+        assert_eq!(
+            loaded.metadata.active_profile_id,
+            snapshot.metadata.active_profile_id
+        );
+        assert_eq!(
+            loaded.metadata.profiles.len(),
+            snapshot.metadata.profiles.len()
+        );
     }
 }

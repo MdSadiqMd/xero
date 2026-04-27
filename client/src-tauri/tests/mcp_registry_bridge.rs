@@ -18,8 +18,9 @@ use cadence_desktop_lib::{
     },
     configure_builder_with_state,
     mcp::{
-        persist_mcp_registry, McpConnectionDiagnostic, McpConnectionState, McpConnectionStatus,
-        McpEnvironmentReference, McpRegistry, McpServerRecord, McpTransport,
+        load_mcp_registry_from_path, persist_mcp_registry, McpConnectionDiagnostic,
+        McpConnectionState, McpConnectionStatus, McpEnvironmentReference, McpRegistry,
+        McpServerRecord, McpTransport,
     },
     state::DesktopState,
 };
@@ -36,6 +37,7 @@ fn create_state(root: &TempDir) -> DesktopState {
     let app_data = root.path().join("app-data");
 
     DesktopState::default()
+        .with_global_db_path_override(app_data.join("cadence.db"))
         .with_registry_file_override(app_data.join("project-registry.json"))
         .with_auth_store_file_override(app_data.join("openai-auth.json"))
         .with_provider_profiles_file_override(app_data.join("provider-profiles.json"))
@@ -48,7 +50,7 @@ fn create_state(root: &TempDir) -> DesktopState {
 }
 
 fn mcp_registry_path(root: &TempDir) -> PathBuf {
-    root.path().join("app-data").join("mcp-registry.json")
+    root.path().join("app-data").join("cadence.db")
 }
 
 fn spawn_single_response_server(
@@ -157,7 +159,6 @@ fn mcp_commands_validate_requests_and_persist_crud_import_without_secret_values(
     let initial = list_mcp_servers(app.handle().clone(), app.state::<DesktopState>())
         .expect("list MCP servers should return a default registry");
     assert!(initial.servers.is_empty());
-    assert!(!registry_path.exists());
 
     let invalid_id = upsert_mcp_server(
         app.handle().clone(),
@@ -191,10 +192,9 @@ fn mcp_commands_validate_requests_and_persist_crud_import_without_secret_values(
     )
     .expect_err("unsupported transport URL should fail closed");
     assert_eq!(invalid_transport.code, "mcp_registry_invalid");
-    assert!(
-        !registry_path.exists(),
-        "failed updates must not create an MCP registry file"
-    );
+    let after_invalid = list_mcp_servers(app.handle().clone(), app.state::<DesktopState>())
+        .expect("list MCP servers after invalid upsert");
+    assert!(after_invalid.servers.is_empty());
 
     let upserted = upsert_mcp_server(
         app.handle().clone(),
@@ -233,10 +233,17 @@ fn mcp_commands_validate_requests_and_persist_crud_import_without_secret_values(
         Some("mcp_status_unchecked")
     );
 
-    let persisted = std::fs::read_to_string(&registry_path).expect("read persisted MCP registry");
-    assert!(persisted.contains("\"fromEnv\": \"MCP_BRIDGE_SECRET_TOKEN\""));
+    let persisted =
+        load_mcp_registry_from_path(&registry_path).expect("read persisted MCP registry");
+    let memory_server = persisted
+        .servers
+        .iter()
+        .find(|server| server.id == "memory")
+        .expect("persisted memory server");
+    assert_eq!(memory_server.env[0].from_env, "MCP_BRIDGE_SECRET_TOKEN");
+    let serialized = serde_json::to_string(&persisted).expect("serialize persisted MCP registry");
     assert!(
-        !persisted.contains("super-secret-bridge-token"),
+        !serialized.contains("super-secret-bridge-token"),
         "persisted MCP registry must not include resolved secret values"
     );
 
