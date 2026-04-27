@@ -9,7 +9,6 @@ use crate::{
     },
     commands::CommandError,
     global_db::global_database_path,
-    notifications::NOTIFICATION_CREDENTIAL_STORE_FILE_NAME,
     provider_models::{
         ProviderModelCatalogRefreshRegistry, PROVIDER_MODEL_CATALOG_CACHE_FILE_NAME,
     },
@@ -312,14 +311,9 @@ impl DesktopState {
             return Ok(path.clone());
         }
 
-        let app_data_dir = app.path().app_data_dir().map_err(|error| {
-            CommandError::system_fault(
-                "app_data_dir_unavailable",
-                format!("Cadence could not resolve the app-data directory: {error}"),
-            )
-        })?;
-
-        Ok(app_data_dir.join(NOTIFICATION_CREDENTIAL_STORE_FILE_NAME))
+        // Phase 2.3: notification credentials live in the global database. Callers that
+        // construct a FileNotificationCredentialStore from this path now operate on cadence.db.
+        self.global_db_path(app)
     }
 
     pub fn runtime_settings_file<R: Runtime>(

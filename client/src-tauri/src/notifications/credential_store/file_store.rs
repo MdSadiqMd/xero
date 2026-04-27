@@ -1,12 +1,12 @@
-use std::{fs, io::Write, path::PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tempfile::NamedTempFile;
 
 use crate::notifications::{NotificationAdapterError, NotificationRouteKind};
 
 use super::{
     readiness::NotificationCredentialReadinessProjector,
+    sql::{load_store, open_db, write_store},
     validation::{
         require_identifier, sanitize_upsert_credentials, NotificationCredentialUpsertInput,
     },
@@ -25,6 +25,9 @@ pub struct NotificationCredentialUpsertReceipt {
     pub updated_at: String,
 }
 
+/// Backed by the global `cadence.db` database. Phase 2.3 swapped the JSON I/O for SQL writes
+/// against `notification_credentials` and `notification_inbound_cursors`. The struct still owns a
+/// path so the existing call sites remain untouched; that path is now the global database file.
 #[derive(Debug, Clone)]
 pub struct FileNotificationCredentialStore {
     path: PathBuf,
@@ -105,105 +108,16 @@ impl FileNotificationCredentialStore {
     pub(crate) fn load_store_file(
         &self,
     ) -> Result<NotificationCredentialStoreFile, NotificationAdapterError> {
-        if !self.path.exists() {
-            return Ok(NotificationCredentialStoreFile::default());
-        }
-
-        let contents = fs::read_to_string(&self.path).map_err(|error| {
-            NotificationAdapterError::credentials_read_failed(format!(
-                "Cadence could not read the app-local notification credential store at {}: {error}",
-                self.path.display()
-            ))
-        })?;
-
-        serde_json::from_str::<NotificationCredentialStoreFile>(&contents).map_err(|error| {
-            NotificationAdapterError::credentials_malformed(format!(
-                "Cadence could not decode the app-local notification credential store at {}: {error}",
-                self.path.display()
-            ))
-        })
+        let connection = open_db(&self.path)?;
+        load_store(&connection)
     }
 
     pub(crate) fn write_store_file(
         &self,
         store: &NotificationCredentialStoreFile,
     ) -> Result<(), NotificationAdapterError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                NotificationAdapterError::new(
-                    "notification_adapter_credentials_directory_unavailable",
-                    format!(
-                        "Cadence could not prepare the app-local notification credential directory at {}: {error}",
-                        parent.display()
-                    ),
-                    true,
-                )
-            })?;
-        }
-
-        let json = serde_json::to_string_pretty(store).map_err(|error| {
-            NotificationAdapterError::new(
-                "notification_adapter_credentials_encode_failed",
-                format!(
-                    "Cadence could not serialize the app-local notification credential store at {}: {error}",
-                    self.path.display()
-                ),
-                false,
-            )
-        })?;
-
-        let parent = self
-            .path
-            .parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."));
-
-        let mut temp_file = NamedTempFile::new_in(&parent).map_err(|error| {
-            NotificationAdapterError::new(
-                "notification_adapter_credentials_write_failed",
-                format!(
-                    "Cadence could not prepare a temporary app-local notification credential store file near {}: {error}",
-                    self.path.display()
-                ),
-                true,
-            )
-        })?;
-
-        temp_file.write_all(json.as_bytes()).map_err(|error| {
-            NotificationAdapterError::new(
-                "notification_adapter_credentials_write_failed",
-                format!(
-                    "Cadence could not write temporary app-local notification credential data near {}: {error}",
-                    self.path.display()
-                ),
-                true,
-            )
-        })?;
-
-        temp_file.as_file_mut().sync_all().map_err(|error| {
-            NotificationAdapterError::new(
-                "notification_adapter_credentials_write_failed",
-                format!(
-                    "Cadence could not flush temporary app-local notification credential data near {}: {error}",
-                    self.path.display()
-                ),
-                true,
-            )
-        })?;
-
-        temp_file.persist(&self.path).map_err(|error| {
-            NotificationAdapterError::new(
-                "notification_adapter_credentials_write_failed",
-                format!(
-                    "Cadence could not persist the app-local notification credential store at {}: {}",
-                    self.path.display(),
-                    error.error
-                ),
-                true,
-            )
-        })?;
-
-        Ok(())
+        let mut connection = open_db(&self.path)?;
+        write_store(&mut connection, store)
     }
 }
 
@@ -235,71 +149,4 @@ pub struct NotificationInboundCursorEntry {
     pub route_kind: String,
     pub cursor: String,
     pub updated_at: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use tempfile::tempdir;
-
-    use super::{FileNotificationCredentialStore, NOTIFICATION_CREDENTIAL_STORE_FILE_NAME};
-    use crate::notifications::{
-        NotificationCredentialReadinessStatus, NotificationCredentialUpsertInput,
-        NotificationRouteKind,
-    };
-
-    #[test]
-    fn readiness_projector_marks_unreadable_store_as_unavailable() {
-        let root = tempdir().expect("temp dir");
-        let store_path = root.path().join(NOTIFICATION_CREDENTIAL_STORE_FILE_NAME);
-        fs::create_dir_all(&store_path).expect("create unreadable store directory");
-
-        let store = FileNotificationCredentialStore::new(store_path);
-        let readiness = store.load_readiness_projector().project_route(
-            "project-1",
-            "route-1",
-            NotificationRouteKind::Telegram,
-        );
-
-        assert_eq!(
-            readiness.status,
-            NotificationCredentialReadinessStatus::Unavailable
-        );
-        assert_eq!(
-            readiness
-                .diagnostic
-                .as_ref()
-                .map(|diagnostic| diagnostic.code.as_str()),
-            Some("notification_adapter_credentials_read_failed")
-        );
-    }
-
-    #[test]
-    fn upsert_route_credentials_fails_when_parent_directory_is_unavailable() {
-        let root = tempdir().expect("temp dir");
-        let parent_file = root.path().join("not-a-directory");
-        fs::write(&parent_file, "occupied").expect("seed parent file");
-
-        let store = FileNotificationCredentialStore::new(
-            parent_file.join(NOTIFICATION_CREDENTIAL_STORE_FILE_NAME),
-        );
-        let error = store
-            .upsert_route_credentials(
-                "project-1",
-                "route-1",
-                NotificationRouteKind::Telegram,
-                NotificationCredentialUpsertInput::Telegram {
-                    bot_token: "bot-token".into(),
-                    chat_id: "chat-id".into(),
-                },
-                "2026-04-20T20:44:00Z",
-            )
-            .expect_err("parent file should block app-local store writes");
-
-        assert_eq!(
-            error.code,
-            "notification_adapter_credentials_directory_unavailable"
-        );
-    }
 }

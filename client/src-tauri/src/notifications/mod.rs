@@ -5,11 +5,12 @@ pub mod service;
 pub mod telegram;
 
 pub use credential_store::{
-    FileNotificationCredentialStore, NotificationCredentialReadinessDiagnostic,
-    NotificationCredentialReadinessProjection, NotificationCredentialReadinessProjector,
-    NotificationCredentialReadinessStatus, NotificationCredentialStoreEntry,
-    NotificationCredentialStoreFile, NotificationCredentialUpsertInput,
-    NotificationCredentialUpsertReceipt, NOTIFICATION_CREDENTIAL_STORE_FILE_NAME,
+    import_legacy_notification_credentials, FileNotificationCredentialStore,
+    NotificationCredentialReadinessDiagnostic, NotificationCredentialReadinessProjection,
+    NotificationCredentialReadinessProjector, NotificationCredentialReadinessStatus,
+    NotificationCredentialStoreEntry, NotificationCredentialStoreFile,
+    NotificationCredentialUpsertInput, NotificationCredentialUpsertReceipt,
+    NotificationInboundCursorEntry, NOTIFICATION_CREDENTIAL_STORE_FILE_NAME,
 };
 pub use discord::ReqwestDiscordTransport;
 pub use route_target::{

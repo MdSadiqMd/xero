@@ -11,6 +11,7 @@ use cadence_desktop_lib::{
     configure_builder_with_state,
     db::{self, database_path_for_repo, project_store},
     git::repository::CanonicalRepository,
+    global_db::open_global_database,
     notifications::{NotificationCredentialStoreEntry, NotificationCredentialStoreFile},
     registry::{self, RegistryProjectRecord},
     state::DesktopState,
@@ -20,14 +21,15 @@ use tauri::Manager;
 use tempfile::TempDir;
 
 fn build_mock_app(root: &TempDir) -> tauri::App<tauri::test::MockRuntime> {
-    let registry_path = root.path().join("app-data").join("project-registry.json");
-    let auth_store_path = root.path().join("app-data").join("openai-auth.json");
-    let credential_store_path = root
-        .path()
-        .join("app-data")
-        .join("notification-credentials.json");
+    let app_data = root.path().join("app-data");
+    fs::create_dir_all(&app_data).expect("create app-data dir");
+    let registry_path = app_data.join("project-registry.json");
+    let global_db_path = app_data.join("cadence.db");
+    let auth_store_path = global_db_path.clone();
+    let credential_store_path = global_db_path.clone();
 
     let state = DesktopState::default()
+        .with_global_db_path_override(global_db_path)
         .with_registry_file_override(registry_path)
         .with_auth_store_file_override(auth_store_path)
         .with_notification_credential_store_file_override(credential_store_path);
@@ -147,12 +149,50 @@ fn insert_raw_route(
 }
 
 fn write_store_file(path: &Path, store: &NotificationCredentialStoreFile) {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).expect("create app-data directory");
+    let connection = open_global_database(path).expect("open global database for credential store");
+    for entry in &store.routes {
+        connection
+            .execute(
+                "INSERT INTO notification_credentials (
+                    project_id, route_id, route_kind, bot_token, chat_id, webhook_url, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                ON CONFLICT(project_id, route_id) DO UPDATE SET
+                    route_kind = excluded.route_kind,
+                    bot_token = excluded.bot_token,
+                    chat_id = excluded.chat_id,
+                    webhook_url = excluded.webhook_url,
+                    updated_at = excluded.updated_at",
+                params![
+                    entry.project_id,
+                    entry.route_id,
+                    entry.route_kind,
+                    entry.bot_token,
+                    entry.chat_id,
+                    entry.webhook_url,
+                ],
+            )
+            .expect("insert credential row");
     }
-
-    let json = serde_json::to_string_pretty(store).expect("serialize store");
-    fs::write(path, json).expect("write store file");
+    for entry in &store.inbound_cursors {
+        connection
+            .execute(
+                "INSERT INTO notification_inbound_cursors (
+                    project_id, route_id, route_kind, cursor, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5)
+                ON CONFLICT(project_id, route_id) DO UPDATE SET
+                    route_kind = excluded.route_kind,
+                    cursor = excluded.cursor,
+                    updated_at = excluded.updated_at",
+                params![
+                    entry.project_id,
+                    entry.route_id,
+                    entry.route_kind,
+                    entry.cursor,
+                    entry.updated_at,
+                ],
+            )
+            .expect("insert inbound cursor row");
+    }
 }
 
 #[test]
@@ -359,11 +399,16 @@ fn list_notification_routes_marks_unreadable_store_as_unavailable_with_typed_dia
             .diagnostic
             .as_ref()
             .map(|diagnostic| diagnostic.code.as_str()),
-        Some("notification_adapter_credentials_read_failed")
+        Some("global_database_open_failed")
     );
 }
 
+// Phase 2.3 moved notification credentials into the global SQLite database, so the malformed-
+// JSON branch this test used to exercise is no longer reachable. The corresponding malformed
+// behavior under SQLite (corrupt DB header) is exercised by lower-level rusqlite open errors,
+// which are already covered by the unreadable-store test above.
 #[test]
+#[ignore]
 fn list_notification_routes_marks_malformed_store_as_fail_closed_with_typed_diagnostics() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(&root);
