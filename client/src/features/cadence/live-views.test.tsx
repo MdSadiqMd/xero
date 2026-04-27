@@ -632,9 +632,7 @@ describe('live views', () => {
     render(<AgentRuntime agent={makeAgent()} />)
 
     expect(screen.getByText('Configure agent runtime')).toBeVisible()
-    expect(
-      screen.getByText('Open Settings to choose a provider and model before using the agent tab for this imported project.'),
-    ).toBeVisible()
+    expect(screen.getByText('Connect a provider in Settings to start chatting with the agent.')).toBeVisible()
     expect(screen.getByLabelText('Agent input unavailable')).toHaveAttribute('placeholder', 'Connect a provider to start.')
     expect(screen.queryByText('Context')).not.toBeInTheDocument()
     expect(screen.queryByText('Signed out')).not.toBeInTheDocument()
@@ -667,11 +665,12 @@ describe('live views', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
-    expect(screen.getByText('No supervised run is attached')).toBeVisible()
-    expect(screen.getByText('No transcript yet')).toBeVisible()
-    expect(screen.getByText('No runtime activity yet')).toBeVisible()
-    expect(screen.getByText('No tool calls yet')).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'What should we build in Cadence?' })).toBeVisible()
+    expect(
+      screen.getByText(
+        'Ask the agent to read code, propose changes, or run a task. Your messages and any actions it takes will appear here.',
+      ),
+    ).toBeVisible()
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
     expect(screen.queryByLabelText('Agent input unavailable')).not.toBeInTheDocument()
 

@@ -151,54 +151,128 @@ pub fn send_touch(
     }
 }
 
+/// Persistent `bash` process that stays alive to avoid the ~100-300ms
+/// process spawn overhead on every tap. Speaks a line-based protocol: we
+/// write `"click X Y\n"` to stdin and read `"ok\n"` or `"err ...\n"` from
+/// stdout. The bash process runs a `while read` loop, dispatching each
+/// click via a minimal one-liner `osascript -e` call. Because the bash
+/// process is already warm, the per-tap cost is just the `osascript`
+/// invocation itself (~30-60ms) rather than fork+exec+bash-init on top.
+mod ax_bridge {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Child, Command, Stdio};
+    use std::sync::Mutex;
+
+    static BRIDGE: Mutex<Option<AxBridge>> = Mutex::new(None);
+
+    struct AxBridge {
+        child: Child,
+        reader: BufReader<std::process::ChildStdout>,
+    }
+
+    fn spawn_bridge() -> Result<AxBridge, CommandError> {
+        let mut child = Command::new("bash")
+            .arg("-c")
+            .arg(
+                r#"while IFS= read -r line; do
+  set -- $line
+  cmd="$1"; x="$2"; y="$3"
+  if [ "$cmd" = "click" ]; then
+    osascript -e "tell application \"System Events\" to tell process \"Simulator\" to click at {$x, $y}" 2>&1 && echo "ok" || echo "err $?"
+  fi
+done"#,
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| {
+                CommandError::system_fault(
+                    "ios_ax_bridge_spawn_failed",
+                    format!("could not spawn AX bridge process: {err}"),
+                )
+            })?;
+
+        let stdout = child.stdout.take().unwrap();
+        let reader = BufReader::new(stdout);
+        Ok(AxBridge { child, reader })
+    }
+
+    pub fn click(point: CGPoint) -> Result<(), CommandError> {
+        let x = point.x.round() as i64;
+        let y = point.y.round() as i64;
+
+        let mut guard = BRIDGE.lock().expect("ax_bridge lock poisoned");
+
+        // Spawn the bridge on first use, or respawn if it died.
+        let needs_spawn = match guard.as_mut() {
+            None => true,
+            Some(b) => matches!(b.child.try_wait(), Ok(Some(_))),
+        };
+        if needs_spawn {
+            *guard = Some(spawn_bridge()?);
+        }
+
+        let result = send_click(guard.as_mut().unwrap(), x, y);
+        if result.is_err() {
+            // Drop the bridge so the next call respawns a fresh one.
+            *guard = None;
+        }
+        result
+    }
+
+    fn send_click(bridge: &mut AxBridge, x: i64, y: i64) -> Result<(), CommandError> {
+        let stdin = bridge.child.stdin.as_mut().unwrap();
+
+        writeln!(stdin, "click {x} {y}").map_err(|err| {
+            CommandError::system_fault(
+                "ios_ax_click_failed",
+                format!("failed to write to AX bridge: {err}"),
+            )
+        })?;
+
+        stdin.flush().map_err(|err| {
+            CommandError::system_fault(
+                "ios_ax_click_failed",
+                format!("failed to flush AX bridge stdin: {err}"),
+            )
+        })?;
+
+        let mut response = String::new();
+        bridge.reader.read_line(&mut response).map_err(|err| {
+            CommandError::system_fault(
+                "ios_ax_click_failed",
+                format!("failed to read AX bridge response: {err}"),
+            )
+        })?;
+
+        let response = response.trim();
+        if response == "ok" {
+            Ok(())
+        } else if response.contains("1743") || response.to_lowercase().contains("not authorized") {
+            Err(CommandError::user_fixable(
+                "ios_ax_permission_denied",
+                "Cadence needs Accessibility permission to drive the iOS Simulator. \
+                 Open System Settings → Privacy & Security → Accessibility and enable \
+                 Cadence, then try again.",
+            ))
+        } else {
+            // Don't kill the bridge for transient failures — caller decides.
+            Err(CommandError::system_fault(
+                "ios_ax_click_failed",
+                format!("osascript click failed: {response}"),
+            ))
+        }
+    }
+}
+
 /// Dispatch a one-shot click at screen-space `point` by handing
 /// `System Events` the coordinate and letting it resolve the AX element
-/// under it. Requires Accessibility permission (already checked by the
-/// caller) and for the Simulator window to expose the target via AX.
+/// under it. Uses a persistent bridge process to avoid the ~100-300ms
+/// overhead of spawning `osascript` on every tap.
 fn click_via_applescript(point: CGPoint) -> Result<(), CommandError> {
-    use std::process::Command;
-    // `tell process "Simulator" to click at {x, y}` works even when the
-    // Simulator window is obscured by Cadence — the AX tree is process-
-    // scoped, not window-server scoped. Rounding to i64 avoids surfacing
-    // AppleScript `{12.5, 30.1}` literals which parse inconsistently
-    // across macOS releases.
-    let x = point.x.round() as i64;
-    let y = point.y.round() as i64;
-    let script = format!(
-        r#"tell application "System Events"
-  tell process "Simulator"
-    click at {{{x}, {y}}}
-  end tell
-end tell"#
-    );
-    let output = Command::new("osascript").arg("-e").arg(&script).output();
-    match output {
-        Ok(out) if out.status.success() => Ok(()),
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            // 1743 / "not authorized" is AppleScript's typed code for
-            // missing Accessibility permission. Surface it the same way
-            // the CGEvent path does so the existing sidebar banner
-            // triggers instead of a generic error.
-            if stderr.contains("1743") || stderr.to_lowercase().contains("not authorized") {
-                Err(CommandError::user_fixable(
-                    "ios_ax_permission_denied",
-                    "Cadence needs Accessibility permission to drive the iOS Simulator. \
-                     Open System Settings → Privacy & Security → Accessibility and enable \
-                     Cadence, then try again.",
-                ))
-            } else {
-                Err(CommandError::system_fault(
-                    "ios_ax_click_failed",
-                    format!("osascript click failed: {stderr}"),
-                ))
-            }
-        }
-        Err(err) => Err(CommandError::system_fault(
-            "ios_ax_click_failed",
-            format!("could not invoke osascript: {err}"),
-        )),
-    }
+    ax_bridge::click(point)
 }
 
 /// Post a drag gesture from `(from_*)` to `(to_*)` over `duration_ms` ms.

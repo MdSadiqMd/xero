@@ -9,10 +9,11 @@ use std::{
 use cadence_desktop_lib::{
     commands::{
         cancel_agent_run, compact_session_history, start_agent_task, start_runtime_run,
+        upsert_provider_profile,
         update_runtime_run_controls, CancelAgentRunRequestDto, CompactSessionHistoryRequestDto,
         RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto,
         RuntimeRunControlStateDto, StartAgentTaskRequestDto, StartRuntimeRunRequestDto,
-        UpdateRuntimeRunControlsRequestDto,
+        UpdateRuntimeRunControlsRequestDto, UpsertProviderProfileRequestDto,
     },
     configure_builder_with_state, db,
     git::repository::{ensure_cadence_excluded, CanonicalRepository},
@@ -167,6 +168,28 @@ fn yolo_controls() -> RuntimeRunControlStateDto {
         },
         pending: None,
     }
+}
+
+fn seed_ready_provider_profile(app: &tauri::App<tauri::test::MockRuntime>) {
+    upsert_provider_profile(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        UpsertProviderProfileRequestDto {
+            profile_id: "anthropic-default".into(),
+            provider_id: "anthropic".into(),
+            runtime_kind: "anthropic".into(),
+            label: "Anthropic".into(),
+            model_id: "claude-3-7-sonnet-latest".into(),
+            preset_id: Some("anthropic".into()),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: Some("test-anthropic-key".into()),
+            activate: true,
+        },
+    )
+    .expect("seed ready provider profile");
 }
 
 fn suggest_controls_input() -> RuntimeRunControlInputDto {
@@ -2068,6 +2091,7 @@ fn start_runtime_run_defaults_to_owned_agent_runtime() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
     let (project_id, _repo_root) = seed_project(&root, &app);
+    seed_ready_provider_profile(&app);
 
     let runtime_run = start_runtime_run(
         app.handle().clone(),
@@ -2096,6 +2120,7 @@ fn start_runtime_run_initial_prompt_runs_owned_agent_task() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
     let (project_id, repo_root) = seed_project(&root, &app);
+    seed_ready_provider_profile(&app);
 
     let runtime_run = start_runtime_run(
         app.handle().clone(),
@@ -2130,6 +2155,7 @@ fn update_runtime_run_controls_prompt_drives_owned_agent_continuation() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
     let (project_id, repo_root) = seed_project(&root, &app);
+    seed_ready_provider_profile(&app);
 
     let runtime_run = start_runtime_run(
         app.handle().clone(),

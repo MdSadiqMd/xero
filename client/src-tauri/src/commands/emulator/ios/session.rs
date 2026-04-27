@@ -550,7 +550,7 @@ fn spawn_screenshot_fallback<R: Runtime + 'static>(
             if shutdown.load(Ordering::Relaxed) {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(600));
+            std::thread::sleep(Duration::from_millis(150));
             if shutdown.load(Ordering::Relaxed) {
                 break;
             }

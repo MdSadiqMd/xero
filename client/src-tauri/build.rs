@@ -49,7 +49,6 @@ fn compile_dictation_shim() {
         return;
     }
 
-    println!("cargo:rustc-link-lib=framework=Speech");
     println!("cargo:rustc-link-lib=framework=AVFoundation");
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=Security");
@@ -83,6 +82,30 @@ fn compile_dictation_shim() {
     );
     if modern_sdk {
         println!("cargo:rustc-cfg=cadence_dictation_modern_sdk");
+    }
+
+    println!("cargo:rustc-link-lib=framework=Speech");
+
+    if modern_sdk {
+        // The modern dictation shim (ModernAvailable.swift) is compiled
+        // with Swift 6.2 / Xcode 26 and references symbols from the
+        // Speech framework's Swift overlay, the Swift concurrency
+        // runtime, Foundation overlays, and Swift type metadata records.
+        //
+        // When swiftc compiles a normal Swift target it embeds auto-link
+        // metadata (.swiftmodule) that tells the linker which dylibs to
+        // pull in. Compiling to a static .a and linking from Rust loses
+        // that metadata — every implicit dependency must be linked
+        // manually. On macOS 26 beta (Swift 6.2) the dependency graph is
+        // large and fragile: swift_Concurrency, swift_DarwinFoundation*,
+        // swiftSynchronization, plus per-framework Swift overlays.
+        //
+        // Rather than chasing each symbol, use `-undefined dynamic_lookup`
+        // which defers all unresolved symbols to runtime. On macOS 26 all
+        // these symbols are present in the OS's /usr/lib/swift dylibs
+        // and the Speech framework. The Swift shim's @available guards
+        // ensure the modern codepath is only called on macOS 26+.
+        println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     }
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -120,6 +143,19 @@ fn compile_dictation_shim() {
     for runtime_path in swift_runtime_library_paths(&swiftc) {
         println!("cargo:rustc-link-search=native={runtime_path}");
         println!("cargo:rustc-link-arg=-Wl,-rpath,{runtime_path}");
+    }
+    // macOS 26+ / Xcode 26+ splits Foundation into several Swift overlay
+    // dylibs (swift_DarwinFoundation{1,2,3}, swiftSynchronization, etc.)
+    // that live under the SDK's usr/lib/swift rather than the toolchain.
+    // Without this search path the linker can't resolve auto-linked libs
+    // from the compiled Swift shim.
+    let sdk_swift_lib = PathBuf::from(&sdk_path).join("usr/lib/swift");
+    if sdk_swift_lib.is_dir() {
+        println!(
+            "cargo:rustc-link-search=framework={}",
+            sdk_swift_lib.display()
+        );
+        println!("cargo:rustc-link-search=native={}", sdk_swift_lib.display());
     }
     println!("cargo:rustc-link-lib=static=CadenceDictationShim");
     println!("cargo:rustc-cfg=cadence_dictation_native_shim");

@@ -5,7 +5,10 @@
     "dev": "concurrently -n TAURI,LANDING -c magenta,cyan \"pnpm run dev:tauri\" \"pnpm run dev:landing\"",
     "dev:tauri": "pnpm --dir ./client run tauri:dev",
     "dev:tauri:ios-grpc": "pnpm --dir ./client run tauri:dev:ios-grpc",
-    "dev:landing": "pnpm --dir ./landing run dev --port 3001"
+    "dev:landing": "pnpm --dir ./landing run dev --port 3001",
+    "test": "pnpm run test:client && pnpm run test:rust",
+    "test:client": "pnpm --dir ./client run test",
+    "test:rust": "cargo test --manifest-path client/src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

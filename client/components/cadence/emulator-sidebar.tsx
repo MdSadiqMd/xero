@@ -430,14 +430,23 @@ function EmulatorViewport({
     return `emulator://localhost/frame?t=${frameSeq}`
   }, [frameSeq])
 
-  const toNormalized = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const node = event.currentTarget
-    const rect = node.getBoundingClientRect()
-    if (rect.width === 0 || rect.height === 0) return null
-    const x = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-    const y = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height))
-    return { x, y }
-  }, [])
+  const toNormalized = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      const img = imgRef.current
+      const node = event.currentTarget
+      const rect = node.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return null
+
+      return computeNormalizedCoords(
+        event.clientX,
+        event.clientY,
+        rect,
+        img?.naturalWidth ?? 0,
+        img?.naturalHeight ?? 0,
+      )
+    },
+    [],
+  )
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -555,7 +564,7 @@ function EmulatorViewport({
             ref={imgRef}
             alt={`${platformLabel} viewport`}
             className={cn(
-              "block h-full w-full select-none object-cover transition-transform duration-150",
+              "block h-full w-full select-none object-contain transition-transform duration-150",
               orientation === "landscape" && "rotate-90",
             )}
             draggable={false}
@@ -700,6 +709,46 @@ function HomeIndicator() {
       )}
     />
   )
+}
+
+/**
+ * Map a pointer event's screen coordinates to normalized (0..1) coordinates
+ * on the simulator viewport image, accounting for `object-contain`
+ * letter/pillar-boxing.
+ *
+ * Exported so it can be regression-tested without mounting the full
+ * EmulatorSidebar component.
+ */
+export function computeNormalizedCoords(
+  clientX: number,
+  clientY: number,
+  containerRect: { left: number; top: number; width: number; height: number },
+  naturalWidth: number,
+  naturalHeight: number,
+): { x: number; y: number } {
+  let imgLeft = containerRect.left
+  let imgTop = containerRect.top
+  let imgWidth = containerRect.width
+  let imgHeight = containerRect.height
+
+  if (naturalWidth > 0 && naturalHeight > 0) {
+    const imgAspect = naturalWidth / naturalHeight
+    const containerAspect = containerRect.width / containerRect.height
+
+    if (imgAspect > containerAspect) {
+      // Image wider than container → bars top/bottom
+      imgHeight = containerRect.width / imgAspect
+      imgTop = containerRect.top + (containerRect.height - imgHeight) / 2
+    } else if (imgAspect < containerAspect) {
+      // Image taller than container → bars left/right
+      imgWidth = containerRect.height * imgAspect
+      imgLeft = containerRect.left + (containerRect.width - imgWidth) / 2
+    }
+  }
+
+  const x = Math.min(1, Math.max(0, (clientX - imgLeft) / imgWidth))
+  const y = Math.min(1, Math.max(0, (clientY - imgTop) / imgHeight))
+  return { x, y }
 }
 
 function InputErrorToast({

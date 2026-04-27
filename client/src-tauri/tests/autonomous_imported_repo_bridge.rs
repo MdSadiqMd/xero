@@ -7,15 +7,18 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cadence_desktop_lib::{
-    auth::{persist_openai_codex_session, StoredOpenAiCodexSession},
+    auth::{persist_openai_codex_session, sync_openai_profile_link, StoredOpenAiCodexSession},
     commands::{
         cancel_autonomous_run::cancel_autonomous_run, get_autonomous_run::get_autonomous_run,
-        get_runtime_run::get_runtime_run, start_autonomous_run::start_autonomous_run,
+        get_provider_model_catalog, get_runtime_run::get_runtime_run,
+        start_autonomous_run::start_autonomous_run,
         start_runtime_session::start_runtime_session, AutonomousRunRecoveryStateDto,
         AutonomousRunStateDto, AutonomousRunStatusDto, CancelAutonomousRunRequestDto,
-        GetAutonomousRunRequestDto, GetRuntimeRunRequestDto, RepositoryDiffScope, RuntimeAuthPhase,
-        RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
+        GetAutonomousRunRequestDto, GetProviderModelCatalogRequestDto, GetRuntimeRunRequestDto,
+        RepositoryDiffScope, RuntimeAuthPhase, RuntimeRunActiveControlSnapshotDto,
+        RuntimeRunApprovalModeDto, RuntimeRunControlStateDto, RuntimeRunControlInputDto,
         RuntimeRunDto, RuntimeRunStatusDto, RuntimeRunTransportLivenessDto,
         StartAutonomousRunRequestDto, StartRuntimeSessionRequestDto,
     },
@@ -36,6 +39,7 @@ use cadence_desktop_lib::{
     state::DesktopState,
 };
 use git2::{Repository, Status, StatusOptions};
+use serde_json::json;
 use tauri::Manager;
 use tempfile::TempDir;
 
@@ -51,11 +55,25 @@ fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::MockRuntime> {
 fn create_state(root: &TempDir) -> (DesktopState, PathBuf) {
     let registry_path = root.path().join("app-data").join("project-registry.json");
     let auth_store_path = root.path().join("app-data").join("openai-auth.json");
+    let provider_profiles_path = root.path().join("app-data").join("provider-profiles.json");
+    let provider_profile_credentials_path = root
+        .path()
+        .join("app-data")
+        .join("provider-profile-credentials.json");
+    let runtime_settings_path = root.path().join("app-data").join("runtime-settings.json");
+    let openrouter_credential_path = root
+        .path()
+        .join("app-data")
+        .join("openrouter-credentials.json");
 
     (
         DesktopState::default()
             .with_registry_file_override(registry_path)
             .with_auth_store_file_override(auth_store_path.clone())
+            .with_provider_profiles_file_override(provider_profiles_path)
+            .with_provider_profile_credential_store_file_override(provider_profile_credentials_path)
+            .with_runtime_settings_file_override(runtime_settings_path)
+            .with_openrouter_credential_file_override(openrouter_credential_path)
             .with_autonomous_skill_cache_dir_override(
                 root.path().join("app-data").join("autonomous-skills"),
             )
@@ -73,6 +91,29 @@ fn current_unix_timestamp() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock should be after unix epoch")
         .as_secs() as i64
+}
+
+fn jwt_with_account_id(account_id: &str) -> String {
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(
+        json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": account_id,
+            }
+        })
+        .to_string(),
+    );
+    format!("{header}.{payload}.")
+}
+
+fn openai_start_controls() -> RuntimeRunControlInputDto {
+    RuntimeRunControlInputDto {
+        provider_profile_id: Some("openai_codex-default".into()),
+        model_id: "gpt-5.3-codex".into(),
+        thinking_effort: None,
+        approval_mode: RuntimeRunApprovalModeDto::Yolo,
+        plan_mode_required: false,
+    }
 }
 
 fn runtime_with_approval(
@@ -191,19 +232,41 @@ fn seed_authenticated_runtime(
     auth_store_path: &Path,
     project_id: &str,
 ) {
-    persist_openai_codex_session(
-        auth_store_path,
-        StoredOpenAiCodexSession {
-            provider_id: "openai_codex".into(),
-            session_id: "session-auth".into(),
-            account_id: "acct-1".into(),
-            access_token: "header.payload.signature".into(),
-            refresh_token: "refresh-1".into(),
-            expires_at: current_unix_timestamp() + Duration::from_secs(3600).as_secs() as i64,
-            updated_at: "2026-04-18T19:00:00Z".into(),
+    let stored_session = StoredOpenAiCodexSession {
+        provider_id: "openai_codex".into(),
+        session_id: "session-auth".into(),
+        account_id: "acct-1".into(),
+        access_token: jwt_with_account_id("acct-1"),
+        refresh_token: "refresh-1".into(),
+        expires_at: current_unix_timestamp() + Duration::from_secs(3600).as_secs() as i64,
+        updated_at: "2026-04-18T19:00:00Z".into(),
+    };
+    persist_openai_codex_session(auth_store_path, stored_session.clone())
+        .expect("persist auth session");
+    sync_openai_profile_link(
+        &app.handle().clone(),
+        &app.state::<DesktopState>(),
+        Some("openai_codex-default"),
+        Some(&stored_session),
+    )
+    .expect("sync active provider-profile auth link");
+
+    let catalog = get_provider_model_catalog(
+        app.handle().clone(),
+        app.state::<DesktopState>(),
+        GetProviderModelCatalogRequestDto {
+            profile_id: "openai_codex-default".into(),
+            force_refresh: true,
         },
     )
-    .expect("persist auth session");
+    .expect("project openai codex catalog");
+    assert!(
+        catalog
+            .models
+            .iter()
+            .any(|model| model.model_id == "gpt-5.3-codex"),
+        "expected openai codex catalog to include gpt-5.3-codex"
+    );
 
     let runtime = start_runtime_session(
         app.handle().clone(),
@@ -214,7 +277,13 @@ fn seed_authenticated_runtime(
         },
     )
     .expect("start runtime session");
-    assert_eq!(runtime.phase, RuntimeAuthPhase::Authenticated);
+    assert_eq!(
+        runtime.phase,
+        RuntimeAuthPhase::Authenticated,
+        "expected authenticated runtime session after seeding ready profile; last_error_code={:?}, last_error={:?}",
+        runtime.last_error_code,
+        runtime.last_error,
+    );
 }
 
 fn wait_for_runtime_run(
@@ -691,7 +760,7 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
             agent_session_id: "agent-session-main".into(),
-            initial_controls: None,
+            initial_controls: Some(openai_start_controls()),
             initial_prompt: None,
         },
     )
@@ -735,7 +804,7 @@ fn imported_repo_bridge_start_once_survives_reload_without_duplicate_continuatio
         StartAutonomousRunRequestDto {
             project_id: project_id.clone(),
             agent_session_id: "agent-session-main".into(),
-            initial_controls: None,
+            initial_controls: Some(openai_start_controls()),
             initial_prompt: None,
         },
     )
