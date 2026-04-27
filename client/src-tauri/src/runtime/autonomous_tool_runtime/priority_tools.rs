@@ -1068,7 +1068,7 @@ fn priority_tool_catalog(
         (
             "process_manager",
             "process_manager",
-            "Inspect the phase-0 process-manager contract for owned processes, risk levels, lifecycle, persistence, and output cursors.",
+            "Start, list, inspect, read output from, and kill Cadence-owned long-running processes.",
         ),
         (
             "web_search",

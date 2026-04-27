@@ -683,7 +683,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
         ),
         descriptor(
             AUTONOMOUS_TOOL_PROCESS_MANAGER,
-            "Phase-0 contract for the future process_manager tool group. It validates schemas, ownership, risk, persistence, lifecycle, and output-limit invariants but does not start, signal, kill, or persist any process yet.",
+            "Manage Cadence-owned long-running processes. Phase 1 supports start, list, status, output, and kill for processes Cadence starts itself.",
             process_manager_schema(),
         ),
         descriptor(
@@ -1044,20 +1044,13 @@ fn process_manager_schema() -> JsonValue {
             (
                 "action",
                 enum_schema(
-                    "Process-manager action. Phase 0 is contract-only and performs no process control.",
+                    "Process-manager action. Phase 1 supports start, list, status, output, and kill.",
                     &[
                         "start",
                         "list",
                         "status",
                         "output",
-                        "digest",
-                        "wait_for_ready",
-                        "send",
-                        "send_and_wait",
-                        "signal",
                         "kill",
-                        "restart",
-                        "group_status",
                     ],
                 ),
             ),

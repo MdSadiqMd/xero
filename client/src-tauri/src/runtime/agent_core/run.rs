@@ -688,6 +688,14 @@ fn command_approval_action_id_for_tool_call(
     let argv = match result.output {
         AutonomousToolOutput::Command(output) if !output.spawned => output.argv,
         AutonomousToolOutput::CommandSession(output) if !output.spawned => output.argv,
+        AutonomousToolOutput::ProcessManager(output)
+            if !output.spawned && output.action == AutonomousProcessManagerAction::Start =>
+        {
+            let Some(process) = output.processes.first() else {
+                return Ok(None);
+            };
+            process.command.argv.clone()
+        }
         _ => return Ok(None),
     };
     Ok(Some(sanitize_action_id(&format!(

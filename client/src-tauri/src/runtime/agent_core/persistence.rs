@@ -404,6 +404,38 @@ pub(crate) fn record_command_output_event(
                 }
             }
         }
+        AutonomousToolOutput::ProcessManager(output) => {
+            append_event(
+                repo_root,
+                project_id,
+                run_id,
+                AgentRunEventKind::CommandOutput,
+                json!({
+                    "operation": output.action.clone(),
+                    "processId": output.process_id.clone(),
+                    "spawned": output.spawned,
+                    "processes": output.processes.clone(),
+                    "chunks": output.chunks.clone(),
+                    "nextCursor": output.next_cursor,
+                    "policy": output.policy.clone(),
+                }),
+            )?;
+
+            if !output.spawned && output.action == AutonomousProcessManagerAction::Start {
+                if let Some(process) = output.processes.first() {
+                    let argv = redact_command_argv_for_persistence(&process.command.argv);
+                    record_command_action_required(
+                        repo_root,
+                        project_id,
+                        run_id,
+                        "process_manager",
+                        &argv,
+                        &output.policy.reason,
+                        &output.policy.code,
+                    )?;
+                }
+            }
+        }
         _ => {}
     }
 

@@ -47,7 +47,7 @@ const MAX_COMMAND_SESSION_READ_BYTES: usize = 64 * 1024;
 const MAX_COMMAND_SESSIONS: usize = 8;
 const MAX_COMMAND_SESSION_STORED_CHUNKS: usize = 512;
 const MAX_COMMAND_SESSION_STORED_BYTES: usize = 1024 * 1024;
-const SAFE_COMMAND_ENV_KEYS: &[&str] = &[
+pub(super) const SAFE_COMMAND_ENV_KEYS: &[&str] = &[
     "PATH",
     "HOME",
     "USER",

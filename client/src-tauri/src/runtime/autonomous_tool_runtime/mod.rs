@@ -296,6 +296,7 @@ pub struct AutonomousToolRuntime {
     pub(super) subagent_execution_depth: usize,
     pub(super) skill_tool: Option<AutonomousSkillToolRuntime>,
     process_sessions: Arc<process::ProcessSessionRegistry>,
+    owned_processes: Arc<process_manager::OwnedProcessRegistry>,
 }
 
 impl std::fmt::Debug for AutonomousToolRuntime {
@@ -377,6 +378,7 @@ impl AutonomousToolRuntime {
             subagent_execution_depth: 0,
             skill_tool: None,
             process_sessions: Arc::new(process::ProcessSessionRegistry::default()),
+            owned_processes: Arc::new(process_manager::OwnedProcessRegistry::default()),
         })
     }
 
@@ -728,6 +730,9 @@ impl AutonomousToolRuntime {
             }
             AutonomousToolRequest::PowerShell(request) => {
                 self.powershell_with_operator_approval(request)
+            }
+            AutonomousToolRequest::ProcessManager(request) => {
+                self.process_manager_with_operator_approval(request)
             }
             request => self.execute(request),
         }

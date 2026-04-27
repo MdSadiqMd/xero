@@ -26,14 +26,13 @@ use cadence_desktop_lib::{
         AutonomousCommandRequest, AutonomousEditRequest, AutonomousFindRequest,
         AutonomousGitDiffRequest, AutonomousGitStatusRequest, AutonomousLspAction,
         AutonomousLspRequest, AutonomousMcpAction, AutonomousMcpRequest,
-        AutonomousNotebookEditRequest, AutonomousProcessActionRiskLevel,
-        AutonomousProcessManagerAction, AutonomousProcessManagerRequest,
-        AutonomousProcessOwnershipScope, AutonomousReadRequest, AutonomousSearchRequest,
-        AutonomousSubagentRequest, AutonomousSubagentType, AutonomousTodoAction,
-        AutonomousTodoRequest, AutonomousToolAccessAction, AutonomousToolAccessRequest,
-        AutonomousToolOutput, AutonomousToolRequest, AutonomousToolRuntime,
-        AutonomousToolRuntimeLimits, AutonomousToolSearchRequest, AutonomousWebConfig,
-        AutonomousWebFetchContentKind, AutonomousWebFetchRequest,
+        AutonomousNotebookEditRequest, AutonomousProcessManagerAction,
+        AutonomousProcessManagerRequest, AutonomousProcessOwnershipScope, AutonomousReadRequest,
+        AutonomousSearchRequest, AutonomousSubagentRequest, AutonomousSubagentType,
+        AutonomousTodoAction, AutonomousTodoRequest, AutonomousToolAccessAction,
+        AutonomousToolAccessRequest, AutonomousToolOutput, AutonomousToolRequest,
+        AutonomousToolRuntime, AutonomousToolRuntimeLimits, AutonomousToolSearchRequest,
+        AutonomousWebConfig, AutonomousWebFetchContentKind, AutonomousWebFetchRequest,
         AutonomousWebSearchProviderConfig, AutonomousWebSearchRequest, AutonomousWriteRequest,
     },
     state::DesktopState,
@@ -395,9 +394,11 @@ fn tool_runtime_tool_access_lists_and_grants_requested_groups() {
 }
 
 #[test]
-fn tool_runtime_process_manager_phase_zero_is_contract_only() {
+fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
     let root = tempfile::tempdir().expect("temp dir");
-    let runtime = AutonomousToolRuntime::new(root.path()).expect("runtime");
+    let runtime = AutonomousToolRuntime::new(root.path())
+        .expect("runtime")
+        .with_runtime_run_controls(runtime_control_state(RuntimeRunApprovalModeDto::Yolo, None));
 
     let start = runtime
         .execute(AutonomousToolRequest::ProcessManager(
@@ -407,47 +408,113 @@ fn tool_runtime_process_manager_phase_zero_is_contract_only() {
                 group: Some("dev".into()),
                 label: Some("test watcher".into()),
                 process_type: Some("test_watcher".into()),
-                argv: vec!["echo".into(), "ready".into()],
+                argv: shell_argv(runtime_shell::script_print_line_and_sleep("ready", 30)),
                 cwd: None,
                 shell_mode: false,
                 target_ownership: None,
                 persistent: false,
-                timeout_ms: Some(1_000),
+                timeout_ms: None,
                 after_cursor: None,
                 max_bytes: None,
                 input: None,
-                wait_pattern: Some("ready".into()),
+                wait_pattern: None,
                 wait_port: None,
                 wait_url: None,
                 signal: None,
             },
         ))
-        .expect("phase-zero process manager contract");
-    match start.output {
+        .expect("phase-one process manager start");
+    let process_id = match start.output {
         AutonomousToolOutput::ProcessManager(output) => {
             assert_eq!(output.action, AutonomousProcessManagerAction::Start);
-            assert_eq!(output.phase, "phase_0_contract");
-            assert!(!output.spawned);
-            assert!(output.processes.is_empty());
-            assert!(output.chunks.is_empty());
-            assert_eq!(
-                output.policy.risk_level,
-                AutonomousProcessActionRiskLevel::RunOwned
-            );
-            assert!(output.policy.approval_required);
+            assert_eq!(output.phase, "phase_1_owned_mvp");
+            assert!(output.spawned);
+            assert_eq!(output.processes.len(), 1);
             assert!(output
                 .contract
                 .supported_actions
-                .contains(&AutonomousProcessManagerAction::SendAndWait));
-            assert!(output
-                .contract
-                .risk_levels
-                .contains(&AutonomousProcessActionRiskLevel::SignalExternal));
+                .contains(&AutonomousProcessManagerAction::Kill));
             assert!(output.contract.persistence.redact_before_persistence);
             assert_eq!(
                 output.contract.output_limits.cursor_kind,
                 "monotonic_output_cursor"
             );
+            output.process_id.expect("process id")
+        }
+        other => panic!("unexpected output: {other:?}"),
+    };
+
+    let mut saw_ready = false;
+    for _ in 0..20 {
+        let output = runtime
+            .execute(AutonomousToolRequest::ProcessManager(
+                AutonomousProcessManagerRequest {
+                    action: AutonomousProcessManagerAction::Output,
+                    process_id: Some(process_id.clone()),
+                    group: None,
+                    label: None,
+                    process_type: None,
+                    argv: Vec::new(),
+                    cwd: None,
+                    shell_mode: false,
+                    target_ownership: None,
+                    persistent: false,
+                    timeout_ms: None,
+                    after_cursor: None,
+                    max_bytes: None,
+                    input: None,
+                    wait_pattern: None,
+                    wait_port: None,
+                    wait_url: None,
+                    signal: None,
+                },
+            ))
+            .expect("phase-one process manager output");
+        match output.output {
+            AutonomousToolOutput::ProcessManager(output) => {
+                saw_ready = output
+                    .chunks
+                    .iter()
+                    .filter_map(|chunk| chunk.text.as_deref())
+                    .any(|text| text.contains("ready"));
+                if saw_ready {
+                    break;
+                }
+            }
+            other => panic!("unexpected output: {other:?}"),
+        }
+        thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(saw_ready, "expected process output to include ready line");
+
+    let kill = runtime
+        .execute(AutonomousToolRequest::ProcessManager(
+            AutonomousProcessManagerRequest {
+                action: AutonomousProcessManagerAction::Kill,
+                process_id: Some(process_id.clone()),
+                group: None,
+                label: None,
+                process_type: None,
+                argv: Vec::new(),
+                cwd: None,
+                shell_mode: false,
+                target_ownership: None,
+                persistent: false,
+                timeout_ms: None,
+                after_cursor: None,
+                max_bytes: None,
+                input: None,
+                wait_pattern: None,
+                wait_port: None,
+                wait_url: None,
+                signal: None,
+            },
+        ))
+        .expect("phase-one process manager kill");
+    match kill.output {
+        AutonomousToolOutput::ProcessManager(output) => {
+            assert_eq!(output.process_id.as_deref(), Some(process_id.as_str()));
+            assert!(output.spawned);
         }
         other => panic!("unexpected output: {other:?}"),
     }
@@ -475,19 +542,11 @@ fn tool_runtime_process_manager_phase_zero_is_contract_only() {
                 signal: None,
             },
         ))
-        .expect("phase-zero external kill contract");
-    match external_kill.output {
-        AutonomousToolOutput::ProcessManager(output) => {
-            assert!(!output.spawned);
-            assert_eq!(output.process_id.as_deref(), Some("external-1"));
-            assert_eq!(
-                output.policy.risk_level,
-                AutonomousProcessActionRiskLevel::SignalExternal
-            );
-            assert!(output.policy.approval_required);
-        }
-        other => panic!("unexpected output: {other:?}"),
-    }
+        .expect_err("external kill remains out of scope in phase one");
+    assert_eq!(
+        external_kill.code,
+        "autonomous_tool_process_manager_external_unsupported"
+    );
 }
 
 #[test]
