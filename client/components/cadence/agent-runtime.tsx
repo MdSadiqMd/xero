@@ -11,11 +11,9 @@ import type {
 } from '@/src/lib/cadence-model'
 import {
   getRuntimeRunThinkingEffortLabel,
-  getRuntimeStreamStatusLabel,
   type RuntimeRunControlInputDto,
 } from '@/src/lib/cadence-model'
 
-import { AgentFeedSection } from './agent-runtime/agent-feed-section'
 import {
   createEmptyCheckpointControlLoop,
   getCheckpointControlLoopCoverageAlertMeta,
@@ -35,10 +33,8 @@ import { ComposerDock } from './agent-runtime/composer-dock'
 import { EmptySessionState } from './agent-runtime/empty-session-state'
 import {
   getStreamRunId,
-  getStreamStatusMeta,
   hasUsableRuntimeRunId,
 } from './agent-runtime/runtime-stream-helpers'
-import { displayValue, formatSequence } from './agent-runtime/shared-helpers'
 import { SetupEmptyState } from './agent-runtime/setup-empty-state'
 import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-controller'
 import type { SpeechDictationAdapter } from './agent-runtime/use-speech-dictation'
@@ -105,10 +101,6 @@ export function AgentRuntime({
   const transcriptItems = runtimeStream?.transcriptItems ?? []
   const toolCalls = runtimeStream?.toolCalls ?? []
   const streamIssue = agent.runtimeStreamError ?? runtimeStream?.lastIssue ?? null
-  const streamStatusLabel = displayValue(
-    agent.runtimeStreamStatusLabel,
-    getRuntimeStreamStatusLabel(streamStatus),
-  )
 
   const selectedProviderId = getSelectedProviderId(agent, runtimeSession)
   const selectedModelId = agent.selectedModelId?.trim() || null
@@ -188,28 +180,7 @@ export function AgentRuntime({
     : controller.composerModelId
       ? 'Thinking unavailable'
       : 'Choose model'
-  const streamStatusMeta = useMemo(() => getStreamStatusMeta(agent, runtimeSession), [agent, runtimeSession])
   const streamRunId = getStreamRunId(runtimeStream, renderableRuntimeRun)
-  const streamSequenceLabel = formatSequence(runtimeStream?.lastSequence ?? null)
-  const streamSessionLabel = displayValue(
-    runtimeStream?.sessionId,
-    runtimeSession?.sessionLabel ?? 'No session',
-  )
-  const showNoRunStreamBanner = Boolean(runtimeSession?.isAuthenticated && !renderableRuntimeRun)
-  const hasAgentFeedSurface = Boolean(
-    hasIncompleteRuntimeRunPayload ||
-      renderableRuntimeRun ||
-      runtimeSession?.isAuthenticated ||
-      controller.recentRunReplacement ||
-      streamIssue ||
-      transcriptItems.length > 0 ||
-      activityItems.length > 0 ||
-      toolCalls.length > 0 ||
-      skillItems.length > 0 ||
-      actionRequiredItems.length > 0 ||
-      runtimeStream?.completion ||
-      runtimeStream?.failure,
-  )
   const checkpointControlLoop = agent.checkpointControlLoop ?? createEmptyCheckpointControlLoop()
   const checkpointControlLoopRecoveryAlert = getCheckpointControlLoopRecoveryAlertMeta({
     controlLoop: checkpointControlLoop,
@@ -267,7 +238,6 @@ export function AgentRuntime({
   )
   const showEmptySessionState = Boolean(
     !showAgentSetupEmptyState &&
-      !runtimeSession?.isAuthenticated &&
       !providerMismatch &&
       isProviderLoggedIn &&
       !hasSessionActivity,
@@ -297,24 +267,6 @@ export function AgentRuntime({
             />
           ) : (
             <div className="mx-auto flex max-w-4xl flex-col gap-4">
-              {hasAgentFeedSurface ? (
-                <AgentFeedSection
-                  activityItems={activityItems}
-                  messagesUnavailableReason={agent.messagesUnavailableReason}
-                  recentRunReplacement={controller.recentRunReplacement}
-                  showNoRunStreamBanner={showNoRunStreamBanner}
-                  skillItems={skillItems}
-                  streamIssue={streamIssue}
-                  streamRunId={streamRunId}
-                  streamSequenceLabel={streamSequenceLabel}
-                  streamSessionLabel={streamSessionLabel}
-                  streamStatus={streamStatus}
-                  streamStatusLabel={streamStatusLabel}
-                  streamStatusMeta={streamStatusMeta}
-                  toolCalls={toolCalls}
-                  transcriptItems={transcriptItems}
-                />
-              ) : null}
               {showCheckpointControlLoopSection ? (
                 <CheckpointControlLoopSection
                   checkpointControlLoop={checkpointControlLoop}

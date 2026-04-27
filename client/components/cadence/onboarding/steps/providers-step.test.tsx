@@ -817,7 +817,7 @@ describe('ProvidersStep', () => {
     expect(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' })).toBeVisible()
   })
 
-  it('keeps OpenAI auth scoped to sign-in controls and disables them until a project is selected', () => {
+  it('shows the OpenAI sign-in control globally and dedupes alt profiles into the canonical card', () => {
     render(
       <ProvidersStep
         {...makeProvidersStepProps({
@@ -834,7 +834,6 @@ describe('ProvidersStep', () => {
             ],
           }),
           runtimeSession: makeRuntimeSession(),
-          hasSelectedProject: false,
           onStartLogin: vi.fn(async () => makeRuntimeSession()),
           onLogout: vi.fn(async () => makeRuntimeSession()),
         })}
@@ -844,10 +843,9 @@ describe('ProvidersStep', () => {
     const openAiCard = getProviderCard('OpenAI Codex')
     const openAiSignIn = within(openAiCard).getByRole('button', { name: 'Sign in' })
     expect(openAiSignIn).toBeVisible()
-    expect(openAiSignIn).toBeDisabled()
+    expect(openAiSignIn).not.toBeDisabled()
     expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(1)
     expect(screen.queryByText('OpenAI Alt')).not.toBeInTheDocument()
-    expect(screen.queryByText('Choose a project next')).not.toBeInTheDocument()
     expect(within(openAiCard).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
     expect(within(openAiCard).queryByRole('button', { name: 'API key' })).not.toBeInTheDocument()
   })
@@ -882,7 +880,6 @@ describe('ProvidersStep', () => {
             isAuthenticated: true,
             isSignedOut: false,
           }),
-          hasSelectedProject: true,
           onStartLogin: vi.fn(async () => makeRuntimeSession()),
           onLogout: vi.fn(async () => makeRuntimeSession()),
         })}

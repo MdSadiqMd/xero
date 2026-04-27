@@ -111,11 +111,69 @@ function normalizeProviderProfilesMigrationPayload(value: unknown): unknown {
 }
 
 function normalizeProviderProfilesPayload(value: unknown): unknown {
-  return normalizeObjectAliases(value, {
+  const normalized = normalizeObjectAliases(value, {
     activeProfileId: ['activeProfileId', 'active_profile_id'],
     profiles: ['profiles'],
     migration: ['migration'],
   })
+
+  if (!isRecord(normalized) || !Array.isArray(normalized.profiles)) {
+    return normalized
+  }
+
+  const activeProfileId =
+    typeof normalized.activeProfileId === 'string' && normalized.activeProfileId.trim().length > 0
+      ? normalized.activeProfileId
+      : null
+
+  const seen = new Map<string, unknown>()
+  const droppedProfileIds = new Set<string>()
+  for (const raw of normalized.profiles) {
+    const profile = normalizeProviderProfilePayload(raw)
+    if (!isRecord(profile)) continue
+    const providerId = typeof profile.providerId === 'string' ? profile.providerId : null
+    if (!providerId) continue
+    const profileId = typeof profile.profileId === 'string' ? profile.profileId : null
+    if (!profileId) continue
+
+    const existing = seen.get(providerId)
+    if (!existing) {
+      seen.set(providerId, profile)
+      continue
+    }
+
+    const existingProfileId = isRecord(existing) && typeof existing.profileId === 'string' ? existing.profileId : null
+    const canonicalId = `${providerId}-default`
+    const candidatePriority =
+      profileId === canonicalId ? 0 : profileId === activeProfileId ? 1 : 2
+    const existingPriority =
+      existingProfileId === canonicalId ? 0 : existingProfileId === activeProfileId ? 1 : 2
+
+    if (candidatePriority < existingPriority) {
+      if (existingProfileId) droppedProfileIds.add(existingProfileId)
+      seen.set(providerId, profile)
+    } else {
+      droppedProfileIds.add(profileId)
+    }
+  }
+
+  const dedupedProfiles = Array.from(seen.values())
+
+  let nextActiveProfileId = normalized.activeProfileId
+  if (typeof nextActiveProfileId === 'string' && droppedProfileIds.has(nextActiveProfileId)) {
+    const fallback =
+      dedupedProfiles.find((profile) => isRecord(profile) && profile.providerId === 'openai_codex') ??
+      dedupedProfiles[0]
+    if (isRecord(fallback) && typeof fallback.profileId === 'string') {
+      nextActiveProfileId = fallback.profileId
+    }
+  }
+
+  return {
+    ...normalized,
+    activeProfileId: nextActiveProfileId,
+    profiles: dedupedProfiles,
+  }
 }
 
 function expectedRuntimeKindForProvider(providerId: z.infer<typeof runtimeProviderIdSchema>): z.infer<typeof providerProfileRuntimeKindSchema> {

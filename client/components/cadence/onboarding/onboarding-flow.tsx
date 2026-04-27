@@ -247,7 +247,6 @@ export function OnboardingFlow({
               providerModelCatalogs={providerModelCatalogs}
               providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
               runtimeSession={runtimeSession}
-              hasSelectedProject={Boolean(project?.path?.trim())}
               onRefreshProviderProfiles={onRefreshProviderProfiles}
               onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
               onUpsertProviderProfile={onUpsertProviderProfile}

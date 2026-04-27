@@ -45,13 +45,11 @@ import {
   getProviderSetupRecipeDraftDefaults,
   isLocalOpenAiCompatibleBaseUrl,
   listProviderSetupRecipes,
-  recommendProviderSetup,
   type CadenceDiagnosticCheckDto,
   type ProviderModelCatalogDto,
   type ProviderProfileDiagnosticsDto,
   type ProviderProfilesDto,
   type ProviderProfileDto,
-  type ProviderRecommendationDto,
   type ProviderSetupRecipeApiKeyModeDto,
   type ProviderSetupRecipeDto,
   type ProviderSetupRecipeIdDto,
@@ -183,40 +181,14 @@ function getProfileCards(providerProfiles: ProviderProfilesDto | null): Provider
   const cards: ProviderProfileCard[] = []
 
   for (const preset of listCloudProviderPresets()) {
-    const matches = (providerProfiles?.profiles ?? [])
-      .filter((profile) => profile.providerId === preset.providerId)
-      .sort((left, right) => left.label.localeCompare(right.label))
+    const profile =
+      (providerProfiles?.profiles ?? []).find((candidate) => candidate.providerId === preset.providerId) ?? null
 
-    if (matches.length === 0) {
-      cards.push({
-        key: `${preset.providerId}-placeholder`,
-        preset,
-        profile: null,
-      })
-      continue
-    }
-
-    if (preset.providerId === "openai_codex") {
-      const profile =
-        matches.find((candidate) => candidate.profileId === preset.defaultProfileId) ??
-        matches.find((candidate) => candidate.label === preset.defaultProfileLabel) ??
-        matches[0]
-
-      cards.push({
-        key: profile.profileId,
-        preset,
-        profile,
-      })
-      continue
-    }
-
-    cards.push(
-      ...matches.map((profile) => ({
-        key: profile.profileId,
-        preset,
-        profile,
-      })),
-    )
+    cards.push({
+      key: profile?.profileId ?? `${preset.providerId}-placeholder`,
+      preset,
+      profile,
+    })
   }
 
   return cards
@@ -492,7 +464,6 @@ export interface ProviderProfileFormProps {
   ) => Promise<ProviderProfileDiagnosticsDto>
   onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
   runtimeSession?: RuntimeSessionView | null
-  hasSelectedProject?: boolean
   onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
   onLogoutProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
@@ -511,7 +482,6 @@ export function ProviderProfileForm({
   onCheckProviderProfile,
   onUpsertProviderProfile,
   runtimeSession,
-  hasSelectedProject = false,
   onStartLogin,
   onLogoutProviderProfile,
 }: ProviderProfileFormProps) {
@@ -535,9 +505,6 @@ export function ProviderProfileForm({
     () => groupProfileCards(cards),
     [cards],
   )
-  const recommendationSet = useMemo(() => recommendProviderSetup(providerProfiles), [providerProfiles])
-  const primaryRecommendation =
-    recommendationSet.primary?.action === "activate_profile" ? null : recommendationSet.primary
   const selectedRecipe = getProviderSetupRecipe(selectedRecipeId) ?? recipes[0] ?? null
   const isRefreshing = providerProfilesLoadStatus === "loading"
   const isSaving = providerProfilesSaveStatus === "running"
@@ -706,27 +673,6 @@ export function ProviderProfileForm({
     }
   }
 
-  async function handleRecommendationAction(recommendation: ProviderRecommendationDto) {
-    setFormError(null)
-    setAuthError(null)
-
-    if (recommendation.action === "apply_recipe") {
-      const recipe = getProviderSetupRecipe(recommendation.recipeId)
-      if (recipe) {
-        applyRecipe(recipe)
-      }
-      return
-    }
-
-    const card = cards.find((candidate) => candidate.profile?.profileId === recommendation.profileId) ?? null
-    if (!card) {
-      setFormError("Cadence could not find the recommended provider profile.")
-      return
-    }
-
-    openEditor(card)
-  }
-
   async function handleCheckConnection(card: ProviderProfileCard) {
     const profileId = card.profile?.profileId
     if (!profileId || !onCheckProviderProfile) {
@@ -767,7 +713,7 @@ export function ProviderProfileForm({
   }
 
   async function handleOpenAiConnect(card: ProviderProfileCard) {
-    if (!hasSelectedProject || !onStartLogin) return
+    if (!onStartLogin) return
 
     const profileId = card.profile?.profileId ?? null
     if (!profileId) {
@@ -878,104 +824,6 @@ export function ProviderProfileForm({
           <AlertDescription className="text-[13px]">{formError}</AlertDescription>
         </Alert>
       ) : null}
-
-      <div className="grid gap-3">
-        {primaryRecommendation ? (
-          <div className="rounded-md border border-primary/20 bg-primary/[0.035] px-3.5 py-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Sparkles className="h-3.5 w-3.5 text-primary" />
-                  <p className="text-[12.5px] font-semibold text-foreground">
-                    {primaryRecommendation.title}
-                  </p>
-                  <Badge variant="secondary" className="text-[10.5px]">
-                    {primaryRecommendation.kind === "best_local_profile"
-                      ? "Local"
-                      : primaryRecommendation.kind === "fastest_ready_profile"
-                        ? "Ready path"
-                        : primaryRecommendation.kind === "missing_key_cloud_profile"
-                          ? "Setup"
-                          : "Repair"}
-                  </Badge>
-                </div>
-                <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
-                  {primaryRecommendation.message}
-                </p>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-8 shrink-0 text-[12px]"
-                onClick={() => void handleRecommendationAction(primaryRecommendation as ProviderRecommendationDto)}
-              >
-                {primaryRecommendation.actionLabel}
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        {selectedRecipe ? (
-          <div className="rounded-md border border-border/70 bg-muted/20 px-3.5 py-3">
-            <div className="grid gap-3 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_auto] md:items-end">
-              <div className="space-y-2">
-                <Label htmlFor="provider-setup-recipe" className="text-[12px]">
-                  Setup recipe
-                </Label>
-                <Select
-                  value={selectedRecipeId}
-                  onValueChange={(value) => setSelectedRecipeId(value as ProviderSetupRecipeIdDto)}
-                >
-                  <SelectTrigger id="provider-setup-recipe" className="h-9 w-full text-[13px]" size="sm">
-                    <SelectValue placeholder="Choose recipe" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectLabel>OpenAI-compatible</SelectLabel>
-                      {recipes.map((recipe) => (
-                        <SelectItem key={recipe.recipeId} value={recipe.recipeId}>
-                          {recipe.label}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge variant="secondary" className="text-[10.5px]">
-                    {selectedRecipe.apiKeyMode === "none"
-                      ? "No key"
-                      : selectedRecipe.apiKeyMode === "optional"
-                        ? "Optional key"
-                        : "API key"}
-                  </Badge>
-                  <Badge variant="outline" className="text-[10.5px]">
-                    {selectedRecipe.modelCatalogExpectation === "live"
-                      ? "Live catalog"
-                      : selectedRecipe.modelCatalogExpectation === "manual"
-                        ? "Manual catalog"
-                        : "Catalog fallback"}
-                  </Badge>
-                </div>
-                <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
-                  {selectedRecipe.description}
-                </p>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                className="h-8 gap-1.5 text-[12px]"
-                onClick={() => applyRecipe(selectedRecipe)}
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                Apply recipe
-              </Button>
-            </div>
-          </div>
-        ) : null}
-      </div>
 
       <div className="flex flex-col gap-5">
         {cardGroups.map((group) => (
@@ -1143,7 +991,7 @@ export function ProviderProfileForm({
                       <Button
                         size="sm"
                         className="h-7 gap-1.5 px-2.5 text-[11.5px]"
-                        disabled={pendingAuth !== null || isSaving || isOpenAiInProgress || !hasSelectedProject}
+                        disabled={pendingAuth !== null || isSaving || isOpenAiInProgress}
                         onClick={() => void handleOpenAiConnect(card)}
                       >
                         {pendingAuth?.cardKey === card.key || isOpenAiInProgress ? (
@@ -1471,6 +1319,75 @@ export function ProviderProfileForm({
           </div>
         ))}
       </div>
+
+      {selectedRecipe ? (
+        <details className="group rounded-md border border-border/60 bg-muted/10">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3.5 py-2.5 text-[12px] text-muted-foreground hover:text-foreground">
+            <span className="flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5" />
+              Advanced: OpenAI-compatible setup recipes
+            </span>
+            <span className="text-[11px] opacity-70 transition-transform group-open:rotate-90">›</span>
+          </summary>
+          <div className="border-t border-border/60 px-3.5 py-3">
+            <div className="grid gap-3 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_auto] md:items-end">
+              <div className="space-y-2">
+                <Label htmlFor="provider-setup-recipe" className="text-[12px]">
+                  Setup recipe
+                </Label>
+                <Select
+                  value={selectedRecipeId}
+                  onValueChange={(value) => setSelectedRecipeId(value as ProviderSetupRecipeIdDto)}
+                >
+                  <SelectTrigger id="provider-setup-recipe" className="h-9 w-full text-[13px]" size="sm">
+                    <SelectValue placeholder="Choose recipe" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>OpenAI-compatible</SelectLabel>
+                      {recipes.map((recipe) => (
+                        <SelectItem key={recipe.recipeId} value={recipe.recipeId}>
+                          {recipe.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="secondary" className="text-[10.5px]">
+                    {selectedRecipe.apiKeyMode === "none"
+                      ? "No key"
+                      : selectedRecipe.apiKeyMode === "optional"
+                        ? "Optional key"
+                        : "API key"}
+                  </Badge>
+                  <Badge variant="outline" className="text-[10.5px]">
+                    {selectedRecipe.modelCatalogExpectation === "live"
+                      ? "Live catalog"
+                      : selectedRecipe.modelCatalogExpectation === "manual"
+                        ? "Manual catalog"
+                        : "Catalog fallback"}
+                  </Badge>
+                </div>
+                <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                  {selectedRecipe.description}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 gap-1.5 text-[12px]"
+                onClick={() => applyRecipe(selectedRecipe)}
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Apply recipe
+              </Button>
+            </div>
+          </div>
+        </details>
+      ) : null}
     </div>
   )
 }

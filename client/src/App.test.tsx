@@ -2208,7 +2208,7 @@ describe('CadenceApp current UI', () => {
     const openAiCard = getProviderCard('OpenAI Codex')
     const openAiSignIn = within(openAiCard).getByRole('button', { name: 'Sign in' })
     expect(openAiSignIn).toBeVisible()
-    expect(openAiSignIn).toBeDisabled()
+    expect(openAiSignIn).not.toBeDisabled()
     expect(within(openAiCard).queryByRole('button', { name: 'Select' })).not.toBeInTheDocument()
     expect(within(openAiCard).queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument()
   })
@@ -2775,7 +2775,7 @@ describe('CadenceApp current UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
 
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: /What can we build together in/ })).toBeVisible()
     expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
     expect(screen.queryByRole('heading', { name: 'Autonomous run truth' })).not.toBeInTheDocument()
@@ -2964,7 +2964,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: /What can we build together in/ })).toBeVisible()
     await waitFor(() => expect(setup.onRuntimeRunUpdated).toHaveBeenCalledTimes(1))
 
     act(() => {
@@ -3099,7 +3099,7 @@ describe('CadenceApp current UI', () => {
       })
     })
 
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible())
+    await waitFor(() => expect(screen.getByRole('heading', { name: /What can we build together in/ })).toBeVisible())
 
     act(() => {
       setup.emitRuntimeRunUpdated({
@@ -3144,191 +3144,6 @@ describe('CadenceApp current UI', () => {
       expect(screen.getByText('Event runtime_run:updated returned an unexpected payload shape.')).toBeVisible(),
     )
   })
-
-  it('proves one shipped-path continuity flow across MCP manage/import, gate pause visibility, and recovery retention', async () => {
-    const gateActionId = 'flow:flow-1:run:run-1:boundary:boundary-plan-1:review_command'
-    const snapshot = {
-      ...makeSnapshot(),
-      approvalRequests: [
-        makeRuntimeApproval(gateActionId, {
-          status: 'pending',
-          userAnswer: null,
-          decisionNote: null,
-          gateNodeId: 'workflow-research',
-          gateKey: 'plan_mode_required',
-          transitionFromNodeId: 'workflow-discussion',
-          transitionToNodeId: 'workflow-research',
-          transitionKind: 'advance',
-          title: 'Plan gate requires operator approval',
-          detail: 'workflow_transition_gate_unmet: Plan mode requires explicit operator approval before continuation.',
-          createdAt: '2026-04-22T12:07:00Z',
-          updatedAt: '2026-04-22T12:07:00Z',
-          resolvedAt: null,
-        }),
-      ],
-      resumeHistory: [
-        makeResumeHistoryEntry(gateActionId, {
-          id: 42,
-          status: 'failed',
-          summary: 'autonomous_linkage_mismatch is still visible while Cadence preserves the last truthful handoff row.',
-          createdAt: '2026-04-22T12:07:20Z',
-        }),
-      ],
-    } satisfies ProjectSnapshotResponseDto
-    const autonomousState = makeAutonomousRunState('project-1', 'auto-project-1')
-
-    const setup = createAdapter({
-      snapshot,
-      autonomousState,
-      runtimeRun: makeRuntimeRun('project-1', {
-        runId: 'run-1',
-        startedAt: '2026-04-22T12:00:00Z',
-        lastHeartbeatAt: '2026-04-22T12:07:00Z',
-        lastCheckpointSequence: 2,
-        lastCheckpointAt: '2026-04-22T12:07:00Z',
-        updatedAt: '2026-04-22T12:07:00Z',
-      }),
-      runtimeSession: makeRuntimeSession('project-1', {
-        phase: 'authenticated',
-        sessionId: 'session-1',
-        accountId: 'acct-1',
-        flowId: 'flow-1',
-      }),
-      mcpRegistry: makeMcpRegistry(),
-    })
-
-    render(<CadenceApp adapter={setup.adapter} />)
-
-    await waitFor(() =>
-      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
-    )
-
-    fireEvent.click(screen.getByLabelText('Settings'))
-    expect(await screen.findByRole('heading', { name: 'Providers' })).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
-    expect(await screen.findByRole('heading', { name: 'MCP Servers' })).toBeVisible()
-    expect(screen.getByText('Memory Server')).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Add server' }))
-    fireEvent.change(screen.getByLabelText('Server id'), { target: { value: 'linear' } })
-    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Linear MCP' } })
-    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'npx' } })
-    fireEvent.change(screen.getByLabelText('Args (one per line)'), {
-      target: { value: '@modelcontextprotocol/server-linear' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Create server' }))
-
-    await waitFor(() => expect(setup.upsertMcpServer).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(screen.getByText('Linear MCP')).toBeVisible())
-
-    fireEvent.change(screen.getByLabelText('Import JSON file'), { target: { value: '/tmp/mcp-import.json' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Import' }))
-
-    await waitFor(() => expect(setup.importMcpServers).toHaveBeenCalledWith('/tmp/mcp-import.json'))
-    await waitFor(() => expect(screen.getByText('Import diagnostics')).toBeVisible())
-    expect(screen.getAllByText(/runtime_mcp_projection_decode_failed/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/Cadence (preserved|kept) the last truthful MCP projection/).length).toBeGreaterThan(0)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    await waitFor(() => expect(setup.streamSubscriptions.length).toBeGreaterThan(0))
-    expect(await screen.findByRole('heading', { name: 'Runtime activity' })).toBeVisible()
-
-    act(() => {
-      setup.emitRuntimeStream(
-        0,
-        makeRuntimeStreamToolEvent({
-          runId: 'run-1',
-          sequence: 6,
-          detail: 'MCP prompt invocation failed with upstream timeout.',
-        }),
-      )
-      setup.emitRuntimeStream(
-        0,
-        makeRuntimeStreamActivityEvent({
-          runId: 'run-1',
-          sequence: 7,
-          code: 'workflow_transition_gate_unmet',
-          title: 'Planner gate unmet',
-          detail: 'workflow_transition_gate_unmet: Plan mode requires explicit operator approval before continuation.',
-        }),
-      )
-      setup.emitRuntimeStream(
-        0,
-        makeRuntimeStreamActionRequiredEvent({
-          runId: 'run-1',
-          sequence: 8,
-          actionId: gateActionId,
-          boundaryId: 'boundary-plan-1',
-          detail: 'workflow_transition_gate_unmet: Plan mode requires explicit operator approval before continuation.',
-          title: 'Plan gate requires operator approval',
-        }),
-      )
-    })
-
-    expect(await screen.findByRole('heading', { name: 'Tool lane' })).toBeVisible()
-    expect(screen.getByText('MCP prompt invocation failed with upstream timeout.')).toBeVisible()
-    expect(screen.getByText('MCP Prompt · Summarize Context · server linear · outcome Failed')).toBeVisible()
-    expect(screen.getAllByText('workflow_transition_gate_unmet: Plan mode requires explicit operator approval before continuation.').length).toBeGreaterThan(0)
-    expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible()
-    expect(screen.getByText('Live action required')).toBeVisible()
-    expect(screen.getByText(new RegExp(`Action ${gateActionId} · Boundary boundary-plan-1`))).toBeVisible()
-
-    act(() => {
-      setup.emitRuntimeRunUpdated({
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        run: makeRuntimeRun('project-1', {
-          runId: 'run-1',
-          startedAt: '2026-04-22T12:00:00Z',
-          lastHeartbeatAt: '2026-04-22T12:08:30Z',
-          lastCheckpointSequence: 3,
-          lastCheckpointAt: '2026-04-22T12:08:30Z',
-          updatedAt: '2026-04-22T12:08:30Z',
-        }),
-      })
-    })
-
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Tool lane' })).toBeVisible())
-
-    expect(() =>
-      setup.emitRuntimeRunUpdated({
-        projectId: 'project-2',
-        agentSessionId: 'agent-session-main',
-        run: makeRuntimeRun('project-2', { runId: 'run-project-2' }),
-      }),
-    ).toThrowError(/expected one of \[project-1\]/)
-    expect(() =>
-      setup.emitRuntimeRunUpdated({
-        projectId: 'project-1',
-        agentSessionId: 'agent-session-main',
-        run: makeRuntimeRun('project-1', { runId: 'run-2' }),
-      }),
-    ).toThrowError(/clear the active run before attaching `run-2`/)
-
-    act(() => {
-      setup.emitRuntimeRunUpdatedError(
-        new CadenceDesktopError({
-          code: 'adapter_contract_mismatch',
-          errorClass: 'adapter_contract_mismatch',
-          message:
-            'Event runtime_run:updated returned malformed recovery payload (runtime_mcp_projection_decode_failed).',
-        }),
-      )
-    })
-
-    await waitFor(() =>
-      expect(
-        screen.getByText(
-          'Event runtime_run:updated returned malformed recovery payload (runtime_mcp_projection_decode_failed).',
-        ),
-      ).toBeVisible(),
-    )
-    expect(screen.getByText('MCP Prompt · Summarize Context · server linear · outcome Failed')).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Runtime activity' })).toBeVisible()
-  }, 15_000)
 
   it('starts the shipped Agent path with openai_api provider identity and openai_compatible runtime truth', async () => {
     const setup = createAdapter({
@@ -3380,7 +3195,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: /What can we build together in/ })).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('gpt-4.1-mini')
 
     fireEvent.change(screen.getByLabelText('Agent input'), {
@@ -3451,7 +3266,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: /What can we build together in/ })).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('openai/gpt-4.1')
 
     fireEvent.change(screen.getByLabelText('Agent input'), {
@@ -3523,7 +3338,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: /What can we build together in/ })).toBeVisible()
     expect(screen.getByRole('combobox', { name: 'Model selector' })).toHaveTextContent('llama3.2')
     expect(screen.getByRole('combobox', { name: 'Thinking level selector' })).toHaveTextContent('Thinking unavailable')
 
@@ -3607,7 +3422,6 @@ describe('CadenceApp current UI', () => {
       'placeholder',
       'Rebind Ollama before trusting new live activity.',
     )
-    expect(screen.getAllByText(/Configured provider profile Ollama \(ollama-default\) no longer matches the persisted runtime session for OpenAI Codex\./).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: 'Start run' })).not.toBeInTheDocument()
   })
 
@@ -3768,7 +3582,7 @@ describe('CadenceApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    expect(await screen.findByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: /What can we build together in/ })).toBeVisible()
 
     fireEvent.change(screen.getByLabelText('Agent input'), {
       target: { value: 'Start before changing approval.' },

@@ -254,6 +254,23 @@ fn apply_provider_profile_upsert(
             CommandError::user_fixable("provider_profiles_invalid", diagnostic.message)
         })?;
 
+    if let Some(existing) = current
+        .metadata
+        .profiles
+        .iter()
+        .find(|profile| profile.provider_id == provider.provider_id)
+    {
+        if existing.profile_id != profile_id {
+            return Err(CommandError::user_fixable(
+                "provider_profile_already_exists",
+                format!(
+                    "Cadence already has a `{}` provider profile (`{}`); only one profile per provider is supported. Update the existing profile instead of creating `{}`.",
+                    provider.provider_id, existing.profile_id, profile_id,
+                ),
+            ));
+        }
+    }
+
     if provider.provider_id == OPENAI_CODEX_PROVIDER_ID {
         let _ = runtime_settings_file_from_request(provider_id, model_id, false)?;
         if request

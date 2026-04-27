@@ -475,7 +475,15 @@ pub(crate) fn validate_provider_profiles_contract(
     credentials_path: &Path,
 ) -> CommandResult<ProviderProfilesSnapshot> {
     let metadata = validate_provider_profiles_metadata(metadata, metadata_path)?;
-    let credentials = validate_provider_profile_credentials(credentials, credentials_path)?;
+    let mut credentials = validate_provider_profile_credentials(credentials, credentials_path)?;
+    let surviving_profile_ids: BTreeSet<String> = metadata
+        .profiles
+        .iter()
+        .map(|profile| profile.profile_id.clone())
+        .collect();
+    credentials
+        .api_keys
+        .retain(|entry| surviving_profile_ids.contains(&entry.profile_id));
     let credentials_by_profile = api_key_credentials_by_profile(&credentials);
 
     for profile in &metadata.profiles {
@@ -797,27 +805,77 @@ fn validate_provider_profiles_metadata(
         validated_profiles.push(validated);
     }
 
-    if !validated_profiles
+    let validated_profiles =
+        dedupe_profiles_by_provider_id(validated_profiles, active_profile_id);
+
+    let next_active_profile_id = if validated_profiles
         .iter()
         .any(|profile| profile.profile_id == active_profile_id)
     {
-        return Err(CommandError::user_fixable(
-            "provider_profiles_invalid",
-            format!(
-                "Cadence rejected the app-local provider-profile metadata file at {} because activeProfileId `{}` did not match any stored profile.",
-                path.display(),
-                active_profile_id
-            ),
-        ));
-    }
+        active_profile_id.to_owned()
+    } else {
+        validated_profiles
+            .iter()
+            .find(|profile| profile.provider_id == OPENAI_CODEX_PROVIDER_ID)
+            .map(|profile| profile.profile_id.clone())
+            .or_else(|| validated_profiles.first().map(|profile| profile.profile_id.clone()))
+            .ok_or_else(|| {
+                CommandError::user_fixable(
+                    "provider_profiles_invalid",
+                    format!(
+                        "Cadence rejected the app-local provider-profile metadata file at {} because no profiles remained after deduplication.",
+                        path.display()
+                    ),
+                )
+            })?
+    };
 
     Ok(ProviderProfilesMetadataFile {
         version: PROVIDER_PROFILES_SCHEMA_VERSION,
-        active_profile_id: active_profile_id.to_owned(),
+        active_profile_id: next_active_profile_id,
         profiles: validated_profiles,
         updated_at: normalize_updated_at(metadata.updated_at),
         migration: metadata.migration.map(validate_migration_state),
     })
+}
+
+fn dedupe_profiles_by_provider_id(
+    profiles: Vec<ProviderProfileRecord>,
+    active_profile_id: &str,
+) -> Vec<ProviderProfileRecord> {
+    let mut seen: BTreeMap<String, ProviderProfileRecord> = BTreeMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for profile in profiles {
+        let key = profile.provider_id.clone();
+        match seen.get(&key) {
+            None => {
+                order.push(key.clone());
+                seen.insert(key, profile);
+            }
+            Some(existing) => {
+                if profile_priority(&profile, active_profile_id)
+                    < profile_priority(existing, active_profile_id)
+                {
+                    seen.insert(key, profile);
+                }
+            }
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|key| seen.remove(&key))
+        .collect()
+}
+
+fn profile_priority(profile: &ProviderProfileRecord, active_profile_id: &str) -> u8 {
+    let canonical = format!("{}-default", profile.provider_id);
+    if profile.profile_id == canonical {
+        0
+    } else if profile.profile_id == active_profile_id {
+        1
+    } else {
+        2
+    }
 }
 
 fn validate_provider_profile_record(

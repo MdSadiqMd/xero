@@ -21,7 +21,6 @@ interface ProvidersStepProps {
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
   runtimeSession?: RuntimeSessionView | null
-  hasSelectedProject?: boolean
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
   onRefreshProviderModelCatalog?: (
     profileId: string,
@@ -42,7 +41,6 @@ export function ProvidersStep({
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
   runtimeSession = null,
-  hasSelectedProject = false,
   onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
   onUpsertProviderProfile,
@@ -70,7 +68,6 @@ export function ProvidersStep({
           onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
           onUpsertProviderProfile={onUpsertProviderProfile}
           runtimeSession={runtimeSession}
-          hasSelectedProject={hasSelectedProject}
           onStartLogin={onStartLogin}
           onLogout={onLogout}
           onLogoutProviderProfile={onLogoutProviderProfile}

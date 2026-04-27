@@ -702,12 +702,6 @@ describe('live views', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'No supervised run attached yet' })).toBeVisible()
-    expect(screen.getByText('No supervised run is attached')).toBeVisible()
-    expect(screen.getByText('No transcript yet')).toBeVisible()
-    expect(screen.getByText('No runtime activity yet')).toBeVisible()
-    expect(screen.getByText('No tool calls yet')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled()
     expect(screen.queryByLabelText('Agent input unavailable')).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Agent input'), {
@@ -715,156 +709,6 @@ describe('live views', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(onStartRuntimeRun).toHaveBeenCalledTimes(1))
-  })
-
-  it('renders projected skill lifecycle rows in the live agent feed', () => {
-    const skillItems: RuntimeStreamView['skillItems'] = [
-      {
-        id: 'skill-discovery-1',
-        kind: 'skill',
-        runId: 'run-1',
-        sequence: 3,
-        createdAt: '2026-04-18T15:00:00Z',
-        skillId: 'find-skills',
-        stage: 'discovery',
-        result: 'succeeded',
-        detail: 'Discovery completed for the requested skill set.',
-        source: {
-          repo: 'vercel-labs/skills',
-          path: 'skills/find-skills',
-          reference: 'main',
-          treeHash: '0123456789abcdef0123456789abcdef01234567',
-        },
-        cacheStatus: 'miss',
-        diagnostic: null,
-      },
-    ]
-
-    render(
-      <AgentRuntime
-        agent={makeAgent(makeProject(), {
-          runtimeSession: makeRuntimeSession({
-            phase: 'authenticated',
-            phaseLabel: 'Authenticated',
-            runtimeLabel: 'Openai Codex · Authenticated',
-            accountId: 'acct@example.com',
-            accountLabel: 'acct@example.com',
-            sessionId: 'session-1',
-            sessionLabel: 'session-1',
-            lastErrorCode: null,
-            lastError: null,
-            isAuthenticated: true,
-            isLoginInProgress: false,
-            needsManualInput: false,
-            isSignedOut: false,
-            isFailed: false,
-          }),
-          runtimeRun: makeRuntimeRun(),
-          runtimeStream: makeRuntimeStream({
-            status: 'live',
-            items: skillItems,
-            skillItems,
-            lastSequence: 3,
-          }),
-          runtimeStreamStatus: 'live',
-          runtimeStreamStatusLabel: getStreamStatusLabel('live'),
-          skillItems,
-        })}
-      />,
-    )
-
-    expect(screen.getByRole('heading', { name: 'Skill lane' })).toBeVisible()
-    expect(screen.getByText('find-skills')).toBeVisible()
-    expect(screen.getByText('Discovery')).toBeVisible()
-    expect(screen.getByText('Cache miss')).toBeVisible()
-  })
-
-  it('renders recovered runtime without the removed autonomous and remote debug panels', () => {
-    const autonomousRun = makeAutonomousRun({
-      duplicateStartDetected: true,
-      duplicateStartRunId: 'auto-run-1',
-      duplicateStartReason:
-        'Cadence reused the already-active autonomous run for this project instead of launching a duplicate supervisor.',
-    })
-
-    render(
-      <AgentRuntime
-        agent={makeAgent(
-          makeProject({
-            autonomousRun,
-            runtimeRun: makeRuntimeRun({
-              status: 'stale',
-              statusLabel: 'Supervisor stale',
-              transport: {
-                kind: 'tcp',
-                endpoint: '127.0.0.1:4455',
-                liveness: 'unreachable',
-                livenessLabel: 'Control unreachable',
-              },
-              lastErrorCode: 'runtime_supervisor_connect_failed',
-              lastError: {
-                code: 'runtime_supervisor_connect_failed',
-                message: 'Cadence restored the same autonomous run after reload without starting a duplicate continuation.',
-              },
-              isActive: false,
-              isStale: true,
-            }),
-          }),
-          {
-            runtimeSession: makeRuntimeSession({
-              phase: 'authenticated',
-              phaseLabel: 'Authenticated',
-              runtimeLabel: 'Openai Codex · Authenticated',
-              accountId: 'acct@example.com',
-              accountLabel: 'acct@example.com',
-              sessionId: 'session-1',
-              sessionLabel: 'session-1',
-              lastErrorCode: null,
-              lastError: null,
-              isAuthenticated: true,
-              isLoginInProgress: false,
-              needsManualInput: false,
-              isSignedOut: false,
-              isFailed: false,
-            }),
-            autonomousRun,
-            runtimeRun: makeRuntimeRun({
-              status: 'stale',
-              statusLabel: 'Supervisor stale',
-              transport: {
-                kind: 'tcp',
-                endpoint: '127.0.0.1:4455',
-                liveness: 'unreachable',
-                livenessLabel: 'Control unreachable',
-              },
-              lastErrorCode: 'runtime_supervisor_connect_failed',
-              lastError: {
-                code: 'runtime_supervisor_connect_failed',
-                message: 'Cadence restored the same autonomous run after reload without starting a duplicate continuation.',
-              },
-              isActive: false,
-              isStale: true,
-            }),
-            runtimeStream: makeRuntimeStream({ status: 'idle' }),
-            runtimeRunUnavailableReason:
-              'Cadence recovered a supervised harness run and its durable checkpoints before the live runtime feed resumed.',
-            messagesUnavailableReason:
-              'Cadence recovered a supervised harness run, but the live runtime stream has not resumed yet. Durable checkpoints remain visible below.',
-          },
-        )}
-      />,
-    )
-
-    expect(screen.getByRole('heading', { name: 'Waiting for the first run-scoped event' })).toBeVisible()
-    expect(screen.queryByRole('heading', { name: 'Recovered run snapshot' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Autonomous run truth' })).not.toBeInTheDocument()
-    expect(screen.queryByText('Current autonomous boundary')).not.toBeInTheDocument()
-    expect(
-      screen.queryByText('Recovered the current autonomous unit boundary after reload without launching a duplicate continuation.'),
-    ).not.toBeInTheDocument()
-    expect(screen.queryByText('Duplicate start prevented')).not.toBeInTheDocument()
-    expect(screen.queryByText('run: auto-run-1')).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Remote escalation trust' })).not.toBeInTheDocument()
   })
 
   it('keeps the live feed visible while rendering checkpoint control-loop cards', () => {
@@ -990,8 +834,6 @@ describe('live views', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Waiting for the first run-scoped event' })).toBeVisible()
-    expect(screen.queryByRole('heading', { name: 'Recovered run snapshot' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible()
     expect(screen.getByText('Review worktree changes')).toBeVisible()
     expect(screen.getByText('Resume after plan review')).toBeVisible()

@@ -78,7 +78,6 @@ export function ProvidersSection({
         onCheckProviderProfile={active ? onCheckProviderProfile : undefined}
         onUpsertProviderProfile={onUpsertProviderProfile}
         runtimeSession={agent?.runtimeSession ?? null}
-        hasSelectedProject={Boolean(agent?.repositoryPath?.trim())}
         onStartLogin={onStartLogin}
         onLogout={onLogout}
         onLogoutProviderProfile={onLogoutProviderProfile}
