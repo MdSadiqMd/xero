@@ -426,21 +426,19 @@ impl DesktopState {
     pub fn auth_store_file_for_provider<R: Runtime>(
         &self,
         app: &AppHandle<R>,
-        provider: ResolvedRuntimeProvider,
+        _provider: ResolvedRuntimeProvider,
     ) -> Result<PathBuf, AuthFlowError> {
         if let Some(path) = &self.auth_store_file_override {
             return Ok(path.clone());
         }
 
-        let app_data_dir = app.path().app_data_dir().map_err(|error| {
+        self.global_db_path(app).map_err(|error| {
             AuthFlowError::terminal(
-                "app_data_dir_unavailable",
+                error.code,
                 crate::commands::RuntimeAuthPhase::Failed,
-                format!("Cadence could not resolve the app-data directory: {error}"),
+                error.message,
             )
-        })?;
-
-        Ok(app_data_dir.join(provider.auth_store_file_name))
+        })
     }
 
     pub fn auth_store_file<R: Runtime>(

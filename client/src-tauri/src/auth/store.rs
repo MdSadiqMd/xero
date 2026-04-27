@@ -1,9 +1,19 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
-use super::{now_timestamp, AuthFlowError, OPENAI_CODEX_PROVIDER_ID};
+use super::{
+    now_timestamp,
+    sql::{
+        clear_openai_codex_sessions as sql_clear, load_latest_openai_codex_session as sql_latest,
+        load_openai_codex_session_by_account as sql_load_by_account,
+        load_openai_codex_session_by_session_id as sql_load_by_session,
+        remove_openai_codex_session as sql_remove,
+        upsert_openai_codex_session as sql_upsert,
+    },
+    AuthFlowError, OPENAI_CODEX_PROVIDER_ID,
+};
 use crate::{
     commands::{CommandError, RuntimeAuthPhase},
     global_db::open_global_database,
@@ -27,19 +37,12 @@ pub struct StoredOpenAiCodexSession {
     pub updated_at: String,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AuthStoreFile {
-    openai_codex_sessions: HashMap<String, StoredOpenAiCodexSession>,
-    updated_at: String,
-}
-
 pub fn load_openai_codex_session(
     path: &Path,
     account_id: &str,
 ) -> Result<Option<StoredOpenAiCodexSession>, AuthFlowError> {
-    let store = load_store(path)?;
-    Ok(store.openai_codex_sessions.get(account_id).cloned())
+    let connection = open_db(path)?;
+    sql_load_by_account(&connection, account_id)
 }
 
 pub fn load_openai_codex_session_for_profile_link(
@@ -59,66 +62,45 @@ pub fn load_openai_codex_session_for_profile_link(
         ));
     };
 
-    let store = load_store(path)?;
-    if let Some(stored) = store.openai_codex_sessions.get(account_id).cloned() {
+    let connection = open_db(path)?;
+    if let Some(stored) = sql_load_by_account(&connection, account_id)? {
         return Ok(Some(stored));
     }
 
-    Ok(store
-        .openai_codex_sessions
-        .values()
-        .max_by(|left, right| {
-            let left_linked = left.session_id == *session_id;
-            let right_linked = right.session_id == *session_id;
-            left_linked
-                .cmp(&right_linked)
-                .then_with(|| left.updated_at.cmp(&right.updated_at))
-        })
-        .cloned())
+    if let Some(stored) = sql_load_by_session(&connection, session_id)? {
+        return Ok(Some(stored));
+    }
+
+    sql_latest(&connection)
 }
 
 pub fn load_latest_openai_codex_session(
     path: &Path,
 ) -> Result<Option<StoredOpenAiCodexSession>, AuthFlowError> {
-    let store = load_store(path)?;
-    Ok(store
-        .openai_codex_sessions
-        .values()
-        .max_by(|left, right| left.updated_at.cmp(&right.updated_at))
-        .cloned())
+    let connection = open_db(path)?;
+    sql_latest(&connection)
 }
 
 pub fn persist_openai_codex_session(
     path: &Path,
     session: StoredOpenAiCodexSession,
 ) -> Result<(), AuthFlowError> {
-    let mut store = load_store(path)?;
-    store.updated_at = now_timestamp();
-    store
-        .openai_codex_sessions
-        .insert(session.account_id.clone(), session);
-    write_store(path, &store)
+    let connection = open_db(path)?;
+    sql_upsert(&connection, &session)
 }
 
 pub fn remove_openai_codex_session(path: &Path, account_id: &str) -> Result<(), AuthFlowError> {
-    let mut store = load_store(path)?;
-    if store.openai_codex_sessions.remove(account_id).is_none() {
-        return Ok(());
-    }
-
-    store.updated_at = now_timestamp();
-    write_store(path, &store)
+    let connection = open_db(path)?;
+    sql_remove(&connection, account_id)
 }
 
 pub fn clear_openai_codex_sessions(path: &Path) -> Result<(), AuthFlowError> {
-    let mut store = load_store(path)?;
-    if store.openai_codex_sessions.is_empty() {
-        return Ok(());
-    }
+    let connection = open_db(path)?;
+    sql_clear(&connection)
+}
 
-    store.openai_codex_sessions.clear();
-    store.updated_at = now_timestamp();
-    write_store(path, &store)
+fn open_db(path: &Path) -> Result<rusqlite::Connection, AuthFlowError> {
+    open_global_database(path).map_err(map_command_error_to_auth_error)
 }
 
 pub fn sync_openai_profile_link<R: Runtime>(
@@ -266,74 +248,6 @@ fn resolve_openai_profile_sync_targets(
     }
 
     Ok(profile_ids)
-}
-
-fn load_store(path: &Path) -> Result<AuthStoreFile, AuthFlowError> {
-    if !path.exists() {
-        return Ok(AuthStoreFile {
-            openai_codex_sessions: HashMap::new(),
-            updated_at: now_timestamp(),
-        });
-    }
-
-    let contents = fs::read_to_string(path).map_err(|error| {
-        AuthFlowError::terminal(
-            "auth_store_read_failed",
-            RuntimeAuthPhase::Failed,
-            format!(
-                "Cadence could not read the app-local auth store at {}: {error}",
-                path.display()
-            ),
-        )
-    })?;
-
-    serde_json::from_str(&contents).map_err(|error| {
-        AuthFlowError::terminal(
-            "auth_store_decode_failed",
-            RuntimeAuthPhase::Failed,
-            format!(
-                "Cadence could not decode the app-local auth store at {}: {error}",
-                path.display()
-            ),
-        )
-    })
-}
-
-fn write_store(path: &Path, store: &AuthStoreFile) -> Result<(), AuthFlowError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            AuthFlowError::terminal(
-                "auth_store_directory_unavailable",
-                RuntimeAuthPhase::Failed,
-                format!(
-                    "Cadence could not prepare the app-local auth directory at {}: {error}",
-                    parent.display()
-                ),
-            )
-        })?;
-    }
-
-    let json = serde_json::to_string_pretty(store).map_err(|error| {
-        AuthFlowError::terminal(
-            "auth_store_encode_failed",
-            RuntimeAuthPhase::Failed,
-            format!(
-                "Cadence could not serialize the {} auth session store: {error}",
-                OPENAI_CODEX_PROVIDER_ID
-            ),
-        )
-    })?;
-
-    fs::write(path, json).map_err(|error| {
-        AuthFlowError::terminal(
-            "auth_store_write_failed",
-            RuntimeAuthPhase::Failed,
-            format!(
-                "Cadence could not persist the app-local auth store at {}: {error}",
-                path.display()
-            ),
-        )
-    })
 }
 
 fn openai_profile_link_from_session(

@@ -1,8 +1,12 @@
 pub mod anthropic;
+pub mod importer;
 pub mod openai_codex;
 pub mod openai_compatible;
 pub mod openrouter;
+pub mod sql;
 pub mod store;
+
+pub use importer::import_legacy_openai_codex_sessions;
 
 pub use crate::runtime::{
     anthropic_provider, openai_codex_provider, openrouter_provider, ResolvedRuntimeProvider,

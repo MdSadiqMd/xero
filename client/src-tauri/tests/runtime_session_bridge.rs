@@ -62,20 +62,21 @@ fn start_runtime_session<R: tauri::Runtime>(
 }
 
 fn create_state(root: &TempDir) -> (DesktopState, PathBuf, PathBuf) {
-    let registry_path = root.path().join("app-data").join("project-registry.json");
-    let auth_store_path = root.path().join("app-data").join("openai-auth.json");
-    let provider_profiles_path = root.path().join("app-data").join("provider-profiles.json");
-    let provider_profile_credentials_path = root
-        .path()
-        .join("app-data")
-        .join("provider-profile-credentials.json");
-    let runtime_settings_path = root.path().join("app-data").join("runtime-settings.json");
-    let openrouter_credential_path = root
-        .path()
-        .join("app-data")
-        .join("openrouter-credentials.json");
+    let app_data = root.path().join("app-data");
+    std::fs::create_dir_all(&app_data).expect("create app-data dir");
+    let registry_path = app_data.join("project-registry.json");
+    let global_db_path = app_data.join("cadence.db");
+    // Phase 2.2: openai_codex_sessions live in the global DB, so the auth-store override and
+    // global-db override resolve to the same file. Tests still pass `auth_store_path` to
+    // legacy persistence helpers, which now operate on that SQLite DB directly.
+    let auth_store_path = global_db_path.clone();
+    let provider_profiles_path = app_data.join("provider-profiles.json");
+    let provider_profile_credentials_path = app_data.join("provider-profile-credentials.json");
+    let runtime_settings_path = app_data.join("runtime-settings.json");
+    let openrouter_credential_path = app_data.join("openrouter-credentials.json");
     (
         DesktopState::default()
+            .with_global_db_path_override(global_db_path)
             .with_registry_file_override(registry_path.clone())
             .with_auth_store_file_override(auth_store_path.clone())
             .with_provider_profiles_file_override(provider_profiles_path)
@@ -737,7 +738,7 @@ fn start_runtime_session_returns_idle_diagnostic_when_auth_store_is_unreadable()
     assert_eq!(runtime.phase, RuntimeAuthPhase::Idle);
     assert_eq!(
         runtime.last_error_code.as_deref(),
-        Some("auth_store_read_failed")
+        Some("global_database_open_failed")
     );
     assert!(runtime.session_id.is_none());
 }
@@ -760,7 +761,9 @@ fn start_runtime_session_preserves_retryable_refresh_state_when_refresh_fails() 
         current_unix_timestamp() - Duration::from_secs(60).as_secs() as i64,
         "2026-04-13T14:11:59Z",
     );
-    let before = std::fs::read_to_string(&auth_store_path).expect("seed contents");
+    let before = load_openai_codex_session(&auth_store_path, "acct-refresh")
+        .expect("seed session present")
+        .expect("seed session row");
 
     let runtime = start_runtime_session(
         app.handle().clone(),
@@ -779,7 +782,9 @@ fn start_runtime_session_preserves_retryable_refresh_state_when_refresh_fails() 
     assert_eq!(runtime.account_id.as_deref(), Some("acct-refresh"));
     assert!(runtime.session_id.is_none());
 
-    let after = std::fs::read_to_string(&auth_store_path).expect("post-refresh contents");
+    let after = load_openai_codex_session(&auth_store_path, "acct-refresh")
+        .expect("post-refresh session present")
+        .expect("post-refresh session row");
     assert_eq!(
         before, after,
         "failed refresh should not rewrite stored tokens"
@@ -948,6 +953,7 @@ fn get_runtime_session_marks_transient_flow_failed_when_snapshot_missing_after_r
 
     let reloaded = build_mock_app(
         DesktopState::default()
+            .with_global_db_path_override(auth_store_path.clone())
             .with_registry_file_override(registry_path)
             .with_auth_store_file_override(auth_store_path)
             .with_openai_auth_config_override(auth_config_with_token_url(

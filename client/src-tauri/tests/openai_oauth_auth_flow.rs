@@ -14,9 +14,9 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use cadence_desktop_lib::{
     auth::{
-        cancel_openai_codex_flow, complete_openai_codex_flow, persist_openai_codex_session,
-        refresh_openai_codex_session, start_openai_codex_flow, OpenAiCodexAuthConfig,
-        StoredOpenAiCodexSession,
+        cancel_openai_codex_flow, complete_openai_codex_flow, load_latest_openai_codex_session,
+        load_openai_codex_session, persist_openai_codex_session, refresh_openai_codex_session,
+        start_openai_codex_flow, OpenAiCodexAuthConfig, StoredOpenAiCodexSession,
     },
     commands::{
         get_runtime_session::get_runtime_session, provider_profiles::upsert_provider_profile,
@@ -44,19 +44,17 @@ fn build_mock_app(state: DesktopState) -> tauri::App<tauri::test::MockRuntime> {
 }
 
 fn create_state(root: &TempDir) -> (DesktopState, PathBuf) {
-    let auth_store_path = root.path().join("app-data").join("openai-auth.json");
-    let provider_profiles_path = root.path().join("app-data").join("provider-profiles.json");
-    let provider_profile_credentials_path = root
-        .path()
-        .join("app-data")
-        .join("provider-profile-credentials.json");
-    let runtime_settings_path = root.path().join("app-data").join("runtime-settings.json");
-    let openrouter_credential_path = root
-        .path()
-        .join("app-data")
-        .join("openrouter-credentials.json");
+    let app_data = root.path().join("app-data");
+    std::fs::create_dir_all(&app_data).expect("create app-data dir");
+    let global_db_path = app_data.join("cadence.db");
+    let auth_store_path = global_db_path.clone();
+    let provider_profiles_path = app_data.join("provider-profiles.json");
+    let provider_profile_credentials_path = app_data.join("provider-profile-credentials.json");
+    let runtime_settings_path = app_data.join("runtime-settings.json");
+    let openrouter_credential_path = app_data.join("openrouter-credentials.json");
     (
         DesktopState::default()
+            .with_global_db_path_override(global_db_path)
             .with_auth_store_file_override(auth_store_path.clone())
             .with_provider_profiles_file_override(provider_profiles_path)
             .with_provider_profile_credential_store_file_override(provider_profile_credentials_path)
@@ -67,20 +65,18 @@ fn create_state(root: &TempDir) -> (DesktopState, PathBuf) {
 }
 
 fn create_project_state(root: &TempDir) -> (DesktopState, PathBuf, PathBuf) {
-    let registry_path = root.path().join("app-data").join("project-registry.json");
-    let auth_store_path = root.path().join("app-data").join("openai-auth.json");
-    let provider_profiles_path = root.path().join("app-data").join("provider-profiles.json");
-    let provider_profile_credentials_path = root
-        .path()
-        .join("app-data")
-        .join("provider-profile-credentials.json");
-    let runtime_settings_path = root.path().join("app-data").join("runtime-settings.json");
-    let openrouter_credential_path = root
-        .path()
-        .join("app-data")
-        .join("openrouter-credentials.json");
+    let app_data = root.path().join("app-data");
+    std::fs::create_dir_all(&app_data).expect("create app-data dir");
+    let registry_path = app_data.join("project-registry.json");
+    let global_db_path = app_data.join("cadence.db");
+    let auth_store_path = global_db_path.clone();
+    let provider_profiles_path = app_data.join("provider-profiles.json");
+    let provider_profile_credentials_path = app_data.join("provider-profile-credentials.json");
+    let runtime_settings_path = app_data.join("runtime-settings.json");
+    let openrouter_credential_path = app_data.join("openrouter-credentials.json");
     (
         DesktopState::default()
+            .with_global_db_path_override(global_db_path)
             .with_registry_file_override(registry_path.clone())
             .with_auth_store_file_override(auth_store_path.clone())
             .with_provider_profiles_file_override(provider_profiles_path)
@@ -359,10 +355,12 @@ fn callback_flow_persists_tokens_only_to_app_local_store_and_exposes_redacted_sn
     .expect("complete auth flow");
     assert_eq!(session.account_id, "acct-browser-code");
 
-    let stored = std::fs::read_to_string(&auth_store_path).expect("auth store contents");
-    assert!(stored.contains("refresh-browser-code"));
-    assert!(stored.contains("acct-browser-code"));
-    assert!(stored.contains("openai_codex"));
+    let stored = load_openai_codex_session(&auth_store_path, "acct-browser-code")
+        .expect("auth store contents")
+        .expect("session row present");
+    assert_eq!(stored.refresh_token, "refresh-browser-code");
+    assert_eq!(stored.account_id, "acct-browser-code");
+    assert_eq!(stored.provider_id, "openai_codex");
     assert!(!root.path().join(".cadence").join("state.db").exists());
 
     let final_snapshot = app
@@ -500,7 +498,9 @@ fn malformed_callback_host_fails_closed_before_browser_url_is_opened() {
     .expect_err("malformed callback host should fail before flow starts");
     assert_eq!(error.code, "callback_listener_config_invalid");
     assert_eq!(error.phase, RuntimeAuthPhase::Starting);
-    assert!(!auth_store_path.exists());
+    assert!(load_latest_openai_codex_session(&auth_store_path)
+        .expect("auth store readable")
+        .is_none());
 }
 
 #[test]
@@ -691,7 +691,9 @@ fn token_exchange_failures_and_decode_errors_do_not_persist_credentials() {
     )
     .expect_err("401 response should fail");
     assert_eq!(error.code, "token_exchange_rejected");
-    assert!(!rejected_store.exists());
+    assert!(load_latest_openai_codex_session(&rejected_store)
+        .expect("auth store readable")
+        .is_none());
 
     let decode_root = tempfile::tempdir().expect("temp dir");
     let (decode_state, decode_store) = create_state(&decode_root);
@@ -718,7 +720,9 @@ fn token_exchange_failures_and_decode_errors_do_not_persist_credentials() {
     )
     .expect_err("malformed token response should fail");
     assert_eq!(error.code, "token_exchange_decode_failed");
-    assert!(!decode_store.exists());
+    assert!(load_latest_openai_codex_session(&decode_store)
+        .expect("auth store readable")
+        .is_none());
 }
 
 #[test]
@@ -741,7 +745,9 @@ fn refresh_failure_preserves_existing_credentials() {
         },
     )
     .expect("persist seed session");
-    let before = std::fs::read_to_string(&auth_store_path).expect("seed contents");
+    let before = load_openai_codex_session(&auth_store_path, "acct-refresh")
+        .expect("seed session")
+        .expect("seed row present");
 
     let error = refresh_openai_codex_session(
         &app.handle().clone(),
@@ -751,7 +757,9 @@ fn refresh_failure_preserves_existing_credentials() {
     )
     .expect_err("refresh should fail");
     assert_eq!(error.code, "token_refresh_server_error");
-    let after = std::fs::read_to_string(&auth_store_path).expect("post-refresh contents");
+    let after = load_openai_codex_session(&auth_store_path, "acct-refresh")
+        .expect("post-refresh session")
+        .expect("post-refresh row present");
     assert_eq!(
         before, after,
         "failed refresh should not rewrite stored tokens"
@@ -1005,7 +1013,9 @@ fn submit_openai_callback_rejects_selected_profile_switch_before_completion() {
         .message;
     assert!(message.contains(DEFAULT_OPENAI_PROFILE_ID));
     assert!(message.contains("zz-openai-alt"));
-    assert!(!auth_store_path.exists());
+    assert!(load_latest_openai_codex_session(&auth_store_path)
+        .expect("auth store readable")
+        .is_none());
 }
 
 #[test]
@@ -1066,7 +1076,9 @@ fn wrapper_submit_pending_browser_callback_keeps_flow_waiting() {
     assert_eq!(runtime.phase, RuntimeAuthPhase::AwaitingBrowserCallback);
     assert!(runtime.last_error_code.is_none());
     assert!(runtime.last_error.is_none());
-    assert!(!auth_store_path.exists());
+    assert!(load_latest_openai_codex_session(&auth_store_path)
+        .expect("read auth store")
+        .is_none());
 
     let expected_state = active_flow_expected_state(&app, &flow_id);
     send_callback(&redirect_uri, &expected_state, "browser-code");
@@ -1156,8 +1168,10 @@ fn wrapper_commands_complete_browser_callback_without_repo_secret_leakage() {
     assert_eq!(status.phase, RuntimeAuthPhase::Authenticated);
     assert_eq!(status.account_id.as_deref(), Some("acct-browser-code"));
 
-    let auth_store = std::fs::read_to_string(&auth_store_path).expect("auth store contents");
-    assert!(auth_store.contains("refresh-browser-code"));
+    let stored = load_openai_codex_session(&auth_store_path, "acct-browser-code")
+        .expect("auth store contents")
+        .expect("session row present");
+    assert_eq!(stored.refresh_token, "refresh-browser-code");
 
     let request = server.single_request();
     assert_eq!(
@@ -1238,8 +1252,10 @@ fn wrapper_submit_supports_manual_fallback_and_preserves_redaction() {
         Some("acct-manual-wrapper-code")
     );
 
-    let auth_store = std::fs::read_to_string(&auth_store_path).expect("auth store contents");
-    assert!(auth_store.contains("refresh-manual-wrapper-code"));
+    let stored = load_openai_codex_session(&auth_store_path, "acct-manual-wrapper-code")
+        .expect("auth store contents")
+        .expect("session row present");
+    assert_eq!(stored.refresh_token, "refresh-manual-wrapper-code");
 
     let request = server.single_request();
     assert_eq!(
