@@ -687,7 +687,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
         ),
         descriptor(
             AUTONOMOUS_TOOL_PROCESS_MANAGER,
-            "Manage Cadence-owned long-running, interactive, grouped, restartable, and async-job processes. Phase 4 adds restart, group status/kill, async_start, async_await, and async_cancel.",
+            "Manage Cadence-owned long-running, interactive, grouped, restartable, and async-job processes, plus phase 5 system process visibility and approval-gated external signaling.",
             process_manager_schema(),
         ),
         descriptor(
@@ -1048,7 +1048,7 @@ fn process_manager_schema() -> JsonValue {
             (
                 "action",
                 enum_schema(
-                    "Process-manager action. Phase 4 supports Cadence-owned start, list, status, output, digest, wait_for_ready, highlights, send, send_and_wait, run, env, kill, restart, group_status, group_kill, async_start, async_await, and async_cancel.",
+                    "Process-manager action. Supports Cadence-owned process control plus phase 5 system process visibility and external kill actions.",
                     &[
                         "start",
                         "list",
@@ -1068,10 +1068,18 @@ fn process_manager_schema() -> JsonValue {
                         "async_start",
                         "async_await",
                         "async_cancel",
+                        "system_process_list",
+                        "system_process_tree",
+                        "system_port_list",
+                        "system_signal",
+                        "system_kill_tree",
                     ],
                 ),
             ),
-            ("processId", string_schema("Managed process id for targeted actions.")),
+            ("processId", string_schema("Managed process id for owned actions, or numeric/system-pid-N id for system actions.")),
+            ("pid", integer_schema("External/system PID for system_process_tree, system_signal, system_kill_tree, or filters.")),
+            ("parentPid", integer_schema("Filter system_process_list to children of this parent PID.")),
+            ("port", integer_schema("Filter system_port_list or system_process_list to a local listening port.")),
             ("group", string_schema("Process group label for grouped status, kill, or async-await filtering.")),
             ("label", string_schema("Human-readable process label.")),
             ("processType", string_schema("Process type, such as dev_server, test_watcher, shell, or job.")),

@@ -136,7 +136,12 @@ pub(super) fn process_manager_policy_trace(
         | AutonomousProcessManagerAction::Highlights
         | AutonomousProcessManagerAction::Env
         | AutonomousProcessManagerAction::GroupStatus
-        | AutonomousProcessManagerAction::AsyncAwait => AutonomousProcessActionRiskLevel::Observe,
+        | AutonomousProcessManagerAction::AsyncAwait
+        | AutonomousProcessManagerAction::SystemProcessList
+        | AutonomousProcessManagerAction::SystemProcessTree
+        | AutonomousProcessManagerAction::SystemPortList => {
+            AutonomousProcessActionRiskLevel::Observe
+        }
         AutonomousProcessManagerAction::Start if persistent => {
             AutonomousProcessActionRiskLevel::PersistentBackground
         }
@@ -150,6 +155,8 @@ pub(super) fn process_manager_policy_trace(
         | AutonomousProcessManagerAction::GroupKill
         | AutonomousProcessManagerAction::AsyncCancel
         | AutonomousProcessManagerAction::Restart
+        | AutonomousProcessManagerAction::SystemSignal
+        | AutonomousProcessManagerAction::SystemKillTree
             if target_scope == AutonomousProcessOwnershipScope::External =>
         {
             AutonomousProcessActionRiskLevel::SignalExternal
@@ -158,7 +165,11 @@ pub(super) fn process_manager_policy_trace(
         | AutonomousProcessManagerAction::Kill
         | AutonomousProcessManagerAction::GroupKill
         | AutonomousProcessManagerAction::AsyncCancel
-        | AutonomousProcessManagerAction::Restart => AutonomousProcessActionRiskLevel::SignalOwned,
+        | AutonomousProcessManagerAction::Restart
+        | AutonomousProcessManagerAction::SystemSignal
+        | AutonomousProcessManagerAction::SystemKillTree => {
+            AutonomousProcessActionRiskLevel::SignalOwned
+        }
     };
 
     let (approval_required, code, reason) = match risk_level {

@@ -28,8 +28,8 @@ use super::{
     AutonomousProcessOutputLimits, AutonomousProcessOutputStream, AutonomousProcessOwner,
     AutonomousProcessOwnershipScope, AutonomousProcessPersistenceContract,
     AutonomousProcessReadinessDetector, AutonomousProcessReadinessState, AutonomousProcessStatus,
-    AutonomousProcessStdinState, AutonomousToolOutput, AutonomousToolResult, AutonomousToolRuntime,
-    AUTONOMOUS_TOOL_PROCESS_MANAGER,
+    AutonomousProcessStdinState, AutonomousSystemPort, AutonomousToolOutput, AutonomousToolResult,
+    AutonomousToolRuntime, AUTONOMOUS_TOOL_PROCESS_MANAGER,
 };
 use crate::{
     auth::now_timestamp,
@@ -47,7 +47,7 @@ use crate::{
     },
 };
 
-const PROCESS_MANAGER_PHASE: &str = "phase_4_restart_groups_async_jobs";
+const PROCESS_MANAGER_PHASE: &str = "phase_5_system_process_visibility";
 const PROCESS_MANAGER_INITIAL_DRAIN: Duration = Duration::from_millis(150);
 const PROCESS_MANAGER_SEND_DRAIN: Duration = Duration::from_millis(50);
 const PROCESS_MANAGER_WAIT_POLL: Duration = Duration::from_millis(25);
@@ -61,6 +61,9 @@ const MAX_PROCESS_OUTPUT_READ_BYTES: usize = 64 * 1024;
 const MAX_PROCESS_OUTPUT_TAIL_LINES: usize = 200;
 const MAX_PROCESS_STDIN_INPUT_BYTES: usize = 64 * 1024;
 const MAX_PROCESS_HIGHLIGHTS: usize = 32;
+const MAX_SYSTEM_PROCESS_RESULTS: usize = 200;
+const MAX_SYSTEM_TREE_PROCESSES: usize = 512;
+const MAX_SYSTEM_PORT_RESULTS: usize = 200;
 const ASYNC_JOB_ARTIFACT_DIR: &str = "cadence-process-artifacts";
 const REDACTED_PROCESS_OUTPUT_SUMMARY: &str =
     "Process output was redacted before durable persistence.";
@@ -658,7 +661,10 @@ impl OwnedProcess {
         Ok(AutonomousProcessMetadata {
             process_id: self.process_id.clone(),
             pid: Some(self.pid),
+            parent_pid: None,
             process_group_id: Some(self.pid as i64),
+            process_name: self.command.argv.first().cloned(),
+            executable_path: None,
             label: self.label.clone(),
             process_type: self.process_type.clone(),
             group: self.group.clone(),
@@ -794,7 +800,7 @@ impl AutonomousToolRuntime {
         operator_approved: bool,
     ) -> CommandResult<AutonomousToolResult> {
         validate_process_manager_request(&request)?;
-        validate_phase_4_scope(&request)?;
+        validate_phase_5_scope(&request)?;
 
         match request.action {
             AutonomousProcessManagerAction::Start => {
@@ -833,7 +839,25 @@ impl AutonomousToolRuntime {
             AutonomousProcessManagerAction::AsyncCancel => {
                 self.process_manager_async_cancel(request)
             }
-            action => Err(unsupported_phase_4_action(action)),
+            AutonomousProcessManagerAction::SystemProcessList => {
+                self.process_manager_system_process_list(request)
+            }
+            AutonomousProcessManagerAction::SystemProcessTree => {
+                self.process_manager_system_process_tree(request)
+            }
+            AutonomousProcessManagerAction::SystemPortList => {
+                self.process_manager_system_port_list(request)
+            }
+            AutonomousProcessManagerAction::SystemSignal => {
+                self.process_manager_system_signal(request, operator_approved)
+            }
+            AutonomousProcessManagerAction::SystemKillTree => {
+                self.process_manager_system_kill_tree(request, operator_approved)
+            }
+            AutonomousProcessManagerAction::Signal => Err(CommandError::user_fixable(
+                "autonomous_tool_process_manager_signal_unsupported",
+                "Cadence phase 5 supports external signaling through system_signal; owned generic signal is not implemented yet.",
+            )),
         }
     }
 
@@ -1760,6 +1784,282 @@ impl AutonomousToolRuntime {
         }))
     }
 
+    fn process_manager_system_process_list(
+        &self,
+        request: AutonomousProcessManagerRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        let mut processes = list_system_processes()?;
+        let port_filter = request.port.or(request.wait_port);
+        let ports = if port_filter.is_some() {
+            list_system_ports()?
+        } else {
+            list_system_ports().unwrap_or_default()
+        };
+        let port_pids = port_filter.map(|port| {
+            ports
+                .iter()
+                .filter(|entry| entry.local_port == port)
+                .filter_map(|entry| entry.pid)
+                .collect::<BTreeSet<_>>()
+        });
+        filter_system_processes(&mut processes, &request, port_pids.as_ref())?;
+        let total = processes.len();
+        processes.sort_by_key(|process| process.pid);
+        processes.truncate(MAX_SYSTEM_PROCESS_RESULTS);
+
+        let owned_pids = self.owned_process_pid_set()?;
+        let ports_by_pid = system_ports_by_pid(ports);
+        let metadata = processes
+            .iter()
+            .map(|process| system_process_metadata(process, &owned_pids, &ports_by_pid))
+            .collect::<Vec<_>>();
+        let truncated = total > metadata.len();
+        let message = if truncated {
+            format!(
+                "Listed {} external/system process(es), truncated from {total}.",
+                metadata.len()
+            )
+        } else {
+            format!("Listed {} external/system process(es).", metadata.len())
+        };
+
+        Ok(process_manager_result(ProcessManagerResultInput {
+            action: AutonomousProcessManagerAction::SystemProcessList,
+            spawned: true,
+            process_id: request.process_id.clone(),
+            processes: metadata,
+            chunks: Vec::new(),
+            next_cursor: request.after_cursor,
+            policy: process_manager_policy_trace(
+                AutonomousProcessManagerAction::SystemProcessList,
+                Some(AutonomousProcessOwnershipScope::External),
+                false,
+            ),
+            message,
+        }))
+    }
+
+    fn process_manager_system_process_tree(
+        &self,
+        request: AutonomousProcessManagerRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        let pid = normalized_system_pid(&request)?;
+        let processes = list_system_processes()?;
+        let tree = system_process_tree(&processes, pid)?;
+        let owned_pids = self.owned_process_pid_set()?;
+        let ports_by_pid = system_ports_by_pid(list_system_ports().unwrap_or_default());
+        let metadata = tree
+            .iter()
+            .map(|process| system_process_metadata(process, &owned_pids, &ports_by_pid))
+            .collect::<Vec<_>>();
+        let message = format!(
+            "Inspected process tree for external/system PID {pid} with {} related process(es).",
+            metadata.len()
+        );
+
+        Ok(process_manager_result(ProcessManagerResultInput {
+            action: AutonomousProcessManagerAction::SystemProcessTree,
+            spawned: true,
+            process_id: Some(pid.to_string()),
+            processes: metadata,
+            chunks: Vec::new(),
+            next_cursor: request.after_cursor,
+            policy: process_manager_policy_trace(
+                AutonomousProcessManagerAction::SystemProcessTree,
+                Some(AutonomousProcessOwnershipScope::External),
+                false,
+            ),
+            message,
+        }))
+    }
+
+    fn process_manager_system_port_list(
+        &self,
+        request: AutonomousProcessManagerRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        let mut ports = list_system_ports()?;
+        filter_system_ports(&mut ports, &request)?;
+        let total = ports.len();
+        ports.sort_by(|left, right| {
+            left.local_port
+                .cmp(&right.local_port)
+                .then_with(|| left.local_addr.cmp(&right.local_addr))
+                .then_with(|| left.pid.cmp(&right.pid))
+        });
+        ports.truncate(MAX_SYSTEM_PORT_RESULTS);
+
+        let system_processes = list_system_processes().unwrap_or_default();
+        let process_by_pid = system_processes
+            .iter()
+            .map(|process| (process.pid, process.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let owned_pids = self.owned_process_pid_set()?;
+        let ports_by_pid = system_ports_by_pid(ports.clone());
+        let mut seen_pids = BTreeSet::new();
+        let metadata = ports
+            .iter()
+            .filter_map(|port| port.pid)
+            .filter(|pid| seen_pids.insert(*pid))
+            .filter_map(|pid| process_by_pid.get(&pid))
+            .map(|process| system_process_metadata(process, &owned_pids, &ports_by_pid))
+            .collect::<Vec<_>>();
+        let output_ports = ports.iter().map(system_port_output).collect::<Vec<_>>();
+        let truncated = total > output_ports.len();
+        let message = if truncated {
+            format!(
+                "Listed {} local listening port(s), truncated from {total}.",
+                output_ports.len()
+            )
+        } else {
+            format!("Listed {} local listening port(s).", output_ports.len())
+        };
+
+        Ok(process_manager_result_with_ports(
+            ProcessManagerResultInput {
+                action: AutonomousProcessManagerAction::SystemPortList,
+                spawned: true,
+                process_id: request.process_id.clone(),
+                processes: metadata,
+                chunks: Vec::new(),
+                next_cursor: request.after_cursor,
+                policy: process_manager_policy_trace(
+                    AutonomousProcessManagerAction::SystemPortList,
+                    Some(AutonomousProcessOwnershipScope::External),
+                    false,
+                ),
+                message,
+            },
+            output_ports,
+        ))
+    }
+
+    fn process_manager_system_signal(
+        &self,
+        request: AutonomousProcessManagerRequest,
+        operator_approved: bool,
+    ) -> CommandResult<AutonomousToolResult> {
+        let pid = normalized_system_pid(&request)?;
+        let signal = normalized_external_signal(request.signal.as_deref())?;
+        let processes = list_system_processes()?;
+        let target = system_process_by_pid(&processes, pid)?;
+        let owned_pids = self.owned_process_pid_set()?;
+        ensure_external_signal_target(pid, &processes, &owned_pids, false)?;
+        let ports_by_pid = system_ports_by_pid(list_system_ports().unwrap_or_default());
+        let metadata = vec![system_process_metadata(&target, &owned_pids, &ports_by_pid)];
+        let approval_policy = process_manager_policy_trace(
+            AutonomousProcessManagerAction::SystemSignal,
+            Some(AutonomousProcessOwnershipScope::External),
+            false,
+        );
+        if !operator_approved {
+            return Ok(process_manager_result(ProcessManagerResultInput {
+                action: AutonomousProcessManagerAction::SystemSignal,
+                spawned: false,
+                process_id: Some(pid.to_string()),
+                processes: metadata,
+                chunks: Vec::new(),
+                next_cursor: request.after_cursor,
+                policy: approval_policy,
+                message: format!(
+                    "External process PID {pid} requires operator review before Cadence can send signal {}.",
+                    signal.label
+                ),
+            }));
+        }
+
+        signal_external_pid(pid, signal.number)?;
+        let mut metadata = metadata;
+        if let Some(process) = metadata.first_mut() {
+            process.status_changes.push(format!(
+                "sent signal {} to external PID {pid}",
+                signal.label
+            ));
+        }
+        Ok(process_manager_result(ProcessManagerResultInput {
+            action: AutonomousProcessManagerAction::SystemSignal,
+            spawned: true,
+            process_id: Some(pid.to_string()),
+            processes: metadata,
+            chunks: Vec::new(),
+            next_cursor: request.after_cursor,
+            policy: external_signal_policy_allowed(
+                AutonomousProcessManagerAction::SystemSignal,
+                signal.label,
+            ),
+            message: format!(
+                "Sent signal {} to external process PID {pid}.",
+                signal.label
+            ),
+        }))
+    }
+
+    fn process_manager_system_kill_tree(
+        &self,
+        request: AutonomousProcessManagerRequest,
+        operator_approved: bool,
+    ) -> CommandResult<AutonomousToolResult> {
+        let pid = normalized_system_pid(&request)?;
+        let processes = list_system_processes()?;
+        let tree = system_process_tree(&processes, pid)?;
+        let owned_pids = self.owned_process_pid_set()?;
+        ensure_external_signal_target(pid, &processes, &owned_pids, true)?;
+        let ports_by_pid = system_ports_by_pid(list_system_ports().unwrap_or_default());
+        let metadata = tree
+            .iter()
+            .map(|process| system_process_metadata(process, &owned_pids, &ports_by_pid))
+            .collect::<Vec<_>>();
+        let approval_policy = process_manager_policy_trace(
+            AutonomousProcessManagerAction::SystemKillTree,
+            Some(AutonomousProcessOwnershipScope::External),
+            false,
+        );
+        if !operator_approved {
+            return Ok(process_manager_result(ProcessManagerResultInput {
+                action: AutonomousProcessManagerAction::SystemKillTree,
+                spawned: false,
+                process_id: Some(pid.to_string()),
+                processes: metadata,
+                chunks: Vec::new(),
+                next_cursor: request.after_cursor,
+                policy: approval_policy,
+                message: format!(
+                    "External process tree rooted at PID {pid} requires operator review before Cadence can kill it."
+                ),
+            }));
+        }
+
+        let killed_pids = kill_external_process_tree(&tree, pid)?;
+        let mut metadata = metadata;
+        for process in &mut metadata {
+            if process.pid.is_some_and(|pid| killed_pids.contains(&pid)) {
+                process.status = if process_exists(process.pid.unwrap_or_default()) {
+                    AutonomousProcessStatus::Unknown
+                } else {
+                    AutonomousProcessStatus::Killed
+                };
+                process
+                    .status_changes
+                    .push(format!("attempted external tree kill for PID {pid}"));
+            }
+        }
+        Ok(process_manager_result(ProcessManagerResultInput {
+            action: AutonomousProcessManagerAction::SystemKillTree,
+            spawned: true,
+            process_id: Some(pid.to_string()),
+            processes: metadata,
+            chunks: Vec::new(),
+            next_cursor: request.after_cursor,
+            policy: external_signal_policy_allowed(
+                AutonomousProcessManagerAction::SystemKillTree,
+                "TERM/KILL",
+            ),
+            message: format!(
+                "Killed external process tree rooted at PID {pid} ({} target process(es)).",
+                killed_pids.len()
+            ),
+        }))
+    }
+
     fn unperformed_process_interaction_result(
         &self,
         request: AutonomousProcessManagerRequest,
@@ -1832,6 +2132,9 @@ impl AutonomousToolRuntime {
         let metadata = self.process_metadata_for_request(&AutonomousProcessManagerRequest {
             action: AutonomousProcessManagerAction::Digest,
             process_id: None,
+            pid: None,
+            parent_pid: None,
+            port: None,
             group: None,
             label: None,
             process_type: None,
@@ -1860,6 +2163,15 @@ impl AutonomousToolRuntime {
             Ok(Some(process_digest(&metadata)))
         }
     }
+
+    fn owned_process_pid_set(&self) -> CommandResult<BTreeSet<u32>> {
+        Ok(self
+            .owned_processes
+            .list()?
+            .into_iter()
+            .map(|process| process.pid)
+            .collect())
+    }
 }
 
 struct ProcessManagerResultInput {
@@ -1874,6 +2186,13 @@ struct ProcessManagerResultInput {
 }
 
 fn process_manager_result(input: ProcessManagerResultInput) -> AutonomousToolResult {
+    process_manager_result_with_ports(input, Vec::new())
+}
+
+fn process_manager_result_with_ports(
+    input: ProcessManagerResultInput,
+    system_ports: Vec<AutonomousSystemPort>,
+) -> AutonomousToolResult {
     let digest = if matches!(
         input.action,
         AutonomousProcessManagerAction::Digest | AutonomousProcessManagerAction::GroupStatus
@@ -1893,6 +2212,7 @@ fn process_manager_result(input: ProcessManagerResultInput) -> AutonomousToolRes
             spawned: input.spawned,
             process_id: input.process_id,
             processes: input.processes,
+            system_ports,
             chunks: input.chunks,
             next_cursor: input.next_cursor,
             digest,
@@ -2151,7 +2471,21 @@ fn validate_process_manager_request(
         }
         AutonomousProcessManagerAction::Digest
         | AutonomousProcessManagerAction::Highlights
-        | AutonomousProcessManagerAction::AsyncAwait => {}
+        | AutonomousProcessManagerAction::AsyncAwait
+        | AutonomousProcessManagerAction::SystemProcessList
+        | AutonomousProcessManagerAction::SystemPortList => {}
+        AutonomousProcessManagerAction::SystemProcessTree
+        | AutonomousProcessManagerAction::SystemSignal
+        | AutonomousProcessManagerAction::SystemKillTree => {
+            if request.pid.is_none()
+                && parse_process_id_pid(request.process_id.as_deref()).is_none()
+            {
+                return Err(CommandError::user_fixable(
+                    "autonomous_tool_process_manager_pid_required",
+                    "Cadence requires system process actions to include pid or a numeric processId.",
+                ));
+            }
+        }
         AutonomousProcessManagerAction::Send
         | AutonomousProcessManagerAction::SendAndWait
         | AutonomousProcessManagerAction::Run => {
@@ -2222,17 +2556,27 @@ fn validate_process_manager_request(
     Ok(())
 }
 
-fn validate_phase_4_scope(request: &AutonomousProcessManagerRequest) -> CommandResult<()> {
-    if request.target_ownership == Some(AutonomousProcessOwnershipScope::External) {
+fn validate_phase_5_scope(request: &AutonomousProcessManagerRequest) -> CommandResult<()> {
+    let is_system_action = matches!(
+        request.action,
+        AutonomousProcessManagerAction::SystemProcessList
+            | AutonomousProcessManagerAction::SystemProcessTree
+            | AutonomousProcessManagerAction::SystemPortList
+            | AutonomousProcessManagerAction::SystemSignal
+            | AutonomousProcessManagerAction::SystemKillTree
+    );
+    if !is_system_action
+        && request.target_ownership == Some(AutonomousProcessOwnershipScope::External)
+    {
         return Err(CommandError::user_fixable(
             "autonomous_tool_process_manager_external_unsupported",
-            "Cadence phase 4 process_manager only controls Cadence-owned processes.",
+            "Cadence process_manager external ownership is only supported by the phase 5 system_* actions.",
         ));
     }
     if request.persistent {
         return Err(CommandError::user_fixable(
             "autonomous_tool_process_manager_persistent_unsupported",
-            "Cadence phase 4 process_manager does not support durable background persistence yet.",
+            "Cadence phase 5 process_manager does not support durable background persistence yet.",
         ));
     }
     match request.action {
@@ -2253,8 +2597,16 @@ fn validate_phase_4_scope(request: &AutonomousProcessManagerRequest) -> CommandR
         | AutonomousProcessManagerAction::GroupStatus
         | AutonomousProcessManagerAction::GroupKill
         | AutonomousProcessManagerAction::AsyncAwait
-        | AutonomousProcessManagerAction::AsyncCancel => Ok(()),
-        action => Err(unsupported_phase_4_action(action)),
+        | AutonomousProcessManagerAction::AsyncCancel
+        | AutonomousProcessManagerAction::SystemProcessList
+        | AutonomousProcessManagerAction::SystemProcessTree
+        | AutonomousProcessManagerAction::SystemPortList
+        | AutonomousProcessManagerAction::SystemSignal
+        | AutonomousProcessManagerAction::SystemKillTree => Ok(()),
+        AutonomousProcessManagerAction::Signal => Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_signal_unsupported",
+            "Cadence phase 5 supports external signaling through system_signal; owned generic signal is not implemented yet.",
+        )),
     }
 }
 
@@ -2270,16 +2622,6 @@ fn validate_argv_contract(argv: &[String]) -> CommandResult<()> {
     let mut probe = Command::new(&argv[0]);
     apply_sanitized_command_environment(&mut probe);
     Ok(())
-}
-
-fn unsupported_phase_4_action(action: AutonomousProcessManagerAction) -> CommandError {
-    CommandError::user_fixable(
-        "autonomous_tool_process_manager_action_unsupported",
-        format!(
-            "Cadence phase 4 process_manager supports start, list, status, output, digest, wait_for_ready, highlights, send, send_and_wait, run, env, kill, restart, group_status, group_kill, async_start, async_await, and async_cancel; `{}` is planned for a later phase.",
-            process_manager_action_label(action)
-        ),
-    )
 }
 
 pub(super) fn process_manager_contract() -> AutonomousProcessManagerContract {
@@ -2304,6 +2646,11 @@ pub(super) fn process_manager_contract() -> AutonomousProcessManagerContract {
             AutonomousProcessManagerAction::GroupKill,
             AutonomousProcessManagerAction::AsyncAwait,
             AutonomousProcessManagerAction::AsyncCancel,
+            AutonomousProcessManagerAction::SystemProcessList,
+            AutonomousProcessManagerAction::SystemProcessTree,
+            AutonomousProcessManagerAction::SystemPortList,
+            AutonomousProcessManagerAction::SystemSignal,
+            AutonomousProcessManagerAction::SystemKillTree,
         ],
         ownership_fields: vec![
             "threadId".into(),
@@ -2365,6 +2712,11 @@ fn process_manager_action_label(action: AutonomousProcessManagerAction) -> &'sta
         AutonomousProcessManagerAction::AsyncStart => "async_start",
         AutonomousProcessManagerAction::AsyncAwait => "async_await",
         AutonomousProcessManagerAction::AsyncCancel => "async_cancel",
+        AutonomousProcessManagerAction::SystemProcessList => "system_process_list",
+        AutonomousProcessManagerAction::SystemProcessTree => "system_process_tree",
+        AutonomousProcessManagerAction::SystemPortList => "system_port_list",
+        AutonomousProcessManagerAction::SystemSignal => "system_signal",
+        AutonomousProcessManagerAction::SystemKillTree => "system_kill_tree",
     }
 }
 
@@ -2435,6 +2787,9 @@ fn process_manager_request_from_launch_config(
     AutonomousProcessManagerRequest {
         action,
         process_id: None,
+        pid: None,
+        parent_pid: None,
+        port: None,
         group: launch_config.group.clone(),
         label: launch_config.label.clone(),
         process_type: launch_config.process_type.clone(),
@@ -2460,6 +2815,908 @@ fn process_manager_request_from_launch_config(
         wait_port: None,
         wait_url: None,
         signal: None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SystemProcessInfo {
+    pid: u32,
+    parent_pid: Option<u32>,
+    name: String,
+    executable_path: Option<String>,
+    cwd: Option<String>,
+    argv: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SystemPortInfo {
+    protocol: String,
+    local_addr: String,
+    local_port: u16,
+    state: String,
+    pid: Option<u32>,
+    process_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExternalSignal {
+    label: &'static str,
+    number: i32,
+}
+
+fn list_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
+    #[cfg(target_os = "linux")]
+    {
+        return linux_system_processes();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return macos_system_processes();
+    }
+
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    {
+        return ps_system_processes();
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_system_process_unsupported",
+            "Cadence system process inspection is not supported on this platform yet.",
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
+    let entries = fs::read_dir("/proc").map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_tool_process_manager_system_process_failed",
+            format!("Cadence could not read /proc for process inspection: {error}"),
+        )
+    })?;
+    let mut processes = Vec::new();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(pid) = file_name
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let root = entry.path();
+        let name = fs::read_to_string(root.join("comm"))
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| pid.to_string());
+        let parent_pid = linux_parent_pid(&root);
+        let executable_path = fs::read_link(root.join("exe"))
+            .ok()
+            .map(|path| path.display().to_string());
+        let cwd = fs::read_link(root.join("cwd"))
+            .ok()
+            .map(|path| path.display().to_string());
+        let argv = fs::read(root.join("cmdline"))
+            .ok()
+            .map(split_nul_args)
+            .filter(|args| !args.is_empty())
+            .unwrap_or_else(|| vec![name.clone()]);
+        processes.push(SystemProcessInfo {
+            pid,
+            parent_pid,
+            name,
+            executable_path,
+            cwd,
+            argv,
+        });
+    }
+    Ok(processes)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_parent_pid(root: &std::path::Path) -> Option<u32> {
+    let status = fs::read_to_string(root.join("status")).ok()?;
+    status.lines().find_map(|line| {
+        line.strip_prefix("PPid:")
+            .and_then(|value| value.trim().parse::<u32>().ok())
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn split_nul_args(bytes: Vec<u8>) -> Vec<String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter_map(|part| {
+            if part.is_empty() {
+                None
+            } else {
+                Some(String::from_utf8_lossy(part).into_owned())
+            }
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
+    ps_system_processes()
+}
+
+#[cfg(unix)]
+fn ps_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,comm="])
+        .output()
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_tool_process_manager_system_process_failed",
+                format!("Cadence could not execute ps for process inspection: {error}"),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(CommandError::system_fault(
+            "autonomous_tool_process_manager_system_process_failed",
+            format!("ps exited with status {}.", output.status),
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut processes = Vec::new();
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(pid) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let parent_pid = parts.next().and_then(|value| value.parse::<u32>().ok());
+        let command = parts.collect::<Vec<_>>().join(" ");
+        let executable_path = process_executable_path(pid).or_else(|| {
+            if command.starts_with('/') {
+                Some(command.clone())
+            } else {
+                None
+            }
+        });
+        let name = executable_path
+            .as_deref()
+            .or_else(|| (!command.is_empty()).then_some(command.as_str()))
+            .and_then(|value| {
+                std::path::Path::new(value)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+            })
+            .unwrap_or(if command.is_empty() {
+                "unknown"
+            } else {
+                &command
+            })
+            .to_owned();
+        let argv = if command.is_empty() {
+            vec![name.clone()]
+        } else {
+            vec![command.clone()]
+        };
+        processes.push(SystemProcessInfo {
+            pid,
+            parent_pid,
+            name,
+            executable_path,
+            cwd: None,
+            argv,
+        });
+    }
+    Ok(processes)
+}
+
+#[cfg(target_os = "macos")]
+fn process_executable_path(pid: u32) -> Option<String> {
+    const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
+    extern "C" {
+        fn proc_pidpath(
+            pid: libc::c_int,
+            buffer: *mut libc::c_void,
+            buffersize: u32,
+        ) -> libc::c_int;
+    }
+
+    let mut buffer = vec![0_u8; PROC_PIDPATHINFO_MAXSIZE];
+    let result = unsafe {
+        proc_pidpath(
+            pid as libc::c_int,
+            buffer.as_mut_ptr().cast::<libc::c_void>(),
+            buffer.len() as u32,
+        )
+    };
+    if result <= 0 {
+        return None;
+    }
+    let len = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(result as usize);
+    Some(String::from_utf8_lossy(&buffer[..len]).into_owned())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_executable_path(_pid: u32) -> Option<String> {
+    None
+}
+
+fn filter_system_processes(
+    processes: &mut Vec<SystemProcessInfo>,
+    request: &AutonomousProcessManagerRequest,
+    port_pids: Option<&BTreeSet<u32>>,
+) -> CommandResult<()> {
+    if let Some(pid) = request
+        .pid
+        .or_else(|| parse_process_id_pid(request.process_id.as_deref()))
+    {
+        processes.retain(|process| process.pid == pid);
+    }
+    if let Some(parent_pid) = request.parent_pid {
+        processes.retain(|process| process.parent_pid == Some(parent_pid));
+    }
+    if let Some(port_pids) = port_pids {
+        processes.retain(|process| port_pids.contains(&process.pid));
+    }
+    if let Some(filter) = request.filter.as_deref() {
+        let regex = Regex::new(filter).map_err(|error| {
+            CommandError::user_fixable(
+                "autonomous_tool_process_manager_filter_invalid",
+                format!("Cadence could not compile system process filter regex: {error}"),
+            )
+        })?;
+        processes.retain(|process| {
+            regex.is_match(&process.name)
+                || process
+                    .executable_path
+                    .as_deref()
+                    .is_some_and(|value| regex.is_match(value))
+                || process
+                    .cwd
+                    .as_deref()
+                    .is_some_and(|value| regex.is_match(value))
+                || process.argv.iter().any(|value| regex.is_match(value))
+        });
+    }
+    Ok(())
+}
+
+fn system_process_by_pid(
+    processes: &[SystemProcessInfo],
+    pid: u32,
+) -> CommandResult<SystemProcessInfo> {
+    processes
+        .iter()
+        .find(|process| process.pid == pid)
+        .cloned()
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "autonomous_tool_process_manager_system_process_not_found",
+                format!("Cadence could not find external/system process PID {pid}."),
+            )
+        })
+}
+
+fn system_process_tree(
+    processes: &[SystemProcessInfo],
+    target_pid: u32,
+) -> CommandResult<Vec<SystemProcessInfo>> {
+    let target = system_process_by_pid(processes, target_pid)?;
+    let process_by_pid = processes
+        .iter()
+        .map(|process| (process.pid, process.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected = BTreeMap::new();
+    selected.insert(target.pid, target.clone());
+
+    let mut parent = target.parent_pid;
+    while let Some(parent_pid) = parent {
+        let Some(process) = process_by_pid.get(&parent_pid) else {
+            break;
+        };
+        if selected.len() >= MAX_SYSTEM_TREE_PROCESSES || selected.contains_key(&process.pid) {
+            break;
+        }
+        selected.insert(process.pid, process.clone());
+        parent = process.parent_pid;
+    }
+
+    let mut frontier = vec![target_pid];
+    while let Some(parent_pid) = frontier.pop() {
+        if selected.len() >= MAX_SYSTEM_TREE_PROCESSES {
+            break;
+        }
+        for child in processes
+            .iter()
+            .filter(|process| process.parent_pid == Some(parent_pid))
+        {
+            if selected.insert(child.pid, child.clone()).is_none() {
+                frontier.push(child.pid);
+            }
+        }
+    }
+
+    let mut out = selected.into_values().collect::<Vec<_>>();
+    out.sort_by_key(|process| {
+        if process.pid == target_pid {
+            (0_u8, process.pid)
+        } else if is_descendant(processes, target_pid, process.pid) {
+            (1_u8, process.pid)
+        } else {
+            (2_u8, process.pid)
+        }
+    });
+    Ok(out)
+}
+
+fn is_descendant(processes: &[SystemProcessInfo], ancestor_pid: u32, pid: u32) -> bool {
+    let parent_by_pid = processes
+        .iter()
+        .filter_map(|process| process.parent_pid.map(|parent| (process.pid, parent)))
+        .collect::<BTreeMap<_, _>>();
+    let mut current = Some(pid);
+    let mut seen = BTreeSet::new();
+    while let Some(candidate) = current {
+        if !seen.insert(candidate) {
+            return false;
+        }
+        if candidate == ancestor_pid {
+            return true;
+        }
+        current = parent_by_pid.get(&candidate).copied();
+    }
+    false
+}
+
+fn system_process_metadata(
+    process: &SystemProcessInfo,
+    owned_pids: &BTreeSet<u32>,
+    ports_by_pid: &BTreeMap<u32, Vec<u16>>,
+) -> AutonomousProcessMetadata {
+    let scope = if owned_pids.contains(&process.pid) {
+        AutonomousProcessOwnershipScope::CadenceOwned
+    } else {
+        AutonomousProcessOwnershipScope::External
+    };
+    let detected_ports = ports_by_pid.get(&process.pid).cloned().unwrap_or_default();
+    AutonomousProcessMetadata {
+        process_id: format!("system-pid-{}", process.pid),
+        pid: Some(process.pid),
+        parent_pid: process.parent_pid,
+        process_group_id: None,
+        process_name: Some(process.name.clone()),
+        executable_path: process.executable_path.clone(),
+        label: Some(process.name.clone()),
+        process_type: Some("system_process".into()),
+        group: None,
+        owner: AutonomousProcessOwner {
+            thread_id: None,
+            session_id: None,
+            repo_id: None,
+            user_id: None,
+            scope,
+        },
+        command: AutonomousProcessCommandMetadata {
+            argv: redact_command_argv_for_persistence(&process.argv),
+            shell_mode: false,
+            cwd: process.cwd.clone().unwrap_or_else(|| "unknown".into()),
+            sanitized_env: Vec::new(),
+        },
+        stdin_state: AutonomousProcessStdinState::Unavailable,
+        status: if process_exists(process.pid) {
+            AutonomousProcessStatus::Running
+        } else {
+            AutonomousProcessStatus::Unknown
+        },
+        started_at: None,
+        exited_at: None,
+        exit_code: None,
+        output_cursor: None,
+        detected_urls: Vec::new(),
+        detected_ports,
+        recent_errors: Vec::new(),
+        recent_warnings: Vec::new(),
+        recent_stack_traces: Vec::new(),
+        status_changes: Vec::new(),
+        readiness: AutonomousProcessReadinessState {
+            ready: false,
+            detector: None,
+            matched: None,
+        },
+        restart_count: 0,
+        last_restart_reason: None,
+        async_job: false,
+        timeout_ms: None,
+        output_artifact: None,
+    }
+}
+
+fn normalized_system_pid(request: &AutonomousProcessManagerRequest) -> CommandResult<u32> {
+    let pid = request
+        .pid
+        .or_else(|| parse_process_id_pid(request.process_id.as_deref()))
+        .ok_or_else(|| {
+            CommandError::user_fixable(
+                "autonomous_tool_process_manager_pid_required",
+                "Cadence requires system process actions to include pid or a numeric processId.",
+            )
+        })?;
+    if pid == 0 {
+        return Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_pid_invalid",
+            "Cadence requires system process pid to be greater than zero.",
+        ));
+    }
+    Ok(pid)
+}
+
+fn parse_process_id_pid(process_id: Option<&str>) -> Option<u32> {
+    let value = process_id?.trim();
+    value
+        .strip_prefix("system-pid-")
+        .unwrap_or(value)
+        .parse::<u32>()
+        .ok()
+}
+
+fn system_ports_by_pid(ports: Vec<SystemPortInfo>) -> BTreeMap<u32, Vec<u16>> {
+    let mut by_pid: BTreeMap<u32, BTreeSet<u16>> = BTreeMap::new();
+    for port in ports {
+        if let Some(pid) = port.pid {
+            by_pid.entry(pid).or_default().insert(port.local_port);
+        }
+    }
+    by_pid
+        .into_iter()
+        .map(|(pid, ports)| (pid, ports.into_iter().collect()))
+        .collect()
+}
+
+fn list_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
+    #[cfg(target_os = "linux")]
+    {
+        return linux_system_ports();
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return lsof_system_ports();
+    }
+
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    {
+        return lsof_system_ports();
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_system_ports_unsupported",
+            "Cadence system port inspection is not supported on this platform yet.",
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
+    let inode_pids = linux_socket_inode_pids();
+    let mut ports = Vec::new();
+    ports.extend(linux_tcp_ports("/proc/net/tcp", false, &inode_pids)?);
+    ports.extend(linux_tcp_ports("/proc/net/tcp6", true, &inode_pids)?);
+    Ok(ports)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_socket_inode_pids() -> BTreeMap<String, u32> {
+    let mut out = BTreeMap::new();
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(pid) = file_name
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let fd_dir = entry.path().join("fd");
+        let Ok(fds) = fs::read_dir(fd_dir) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            let Ok(target) = fs::read_link(fd.path()) else {
+                continue;
+            };
+            let target = target.to_string_lossy();
+            if let Some(inode) = target
+                .strip_prefix("socket:[")
+                .and_then(|value| value.strip_suffix(']'))
+            {
+                out.entry(inode.to_owned()).or_insert(pid);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn linux_tcp_ports(
+    path: &str,
+    ipv6: bool,
+    inode_pids: &BTreeMap<String, u32>,
+) -> CommandResult<Vec<SystemPortInfo>> {
+    let content = fs::read_to_string(path).map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_tool_process_manager_system_ports_failed",
+            format!("Cadence could not read {path} for listening ports: {error}"),
+        )
+    })?;
+    let mut ports = Vec::new();
+    for line in content.lines().skip(1) {
+        let columns = line.split_whitespace().collect::<Vec<_>>();
+        if columns.len() < 10 || columns[3] != "0A" {
+            continue;
+        }
+        let Some((addr_hex, port_hex)) = columns[1].split_once(':') else {
+            continue;
+        };
+        let Ok(local_port) = u16::from_str_radix(port_hex, 16) else {
+            continue;
+        };
+        let local_addr = if ipv6 {
+            linux_ipv6_addr(addr_hex)
+        } else {
+            linux_ipv4_addr(addr_hex)
+        };
+        let inode = columns[9].to_owned();
+        let pid = inode_pids.get(&inode).copied();
+        ports.push(SystemPortInfo {
+            protocol: if ipv6 { "tcp6" } else { "tcp" }.into(),
+            local_addr,
+            local_port,
+            state: "listen".into(),
+            pid,
+            process_name: None,
+        });
+    }
+    Ok(ports)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_ipv4_addr(value: &str) -> String {
+    let Ok(raw) = u32::from_str_radix(value, 16) else {
+        return value.into();
+    };
+    let bytes = raw.to_le_bytes();
+    format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3])
+}
+
+#[cfg(target_os = "linux")]
+fn linux_ipv6_addr(value: &str) -> String {
+    if value.len() != 32 {
+        return value.into();
+    }
+    let mut segments = Vec::new();
+    for chunk in value.as_bytes().chunks(8) {
+        let chunk = String::from_utf8_lossy(chunk);
+        let Ok(raw) = u32::from_str_radix(&chunk, 16) else {
+            return value.into();
+        };
+        for segment in raw.to_le_bytes().chunks(2) {
+            segments.push(u16::from_be_bytes([segment[0], segment[1]]));
+        }
+    }
+    segments
+        .chunks(1)
+        .map(|chunk| format!("{:x}", chunk[0]))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+#[cfg(unix)]
+fn lsof_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
+    let output = Command::new("lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcPn"])
+        .output()
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_tool_process_manager_system_ports_failed",
+                format!("Cadence could not execute lsof for listening ports: {error}"),
+            )
+        })?;
+    if !output.status.success() && output.stdout.is_empty() {
+        return Err(CommandError::system_fault(
+            "autonomous_tool_process_manager_system_ports_failed",
+            format!("lsof exited with status {}.", output.status),
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut ports = Vec::new();
+    let mut pid = None;
+    let mut process_name = None;
+    let mut protocol = "tcp".to_owned();
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let (tag, value) = line.split_at(1);
+        match tag {
+            "p" => {
+                pid = value.parse::<u32>().ok();
+                process_name = None;
+                protocol = "tcp".into();
+            }
+            "c" => process_name = Some(value.to_owned()),
+            "P" => protocol = value.to_ascii_lowercase(),
+            "n" => {
+                if let Some((addr, port)) = parse_lsof_address(value) {
+                    ports.push(SystemPortInfo {
+                        protocol: protocol.clone(),
+                        local_addr: addr,
+                        local_port: port,
+                        state: "listen".into(),
+                        pid,
+                        process_name: process_name.clone(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(ports)
+}
+
+fn parse_lsof_address(value: &str) -> Option<(String, u16)> {
+    let without_state = value.split(" (").next().unwrap_or(value);
+    let (addr, port) = if let Some(end) = without_state.rfind("]:") {
+        let addr = without_state[..=end]
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        (addr.to_owned(), &without_state[end + 2..])
+    } else {
+        let (addr, port) = without_state.rsplit_once(':')?;
+        (addr.to_owned(), port)
+    };
+    let port = port.parse::<u16>().ok()?;
+    Some((addr, port))
+}
+
+fn filter_system_ports(
+    ports: &mut Vec<SystemPortInfo>,
+    request: &AutonomousProcessManagerRequest,
+) -> CommandResult<()> {
+    if let Some(port) = request.port.or(request.wait_port) {
+        ports.retain(|entry| entry.local_port == port);
+    }
+    if let Some(pid) = request
+        .pid
+        .or_else(|| parse_process_id_pid(request.process_id.as_deref()))
+    {
+        ports.retain(|entry| entry.pid == Some(pid));
+    }
+    if let Some(filter) = request.filter.as_deref() {
+        let regex = Regex::new(filter).map_err(|error| {
+            CommandError::user_fixable(
+                "autonomous_tool_process_manager_filter_invalid",
+                format!("Cadence could not compile system port filter regex: {error}"),
+            )
+        })?;
+        ports.retain(|entry| {
+            regex.is_match(&entry.protocol)
+                || regex.is_match(&entry.local_addr)
+                || entry
+                    .process_name
+                    .as_deref()
+                    .is_some_and(|value| regex.is_match(value))
+        });
+    }
+    Ok(())
+}
+
+fn system_port_output(port: &SystemPortInfo) -> AutonomousSystemPort {
+    AutonomousSystemPort {
+        protocol: port.protocol.clone(),
+        local_addr: port.local_addr.clone(),
+        local_port: port.local_port,
+        state: port.state.clone(),
+        pid: port.pid,
+        process_name: port.process_name.clone(),
+    }
+}
+
+fn normalized_external_signal(signal: Option<&str>) -> CommandResult<ExternalSignal> {
+    let normalized = signal
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("TERM")
+        .trim_start_matches("SIG")
+        .to_ascii_uppercase();
+    #[cfg(unix)]
+    {
+        let signal = match normalized.as_str() {
+            "TERM" => ExternalSignal {
+                label: "TERM",
+                number: libc::SIGTERM,
+            },
+            "KILL" => ExternalSignal {
+                label: "KILL",
+                number: libc::SIGKILL,
+            },
+            "INT" => ExternalSignal {
+                label: "INT",
+                number: libc::SIGINT,
+            },
+            "HUP" => ExternalSignal {
+                label: "HUP",
+                number: libc::SIGHUP,
+            },
+            "QUIT" => ExternalSignal {
+                label: "QUIT",
+                number: libc::SIGQUIT,
+            },
+            "USR1" => ExternalSignal {
+                label: "USR1",
+                number: libc::SIGUSR1,
+            },
+            "USR2" => ExternalSignal {
+                label: "USR2",
+                number: libc::SIGUSR2,
+            },
+            "STOP" => ExternalSignal {
+                label: "STOP",
+                number: libc::SIGSTOP,
+            },
+            "CONT" => ExternalSignal {
+                label: "CONT",
+                number: libc::SIGCONT,
+            },
+            _ => {
+                return Err(CommandError::user_fixable(
+                    "autonomous_tool_process_manager_signal_invalid",
+                    "Cadence supports external signals TERM, KILL, INT, HUP, QUIT, USR1, USR2, STOP, and CONT.",
+                ))
+            }
+        };
+        Ok(signal)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = normalized;
+        Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_signal_unsupported",
+            "Cadence external process signals are not supported on this platform yet.",
+        ))
+    }
+}
+
+fn ensure_external_signal_target(
+    target_pid: u32,
+    processes: &[SystemProcessInfo],
+    owned_pids: &BTreeSet<u32>,
+    include_descendants: bool,
+) -> CommandResult<()> {
+    if owned_pids.contains(&target_pid) {
+        return Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_owned_target_refused",
+            "Cadence refused an external signal request for a Cadence-owned process. Use the owned kill/group actions instead.",
+        ));
+    }
+    let current_pid = std::process::id();
+    if target_pid == current_pid {
+        return Err(CommandError::policy_denied(
+            "Cadence refused to signal its own desktop process.",
+        ));
+    }
+    if current_process_ancestors(processes).contains(&target_pid) {
+        return Err(CommandError::policy_denied(
+            "Cadence refused to signal an ancestor of its own desktop process.",
+        ));
+    }
+    if include_descendants {
+        if is_descendant(processes, target_pid, current_pid) {
+            return Err(CommandError::policy_denied(
+                "Cadence refused to kill a process tree that contains its own desktop process.",
+            ));
+        }
+        if owned_pids
+            .iter()
+            .any(|owned_pid| is_descendant(processes, target_pid, *owned_pid))
+        {
+            return Err(CommandError::user_fixable(
+                "autonomous_tool_process_manager_owned_target_refused",
+                "Cadence refused an external tree kill that includes Cadence-owned processes. Use owned process-manager actions for those targets.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn current_process_ancestors(processes: &[SystemProcessInfo]) -> BTreeSet<u32> {
+    let parent_by_pid = processes
+        .iter()
+        .filter_map(|process| process.parent_pid.map(|parent| (process.pid, parent)))
+        .collect::<BTreeMap<_, _>>();
+    let mut ancestors = BTreeSet::new();
+    let mut current = parent_by_pid.get(&std::process::id()).copied();
+    while let Some(pid) = current {
+        if !ancestors.insert(pid) {
+            break;
+        }
+        current = parent_by_pid.get(&pid).copied();
+    }
+    ancestors
+}
+
+fn signal_external_pid(pid: u32, signal: i32) -> CommandResult<()> {
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::kill(pid as libc::pid_t, signal) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        return Err(CommandError::retryable(
+            "autonomous_tool_process_manager_system_signal_failed",
+            format!("Cadence could not signal external PID {pid}: {error}"),
+        ));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, signal);
+        Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_signal_unsupported",
+            "Cadence external process signals are not supported on this platform yet.",
+        ))
+    }
+}
+
+fn kill_external_process_tree(
+    tree: &[SystemProcessInfo],
+    root_pid: u32,
+) -> CommandResult<BTreeSet<u32>> {
+    let mut targets = tree
+        .iter()
+        .filter(|process| is_descendant(tree, root_pid, process.pid) || process.pid == root_pid)
+        .map(|process| process.pid)
+        .collect::<Vec<_>>();
+    targets.sort_by(
+        |left, right| match (*left == root_pid, *right == root_pid) {
+            (true, true) => left.cmp(right),
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => right.cmp(left),
+        },
+    );
+    targets.dedup();
+    let killed = targets.iter().copied().collect::<BTreeSet<_>>();
+
+    for pid in &targets {
+        let _ = signal_external_pid(*pid, normalized_external_signal(Some("TERM"))?.number);
+    }
+    thread::sleep(Duration::from_millis(300));
+    for pid in &targets {
+        if process_exists(*pid) {
+            let _ = signal_external_pid(*pid, normalized_external_signal(Some("KILL"))?.number);
+        }
+    }
+    Ok(killed)
+}
+
+fn process_exists(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if result == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
     }
 }
 
@@ -3273,6 +4530,24 @@ fn process_interaction_policy_allowed(
     policy
 }
 
+fn external_signal_policy_allowed(
+    action: AutonomousProcessManagerAction,
+    signal_label: &str,
+) -> AutonomousProcessManagerPolicyTrace {
+    let mut policy = process_manager_policy_trace(
+        action,
+        Some(AutonomousProcessOwnershipScope::External),
+        false,
+    );
+    policy.approval_required = false;
+    policy.code = "process_policy_external_signal_allowed_after_operator_approval".into();
+    policy.reason = format!(
+        "Operator approval allowed Cadence to apply external process signal action `{}` with signal {signal_label}.",
+        process_manager_action_label(action)
+    );
+    policy
+}
+
 fn operator_approved_command_policy(
     mut policy: AutonomousCommandPolicyTrace,
     argv: &[String],
@@ -3327,7 +4602,10 @@ fn unstarted_process_metadata(
     AutonomousProcessMetadata {
         process_id: "unstarted".into(),
         pid: None,
+        parent_pid: None,
         process_group_id: None,
+        process_name: argv.first().cloned(),
+        executable_path: None,
         label: clean_optional_string(label.as_deref()),
         process_type: clean_optional_string(process_type.as_deref()),
         group: clean_optional_string(group.as_deref()),
@@ -3699,7 +4977,10 @@ mod tests {
         let start_output = process_manager_output(start);
         let process_id = start_output.process_id.clone().expect("process id");
         let child_pid = wait_for_child_pid(&pid_file);
-        assert!(process_exists(child_pid), "child process should be alive");
+        assert!(
+            unix_process_exists(child_pid),
+            "child process should be alive"
+        );
 
         let mut kill_request = base_request(AutonomousProcessManagerAction::Kill);
         kill_request.process_id = Some(process_id);
@@ -3708,7 +4989,7 @@ mod tests {
             .expect("kill process tree");
 
         for _ in 0..20 {
-            if !process_exists(child_pid) {
+            if !unix_process_exists(child_pid) {
                 return;
             }
             thread::sleep(Duration::from_millis(50));
@@ -4219,6 +5500,123 @@ mod tests {
             .all(|process| process.process_id != cancellable_id));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn system_process_list_and_tree_observe_external_processes() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime = test_runtime(tempdir.path());
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn external sleep");
+        let pid = child.id();
+
+        let mut list_request = base_request(AutonomousProcessManagerAction::SystemProcessList);
+        list_request.pid = Some(pid);
+        let listed = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(list_request))
+                .expect("list external process"),
+        );
+        assert_eq!(
+            listed.action,
+            AutonomousProcessManagerAction::SystemProcessList
+        );
+        assert_eq!(listed.processes[0].pid, Some(pid));
+        assert_eq!(
+            listed.processes[0].owner.scope,
+            AutonomousProcessOwnershipScope::External
+        );
+
+        let mut tree_request = base_request(AutonomousProcessManagerAction::SystemProcessTree);
+        tree_request.pid = Some(pid);
+        let tree = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(tree_request))
+                .expect("inspect external tree"),
+        );
+        assert!(tree
+            .processes
+            .iter()
+            .any(|process| process.pid == Some(pid)));
+        assert!(!tree.policy.approval_required);
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_kill_tree_requires_approval_then_kills_external_process() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime = test_runtime(tempdir.path());
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn external sleep");
+        let pid = child.id();
+
+        let mut blocked_request = base_request(AutonomousProcessManagerAction::SystemKillTree);
+        blocked_request.pid = Some(pid);
+        let blocked = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(blocked_request))
+                .expect("blocked external kill"),
+        );
+        assert!(!blocked.spawned);
+        assert!(blocked.policy.approval_required);
+        assert!(
+            process_exists(pid),
+            "blocked kill must not terminate target"
+        );
+
+        let mut approved_request = base_request(AutonomousProcessManagerAction::SystemKillTree);
+        approved_request.pid = Some(pid);
+        let approved = process_manager_output(
+            runtime
+                .execute_approved(AutonomousToolRequest::ProcessManager(approved_request))
+                .expect("approved external kill"),
+        );
+        assert!(approved.spawned);
+        for _ in 0..20 {
+            if child.try_wait().expect("observe killed child").is_some() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("external process {pid} survived approved system_kill_tree");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn system_port_list_identifies_local_listener() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime = test_runtime(tempdir.path());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let port = listener.local_addr().expect("listener addr").port();
+
+        for _ in 0..10 {
+            let mut request = base_request(AutonomousProcessManagerAction::SystemPortList);
+            request.port = Some(port);
+            let output = process_manager_output(
+                runtime
+                    .execute(AutonomousToolRequest::ProcessManager(request))
+                    .expect("list system ports"),
+            );
+            if output
+                .system_ports
+                .iter()
+                .any(|entry| entry.local_port == port)
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        panic!("system_port_list did not report listener on port {port}");
+    }
+
     fn test_runtime(repo_root: &std::path::Path) -> AutonomousToolRuntime {
         AutonomousToolRuntime::new(repo_root)
             .expect("runtime")
@@ -4265,6 +5663,9 @@ mod tests {
         AutonomousProcessManagerRequest {
             action,
             process_id: None,
+            pid: None,
+            parent_pid: None,
+            port: None,
             group: None,
             label: None,
             process_type: None,
@@ -4354,7 +5755,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn process_exists(pid: i32) -> bool {
+    fn unix_process_exists(pid: i32) -> bool {
         let result = unsafe { libc::kill(pid, 0) };
         if result == 0 {
             return true;

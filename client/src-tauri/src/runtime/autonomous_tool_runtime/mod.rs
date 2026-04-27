@@ -1182,6 +1182,11 @@ pub enum AutonomousProcessManagerAction {
     AsyncStart,
     AsyncAwait,
     AsyncCancel,
+    SystemProcessList,
+    SystemProcessTree,
+    SystemPortList,
+    SystemSignal,
+    SystemKillTree,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -1209,6 +1214,12 @@ pub struct AutonomousProcessManagerRequest {
     pub action: AutonomousProcessManagerAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1792,7 +1803,10 @@ pub struct AutonomousProcessOutputChunk {
 pub struct AutonomousProcessMetadata {
     pub process_id: String,
     pub pid: Option<u32>,
+    pub parent_pid: Option<u32>,
     pub process_group_id: Option<i64>,
+    pub process_name: Option<String>,
+    pub executable_path: Option<String>,
     pub label: Option<String>,
     pub process_type: Option<String>,
     pub group: Option<String>,
@@ -1824,6 +1838,17 @@ pub struct AutonomousProcessOutputArtifact {
     pub path: String,
     pub byte_count: usize,
     pub redacted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousSystemPort {
+    pub protocol: String,
+    pub local_addr: String,
+    pub local_port: u16,
+    pub state: String,
+    pub pid: Option<u32>,
+    pub process_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -1907,6 +1932,7 @@ pub struct AutonomousProcessManagerOutput {
     pub spawned: bool,
     pub process_id: Option<String>,
     pub processes: Vec<AutonomousProcessMetadata>,
+    pub system_ports: Vec<AutonomousSystemPort>,
     pub chunks: Vec<AutonomousProcessOutputChunk>,
     pub next_cursor: Option<u64>,
     pub digest: Option<String>,

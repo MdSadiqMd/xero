@@ -415,6 +415,7 @@ pub(crate) fn record_command_output_event(
                     "processId": output.process_id.clone(),
                     "spawned": output.spawned,
                     "processes": output.processes.clone(),
+                    "systemPorts": output.system_ports.clone(),
                     "chunks": output.chunks.clone(),
                     "nextCursor": output.next_cursor,
                     "policy": output.policy.clone(),
@@ -426,6 +427,8 @@ pub(crate) fn record_command_output_event(
                     output.action,
                     AutonomousProcessManagerAction::Start
                         | AutonomousProcessManagerAction::AsyncStart
+                        | AutonomousProcessManagerAction::SystemSignal
+                        | AutonomousProcessManagerAction::SystemKillTree
                 )
             {
                 if let Some(process) = output.processes.first() {
