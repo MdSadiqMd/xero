@@ -30,6 +30,8 @@ pub(crate) fn drive_provider_loop(
             Some(agent_session_id),
             tool_registry.descriptors(),
         )?;
+        let turn_system_prompt =
+            append_owned_process_lifecycle_summary(turn_system_prompt, tool_runtime)?;
         let turn = ProviderTurnRequest {
             system_prompt: turn_system_prompt,
             messages: messages.clone(),
@@ -156,6 +158,18 @@ pub(crate) fn drive_provider_loop(
         format!(
             "Cadence stopped the owned-agent model loop after {MAX_PROVIDER_TURNS} provider turns to prevent an infinite tool loop."
         ),
+    ))
+}
+
+fn append_owned_process_lifecycle_summary(
+    system_prompt: String,
+    tool_runtime: &AutonomousToolRuntime,
+) -> CommandResult<String> {
+    let Some(summary) = tool_runtime.owned_process_lifecycle_summary()? else {
+        return Ok(system_prompt);
+    };
+    Ok(format!(
+        "{system_prompt}\n\nCadence-owned process state for this turn (read-only digest; call `process_manager` for fresh output or control):\n{summary}"
     ))
 }
 

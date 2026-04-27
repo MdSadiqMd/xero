@@ -394,7 +394,7 @@ fn tool_runtime_tool_access_lists_and_grants_requested_groups() {
 }
 
 #[test]
-fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
+fn tool_runtime_process_manager_phase_three_controls_owned_processes() {
     let root = tempfile::tempdir().expect("temp dir");
     let runtime = AutonomousToolRuntime::new(root.path())
         .expect("runtime")
@@ -411,11 +411,16 @@ fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
                 argv: shell_argv(runtime_shell::script_print_line_and_sleep("ready", 30)),
                 cwd: None,
                 shell_mode: false,
+                interactive: false,
                 target_ownership: None,
                 persistent: false,
                 timeout_ms: None,
                 after_cursor: None,
+                since_last_read: false,
                 max_bytes: None,
+                tail_lines: None,
+                stream: None,
+                filter: None,
                 input: None,
                 wait_pattern: None,
                 wait_port: None,
@@ -423,11 +428,11 @@ fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
                 signal: None,
             },
         ))
-        .expect("phase-one process manager start");
+        .expect("phase-three process manager start");
     let process_id = match start.output {
         AutonomousToolOutput::ProcessManager(output) => {
             assert_eq!(output.action, AutonomousProcessManagerAction::Start);
-            assert_eq!(output.phase, "phase_1_owned_mvp");
+            assert_eq!(output.phase, "phase_3_readiness_output_intelligence");
             assert!(output.spawned);
             assert_eq!(output.processes.len(), 1);
             assert!(output
@@ -457,11 +462,16 @@ fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
                     argv: Vec::new(),
                     cwd: None,
                     shell_mode: false,
+                    interactive: false,
                     target_ownership: None,
                     persistent: false,
                     timeout_ms: None,
                     after_cursor: None,
+                    since_last_read: false,
                     max_bytes: None,
+                    tail_lines: None,
+                    stream: None,
+                    filter: None,
                     input: None,
                     wait_pattern: None,
                     wait_port: None,
@@ -469,7 +479,7 @@ fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
                     signal: None,
                 },
             ))
-            .expect("phase-one process manager output");
+            .expect("phase-three process manager output");
         match output.output {
             AutonomousToolOutput::ProcessManager(output) => {
                 saw_ready = output
@@ -498,11 +508,16 @@ fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
                 argv: Vec::new(),
                 cwd: None,
                 shell_mode: false,
+                interactive: false,
                 target_ownership: None,
                 persistent: false,
                 timeout_ms: None,
                 after_cursor: None,
+                since_last_read: false,
                 max_bytes: None,
+                tail_lines: None,
+                stream: None,
+                filter: None,
                 input: None,
                 wait_pattern: None,
                 wait_port: None,
@@ -510,7 +525,7 @@ fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
                 signal: None,
             },
         ))
-        .expect("phase-one process manager kill");
+        .expect("phase-three process manager kill");
     match kill.output {
         AutonomousToolOutput::ProcessManager(output) => {
             assert_eq!(output.process_id.as_deref(), Some(process_id.as_str()));
@@ -530,11 +545,16 @@ fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
                 argv: Vec::new(),
                 cwd: None,
                 shell_mode: false,
+                interactive: false,
                 target_ownership: Some(AutonomousProcessOwnershipScope::External),
                 persistent: false,
                 timeout_ms: None,
                 after_cursor: None,
+                since_last_read: false,
                 max_bytes: None,
+                tail_lines: None,
+                stream: None,
+                filter: None,
                 input: None,
                 wait_pattern: None,
                 wait_port: None,
@@ -542,7 +562,7 @@ fn tool_runtime_process_manager_phase_one_controls_owned_processes() {
                 signal: None,
             },
         ))
-        .expect_err("external kill remains out of scope in phase one");
+        .expect_err("external kill remains out of scope in phase three");
     assert_eq!(
         external_kill.code,
         "autonomous_tool_process_manager_external_unsupported"

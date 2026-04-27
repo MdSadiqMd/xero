@@ -1169,6 +1169,7 @@ pub enum AutonomousProcessManagerAction {
     Output,
     Digest,
     WaitForReady,
+    Highlights,
     Send,
     SendAndWait,
     Run,
@@ -1226,8 +1227,16 @@ pub struct AutonomousProcessManagerRequest {
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_cursor: Option<u64>,
+    #[serde(default)]
+    pub since_last_read: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_lines: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<AutonomousProcessOutputStream>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1795,8 +1804,33 @@ pub struct AutonomousProcessMetadata {
     pub detected_ports: Vec<u16>,
     pub recent_errors: Vec<String>,
     pub recent_warnings: Vec<String>,
+    pub recent_stack_traces: Vec<String>,
+    pub status_changes: Vec<String>,
     pub readiness: AutonomousProcessReadinessState,
     pub restart_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum AutonomousProcessHighlightKind {
+    Url,
+    Port,
+    Warning,
+    Error,
+    StackTrace,
+    StatusChange,
+    Readiness,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousProcessHighlight {
+    pub process_id: String,
+    pub kind: AutonomousProcessHighlightKind,
+    pub text: String,
+    pub stream: Option<AutonomousProcessOutputStream>,
+    pub cursor: Option<u64>,
+    pub captured_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1859,6 +1893,8 @@ pub struct AutonomousProcessManagerOutput {
     pub processes: Vec<AutonomousProcessMetadata>,
     pub chunks: Vec<AutonomousProcessOutputChunk>,
     pub next_cursor: Option<u64>,
+    pub digest: Option<String>,
+    pub highlights: Vec<AutonomousProcessHighlight>,
     pub policy: AutonomousProcessManagerPolicyTrace,
     pub contract: AutonomousProcessManagerContract,
     pub message: String,

@@ -1,7 +1,8 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env,
     io::{Read, Write},
+    net::{SocketAddr, TcpStream},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -12,18 +13,20 @@ use std::{
 };
 
 use regex::Regex;
+use reqwest::Url;
 
 use super::{
     policy::{process_manager_policy_trace, CommandPolicyDecision, PreparedCommandRequest},
     process::{apply_sanitized_command_environment, SAFE_COMMAND_ENV_KEYS},
     repo_scope::{display_relative_or_root, normalize_relative_path},
     AutonomousCommandPolicyOutcome, AutonomousCommandPolicyTrace, AutonomousProcessActionRiskLevel,
-    AutonomousProcessCommandMetadata, AutonomousProcessLifecycleContract,
-    AutonomousProcessManagerAction, AutonomousProcessManagerContract,
-    AutonomousProcessManagerOutput, AutonomousProcessManagerPolicyTrace,
-    AutonomousProcessManagerRequest, AutonomousProcessMetadata, AutonomousProcessOutputChunk,
-    AutonomousProcessOutputLimits, AutonomousProcessOutputStream, AutonomousProcessOwner,
-    AutonomousProcessOwnershipScope, AutonomousProcessPersistenceContract,
+    AutonomousProcessCommandMetadata, AutonomousProcessHighlight, AutonomousProcessHighlightKind,
+    AutonomousProcessLifecycleContract, AutonomousProcessManagerAction,
+    AutonomousProcessManagerContract, AutonomousProcessManagerOutput,
+    AutonomousProcessManagerPolicyTrace, AutonomousProcessManagerRequest,
+    AutonomousProcessMetadata, AutonomousProcessOutputChunk, AutonomousProcessOutputLimits,
+    AutonomousProcessOutputStream, AutonomousProcessOwner, AutonomousProcessOwnershipScope,
+    AutonomousProcessPersistenceContract, AutonomousProcessReadinessDetector,
     AutonomousProcessReadinessState, AutonomousProcessStatus, AutonomousProcessStdinState,
     AutonomousToolOutput, AutonomousToolResult, AutonomousToolRuntime,
     AUTONOMOUS_TOOL_PROCESS_MANAGER,
@@ -44,17 +47,20 @@ use crate::{
     },
 };
 
-const PROCESS_MANAGER_PHASE: &str = "phase_2_interactive_sessions";
+const PROCESS_MANAGER_PHASE: &str = "phase_3_readiness_output_intelligence";
 const PROCESS_MANAGER_INITIAL_DRAIN: Duration = Duration::from_millis(150);
 const PROCESS_MANAGER_SEND_DRAIN: Duration = Duration::from_millis(50);
 const PROCESS_MANAGER_WAIT_POLL: Duration = Duration::from_millis(25);
+const PROCESS_MANAGER_HTTP_PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 const MAX_OWNED_PROCESSES: usize = 8;
 const RECENT_OUTPUT_RING_BYTES: usize = 1024 * 1024;
 const RECENT_OUTPUT_RING_CHUNKS: usize = 512;
 const FULL_OUTPUT_ARTIFACT_THRESHOLD_BYTES: usize = 1024 * 1024;
 const PROCESS_OUTPUT_EXCERPT_BYTES: usize = 16 * 1024;
 const MAX_PROCESS_OUTPUT_READ_BYTES: usize = 64 * 1024;
+const MAX_PROCESS_OUTPUT_TAIL_LINES: usize = 200;
 const MAX_PROCESS_STDIN_INPUT_BYTES: usize = 64 * 1024;
+const MAX_PROCESS_HIGHLIGHTS: usize = 32;
 const REDACTED_PROCESS_OUTPUT_SUMMARY: &str =
     "Process output was redacted before durable persistence.";
 const INTERNAL_MARKER_PREFIX: &str = "__CADENCE_";
@@ -154,11 +160,22 @@ struct OwnedProcess {
     stdin_state: Mutex<AutonomousProcessStdinState>,
     child: Mutex<Option<Child>>,
     status: Mutex<AutonomousProcessStatus>,
+    readiness: Mutex<AutonomousProcessReadinessState>,
     started_at: String,
     exited_at: Mutex<Option<String>>,
     exit_code: Mutex<Option<i32>>,
     chunks: Mutex<Vec<AutonomousProcessOutputChunk>>,
+    raw_chunks: Mutex<Vec<RawProcessOutputChunk>>,
     next_cursor: AtomicU64,
+    last_read_cursor: AtomicU64,
+}
+
+#[derive(Debug, Clone)]
+struct RawProcessOutputChunk {
+    cursor: u64,
+    stream: AutonomousProcessOutputStream,
+    text: String,
+    captured_at: Option<String>,
 }
 
 impl OwnedProcess {
@@ -201,11 +218,18 @@ impl OwnedProcess {
             stdin: Mutex::new(stdin),
             child: Mutex::new(Some(child)),
             status: Mutex::new(AutonomousProcessStatus::Running),
+            readiness: Mutex::new(AutonomousProcessReadinessState {
+                ready: false,
+                detector: None,
+                matched: None,
+            }),
             started_at: now_timestamp(),
             exited_at: Mutex::new(None),
             exit_code: Mutex::new(None),
             chunks: Mutex::new(Vec::new()),
+            raw_chunks: Mutex::new(Vec::new()),
             next_cursor: AtomicU64::new(1),
+            last_read_cursor: AtomicU64::new(0),
         }
     }
 
@@ -217,8 +241,20 @@ impl OwnedProcess {
         &self,
         stream: AutonomousProcessOutputStream,
         capture: SanitizedProcessOutput,
+        raw_text: Option<String>,
     ) -> CommandResult<()> {
         let cursor = self.next_cursor.fetch_add(1, Ordering::Relaxed);
+        let captured_at = Some(now_timestamp());
+        if let Some(text) = raw_text.filter(|text| !text.trim().is_empty()) {
+            let mut raw_chunks = self.raw_chunks.lock().map_err(process_output_lock_error)?;
+            raw_chunks.push(RawProcessOutputChunk {
+                cursor,
+                stream,
+                text,
+                captured_at: captured_at.clone(),
+            });
+            prune_raw_process_output_chunks(&mut raw_chunks);
+        }
         let mut chunks = self.chunks.lock().map_err(process_output_lock_error)?;
         chunks.push(AutonomousProcessOutputChunk {
             cursor,
@@ -226,7 +262,7 @@ impl OwnedProcess {
             text: capture.text,
             truncated: capture.truncated,
             redacted: capture.redacted,
-            captured_at: Some(now_timestamp()),
+            captured_at,
         });
         prune_process_output_chunks(&mut chunks);
         Ok(())
@@ -272,6 +308,66 @@ impl OwnedProcess {
 
     fn next_cursor_value(&self) -> u64 {
         self.next_cursor.load(Ordering::Relaxed)
+    }
+
+    fn read_raw_chunks_after(
+        &self,
+        after_cursor: u64,
+        max_bytes: usize,
+    ) -> CommandResult<Vec<RawProcessOutputChunk>> {
+        let chunks = self.raw_chunks.lock().map_err(process_output_lock_error)?;
+        let mut selected = Vec::new();
+        let mut bytes = 0_usize;
+        for chunk in chunks
+            .iter()
+            .filter(|chunk| chunk.cursor > after_cursor)
+            .cloned()
+        {
+            let chunk_bytes = chunk.text.len();
+            if !selected.is_empty() && bytes.saturating_add(chunk_bytes) > max_bytes {
+                break;
+            }
+            bytes = bytes.saturating_add(chunk_bytes);
+            selected.push(chunk);
+            if bytes >= max_bytes {
+                break;
+            }
+        }
+        Ok(selected)
+    }
+
+    fn last_read_cursor_value(&self) -> u64 {
+        self.last_read_cursor.load(Ordering::Relaxed)
+    }
+
+    fn remember_last_read_cursor(&self, cursor: u64) {
+        self.last_read_cursor.store(cursor, Ordering::Relaxed);
+    }
+
+    fn mark_ready(
+        &self,
+        detector: AutonomousProcessReadinessDetector,
+        matched: String,
+    ) -> CommandResult<()> {
+        *self
+            .readiness
+            .lock()
+            .map_err(process_readiness_lock_error)? = AutonomousProcessReadinessState {
+            ready: true,
+            detector: Some(detector),
+            matched: Some(matched),
+        };
+        let mut status = self.status.lock().map_err(process_status_lock_error)?;
+        if !matches!(
+            *status,
+            AutonomousProcessStatus::Exited
+                | AutonomousProcessStatus::Failed
+                | AutonomousProcessStatus::Killing
+                | AutonomousProcessStatus::Killed
+        ) {
+            *status = AutonomousProcessStatus::Ready;
+        }
+        Ok(())
     }
 
     fn close_stdin(&self) -> CommandResult<()> {
@@ -351,8 +447,10 @@ impl OwnedProcess {
                 Ok(exit_code)
             }
             Ok(None) => {
-                *self.status.lock().map_err(process_status_lock_error)? =
-                    AutonomousProcessStatus::Running;
+                let mut status = self.status.lock().map_err(process_status_lock_error)?;
+                if !matches!(*status, AutonomousProcessStatus::Ready) {
+                    *status = AutonomousProcessStatus::Running;
+                }
                 Ok(None)
             }
             Err(error) => Err(CommandError::retryable(
@@ -418,11 +516,35 @@ impl OwnedProcess {
         let exit_code = *self.exit_code.lock().map_err(process_exit_lock_error)?;
         let status = *self.status.lock().map_err(process_status_lock_error)?;
         let stdin_state = *self.stdin_state.lock().map_err(process_stdin_lock_error)?;
+        let readiness = self
+            .readiness
+            .lock()
+            .map_err(process_readiness_lock_error)?
+            .clone();
         let exited_at = self
             .exited_at
             .lock()
             .map_err(process_exit_lock_error)?
             .clone();
+        let chunks = self.retained_chunks()?;
+        let raw_chunks = self.read_raw_chunks_after(0, RECENT_OUTPUT_RING_BYTES)?;
+        let mut highlights = extract_process_highlights(&self.process_id, &chunks);
+        highlights.extend(extract_process_network_highlights_from_raw(
+            &self.process_id,
+            &raw_chunks,
+        ));
+        let highlights = truncate_highlights(highlights);
+        let detected_urls =
+            unique_highlight_texts(&highlights, AutonomousProcessHighlightKind::Url);
+        let detected_ports = unique_highlight_ports(&highlights);
+        let recent_errors =
+            recent_highlight_texts(&highlights, AutonomousProcessHighlightKind::Error);
+        let recent_warnings =
+            recent_highlight_texts(&highlights, AutonomousProcessHighlightKind::Warning);
+        let recent_stack_traces =
+            recent_highlight_texts(&highlights, AutonomousProcessHighlightKind::StackTrace);
+        let status_changes =
+            process_status_summaries(&self.process_id, status, exit_code, readiness.clone());
         Ok(AutonomousProcessMetadata {
             process_id: self.process_id.clone(),
             pid: Some(self.pid),
@@ -438,17 +560,24 @@ impl OwnedProcess {
             exited_at,
             exit_code,
             output_cursor: Some(self.next_cursor_value().saturating_sub(1)),
-            detected_urls: Vec::new(),
-            detected_ports: Vec::new(),
-            recent_errors: Vec::new(),
-            recent_warnings: Vec::new(),
-            readiness: AutonomousProcessReadinessState {
-                ready: false,
-                detector: None,
-                matched: None,
-            },
+            detected_urls,
+            detected_ports,
+            recent_errors,
+            recent_warnings,
+            recent_stack_traces,
+            status_changes,
+            readiness,
             restart_count: 0,
         })
+    }
+
+    fn retained_chunks(&self) -> CommandResult<Vec<AutonomousProcessOutputChunk>> {
+        let chunks = self.chunks.lock().map_err(process_output_lock_error)?;
+        Ok(chunks
+            .iter()
+            .cloned()
+            .map(filter_internal_marker_chunk)
+            .collect())
     }
 }
 
@@ -463,6 +592,13 @@ fn process_status_lock_error(_error: std::sync::PoisonError<impl Sized>) -> Comm
     CommandError::system_fault(
         "autonomous_tool_process_manager_lock_failed",
         "Cadence could not lock owned process status.",
+    )
+}
+
+fn process_readiness_lock_error(_error: std::sync::PoisonError<impl Sized>) -> CommandError {
+    CommandError::system_fault(
+        "autonomous_tool_process_manager_lock_failed",
+        "Cadence could not lock owned process readiness state.",
     )
 }
 
@@ -508,7 +644,7 @@ impl AutonomousToolRuntime {
         operator_approved: bool,
     ) -> CommandResult<AutonomousToolResult> {
         validate_process_manager_request(&request)?;
-        validate_phase_2_scope(&request)?;
+        validate_phase_3_scope(&request)?;
 
         match request.action {
             AutonomousProcessManagerAction::Start => {
@@ -517,6 +653,11 @@ impl AutonomousToolRuntime {
             AutonomousProcessManagerAction::List => self.process_manager_list(request),
             AutonomousProcessManagerAction::Status => self.process_manager_status(request),
             AutonomousProcessManagerAction::Output => self.process_manager_output(request),
+            AutonomousProcessManagerAction::Digest => self.process_manager_digest(request),
+            AutonomousProcessManagerAction::WaitForReady => {
+                self.process_manager_wait_for_ready(request)
+            }
+            AutonomousProcessManagerAction::Highlights => self.process_manager_highlights(request),
             AutonomousProcessManagerAction::Send => {
                 self.process_manager_send(request, operator_approved)
             }
@@ -528,7 +669,7 @@ impl AutonomousToolRuntime {
             }
             AutonomousProcessManagerAction::Env => self.process_manager_env(request),
             AutonomousProcessManagerAction::Kill => self.process_manager_kill(request),
-            action => Err(unsupported_phase_2_action(action)),
+            action => Err(unsupported_phase_3_action(action)),
         }
     }
 
@@ -792,11 +933,8 @@ impl AutonomousToolRuntime {
         let process_id = normalized_process_id(&request)?;
         let process = self.owned_processes.get(&process_id)?;
         let _ = process.poll_exit()?;
-        let max_bytes = request
-            .max_bytes
-            .unwrap_or_else(default_process_output_read_bytes)
-            .clamp(1, MAX_PROCESS_OUTPUT_READ_BYTES);
-        let chunks = process.read_chunks_after(request.after_cursor.unwrap_or(0), max_bytes)?;
+        let chunks = read_process_output_for_request(&process, &request)?;
+        process.remember_last_read_cursor(process.next_cursor_value().saturating_sub(1));
         let metadata = process.metadata()?;
         let message = format!(
             "Read {} output chunk(s) from owned process `{process_id}`.",
@@ -811,6 +949,104 @@ impl AutonomousToolRuntime {
             next_cursor: Some(process.next_cursor_value()),
             policy: process_manager_policy_trace(
                 AutonomousProcessManagerAction::Output,
+                request.target_ownership,
+                false,
+            ),
+            message,
+        }))
+    }
+
+    fn process_manager_digest(
+        &self,
+        request: AutonomousProcessManagerRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        let metadata = self.process_metadata_for_request(&request)?;
+        let digest = process_digest(&metadata);
+        Ok(process_manager_result(ProcessManagerResultInput {
+            action: AutonomousProcessManagerAction::Digest,
+            spawned: true,
+            process_id: request.process_id.clone(),
+            processes: metadata,
+            chunks: Vec::new(),
+            next_cursor: request.after_cursor,
+            policy: process_manager_policy_trace(
+                AutonomousProcessManagerAction::Digest,
+                request.target_ownership,
+                false,
+            ),
+            message: digest,
+        }))
+    }
+
+    fn process_manager_highlights(
+        &self,
+        request: AutonomousProcessManagerRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        let metadata = self.process_metadata_for_request(&request)?;
+        let highlight_count = metadata
+            .iter()
+            .map(|process| {
+                process.detected_urls.len()
+                    + process.detected_ports.len()
+                    + process.recent_warnings.len()
+                    + process.recent_errors.len()
+                    + process.recent_stack_traces.len()
+                    + process.status_changes.len()
+                    + usize::from(process.readiness.ready)
+            })
+            .sum::<usize>();
+        let message = format!(
+            "Returned {highlight_count} process highlight(s) from {} Cadence-owned process(es).",
+            metadata.len()
+        );
+        Ok(process_manager_result(ProcessManagerResultInput {
+            action: AutonomousProcessManagerAction::Highlights,
+            spawned: true,
+            process_id: request.process_id.clone(),
+            processes: metadata,
+            chunks: Vec::new(),
+            next_cursor: request.after_cursor,
+            policy: process_manager_policy_trace(
+                AutonomousProcessManagerAction::Highlights,
+                request.target_ownership,
+                false,
+            ),
+            message,
+        }))
+    }
+
+    fn process_manager_wait_for_ready(
+        &self,
+        request: AutonomousProcessManagerRequest,
+    ) -> CommandResult<AutonomousToolResult> {
+        let process_id = normalized_process_id(&request)?;
+        let process = self.owned_processes.get(&process_id)?;
+        let timeout = self.process_wait_timeout(request.timeout_ms)?;
+        let after_cursor = request.after_cursor.unwrap_or(0);
+        let readiness =
+            self.wait_for_process_readiness(&process, &request, after_cursor, timeout)?;
+        let chunks = process.read_chunks_after(after_cursor, MAX_PROCESS_OUTPUT_READ_BYTES)?;
+        let metadata = process.metadata()?;
+        let message = if readiness.ready {
+            format!(
+                "Owned process `{process_id}` is ready via {}.",
+                readiness_detector_label(readiness.detector)
+            )
+        } else {
+            format!(
+                "Timed out waiting for owned process `{process_id}` readiness via {}.",
+                readiness_detector_label(readiness.detector)
+            )
+        };
+        Ok(process_manager_result(ProcessManagerResultInput {
+            action: AutonomousProcessManagerAction::WaitForReady,
+            spawned: true,
+            process_id: Some(process_id),
+            processes: vec![metadata],
+            chunks,
+            next_cursor: Some(process.next_cursor_value()),
+            policy: process_manager_policy_trace(
+                AutonomousProcessManagerAction::WaitForReady,
                 request.target_ownership,
                 false,
             ),
@@ -1107,6 +1343,39 @@ impl AutonomousToolRuntime {
         }
         Ok(Duration::from_millis(timeout))
     }
+
+    pub(crate) fn owned_process_lifecycle_summary(&self) -> CommandResult<Option<String>> {
+        let metadata = self.process_metadata_for_request(&AutonomousProcessManagerRequest {
+            action: AutonomousProcessManagerAction::Digest,
+            process_id: None,
+            group: None,
+            label: None,
+            process_type: None,
+            argv: Vec::new(),
+            cwd: None,
+            shell_mode: false,
+            interactive: false,
+            target_ownership: None,
+            persistent: false,
+            timeout_ms: None,
+            after_cursor: None,
+            since_last_read: false,
+            max_bytes: None,
+            tail_lines: None,
+            stream: None,
+            filter: None,
+            input: None,
+            wait_pattern: None,
+            wait_port: None,
+            wait_url: None,
+            signal: None,
+        })?;
+        if metadata.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(process_digest(&metadata)))
+        }
+    }
 }
 
 struct ProcessManagerResultInput {
@@ -1121,6 +1390,12 @@ struct ProcessManagerResultInput {
 }
 
 fn process_manager_result(input: ProcessManagerResultInput) -> AutonomousToolResult {
+    let digest = if input.action == AutonomousProcessManagerAction::Digest {
+        Some(input.message.clone())
+    } else {
+        None
+    };
+    let highlights = result_highlights(input.action, &input.processes, &input.chunks);
     AutonomousToolResult {
         tool_name: AUTONOMOUS_TOOL_PROCESS_MANAGER.into(),
         summary: input.message.clone(),
@@ -1133,10 +1408,178 @@ fn process_manager_result(input: ProcessManagerResultInput) -> AutonomousToolRes
             processes: input.processes,
             chunks: input.chunks,
             next_cursor: input.next_cursor,
+            digest,
+            highlights,
             policy: input.policy,
             contract: process_manager_contract(),
             message: input.message,
         }),
+    }
+}
+
+impl AutonomousToolRuntime {
+    fn process_metadata_for_request(
+        &self,
+        request: &AutonomousProcessManagerRequest,
+    ) -> CommandResult<Vec<AutonomousProcessMetadata>> {
+        let processes = if let Some(process_id) = request
+            .process_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            vec![self.owned_processes.get(process_id)?]
+        } else {
+            self.owned_processes.list()?
+        };
+
+        let mut metadata = Vec::with_capacity(processes.len());
+        for process in processes {
+            let _ = process.poll_exit()?;
+            metadata.push(process.metadata()?);
+        }
+        Ok(metadata)
+    }
+
+    fn wait_for_process_readiness(
+        &self,
+        process: &OwnedProcess,
+        request: &AutonomousProcessManagerRequest,
+        after_cursor: u64,
+        timeout: Duration,
+    ) -> CommandResult<AutonomousProcessReadinessState> {
+        if let Some(pattern) = request.wait_pattern.as_deref() {
+            let (_chunks, matched) =
+                wait_for_output_match(process, after_cursor, pattern, timeout)?;
+            if let Some(matched) = matched {
+                process.mark_ready(
+                    AutonomousProcessReadinessDetector::OutputRegex,
+                    matched.clone(),
+                )?;
+                return Ok(AutonomousProcessReadinessState {
+                    ready: true,
+                    detector: Some(AutonomousProcessReadinessDetector::OutputRegex),
+                    matched: Some(matched),
+                });
+            }
+            return Ok(AutonomousProcessReadinessState {
+                ready: false,
+                detector: Some(AutonomousProcessReadinessDetector::OutputRegex),
+                matched: None,
+            });
+        }
+
+        if let Some(url) = request.wait_url.as_deref() {
+            let parsed = parse_local_http_url(url)?;
+            return self.wait_for_http_readiness(process, parsed, timeout);
+        }
+
+        if let Some(port) = request.wait_port {
+            return self.wait_for_port_readiness(process, port, timeout);
+        }
+
+        self.wait_for_process_exit_readiness(process, timeout)
+    }
+
+    fn wait_for_port_readiness(
+        &self,
+        process: &OwnedProcess,
+        port: u16,
+        timeout: Duration,
+    ) -> CommandResult<AutonomousProcessReadinessState> {
+        let started = Instant::now();
+        loop {
+            self.check_cancelled()?;
+            if port_is_open(port) {
+                let matched = format!("localhost:{port}");
+                process.mark_ready(
+                    AutonomousProcessReadinessDetector::PortOpen,
+                    matched.clone(),
+                )?;
+                return Ok(AutonomousProcessReadinessState {
+                    ready: true,
+                    detector: Some(AutonomousProcessReadinessDetector::PortOpen),
+                    matched: Some(matched),
+                });
+            }
+            if process.poll_exit()?.is_some() || started.elapsed() >= timeout {
+                return Ok(AutonomousProcessReadinessState {
+                    ready: false,
+                    detector: Some(AutonomousProcessReadinessDetector::PortOpen),
+                    matched: None,
+                });
+            }
+            thread::sleep(PROCESS_MANAGER_WAIT_POLL);
+        }
+    }
+
+    fn wait_for_http_readiness(
+        &self,
+        process: &OwnedProcess,
+        url: Url,
+        timeout: Duration,
+    ) -> CommandResult<AutonomousProcessReadinessState> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(PROCESS_MANAGER_HTTP_PROBE_TIMEOUT)
+            .build()
+            .map_err(|error| {
+                CommandError::system_fault(
+                    "autonomous_tool_process_manager_http_client_failed",
+                    format!("Cadence could not create a readiness HTTP client: {error}"),
+                )
+            })?;
+        let started = Instant::now();
+        loop {
+            self.check_cancelled()?;
+            if http_url_is_ready(&client, url.clone()) {
+                let matched = url.to_string();
+                process.mark_ready(AutonomousProcessReadinessDetector::HttpUrl, matched.clone())?;
+                return Ok(AutonomousProcessReadinessState {
+                    ready: true,
+                    detector: Some(AutonomousProcessReadinessDetector::HttpUrl),
+                    matched: Some(matched),
+                });
+            }
+            if process.poll_exit()?.is_some() || started.elapsed() >= timeout {
+                return Ok(AutonomousProcessReadinessState {
+                    ready: false,
+                    detector: Some(AutonomousProcessReadinessDetector::HttpUrl),
+                    matched: None,
+                });
+            }
+            thread::sleep(PROCESS_MANAGER_WAIT_POLL);
+        }
+    }
+
+    fn wait_for_process_exit_readiness(
+        &self,
+        process: &OwnedProcess,
+        timeout: Duration,
+    ) -> CommandResult<AutonomousProcessReadinessState> {
+        let started = Instant::now();
+        loop {
+            self.check_cancelled()?;
+            if let Some(exit_code) = process.poll_exit()? {
+                let matched = format!("exit_code={exit_code}");
+                process.mark_ready(
+                    AutonomousProcessReadinessDetector::ProcessExit,
+                    matched.clone(),
+                )?;
+                return Ok(AutonomousProcessReadinessState {
+                    ready: true,
+                    detector: Some(AutonomousProcessReadinessDetector::ProcessExit),
+                    matched: Some(matched),
+                });
+            }
+            if started.elapsed() >= timeout {
+                return Ok(AutonomousProcessReadinessState {
+                    ready: false,
+                    detector: Some(AutonomousProcessReadinessDetector::ProcessExit),
+                    matched: None,
+                });
+            }
+            thread::sleep(PROCESS_MANAGER_WAIT_POLL);
+        }
     }
 }
 
@@ -1158,7 +1601,6 @@ fn validate_process_manager_request(
         }
         AutonomousProcessManagerAction::Status
         | AutonomousProcessManagerAction::Output
-        | AutonomousProcessManagerAction::Digest
         | AutonomousProcessManagerAction::WaitForReady
         | AutonomousProcessManagerAction::Env
         | AutonomousProcessManagerAction::Signal
@@ -1169,6 +1611,7 @@ fn validate_process_manager_request(
                 "processId",
             )?;
         }
+        AutonomousProcessManagerAction::Digest | AutonomousProcessManagerAction::Highlights => {}
         AutonomousProcessManagerAction::Send
         | AutonomousProcessManagerAction::SendAndWait
         | AutonomousProcessManagerAction::Run => {
@@ -1199,6 +1642,19 @@ fn validate_process_manager_request(
     if let Some(wait_pattern) = request.wait_pattern.as_deref() {
         validate_non_empty(wait_pattern, "waitPattern")?;
     }
+    if let Some(filter) = request.filter.as_deref() {
+        validate_non_empty(filter, "filter")?;
+    }
+    if let Some(tail_lines) = request.tail_lines {
+        if tail_lines == 0 || tail_lines > MAX_PROCESS_OUTPUT_TAIL_LINES {
+            return Err(CommandError::user_fixable(
+                "autonomous_tool_process_manager_tail_lines_invalid",
+                format!(
+                    "Cadence requires process_manager tailLines to be between 1 and {MAX_PROCESS_OUTPUT_TAIL_LINES}."
+                ),
+            ));
+        }
+    }
     if request.action == AutonomousProcessManagerAction::SendAndWait
         && request
             .wait_pattern
@@ -1219,17 +1675,17 @@ fn validate_process_manager_request(
     Ok(())
 }
 
-fn validate_phase_2_scope(request: &AutonomousProcessManagerRequest) -> CommandResult<()> {
+fn validate_phase_3_scope(request: &AutonomousProcessManagerRequest) -> CommandResult<()> {
     if request.target_ownership == Some(AutonomousProcessOwnershipScope::External) {
         return Err(CommandError::user_fixable(
             "autonomous_tool_process_manager_external_unsupported",
-            "Cadence phase 2 process_manager only controls Cadence-owned processes.",
+            "Cadence phase 3 process_manager only controls Cadence-owned processes.",
         ));
     }
     if request.persistent {
         return Err(CommandError::user_fixable(
             "autonomous_tool_process_manager_persistent_unsupported",
-            "Cadence phase 2 process_manager does not support durable background persistence yet.",
+            "Cadence phase 3 process_manager does not support durable background persistence yet.",
         ));
     }
     match request.action {
@@ -1237,12 +1693,15 @@ fn validate_phase_2_scope(request: &AutonomousProcessManagerRequest) -> CommandR
         | AutonomousProcessManagerAction::List
         | AutonomousProcessManagerAction::Status
         | AutonomousProcessManagerAction::Output
+        | AutonomousProcessManagerAction::Digest
+        | AutonomousProcessManagerAction::WaitForReady
+        | AutonomousProcessManagerAction::Highlights
         | AutonomousProcessManagerAction::Send
         | AutonomousProcessManagerAction::SendAndWait
         | AutonomousProcessManagerAction::Run
         | AutonomousProcessManagerAction::Env
         | AutonomousProcessManagerAction::Kill => Ok(()),
-        action => Err(unsupported_phase_2_action(action)),
+        action => Err(unsupported_phase_3_action(action)),
     }
 }
 
@@ -1260,11 +1719,11 @@ fn validate_argv_contract(argv: &[String]) -> CommandResult<()> {
     Ok(())
 }
 
-fn unsupported_phase_2_action(action: AutonomousProcessManagerAction) -> CommandError {
+fn unsupported_phase_3_action(action: AutonomousProcessManagerAction) -> CommandError {
     CommandError::user_fixable(
         "autonomous_tool_process_manager_action_unsupported",
         format!(
-            "Cadence phase 2 process_manager supports start, list, status, output, send, send_and_wait, run, env, and kill; `{}` is planned for a later phase.",
+            "Cadence phase 3 process_manager supports start, list, status, output, digest, wait_for_ready, highlights, send, send_and_wait, run, env, and kill; `{}` is planned for a later phase.",
             process_manager_action_label(action)
         ),
     )
@@ -1278,6 +1737,9 @@ pub(super) fn process_manager_contract() -> AutonomousProcessManagerContract {
             AutonomousProcessManagerAction::List,
             AutonomousProcessManagerAction::Status,
             AutonomousProcessManagerAction::Output,
+            AutonomousProcessManagerAction::Digest,
+            AutonomousProcessManagerAction::WaitForReady,
+            AutonomousProcessManagerAction::Highlights,
             AutonomousProcessManagerAction::Send,
             AutonomousProcessManagerAction::SendAndWait,
             AutonomousProcessManagerAction::Run,
@@ -1331,6 +1793,7 @@ fn process_manager_action_label(action: AutonomousProcessManagerAction) -> &'sta
         AutonomousProcessManagerAction::Output => "output",
         AutonomousProcessManagerAction::Digest => "digest",
         AutonomousProcessManagerAction::WaitForReady => "wait_for_ready",
+        AutonomousProcessManagerAction::Highlights => "highlights",
         AutonomousProcessManagerAction::Send => "send",
         AutonomousProcessManagerAction::SendAndWait => "send_and_wait",
         AutonomousProcessManagerAction::Run => "run",
@@ -1382,6 +1845,74 @@ fn ensure_shell_process(process: &OwnedProcess) -> CommandResult<()> {
     ))
 }
 
+fn read_process_output_for_request(
+    process: &OwnedProcess,
+    request: &AutonomousProcessManagerRequest,
+) -> CommandResult<Vec<AutonomousProcessOutputChunk>> {
+    let after_cursor = request.after_cursor.unwrap_or_else(|| {
+        if request.since_last_read {
+            process.last_read_cursor_value()
+        } else {
+            0
+        }
+    });
+    let max_bytes = request
+        .max_bytes
+        .unwrap_or_else(default_process_output_read_bytes)
+        .clamp(1, MAX_PROCESS_OUTPUT_READ_BYTES);
+    let mut chunks = process.read_chunks_after(after_cursor, max_bytes)?;
+
+    if let Some(stream) = request.stream {
+        if stream != AutonomousProcessOutputStream::Combined {
+            chunks.retain(|chunk| chunk.stream == stream);
+        }
+    }
+
+    if let Some(filter) = request.filter.as_deref() {
+        let regex = Regex::new(filter).map_err(|error| {
+            CommandError::user_fixable(
+                "autonomous_tool_process_manager_filter_invalid",
+                format!("Cadence could not compile process_manager filter regex: {error}"),
+            )
+        })?;
+        chunks.retain(|chunk| {
+            chunk
+                .text
+                .as_deref()
+                .is_some_and(|text| regex.is_match(text))
+        });
+    }
+
+    if let Some(tail_lines) = request.tail_lines {
+        chunks = tail_process_output_chunks(chunks, tail_lines);
+    }
+
+    Ok(chunks)
+}
+
+fn tail_process_output_chunks(
+    chunks: Vec<AutonomousProcessOutputChunk>,
+    tail_lines: usize,
+) -> Vec<AutonomousProcessOutputChunk> {
+    let combined = combine_chunk_text(&chunks);
+    let lines = combined.lines().collect::<Vec<_>>();
+    if lines.len() <= tail_lines {
+        return chunks;
+    }
+
+    let text = lines[lines.len().saturating_sub(tail_lines)..].join("\n");
+    let cursor = chunks.last().map(|chunk| chunk.cursor).unwrap_or_default();
+    let captured_at = chunks.last().and_then(|chunk| chunk.captured_at.clone());
+    vec![AutonomousProcessOutputChunk {
+        cursor,
+        stream: AutonomousProcessOutputStream::Combined,
+        text: Some(text),
+        truncated: true,
+        redacted: chunks.iter().any(|chunk| chunk.redacted),
+        captured_at,
+    }]
+}
+
 fn wait_for_output_match(
     process: &OwnedProcess,
     after_cursor: u64,
@@ -1398,21 +1929,16 @@ fn wait_for_output_match(
 
     loop {
         let _ = process.poll_exit()?;
-        let chunks = process.read_chunks_after_raw(after_cursor, MAX_PROCESS_OUTPUT_READ_BYTES)?;
-        let combined = combine_chunk_text(&chunks);
+        let raw_chunks =
+            process.read_raw_chunks_after(after_cursor, MAX_PROCESS_OUTPUT_READ_BYTES)?;
+        let combined = combine_raw_chunk_text(&raw_chunks);
         if let Some(found) = regex.find(&combined) {
-            let chunks = chunks
-                .into_iter()
-                .map(filter_internal_marker_chunk)
-                .collect();
+            let chunks = process.read_chunks_after(after_cursor, MAX_PROCESS_OUTPUT_READ_BYTES)?;
             return Ok((chunks, Some(found.as_str().to_owned())));
         }
 
         if started.elapsed() >= timeout {
-            let chunks = chunks
-                .into_iter()
-                .map(filter_internal_marker_chunk)
-                .collect();
+            let chunks = process.read_chunks_after(after_cursor, MAX_PROCESS_OUTPUT_READ_BYTES)?;
             return Ok((chunks, None));
         }
 
@@ -1426,6 +1952,569 @@ fn combine_chunk_text(chunks: &[AutonomousProcessOutputChunk]) -> String {
         .filter_map(|chunk| chunk.text.as_deref())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn combine_raw_chunk_text(chunks: &[RawProcessOutputChunk]) -> String {
+    chunks
+        .iter()
+        .map(|chunk| chunk.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn process_digest(processes: &[AutonomousProcessMetadata]) -> String {
+    if processes.is_empty() {
+        return "No Cadence-owned processes are registered.".into();
+    }
+
+    processes
+        .iter()
+        .map(|process| {
+            let name = process
+                .label
+                .as_deref()
+                .or(process.process_type.as_deref())
+                .unwrap_or("unnamed");
+            let readiness = if process.readiness.ready {
+                process
+                    .readiness
+                    .matched
+                    .as_deref()
+                    .map(|matched| format!("ready:{matched}"))
+                    .unwrap_or_else(|| "ready".into())
+            } else {
+                "not_ready".into()
+            };
+            let urls = compact_list(&process.detected_urls);
+            let ports = process
+                .detected_ports
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>();
+            format!(
+                "{} `{}` status={:?} pid={} cursor={} {} urls={} ports={} warnings={} errors={}",
+                process.process_id,
+                name,
+                process.status,
+                process
+                    .pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+                process
+                    .output_cursor
+                    .map(|cursor| cursor.to_string())
+                    .unwrap_or_else(|| "0".into()),
+                readiness,
+                if urls.is_empty() {
+                    "none".into()
+                } else {
+                    urls.join(",")
+                },
+                if ports.is_empty() {
+                    "none".into()
+                } else {
+                    ports.join(",")
+                },
+                process.recent_warnings.len(),
+                process.recent_errors.len(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn compact_list(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .take(3)
+        .map(|value| truncate_chars(value, 96))
+        .collect()
+}
+
+fn result_highlights(
+    action: AutonomousProcessManagerAction,
+    processes: &[AutonomousProcessMetadata],
+    chunks: &[AutonomousProcessOutputChunk],
+) -> Vec<AutonomousProcessHighlight> {
+    let mut highlights = Vec::new();
+    if !chunks.is_empty() {
+        let process_id = processes
+            .first()
+            .map(|process| process.process_id.as_str())
+            .unwrap_or("unknown");
+        highlights.extend(extract_process_highlights(process_id, chunks));
+    }
+    if matches!(
+        action,
+        AutonomousProcessManagerAction::Digest
+            | AutonomousProcessManagerAction::Highlights
+            | AutonomousProcessManagerAction::Status
+            | AutonomousProcessManagerAction::List
+            | AutonomousProcessManagerAction::WaitForReady
+    ) {
+        for process in processes {
+            highlights.extend(metadata_highlights(process));
+        }
+    }
+    truncate_highlights(highlights)
+}
+
+fn metadata_highlights(process: &AutonomousProcessMetadata) -> Vec<AutonomousProcessHighlight> {
+    let mut highlights = Vec::new();
+    for url in &process.detected_urls {
+        highlights.push(metadata_highlight(
+            process,
+            AutonomousProcessHighlightKind::Url,
+            url.clone(),
+        ));
+    }
+    for port in &process.detected_ports {
+        highlights.push(metadata_highlight(
+            process,
+            AutonomousProcessHighlightKind::Port,
+            port.to_string(),
+        ));
+    }
+    for warning in &process.recent_warnings {
+        highlights.push(metadata_highlight(
+            process,
+            AutonomousProcessHighlightKind::Warning,
+            warning.clone(),
+        ));
+    }
+    for error in &process.recent_errors {
+        highlights.push(metadata_highlight(
+            process,
+            AutonomousProcessHighlightKind::Error,
+            error.clone(),
+        ));
+    }
+    for stack_trace in &process.recent_stack_traces {
+        highlights.push(metadata_highlight(
+            process,
+            AutonomousProcessHighlightKind::StackTrace,
+            stack_trace.clone(),
+        ));
+    }
+    for status_change in &process.status_changes {
+        highlights.push(metadata_highlight(
+            process,
+            AutonomousProcessHighlightKind::StatusChange,
+            status_change.clone(),
+        ));
+    }
+    if process.readiness.ready {
+        highlights.push(metadata_highlight(
+            process,
+            AutonomousProcessHighlightKind::Readiness,
+            process
+                .readiness
+                .matched
+                .clone()
+                .unwrap_or_else(|| "ready".into()),
+        ));
+    }
+    highlights
+}
+
+fn metadata_highlight(
+    process: &AutonomousProcessMetadata,
+    kind: AutonomousProcessHighlightKind,
+    text: String,
+) -> AutonomousProcessHighlight {
+    AutonomousProcessHighlight {
+        process_id: process.process_id.clone(),
+        kind,
+        text,
+        stream: None,
+        cursor: process.output_cursor,
+        captured_at: None,
+    }
+}
+
+fn extract_process_highlights(
+    process_id: &str,
+    chunks: &[AutonomousProcessOutputChunk],
+) -> Vec<AutonomousProcessHighlight> {
+    let url_regex = Regex::new(r#"https?://[^\s'"<>)]+"#).expect("valid url regex");
+    let port_regex = Regex::new(
+        r"(?i)\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0|port|listening|server|ready|started)[^\n]{0,48}\b([1-9][0-9]{1,4})\b",
+    )
+    .expect("valid port regex");
+    let mut seen = BTreeSet::new();
+    let mut highlights = Vec::new();
+
+    for chunk in chunks {
+        let Some(text) = chunk.text.as_deref() else {
+            continue;
+        };
+        for url_match in url_regex.find_iter(text) {
+            let url = trim_url_token(url_match.as_str());
+            push_process_highlight(
+                &mut highlights,
+                &mut seen,
+                process_id,
+                AutonomousProcessHighlightKind::Url,
+                url.clone(),
+                chunk,
+            );
+            if let Some(port) = port_from_url(&url) {
+                push_process_highlight(
+                    &mut highlights,
+                    &mut seen,
+                    process_id,
+                    AutonomousProcessHighlightKind::Port,
+                    port.to_string(),
+                    chunk,
+                );
+            }
+        }
+        for capture in port_regex.captures_iter(text) {
+            if let Some(port) = capture
+                .get(1)
+                .and_then(|match_| match_.as_str().parse::<u16>().ok())
+            {
+                push_process_highlight(
+                    &mut highlights,
+                    &mut seen,
+                    process_id,
+                    AutonomousProcessHighlightKind::Port,
+                    port.to_string(),
+                    chunk,
+                );
+            }
+        }
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if is_warning_line(line) {
+                push_process_highlight(
+                    &mut highlights,
+                    &mut seen,
+                    process_id,
+                    AutonomousProcessHighlightKind::Warning,
+                    truncate_chars(line, 240),
+                    chunk,
+                );
+            }
+            if is_error_line(line) {
+                push_process_highlight(
+                    &mut highlights,
+                    &mut seen,
+                    process_id,
+                    AutonomousProcessHighlightKind::Error,
+                    truncate_chars(line, 240),
+                    chunk,
+                );
+            }
+            if is_stack_trace_line(line) {
+                push_process_highlight(
+                    &mut highlights,
+                    &mut seen,
+                    process_id,
+                    AutonomousProcessHighlightKind::StackTrace,
+                    truncate_chars(line, 240),
+                    chunk,
+                );
+            }
+        }
+    }
+
+    truncate_highlights(highlights)
+}
+
+fn extract_process_network_highlights_from_raw(
+    process_id: &str,
+    chunks: &[RawProcessOutputChunk],
+) -> Vec<AutonomousProcessHighlight> {
+    let url_regex = Regex::new(r#"https?://[^\s'"<>)]+"#).expect("valid url regex");
+    let port_regex = Regex::new(
+        r"(?i)\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0|port|listening|server|ready|started)[^\n]{0,48}\b([1-9][0-9]{1,4})\b",
+    )
+    .expect("valid port regex");
+    let mut seen = BTreeSet::new();
+    let mut highlights = Vec::new();
+
+    for chunk in chunks {
+        for url_match in url_regex.find_iter(&chunk.text) {
+            let url = sanitized_url_highlight(url_match.as_str());
+            push_raw_network_highlight(
+                &mut highlights,
+                &mut seen,
+                process_id,
+                AutonomousProcessHighlightKind::Url,
+                url.clone(),
+                chunk,
+            );
+            if let Some(port) = port_from_url(&url) {
+                push_raw_network_highlight(
+                    &mut highlights,
+                    &mut seen,
+                    process_id,
+                    AutonomousProcessHighlightKind::Port,
+                    port.to_string(),
+                    chunk,
+                );
+            }
+        }
+        for capture in port_regex.captures_iter(&chunk.text) {
+            if let Some(port) = capture
+                .get(1)
+                .and_then(|match_| match_.as_str().parse::<u16>().ok())
+            {
+                push_raw_network_highlight(
+                    &mut highlights,
+                    &mut seen,
+                    process_id,
+                    AutonomousProcessHighlightKind::Port,
+                    port.to_string(),
+                    chunk,
+                );
+            }
+        }
+    }
+
+    truncate_highlights(highlights)
+}
+
+fn push_process_highlight(
+    highlights: &mut Vec<AutonomousProcessHighlight>,
+    seen: &mut BTreeSet<(AutonomousProcessHighlightKind, String)>,
+    process_id: &str,
+    kind: AutonomousProcessHighlightKind,
+    text: String,
+    chunk: &AutonomousProcessOutputChunk,
+) {
+    if highlights.len() >= MAX_PROCESS_HIGHLIGHTS {
+        return;
+    }
+    let normalized = text.trim().to_owned();
+    if normalized.is_empty() || !seen.insert((kind, normalized.clone())) {
+        return;
+    }
+    highlights.push(AutonomousProcessHighlight {
+        process_id: process_id.into(),
+        kind,
+        text: normalized,
+        stream: Some(chunk.stream),
+        cursor: Some(chunk.cursor),
+        captured_at: chunk.captured_at.clone(),
+    });
+}
+
+fn push_raw_network_highlight(
+    highlights: &mut Vec<AutonomousProcessHighlight>,
+    seen: &mut BTreeSet<(AutonomousProcessHighlightKind, String)>,
+    process_id: &str,
+    kind: AutonomousProcessHighlightKind,
+    text: String,
+    chunk: &RawProcessOutputChunk,
+) {
+    if highlights.len() >= MAX_PROCESS_HIGHLIGHTS {
+        return;
+    }
+    let normalized = text.trim().to_owned();
+    if normalized.is_empty() || !seen.insert((kind, normalized.clone())) {
+        return;
+    }
+    highlights.push(AutonomousProcessHighlight {
+        process_id: process_id.into(),
+        kind,
+        text: normalized,
+        stream: Some(chunk.stream),
+        cursor: Some(chunk.cursor),
+        captured_at: chunk.captured_at.clone(),
+    });
+}
+
+fn truncate_highlights(
+    highlights: Vec<AutonomousProcessHighlight>,
+) -> Vec<AutonomousProcessHighlight> {
+    highlights
+        .into_iter()
+        .take(MAX_PROCESS_HIGHLIGHTS)
+        .collect()
+}
+
+fn unique_highlight_texts(
+    highlights: &[AutonomousProcessHighlight],
+    kind: AutonomousProcessHighlightKind,
+) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut values = Vec::new();
+    for highlight in highlights.iter().filter(|highlight| highlight.kind == kind) {
+        if seen.insert(highlight.text.clone()) {
+            values.push(highlight.text.clone());
+        }
+        if values.len() >= 8 {
+            break;
+        }
+    }
+    values
+}
+
+fn unique_highlight_ports(highlights: &[AutonomousProcessHighlight]) -> Vec<u16> {
+    let mut ports = BTreeSet::new();
+    for highlight in highlights
+        .iter()
+        .filter(|highlight| highlight.kind == AutonomousProcessHighlightKind::Port)
+    {
+        if let Ok(port) = highlight.text.parse::<u16>() {
+            ports.insert(port);
+        }
+    }
+    ports.into_iter().take(8).collect()
+}
+
+fn recent_highlight_texts(
+    highlights: &[AutonomousProcessHighlight],
+    kind: AutonomousProcessHighlightKind,
+) -> Vec<String> {
+    highlights
+        .iter()
+        .rev()
+        .filter(|highlight| highlight.kind == kind)
+        .take(5)
+        .map(|highlight| highlight.text.clone())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn process_status_summaries(
+    process_id: &str,
+    status: AutonomousProcessStatus,
+    exit_code: Option<i32>,
+    readiness: AutonomousProcessReadinessState,
+) -> Vec<String> {
+    let mut summaries = Vec::new();
+    if readiness.ready {
+        summaries.push(format!(
+            "{process_id} ready via {}{}",
+            readiness_detector_label(readiness.detector),
+            readiness
+                .matched
+                .as_deref()
+                .map(|matched| format!(" ({})", truncate_chars(matched, 120)))
+                .unwrap_or_default()
+        ));
+    }
+    if matches!(
+        status,
+        AutonomousProcessStatus::Exited
+            | AutonomousProcessStatus::Failed
+            | AutonomousProcessStatus::Killed
+    ) {
+        summaries.push(format!(
+            "{process_id} status={status:?} exit_code={exit_code:?}"
+        ));
+    }
+    summaries
+}
+
+fn readiness_detector_label(detector: Option<AutonomousProcessReadinessDetector>) -> &'static str {
+    match detector {
+        Some(AutonomousProcessReadinessDetector::OutputRegex) => "output_regex",
+        Some(AutonomousProcessReadinessDetector::PortOpen) => "port_open",
+        Some(AutonomousProcessReadinessDetector::HttpUrl) => "http_url",
+        Some(AutonomousProcessReadinessDetector::ProcessExit) => "process_exit",
+        None => "unspecified",
+    }
+}
+
+fn trim_url_token(value: &str) -> String {
+    value
+        .trim_end_matches(|character: char| {
+            matches!(character, '.' | ',' | ';' | ':' | '!' | '?' | ']')
+        })
+        .to_owned()
+}
+
+fn sanitized_url_highlight(value: &str) -> String {
+    let trimmed = trim_url_token(value);
+    let Ok(mut url) = Url::parse(&trimmed) else {
+        return trimmed;
+    };
+    url.set_query(None);
+    url.set_fragment(None);
+    if is_local_readiness_host(url.host_str().unwrap_or_default()) {
+        url.set_path("/");
+    }
+    url.to_string().trim_end_matches('/').to_owned()
+}
+
+fn port_from_url(value: &str) -> Option<u16> {
+    Url::parse(value).ok()?.port_or_known_default()
+}
+
+fn parse_local_http_url(value: &str) -> CommandResult<Url> {
+    let url = Url::parse(value).map_err(|error| {
+        CommandError::user_fixable(
+            "autonomous_tool_process_manager_wait_url_invalid",
+            format!("Cadence could not parse process_manager waitUrl: {error}"),
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_wait_url_invalid",
+            "Cadence requires process_manager waitUrl to use http or https.",
+        ));
+    }
+    let host = url.host_str().unwrap_or_default();
+    if !is_local_readiness_host(host) {
+        return Err(CommandError::user_fixable(
+            "autonomous_tool_process_manager_wait_url_non_local",
+            "Cadence only probes local HTTP readiness URLs for managed processes.",
+        ));
+    }
+    Ok(url)
+}
+
+fn is_local_readiness_host(host: &str) -> bool {
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "::1" | "[::1]"
+    )
+}
+
+fn port_is_open(port: u16) -> bool {
+    [
+        SocketAddr::from(([127, 0, 0, 1], port)),
+        SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port)),
+    ]
+    .iter()
+    .any(|addr| TcpStream::connect_timeout(addr, PROCESS_MANAGER_HTTP_PROBE_TIMEOUT).is_ok())
+}
+
+fn http_url_is_ready(client: &reqwest::blocking::Client, url: Url) -> bool {
+    client
+        .get(url)
+        .send()
+        .is_ok_and(|response| response.status().is_success())
+}
+
+fn is_warning_line(line: &str) -> bool {
+    let lowered = line.to_ascii_lowercase();
+    lowered.contains("warning") || lowered.contains("warn:")
+}
+
+fn is_error_line(line: &str) -> bool {
+    let lowered = line.to_ascii_lowercase();
+    lowered.contains("error")
+        || lowered.contains("failed")
+        || lowered.contains("exception")
+        || lowered.contains("panic")
+        || lowered.contains("fatal")
+}
+
+fn is_stack_trace_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("at ")
+        || trimmed.starts_with("stack backtrace:")
+        || trimmed.contains("panicked at")
 }
 
 fn process_run_marker(process_id: &str, cursor: u64) -> String {
@@ -1645,6 +2734,8 @@ fn unstarted_process_metadata(
         detected_ports: Vec::new(),
         recent_errors: Vec::new(),
         recent_warnings: Vec::new(),
+        recent_stack_traces: Vec::new(),
+        status_changes: Vec::new(),
         readiness: AutonomousProcessReadinessState {
             ready: false,
             detector: None,
@@ -1674,6 +2765,24 @@ fn prune_process_output_chunks(chunks: &mut Vec<AutonomousProcessOutputChunk>) {
 
 fn process_output_chunk_bytes(chunk: &AutonomousProcessOutputChunk) -> usize {
     chunk.text.as_deref().map(str::len).unwrap_or_default()
+}
+
+fn prune_raw_process_output_chunks(chunks: &mut Vec<RawProcessOutputChunk>) {
+    let mut total_bytes = chunks.iter().map(|chunk| chunk.text.len()).sum::<usize>();
+    let mut drop_count = 0;
+    while chunks.len().saturating_sub(drop_count) > RECENT_OUTPUT_RING_CHUNKS
+        || total_bytes > RECENT_OUTPUT_RING_BYTES
+    {
+        let Some(chunk) = chunks.get(drop_count) else {
+            break;
+        };
+        total_bytes = total_bytes.saturating_sub(chunk.text.len());
+        drop_count += 1;
+    }
+
+    if drop_count > 0 {
+        chunks.drain(0..drop_count);
+    }
 }
 
 fn filter_internal_marker_chunk(
@@ -1716,7 +2825,11 @@ fn sanitize_process_output(bytes: &[u8], truncated: bool) -> SanitizedProcessOut
     }
 
     let decoded = String::from_utf8_lossy(bytes).into_owned();
-    if find_prohibited_persistence_content(&decoded).is_some() {
+    if decoded.contains('\0')
+        || decoded
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
         return SanitizedProcessOutput {
             text: Some(REDACTED_PROCESS_OUTPUT_SUMMARY.into()),
             truncated,
@@ -1725,19 +2838,56 @@ fn sanitize_process_output(bytes: &[u8], truncated: bool) -> SanitizedProcessOut
     }
 
     let collapsed = decoded.replace("\r\n", "\n").replace('\r', "\n");
-    let trimmed = collapsed.trim();
+    let mut redacted = false;
+    let mut sanitized_lines = Vec::new();
+    for line in collapsed.lines() {
+        if find_prohibited_persistence_content(line).is_some() {
+            redacted = true;
+            if !sanitized_lines
+                .last()
+                .is_some_and(|last| *last == REDACTED_PROCESS_OUTPUT_SUMMARY)
+            {
+                sanitized_lines.push(REDACTED_PROCESS_OUTPUT_SUMMARY);
+            }
+        } else {
+            sanitized_lines.push(line);
+        }
+    }
+    let sanitized = sanitized_lines.join("\n");
+    let trimmed = sanitized.trim();
     if trimmed.is_empty() {
         return SanitizedProcessOutput {
             text: None,
             truncated,
-            redacted: false,
+            redacted,
         };
     }
 
     SanitizedProcessOutput {
         text: Some(truncate_chars(trimmed, PROCESS_OUTPUT_EXCERPT_BYTES)),
         truncated,
-        redacted: false,
+        redacted,
+    }
+}
+
+fn decode_process_output_for_intelligence(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let decoded = String::from_utf8_lossy(bytes).into_owned();
+    if decoded.contains('\0')
+        || decoded
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return None;
+    }
+    let collapsed = decoded.replace("\r\n", "\n").replace('\r', "\n");
+    let trimmed = collapsed.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(truncate_chars(trimmed, PROCESS_OUTPUT_EXCERPT_BYTES))
     }
 }
 
@@ -1764,8 +2914,9 @@ fn spawn_owned_process_reader(
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
+                    let raw_text = decode_process_output_for_intelligence(&buffer[..read]);
                     let capture = sanitize_process_output(&buffer[..read], false);
-                    let _ = process.push_chunk(stream, capture);
+                    let _ = process.push_chunk(stream, capture, raw_text);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) => {
@@ -1774,7 +2925,7 @@ fn spawn_owned_process_reader(
                         truncated: false,
                         redacted: false,
                     };
-                    let _ = process.push_chunk(stream, capture);
+                    let _ = process.push_chunk(stream, capture, None);
                     break;
                 }
             }
@@ -2093,6 +3244,146 @@ mod tests {
         kill_process(&runtime, process_id);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn readiness_digest_highlights_and_since_last_read_summarize_owned_processes() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime = test_runtime(tempdir.path());
+        let mut start_request = start_request(vec![
+            "sh".into(),
+            "-c".into(),
+            "printf 'Server ready at http://127.0.0.1:4321\\nwarning: beta path\\nerror: sample failure\\n    at app.js:1\\n'; sleep 30".into(),
+        ]);
+        start_request.label = Some("dev server".into());
+
+        let start = process_manager_output(
+            runtime
+                .execute_approved(AutonomousToolRequest::ProcessManager(start_request))
+                .expect("start highlighted process"),
+        );
+        let process_id = start.process_id.expect("process id");
+
+        let mut ready_request = base_request(AutonomousProcessManagerAction::WaitForReady);
+        ready_request.process_id = Some(process_id.clone());
+        ready_request.wait_pattern = Some("Server ready".into());
+        let ready = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(ready_request))
+                .expect("wait for output readiness"),
+        );
+        assert!(ready.processes[0].readiness.ready);
+        assert_eq!(
+            ready.processes[0].readiness.detector,
+            Some(AutonomousProcessReadinessDetector::OutputRegex)
+        );
+        assert!(ready.processes[0]
+            .detected_urls
+            .contains(&"http://127.0.0.1:4321".into()));
+        assert!(ready.processes[0].detected_ports.contains(&4321));
+        assert!(ready.processes[0]
+            .recent_warnings
+            .iter()
+            .any(|warning| warning.contains("warning: beta")));
+        assert!(ready.processes[0]
+            .recent_errors
+            .iter()
+            .any(|error| error.contains("error: sample")));
+        assert!(ready.processes[0]
+            .recent_stack_traces
+            .iter()
+            .any(|stack| stack.contains("app.js")));
+
+        let mut output_request = base_request(AutonomousProcessManagerAction::Output);
+        output_request.process_id = Some(process_id.clone());
+        let output = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(output_request))
+                .expect("initial output read"),
+        );
+        assert!(output_contains(&output, "warning: beta"));
+
+        let mut since_request = base_request(AutonomousProcessManagerAction::Output);
+        since_request.process_id = Some(process_id.clone());
+        since_request.since_last_read = true;
+        let since = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(since_request))
+                .expect("since-last-read output"),
+        );
+        assert!(
+            since.chunks.is_empty(),
+            "since-last-read should not replay output already read"
+        );
+
+        let mut highlights_request = base_request(AutonomousProcessManagerAction::Highlights);
+        highlights_request.process_id = Some(process_id.clone());
+        let highlights = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(highlights_request))
+                .expect("highlights"),
+        );
+        assert!(highlights
+            .highlights
+            .iter()
+            .any(|highlight| highlight.kind == AutonomousProcessHighlightKind::Url));
+        assert!(highlights
+            .highlights
+            .iter()
+            .any(|highlight| highlight.kind == AutonomousProcessHighlightKind::Error));
+
+        let digest = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(base_request(
+                    AutonomousProcessManagerAction::Digest,
+                )))
+                .expect("digest"),
+        );
+        assert!(digest
+            .digest
+            .as_deref()
+            .is_some_and(|value| value.contains("dev server") && value.contains("ready")));
+
+        kill_process(&runtime, process_id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_for_ready_supports_local_port_probe() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let runtime = test_runtime(tempdir.path());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind local listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let listener_thread = thread::spawn(move || {
+            let _ = listener.accept();
+        });
+        let start = process_manager_output(
+            runtime
+                .execute_approved(AutonomousToolRequest::ProcessManager(start_request(
+                    long_running_output_command(),
+                )))
+                .expect("start long-running process"),
+        );
+        let process_id = start.process_id.expect("process id");
+
+        let mut ready_request = base_request(AutonomousProcessManagerAction::WaitForReady);
+        ready_request.process_id = Some(process_id.clone());
+        ready_request.wait_port = Some(port);
+        ready_request.timeout_ms = Some(5_000);
+        let ready = process_manager_output(
+            runtime
+                .execute(AutonomousToolRequest::ProcessManager(ready_request))
+                .expect("wait for port readiness"),
+        );
+        assert!(ready.processes[0].readiness.ready);
+        assert_eq!(
+            ready.processes[0].readiness.detector,
+            Some(AutonomousProcessReadinessDetector::PortOpen)
+        );
+
+        kill_process(&runtime, process_id);
+        listener_thread.join().expect("listener thread");
+    }
+
     fn test_runtime(repo_root: &std::path::Path) -> AutonomousToolRuntime {
         AutonomousToolRuntime::new(repo_root)
             .expect("runtime")
@@ -2150,7 +3441,11 @@ mod tests {
             persistent: false,
             timeout_ms: None,
             after_cursor: None,
+            since_last_read: false,
             max_bytes: None,
+            tail_lines: None,
+            stream: None,
+            filter: None,
             input: None,
             wait_pattern: None,
             wait_port: None,

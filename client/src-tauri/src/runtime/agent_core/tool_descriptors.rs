@@ -683,7 +683,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
         ),
         descriptor(
             AUTONOMOUS_TOOL_PROCESS_MANAGER,
-            "Manage Cadence-owned long-running and interactive processes. Phase 2 adds stdin, send_and_wait, and stateful shell run/env actions.",
+            "Manage Cadence-owned long-running and interactive processes. Phase 3 adds readiness waits, digest, highlights, and cursor-aware output controls.",
             process_manager_schema(),
         ),
         descriptor(
@@ -1044,12 +1044,15 @@ fn process_manager_schema() -> JsonValue {
             (
                 "action",
                 enum_schema(
-                    "Process-manager action. Phase 2 supports Cadence-owned start, list, status, output, send, send_and_wait, run, env, and kill.",
+                    "Process-manager action. Phase 3 supports Cadence-owned start, list, status, output, digest, wait_for_ready, highlights, send, send_and_wait, run, env, and kill.",
                     &[
                         "start",
                         "list",
                         "status",
                         "output",
+                        "digest",
+                        "wait_for_ready",
+                        "highlights",
                         "send",
                         "send_and_wait",
                         "run",
@@ -1102,7 +1105,20 @@ fn process_manager_schema() -> JsonValue {
                 "afterCursor",
                 integer_schema("Only return output after this monotonic output cursor."),
             ),
+            (
+                "sinceLastRead",
+                boolean_schema("For output, return only chunks after Cadence's remembered read cursor for this process."),
+            ),
             ("maxBytes", integer_schema("Maximum output bytes to return.")),
+            ("tailLines", integer_schema("For output, collapse returned chunks to the last N lines.")),
+            (
+                "stream",
+                enum_schema(
+                    "For output, restrict chunks to a stream.",
+                    &["stdout", "stderr", "combined"],
+                ),
+            ),
+            ("filter", string_schema("For output, return chunks whose text matches this regex.")),
             ("input", string_schema("Exact stdin payload for send/send_and_wait, or shell command text for run.")),
             (
                 "waitPattern",

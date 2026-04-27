@@ -133,6 +133,7 @@ pub(super) fn process_manager_policy_trace(
         | AutonomousProcessManagerAction::Output
         | AutonomousProcessManagerAction::Digest
         | AutonomousProcessManagerAction::WaitForReady
+        | AutonomousProcessManagerAction::Highlights
         | AutonomousProcessManagerAction::Env
         | AutonomousProcessManagerAction::GroupStatus => AutonomousProcessActionRiskLevel::Observe,
         AutonomousProcessManagerAction::Start if persistent => {
