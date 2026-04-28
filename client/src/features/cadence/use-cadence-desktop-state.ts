@@ -35,6 +35,7 @@ import {
   type ProjectListItem,
   type ProjectUsageSummaryDto,
   type ProviderModelCatalogDto,
+  type ProviderCredentialsSnapshotDto,
   type ProviderProfileDiagnosticsDto,
   type ProviderProfilesDto,
   type ReadProjectFileResponseDto,
@@ -110,6 +111,8 @@ import type {
   OperatorActionErrorView,
   OperatorActionStatus,
   ProjectRemovalStatus,
+  ProviderCredentialsLoadStatus,
+  ProviderCredentialsSaveStatus,
   ProviderModelCatalogLoadStatus,
   ProviderProfilesLoadStatus,
   ProviderProfilesSaveStatus,
@@ -369,6 +372,16 @@ export function useCadenceDesktopState(
     useState<ProviderProfilesSaveStatus>('idle')
   const [providerProfilesSaveError, setProviderProfilesSaveError] =
     useState<OperatorActionErrorView | null>(null)
+  const [providerCredentials, setProviderCredentials] =
+    useState<ProviderCredentialsSnapshotDto | null>(null)
+  const [providerCredentialsLoadStatus, setProviderCredentialsLoadStatus] =
+    useState<ProviderCredentialsLoadStatus>('idle')
+  const [providerCredentialsLoadError, setProviderCredentialsLoadError] =
+    useState<OperatorActionErrorView | null>(null)
+  const [providerCredentialsSaveStatus, setProviderCredentialsSaveStatus] =
+    useState<ProviderCredentialsSaveStatus>('idle')
+  const [providerCredentialsSaveError, setProviderCredentialsSaveError] =
+    useState<OperatorActionErrorView | null>(null)
   const [providerModelCatalogs, setProviderModelCatalogs] = useState<Record<string, ProviderModelCatalogDto>>({})
   const [providerModelCatalogLoadStatuses, setProviderModelCatalogLoadStatuses] = useState<
     Record<string, ProviderModelCatalogLoadStatus>
@@ -432,6 +445,10 @@ export function useCadenceDesktopState(
   const trustSnapshotRef = useRef<Record<string, AgentTrustSnapshotView>>({})
   const providerProfilesRef = useRef<ProviderProfilesDto | null>(null)
   const providerProfilesLoadInFlightRef = useRef<Promise<ProviderProfilesDto> | null>(null)
+  const providerCredentialsRef = useRef<ProviderCredentialsSnapshotDto | null>(null)
+  const providerCredentialsLoadInFlightRef = useRef<Promise<ProviderCredentialsSnapshotDto> | null>(
+    null,
+  )
   const providerModelCatalogsRef = useRef<Record<string, ProviderModelCatalogDto>>({})
   const providerModelCatalogLoadStatusesRef = useRef<Record<string, ProviderModelCatalogLoadStatus>>({})
   const providerModelCatalogLoadErrorsRef = useRef<Record<string, OperatorActionErrorView | null>>({})
@@ -507,6 +524,10 @@ export function useCadenceDesktopState(
   useEffect(() => {
     providerProfilesRef.current = providerProfiles
   }, [providerProfiles])
+
+  useEffect(() => {
+    providerCredentialsRef.current = providerCredentials
+  }, [providerCredentials])
 
   useEffect(() => {
     providerModelCatalogsRef.current = providerModelCatalogs
@@ -1321,6 +1342,11 @@ export function useCadenceDesktopState(
     upsertProviderProfile,
     setActiveProviderProfile,
     logoutProviderProfile,
+    refreshProviderCredentials,
+    upsertProviderCredential,
+    deleteProviderCredential,
+    startOAuthLogin,
+    completeOAuthCallback,
     refreshRuntimeSettings,
     upsertRuntimeSettings,
     refreshMcpRegistry,
@@ -1356,6 +1382,8 @@ export function useCadenceDesktopState(
       runtimeRunsRef,
       providerProfilesRef,
       providerProfilesLoadInFlightRef,
+      providerCredentialsRef,
+      providerCredentialsLoadInFlightRef,
       runtimeSettingsRef,
       runtimeSettingsLoadInFlightRef,
       mcpRegistryRef,
@@ -1390,6 +1418,11 @@ export function useCadenceDesktopState(
       setProviderProfilesLoadError,
       setProviderProfilesSaveStatus,
       setProviderProfilesSaveError,
+      setProviderCredentials,
+      setProviderCredentialsLoadStatus,
+      setProviderCredentialsLoadError,
+      setProviderCredentialsSaveStatus,
+      setProviderCredentialsSaveError,
       setRuntimeSettings,
       setRuntimeSettingsLoadStatus,
       setRuntimeSettingsLoadError,
@@ -1421,6 +1454,7 @@ export function useCadenceDesktopState(
       applyAutonomousRunStateUpdate,
     },
     providerProfilesLoadStatus,
+    providerCredentialsLoadStatus,
     runtimeSettingsLoadStatus,
     mcpRegistryLoadStatus,
     skillRegistryLoadStatus,
@@ -1825,6 +1859,11 @@ export function useCadenceDesktopState(
     providerProfilesLoadError,
     providerProfilesSaveStatus,
     providerProfilesSaveError,
+    providerCredentials,
+    providerCredentialsLoadStatus,
+    providerCredentialsLoadError,
+    providerCredentialsSaveStatus,
+    providerCredentialsSaveError,
     providerModelCatalogs,
     providerModelCatalogLoadStatuses,
     providerModelCatalogLoadErrors,
@@ -1896,6 +1935,11 @@ export function useCadenceDesktopState(
     upsertProviderProfile,
     setActiveProviderProfile,
     logoutProviderProfile,
+    refreshProviderCredentials,
+    upsertProviderCredential,
+    deleteProviderCredential,
+    startOAuthLogin,
+    completeOAuthCallback,
     refreshRuntimeSettings,
     upsertRuntimeSettings,
     refreshMcpRegistry,

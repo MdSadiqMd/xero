@@ -5,6 +5,7 @@ import type {
 import { useAgentSessionMutations } from './agent-session-mutations'
 import { useOperatorAuthMutations } from './operator-auth-mutations'
 import { useProjectEntryMutations } from './project-entry-mutations'
+import { useProviderCredentialsMutations } from './provider-credentials-mutations'
 import { useRunControlMutations } from './run-control-mutations'
 import { useRuntimeSettingsNotificationMutations } from './runtime-settings-notification-mutations'
 
@@ -69,6 +70,13 @@ export function useCadenceDesktopMutations(
     upsertNotificationRoute,
   } = useRuntimeSettingsNotificationMutations(args)
   const {
+    refreshProviderCredentials,
+    upsertProviderCredential,
+    deleteProviderCredential,
+    startOAuthLogin,
+    completeOAuthCallback,
+  } = useProviderCredentialsMutations(args)
+  const {
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,
@@ -125,6 +133,11 @@ export function useCadenceDesktopMutations(
     removePlugin,
     refreshNotificationRoutes,
     upsertNotificationRoute,
+    refreshProviderCredentials,
+    upsertProviderCredential,
+    deleteProviderCredential,
+    startOAuthLogin,
+    completeOAuthCallback,
     createAgentSession,
     selectAgentSession,
     archiveAgentSession,

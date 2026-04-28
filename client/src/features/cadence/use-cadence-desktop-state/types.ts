@@ -19,6 +19,8 @@ import type {
   ProviderModelCatalogDto,
   ProviderModelCatalogSourceDto,
   ProviderModelThinkingEffortDto,
+  ProviderCredentialDto,
+  ProviderCredentialsSnapshotDto,
   ProviderProfileDiagnosticsDto,
   ProviderProfileReadinessDto,
   ProviderProfilesDto,
@@ -66,6 +68,7 @@ import type {
   UpsertSkillLocalRootRequestDto,
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
+  UpsertProviderCredentialRequestDto,
   UpsertProviderProfileRequestDto,
   UpsertRuntimeSettingsRequestDto,
   VerificationRecordView,
@@ -109,6 +112,8 @@ export type NotificationRoutesLoadStatus = 'idle' | 'loading' | 'ready' | 'error
 export type NotificationRouteMutationStatus = 'idle' | 'running'
 export type ProviderProfilesLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type ProviderProfilesSaveStatus = 'idle' | 'running'
+export type ProviderCredentialsLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
+export type ProviderCredentialsSaveStatus = 'idle' | 'running'
 export type ProviderModelCatalogLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
 export type DoctorReportRunStatus = 'idle' | 'running' | 'ready' | 'error'
 export type RuntimeSettingsLoadStatus = 'idle' | 'loading' | 'ready' | 'error'
@@ -409,6 +414,11 @@ export interface UseCadenceDesktopStateResult {
   providerProfilesLoadError: OperatorActionErrorView | null
   providerProfilesSaveStatus: ProviderProfilesSaveStatus
   providerProfilesSaveError: OperatorActionErrorView | null
+  providerCredentials: ProviderCredentialsSnapshotDto | null
+  providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
+  providerCredentialsLoadError: OperatorActionErrorView | null
+  providerCredentialsSaveStatus: ProviderCredentialsSaveStatus
+  providerCredentialsSaveError: OperatorActionErrorView | null
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
   providerModelCatalogLoadErrors: Record<string, OperatorActionErrorView | null>
@@ -481,6 +491,26 @@ export interface UseCadenceDesktopStateResult {
     options?: { userAnswer?: string | null },
   ) => Promise<ProjectDetailView | null>
   refreshProviderProfiles: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
+  refreshProviderCredentials: (options?: { force?: boolean }) => Promise<ProviderCredentialsSnapshotDto>
+  upsertProviderCredential: (
+    request: UpsertProviderCredentialRequestDto,
+  ) => Promise<ProviderCredentialsSnapshotDto>
+  deleteProviderCredential: (
+    providerId: ProviderCredentialDto['providerId'],
+  ) => Promise<ProviderCredentialsSnapshotDto>
+  startOAuthLogin: (
+    request: {
+      providerId: ProviderCredentialDto['providerId']
+      originator?: string | null
+    },
+  ) => Promise<RuntimeSessionView | null>
+  completeOAuthCallback: (
+    request: {
+      providerId: ProviderCredentialDto['providerId']
+      flowId: string
+      manualInput?: string | null
+    },
+  ) => Promise<RuntimeSessionView | null>
   refreshProviderModelCatalog: (
     profileId: string,
     options?: { force?: boolean },
