@@ -34,4 +34,3 @@ pub use store::{
     OPENAI_CODEX_DEFAULT_PROFILE_ID, OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
 };
 
-pub(crate) use store::build_openai_default_profile;

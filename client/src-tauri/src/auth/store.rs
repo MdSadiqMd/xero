@@ -22,8 +22,7 @@ use crate::{
         ProviderCredentialRecord,
     },
     provider_profiles::{
-        build_openai_default_profile, load_provider_profiles_or_default,
-        persist_provider_profiles_to_db, ProviderProfileCredentialLink, ProviderProfilesSnapshot,
+        load_provider_profiles_or_default, ProviderProfileCredentialLink, ProviderProfilesSnapshot,
         OPENAI_CODEX_DEFAULT_PROFILE_ID,
     },
     state::DesktopState,
@@ -113,13 +112,13 @@ pub fn sync_openai_profile_link<R: Runtime>(
     preferred_profile_id: Option<&str>,
     session: Option<&StoredOpenAiCodexSession>,
 ) -> Result<(), AuthFlowError> {
-    let mut connection = open_global_database(
+    let connection = open_global_database(
         &state
             .global_db_path(app)
             .map_err(map_command_error_to_auth_error)?,
     )
     .map_err(map_command_error_to_auth_error)?;
-    let mut snapshot =
+    let snapshot =
         load_provider_profiles_or_default(&connection).map_err(map_provider_profiles_error)?;
 
     let next_link = session.map(openai_profile_link_from_session).transpose()?;
@@ -133,37 +132,10 @@ pub fn sync_openai_profile_link<R: Runtime>(
         .as_ref()
         .map(profile_link_updated_at)
         .unwrap_or_else(now_timestamp);
-    let mut changed = false;
-    for target_profile_id in target_profile_ids {
-        changed |= upsert_openai_profile_link(
-            &mut snapshot,
-            &target_profile_id,
-            next_link.clone(),
-            &updated_at,
-        )?;
-    }
 
-    // When a sign-in or runtime-bind hands us both a preferred profile and a session,
-    // make that profile active so downstream consumers (composer, runtime selector)
-    // pick up the just-authenticated provider without forcing the user to switch manually.
-    if let (Some(preferred), true) = (preferred_profile_id, next_link.is_some()) {
-        if snapshot.metadata.active_profile_id != preferred {
-            snapshot.metadata.active_profile_id = preferred.to_owned();
-            changed = true;
-        }
-    }
-
-    if !changed {
-        // Even when the legacy snapshot didn't change, mirror the OAuth state
-        // into provider_credentials so the new table never lags behind a sign
-        // in / sign out the user just performed.
-        mirror_openai_credential(&connection, session, &updated_at)?;
-        return Ok(());
-    }
-
-    snapshot.metadata.updated_at = updated_at.clone();
-    persist_provider_profiles_to_db(&mut connection, &snapshot)
-        .map_err(map_provider_profiles_error)?;
+    // Source of truth is provider_credentials — write the OAuth state there
+    // and the legacy snapshot will project from it on the next load. The
+    // legacy SQL persist path is gone with the loader hot-swap.
     mirror_openai_credential(&connection, session, &updated_at)
 }
 
@@ -395,43 +367,6 @@ fn select_openai_profile_id(
                 .find(|profile| profile.provider_id == OPENAI_CODEX_PROVIDER_ID)
                 .map(|profile| profile.profile_id.clone())
         })
-}
-
-fn upsert_openai_profile_link(
-    snapshot: &mut ProviderProfilesSnapshot,
-    profile_id: &str,
-    next_link: Option<ProviderProfileCredentialLink>,
-    updated_at: &str,
-) -> Result<bool, AuthFlowError> {
-    if let Some(existing) = snapshot
-        .metadata
-        .profiles
-        .iter_mut()
-        .find(|profile| profile.profile_id == profile_id)
-    {
-        if existing.provider_id != OPENAI_CODEX_PROVIDER_ID {
-            return Err(AuthFlowError::terminal(
-                "provider_profiles_invalid",
-                RuntimeAuthPhase::Failed,
-                format!(
-                    "Cadence rejected provider profile `{profile_id}` because OpenAI auth can only sync onto `{OPENAI_CODEX_PROVIDER_ID}` profiles."
-                ),
-            ));
-        }
-
-        if existing.credential_link == next_link {
-            return Ok(false);
-        }
-
-        existing.credential_link = next_link;
-        existing.updated_at = updated_at.to_owned();
-        return Ok(true);
-    }
-
-    let mut profile = build_openai_default_profile(next_link, None, updated_at);
-    profile.profile_id = profile_id.to_owned();
-    snapshot.metadata.profiles.push(profile);
-    Ok(true)
 }
 
 fn profile_link_updated_at(link: &ProviderProfileCredentialLink) -> String {
