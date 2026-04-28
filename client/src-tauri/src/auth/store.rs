@@ -16,6 +16,11 @@ use super::{
 use crate::{
     commands::{CommandError, RuntimeAuthPhase},
     global_db::open_global_database,
+    provider_credentials::{
+        delete_provider_credential as cred_delete,
+        upsert_provider_credential as cred_upsert, ProviderCredentialKind,
+        ProviderCredentialRecord,
+    },
     provider_profiles::{
         build_openai_default_profile, load_provider_profiles_or_default,
         persist_provider_profiles_to_db, ProviderProfileCredentialLink, ProviderProfilesSnapshot,
@@ -137,12 +142,68 @@ pub fn sync_openai_profile_link<R: Runtime>(
             &updated_at,
         )?;
     }
+
+    // When a sign-in or runtime-bind hands us both a preferred profile and a session,
+    // make that profile active so downstream consumers (composer, runtime selector)
+    // pick up the just-authenticated provider without forcing the user to switch manually.
+    if let (Some(preferred), true) = (preferred_profile_id, next_link.is_some()) {
+        if snapshot.metadata.active_profile_id != preferred {
+            snapshot.metadata.active_profile_id = preferred.to_owned();
+            changed = true;
+        }
+    }
+
     if !changed {
+        // Even when the legacy snapshot didn't change, mirror the OAuth state
+        // into provider_credentials so the new table never lags behind a sign
+        // in / sign out the user just performed.
+        mirror_openai_credential(&connection, session, &updated_at)?;
         return Ok(());
     }
 
-    snapshot.metadata.updated_at = updated_at;
-    persist_provider_profiles_to_db(&mut connection, &snapshot).map_err(map_provider_profiles_error)
+    snapshot.metadata.updated_at = updated_at.clone();
+    persist_provider_profiles_to_db(&mut connection, &snapshot)
+        .map_err(map_provider_profiles_error)?;
+    mirror_openai_credential(&connection, session, &updated_at)
+}
+
+/// Phase 2.3 (write-through): keep the new flat `provider_credentials` row for
+/// `openai_codex` in sync with the OAuth session writes that still flow through
+/// the legacy profile machinery. When `session` is `Some`, upsert the
+/// credential row; when it's `None`, drop the row so the new readers see the
+/// signed-out state.
+fn mirror_openai_credential(
+    connection: &rusqlite::Connection,
+    session: Option<&StoredOpenAiCodexSession>,
+    fallback_updated_at: &str,
+) -> Result<(), AuthFlowError> {
+    let result = match session {
+        Some(session) => cred_upsert(
+            connection,
+            &ProviderCredentialRecord {
+                provider_id: OPENAI_CODEX_PROVIDER_ID.into(),
+                kind: ProviderCredentialKind::OAuthSession,
+                api_key: None,
+                oauth_account_id: Some(session.account_id.clone()),
+                oauth_session_id: Some(session.session_id.clone()),
+                oauth_access_token: Some(session.access_token.clone()),
+                oauth_refresh_token: Some(session.refresh_token.clone()),
+                oauth_expires_at: Some(session.expires_at),
+                base_url: None,
+                api_version: None,
+                region: None,
+                project_id: None,
+                default_model_id: None,
+                updated_at: if session.updated_at.trim().is_empty() {
+                    fallback_updated_at.to_owned()
+                } else {
+                    session.updated_at.clone()
+                },
+            },
+        ),
+        None => cred_delete(connection, OPENAI_CODEX_PROVIDER_ID),
+    };
+    result.map_err(map_provider_profiles_error)
 }
 
 pub fn ensure_openai_profile_target<R: Runtime>(

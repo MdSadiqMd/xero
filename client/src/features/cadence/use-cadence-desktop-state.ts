@@ -457,6 +457,7 @@ export function useCadenceDesktopState(
   } | null>(null)
   const runtimeActionRefreshKeysRef = useRef<Record<string, Set<string>>>({})
   const runtimeRunRefreshKeyRef = useRef<Record<string, string>>({})
+  const previousRuntimeAuthRef = useRef<Record<string, boolean>>({})
 
   useEffect(() => {
     activeProjectRef.current = activeProject
@@ -1615,6 +1616,23 @@ export function useCadenceDesktopState(
     scheduleRuntimeMetadataRefresh,
     updateRuntimeStream,
   ])
+
+  useEffect(() => {
+    const previous = previousRuntimeAuthRef.current
+    const next: Record<string, boolean> = {}
+    let shouldRefresh = false
+    for (const [projectId, session] of Object.entries(runtimeSessions)) {
+      const authenticated = Boolean(session?.isAuthenticated)
+      next[projectId] = authenticated
+      if (authenticated && previous[projectId] === false) {
+        shouldRefresh = true
+      }
+    }
+    previousRuntimeAuthRef.current = next
+    if (shouldRefresh) {
+      void refreshProviderProfiles({ force: true }).catch(() => undefined)
+    }
+  }, [refreshProviderProfiles, runtimeSessions])
 
   const activePhase = useMemo(() => getActivePhase(activeProject), [activeProject])
   const activeRuntimeErrorMessage = activeProject ? runtimeLoadErrors[activeProject.id] ?? null : null

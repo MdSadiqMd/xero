@@ -407,6 +407,105 @@ pub struct ProviderProfilesDto {
     pub migration: Option<ProviderProfilesMigrationDto>,
 }
 
+// ---------------------------------------------------------------------------
+// Provider-credentials (Phase 2.2 of the provider-layer refactor).
+// These DTOs back the new commands that operate on the flat
+// `provider_credentials` table. The legacy `ProviderProfile*` DTOs above will
+// be removed in Phase 3 once the frontend stops calling the old commands.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCredentialKindDto {
+    ApiKey,
+    #[serde(rename = "oauth_session", alias = "o_auth_session")]
+    OAuthSession,
+    Local,
+    Ambient,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCredentialReadinessProofDto {
+    #[serde(rename = "oauth_session", alias = "o_auth_session")]
+    OAuthSession,
+    StoredSecret,
+    Local,
+    Ambient,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderCredentialDto {
+    pub provider_id: String,
+    pub kind: ProviderCredentialKindDto,
+    /// Bool projection — the frontend never sees the secret value.
+    pub has_api_key: bool,
+    pub oauth_account_id: Option<String>,
+    pub oauth_session_id: Option<String>,
+    /// Whether an OAuth access token is currently stored (used by sign-in
+    /// state UI without exposing the token itself).
+    pub has_oauth_access_token: bool,
+    pub oauth_expires_at: Option<i64>,
+    pub base_url: Option<String>,
+    pub api_version: Option<String>,
+    pub region: Option<String>,
+    pub project_id: Option<String>,
+    pub default_model_id: Option<String>,
+    pub readiness_proof: ProviderCredentialReadinessProofDto,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProviderCredentialsSnapshotDto {
+    pub credentials: Vec<ProviderCredentialDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpsertProviderCredentialRequestDto {
+    pub provider_id: String,
+    pub kind: ProviderCredentialKindDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteProviderCredentialRequestDto {
+    pub provider_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartOAuthLoginRequestDto {
+    pub provider_id: String,
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originator: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CompleteOAuthCallbackRequestDto {
+    pub provider_id: String,
+    pub project_id: String,
+    pub flow_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual_input: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderModelCatalogSourceDto {

@@ -10,6 +10,11 @@ use crate::{
         UpsertProviderProfileRequestDto,
     },
     global_db::open_global_database,
+    provider_credentials::{
+        delete_provider_credential as cred_delete,
+        upsert_provider_credential as cred_upsert, ProviderCredentialKind,
+        ProviderCredentialRecord,
+    },
     provider_profiles::{
         load_provider_profiles_or_default, persist_provider_profiles_to_db,
         ProviderApiKeyCredentialEntry, ProviderProfileCredentialLink,
@@ -43,7 +48,85 @@ pub fn upsert_provider_profile<R: Runtime>(
     let current = load_provider_profiles_or_default(&connection)?;
     let next = apply_provider_profile_upsert(&current, &request)?;
     persist_provider_profiles_to_db(&mut connection, &next)?;
+    mirror_profile_credential_to_new_table(&connection, &next, &request)?;
     Ok(provider_profiles_dto_from_snapshot(&next))
+}
+
+/// Phase 2.3 (write-through): keep `provider_credentials` aligned with
+/// per-provider state whenever the legacy upsert path mutates a profile. The
+/// new table is the source of truth for the post-refactor frontend; this
+/// mirror keeps it accurate while the legacy frontend is still in flight.
+fn mirror_profile_credential_to_new_table(
+    connection: &rusqlite::Connection,
+    snapshot: &ProviderProfilesSnapshot,
+    request: &UpsertProviderProfileRequestDto,
+) -> CommandResult<()> {
+    // OpenAI Codex is mirrored from the OAuth completion path, not from the
+    // profile upsert (the upsert command rejects api keys for that provider).
+    let provider_id = request.provider_id.trim();
+    if provider_id == OPENAI_CODEX_PROVIDER_ID {
+        return Ok(());
+    }
+
+    let profile_id = request.profile_id.trim();
+    let Some(profile) = snapshot.profile(profile_id) else {
+        return Ok(());
+    };
+
+    let kind = match profile.credential_link.as_ref() {
+        Some(ProviderProfileCredentialLink::ApiKey { .. }) => ProviderCredentialKind::ApiKey,
+        Some(ProviderProfileCredentialLink::Local { .. }) => ProviderCredentialKind::Local,
+        Some(ProviderProfileCredentialLink::Ambient { .. }) => ProviderCredentialKind::Ambient,
+        // Without a credential linkage the user has cleared the profile —
+        // drop the credential row so the new readers see "not credentialed".
+        Some(ProviderProfileCredentialLink::OpenAiCodex { .. }) | None => {
+            return cred_delete(connection, &profile.provider_id);
+        }
+    };
+
+    let api_key = if matches!(kind, ProviderCredentialKind::ApiKey) {
+        snapshot
+            .api_key_credential(profile_id)
+            .map(|entry| entry.api_key.clone())
+    } else {
+        None
+    };
+
+    if matches!(kind, ProviderCredentialKind::ApiKey) && api_key.is_none() {
+        // Linkage says api_key but the secret is missing — treat as cleared.
+        return cred_delete(connection, &profile.provider_id);
+    }
+
+    let updated_at = profile
+        .credential_link
+        .as_ref()
+        .map(|link| match link {
+            ProviderProfileCredentialLink::ApiKey { updated_at }
+            | ProviderProfileCredentialLink::Local { updated_at }
+            | ProviderProfileCredentialLink::Ambient { updated_at }
+            | ProviderProfileCredentialLink::OpenAiCodex { updated_at, .. } => updated_at.clone(),
+        })
+        .unwrap_or_else(|| profile.updated_at.clone());
+
+    cred_upsert(
+        connection,
+        &ProviderCredentialRecord {
+            provider_id: profile.provider_id.clone(),
+            kind,
+            api_key,
+            oauth_account_id: None,
+            oauth_session_id: None,
+            oauth_access_token: None,
+            oauth_refresh_token: None,
+            oauth_expires_at: None,
+            base_url: profile.base_url.clone(),
+            api_version: profile.api_version.clone(),
+            region: profile.region.clone(),
+            project_id: profile.project_id.clone(),
+            default_model_id: Some(profile.model_id.clone()),
+            updated_at,
+        },
+    )
 }
 
 #[tauri::command]
@@ -105,6 +188,8 @@ pub fn logout_provider_profile<R: Runtime>(
     clear_openai_codex_sessions(&auth_store_path).map_err(map_auth_store_error_to_command_error)?;
     sync_openai_profile_link(&app, state.inner(), Some(profile_id), None)
         .map_err(map_auth_store_error_to_command_error)?;
+    // sync_openai_profile_link already mirrors the cleared OAuth state into
+    // provider_credentials, so no extra delete is required here.
 
     let next = load_provider_profiles_snapshot(&app, state.inner())?;
     Ok(provider_profiles_dto_from_snapshot(&next))
@@ -553,5 +638,144 @@ pub(crate) fn map_auth_store_error_to_command_error(error: AuthFlowError) -> Com
         CommandError::retryable(error.code, error.message)
     } else {
         CommandError::user_fixable(error.code, error.message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::global_db::migrations::migrations;
+    use crate::provider_credentials::{
+        load_all_provider_credentials, load_provider_credential, ProviderCredentialKind,
+    };
+    use rusqlite::Connection;
+
+    fn open_in_memory() -> Connection {
+        let mut connection = Connection::open_in_memory().expect("open in-memory db");
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .expect("enable foreign keys");
+        migrations()
+            .to_latest(&mut connection)
+            .expect("walk migrations");
+        connection
+    }
+
+    fn snapshot_with_openrouter_api_key() -> ProviderProfilesSnapshot {
+        let timestamp = "2026-04-01T00:00:00Z";
+        ProviderProfilesSnapshot {
+            metadata: crate::provider_profiles::ProviderProfilesMetadataFile {
+                version: 3,
+                active_profile_id: "openrouter-default".into(),
+                profiles: vec![ProviderProfileRecord {
+                    profile_id: "openrouter-default".into(),
+                    provider_id: "openrouter".into(),
+                    runtime_kind: "openrouter".into(),
+                    label: "OpenRouter".into(),
+                    model_id: "openai/gpt-4.1-mini".into(),
+                    preset_id: Some("openrouter".into()),
+                    base_url: None,
+                    api_version: None,
+                    region: None,
+                    project_id: None,
+                    credential_link: Some(ProviderProfileCredentialLink::ApiKey {
+                        updated_at: timestamp.into(),
+                    }),
+                    migrated_from_legacy: false,
+                    migrated_at: None,
+                    updated_at: timestamp.into(),
+                }],
+                updated_at: timestamp.into(),
+                migration: None,
+            },
+            credentials: crate::provider_profiles::ProviderProfileCredentialsFile {
+                api_keys: vec![ProviderApiKeyCredentialEntry {
+                    profile_id: "openrouter-default".into(),
+                    api_key: "sk-or-test".into(),
+                    updated_at: timestamp.into(),
+                }],
+            },
+        }
+    }
+
+    fn upsert_request_for_openrouter(api_key: Option<&str>) -> UpsertProviderProfileRequestDto {
+        UpsertProviderProfileRequestDto {
+            profile_id: "openrouter-default".into(),
+            provider_id: "openrouter".into(),
+            runtime_kind: "openrouter".into(),
+            label: "OpenRouter".into(),
+            model_id: "openai/gpt-4.1-mini".into(),
+            preset_id: Some("openrouter".into()),
+            base_url: None,
+            api_version: None,
+            region: None,
+            project_id: None,
+            api_key: api_key.map(str::to_owned),
+            activate: false,
+        }
+    }
+
+    #[test]
+    fn mirror_writes_api_key_into_provider_credentials() {
+        let connection = open_in_memory();
+        let snapshot = snapshot_with_openrouter_api_key();
+        let request = upsert_request_for_openrouter(Some("sk-or-test"));
+        mirror_profile_credential_to_new_table(&connection, &snapshot, &request)
+            .expect("mirror succeeds");
+
+        let row = load_provider_credential(&connection, "openrouter")
+            .expect("load")
+            .expect("row present");
+        assert_eq!(row.kind, ProviderCredentialKind::ApiKey);
+        assert_eq!(row.api_key.as_deref(), Some("sk-or-test"));
+        assert_eq!(row.default_model_id.as_deref(), Some("openai/gpt-4.1-mini"));
+    }
+
+    #[test]
+    fn mirror_skips_openai_codex_writes() {
+        let connection = open_in_memory();
+        let snapshot = snapshot_with_openrouter_api_key();
+        let request = UpsertProviderProfileRequestDto {
+            provider_id: "openai_codex".into(),
+            ..upsert_request_for_openrouter(None)
+        };
+        mirror_profile_credential_to_new_table(&connection, &snapshot, &request)
+            .expect("mirror succeeds (no-op for openai_codex)");
+
+        let rows = load_all_provider_credentials(&connection).expect("load");
+        assert!(
+            rows.iter().all(|row| row.provider_id != "openai_codex"),
+            "OpenAI Codex must not be mirrored from the legacy api-key path"
+        );
+    }
+
+    #[test]
+    fn mirror_clears_credential_when_link_dropped() {
+        let connection = open_in_memory();
+        // Pre-populate the new table.
+        let snapshot = snapshot_with_openrouter_api_key();
+        mirror_profile_credential_to_new_table(
+            &connection,
+            &snapshot,
+            &upsert_request_for_openrouter(Some("sk-or-test")),
+        )
+        .expect("seed mirror");
+        assert!(load_provider_credential(&connection, "openrouter")
+            .expect("load")
+            .is_some());
+
+        // Now mutate snapshot to drop the credential link & secret.
+        let mut cleared = snapshot;
+        cleared.metadata.profiles[0].credential_link = None;
+        cleared.credentials.api_keys.clear();
+        mirror_profile_credential_to_new_table(
+            &connection,
+            &cleared,
+            &upsert_request_for_openrouter(None),
+        )
+        .expect("mirror clear");
+
+        let row = load_provider_credential(&connection, "openrouter").expect("load");
+        assert!(row.is_none(), "credential row must be removed when linkage drops");
     }
 }

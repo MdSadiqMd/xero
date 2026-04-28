@@ -22,6 +22,7 @@ pub mod list_notification_routes;
 pub mod list_projects;
 pub mod logout_runtime_session;
 pub mod project_files;
+pub mod provider_credentials;
 pub mod provider_diagnostics;
 pub mod provider_model_catalog;
 pub mod provider_profiles;
@@ -105,6 +106,9 @@ pub use logout_runtime_session::logout_runtime_session;
 pub use project_files::{
     create_project_entry, delete_project_entry, list_project_files, read_project_file,
     rename_project_entry, write_project_file,
+};
+pub use provider_credentials::{
+    delete_provider_credential, list_provider_credentials, upsert_provider_credential,
 };
 pub use provider_diagnostics::check_provider_profile;
 pub use provider_model_catalog::get_provider_model_catalog;

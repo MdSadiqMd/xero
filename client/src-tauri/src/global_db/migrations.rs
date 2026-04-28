@@ -9,8 +9,12 @@ use rusqlite_migration::{Migrations, M};
 /// Phase 2 of the storage refactor ports each store onto these tables; until
 /// then the schema is created but no code reads or writes it.
 pub fn migrations() -> &'static Migrations<'static> {
-    static MIGRATIONS: LazyLock<Migrations<'static>> =
-        LazyLock::new(|| Migrations::new(vec![M::up(INITIAL_SCHEMA_SQL)]));
+    static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
+        Migrations::new(vec![
+            M::up(INITIAL_SCHEMA_SQL),
+            M::up(PROVIDER_CREDENTIALS_SCHEMA_SQL),
+        ])
+    });
     &MIGRATIONS
 }
 
@@ -162,4 +166,96 @@ const INITIAL_SCHEMA_SQL: &str = r#"
         ON repositories(project_id);
     CREATE INDEX IF NOT EXISTS idx_repositories_root_path
         ON repositories(root_path);
+"#;
+
+/// Provider-credentials refactor (Phase 1): replace the `provider_profiles` /
+/// `provider_profile_credentials` / `openai_codex_sessions` triplet with a flat
+/// per-provider credential row. Old tables are left in place during this
+/// transition so legacy readers (still wired to the profile concept) keep
+/// working until Phase 3 ships the frontend rewrite. Phase 2.5 will drop them.
+const PROVIDER_CREDENTIALS_SCHEMA_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS provider_credentials (
+        provider_id              TEXT    PRIMARY KEY,
+        kind                     TEXT    NOT NULL,
+        api_key                  TEXT,
+        oauth_account_id         TEXT,
+        oauth_session_id         TEXT,
+        oauth_access_token       TEXT,
+        oauth_refresh_token      TEXT,
+        oauth_expires_at         INTEGER,
+        base_url                 TEXT,
+        api_version              TEXT,
+        region                   TEXT,
+        scope_project_id         TEXT,
+        default_model_id         TEXT,
+        updated_at               TEXT    NOT NULL,
+        CHECK (
+            (kind = 'api_key' AND api_key IS NOT NULL) OR
+            (kind = 'oauth_session' AND oauth_account_id IS NOT NULL AND oauth_session_id IS NOT NULL) OR
+            (kind IN ('local', 'ambient'))
+        )
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_provider_credentials_kind
+        ON provider_credentials(kind);
+
+    -- Backfill: pull every legacy provider_profiles row that has a credential
+    -- linkage into the unified credential table. The legacy tables are kept
+    -- intact so older readers continue to function during the transition.
+    INSERT INTO provider_credentials (
+        provider_id, kind, api_key,
+        oauth_account_id, oauth_session_id,
+        oauth_access_token, oauth_refresh_token, oauth_expires_at,
+        base_url, api_version, region, scope_project_id,
+        default_model_id, updated_at
+    )
+    SELECT
+        pp.provider_id,
+        CASE pp.credential_link_kind
+            WHEN 'openai_codex' THEN 'oauth_session'
+            WHEN 'api_key' THEN 'api_key'
+            WHEN 'local' THEN 'local'
+            WHEN 'ambient' THEN 'ambient'
+            ELSE NULL
+        END AS kind,
+        CASE pp.credential_link_kind
+            WHEN 'api_key' THEN
+                (SELECT api_key FROM provider_profile_credentials
+                  WHERE profile_id = pp.profile_id)
+            ELSE NULL
+        END AS api_key,
+        pp.credential_link_account_id,
+        pp.credential_link_session_id,
+        NULL, NULL, NULL,
+        pp.base_url, pp.api_version, pp.region, pp.scope_project_id,
+        pp.model_id,
+        COALESCE(pp.credential_link_updated_at, pp.updated_at)
+    FROM provider_profiles AS pp
+    WHERE pp.credential_link_kind IS NOT NULL
+      AND (
+            pp.credential_link_kind != 'api_key'
+         OR EXISTS (
+              SELECT 1 FROM provider_profile_credentials AS ppc
+               WHERE ppc.profile_id = pp.profile_id
+            )
+      )
+    ON CONFLICT(provider_id) DO NOTHING;
+
+    -- Pull OAuth tokens out of openai_codex_sessions onto the unified row
+    -- so that signing in keeps working without a separate sessions table read.
+    UPDATE provider_credentials
+       SET oauth_access_token = (
+                SELECT access_token FROM openai_codex_sessions
+                 WHERE account_id = provider_credentials.oauth_account_id
+            ),
+           oauth_refresh_token = (
+                SELECT refresh_token FROM openai_codex_sessions
+                 WHERE account_id = provider_credentials.oauth_account_id
+            ),
+           oauth_expires_at = (
+                SELECT expires_at FROM openai_codex_sessions
+                 WHERE account_id = provider_credentials.oauth_account_id
+            )
+     WHERE kind = 'oauth_session'
+       AND oauth_account_id IS NOT NULL;
 "#;

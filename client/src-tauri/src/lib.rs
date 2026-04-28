@@ -4,6 +4,7 @@ pub mod db;
 pub mod global_db;
 pub mod mcp;
 pub mod notifications;
+pub mod provider_credentials;
 pub mod provider_models;
 pub mod provider_profiles;
 pub mod registry;
@@ -232,6 +233,9 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::provider_profiles::upsert_provider_profile,
             commands::provider_profiles::set_active_provider_profile,
             commands::provider_profiles::logout_provider_profile,
+            commands::provider_credentials::list_provider_credentials,
+            commands::provider_credentials::upsert_provider_credential,
+            commands::provider_credentials::delete_provider_credential,
             commands::start_openai_login::start_openai_login,
             commands::submit_openai_callback::submit_openai_callback,
             commands::logout_runtime_session::logout_runtime_session,

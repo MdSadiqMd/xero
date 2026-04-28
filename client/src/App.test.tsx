@@ -1252,6 +1252,11 @@ function createAdapter(options?: {
       lastError: payload.lastError,
       updatedAt: payload.updatedAt,
     })
+    currentProviderProfiles = applyOpenAiRuntimeReadinessToProfiles(
+      currentProviderProfiles,
+      currentRuntimeSession,
+    )
+    rebuildProviderModelCatalogs()
   }
 
   const applyRuntimeRunUpdatedPayload = (payload: RuntimeRunUpdatedPayloadDto) => {
