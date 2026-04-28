@@ -50,7 +50,6 @@ pub mod update_runtime_run_controls;
 pub mod upsert_mcp_server;
 pub mod upsert_notification_route;
 pub mod upsert_notification_route_credentials;
-pub mod upsert_runtime_settings;
 
 mod contracts;
 pub(crate) mod runtime_support;
@@ -94,7 +93,6 @@ pub use get_repository_diff::get_repository_diff;
 pub use get_repository_status::get_repository_status;
 pub use get_runtime_run::get_runtime_run;
 pub use get_runtime_session::get_runtime_session;
-pub use get_runtime_settings::get_runtime_settings;
 pub use git_operations::{
     git_commit, git_discard_changes, git_fetch, git_pull, git_push, git_stage_paths,
     git_unstage_paths,
@@ -115,10 +113,6 @@ pub use provider_credentials::{
 };
 pub use provider_diagnostics::check_provider_profile;
 pub use provider_model_catalog::get_provider_model_catalog;
-pub use provider_profiles::{
-    list_provider_profiles, logout_provider_profile, set_active_provider_profile,
-    upsert_provider_profile,
-};
 pub use record_notification_dispatch_outcome::record_notification_dispatch_outcome;
 pub use remove_mcp_server::remove_mcp_server;
 pub use remove_project::remove_project;
@@ -170,7 +164,6 @@ pub use update_runtime_run_controls::update_runtime_run_controls;
 pub use upsert_mcp_server::upsert_mcp_server;
 pub use upsert_notification_route::upsert_notification_route;
 pub use upsert_notification_route_credentials::upsert_notification_route_credentials;
-pub use upsert_runtime_settings::upsert_runtime_settings;
 
 pub use contracts::{
     agent::*, autonomous::*, dictation::*, error::*, mcp::*, notifications::*, runtime::*,

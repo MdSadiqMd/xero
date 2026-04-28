@@ -1,7 +1,7 @@
 use std::{fs, io::Write, path::Path};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Runtime};
 use tempfile::NamedTempFile;
 
 use crate::{
@@ -54,13 +54,6 @@ impl RuntimeSettingsSnapshot {
     }
 }
 
-#[tauri::command]
-pub fn get_runtime_settings<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, DesktopState>,
-) -> CommandResult<RuntimeSettingsDto> {
-    Ok(load_runtime_settings_snapshot(&app, state.inner())?.dto())
-}
 
 pub(crate) fn load_runtime_settings_snapshot<R: Runtime>(
     app: &AppHandle<R>,

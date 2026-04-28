@@ -1,56 +1,30 @@
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Runtime};
 
 use crate::{
-    auth::{clear_openai_codex_sessions, sync_openai_profile_link, AuthFlowError},
+    auth::AuthFlowError,
     commands::{
         get_runtime_settings::runtime_settings_file_from_request, CommandError, CommandResult,
-        LogoutProviderProfileRequestDto, ProviderProfileDto, ProviderProfileReadinessDto,
-        ProviderProfileReadinessProofDto, ProviderProfileReadinessStatusDto, ProviderProfilesDto,
-        ProviderProfilesMigrationDto, SetActiveProviderProfileRequestDto,
+        ProviderProfileDto, ProviderProfileReadinessDto, ProviderProfileReadinessProofDto,
+        ProviderProfileReadinessStatusDto, ProviderProfilesDto, ProviderProfilesMigrationDto,
         UpsertProviderProfileRequestDto,
     },
-    global_db::open_global_database,
     provider_credentials::{
         delete_provider_credential as cred_delete,
         upsert_provider_credential as cred_upsert, ProviderCredentialKind,
         ProviderCredentialRecord,
     },
+    global_db::open_global_database,
     provider_profiles::{
-        load_provider_profiles_or_default, persist_provider_profiles_to_db,
-        ProviderApiKeyCredentialEntry, ProviderProfileCredentialLink,
-        ProviderProfileReadinessProof, ProviderProfileReadinessStatus, ProviderProfileRecord,
-        ProviderProfilesSnapshot,
+        load_provider_profiles_or_default, ProviderApiKeyCredentialEntry,
+        ProviderProfileCredentialLink, ProviderProfileReadinessProof,
+        ProviderProfileReadinessStatus, ProviderProfileRecord, ProviderProfilesSnapshot,
     },
     runtime::{
-        normalize_openai_codex_model_id, openai_codex_provider, resolve_runtime_provider_identity,
-        BEDROCK_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
-        VERTEX_PROVIDER_ID,
+        normalize_openai_codex_model_id, resolve_runtime_provider_identity, BEDROCK_PROVIDER_ID,
+        OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, VERTEX_PROVIDER_ID,
     },
     state::DesktopState,
 };
-
-#[tauri::command]
-pub fn list_provider_profiles<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, DesktopState>,
-) -> CommandResult<ProviderProfilesDto> {
-    let snapshot = load_provider_profiles_snapshot(&app, state.inner())?;
-    Ok(provider_profiles_dto_from_snapshot(&snapshot))
-}
-
-#[tauri::command]
-pub fn upsert_provider_profile<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, DesktopState>,
-    request: UpsertProviderProfileRequestDto,
-) -> CommandResult<ProviderProfilesDto> {
-    let mut connection = open_global_database(&state.global_db_path(&app)?)?;
-    let current = load_provider_profiles_or_default(&connection)?;
-    let next = apply_provider_profile_upsert(&current, &request)?;
-    persist_provider_profiles_to_db(&mut connection, &next)?;
-    mirror_profile_credential_to_new_table(&connection, &next, &request)?;
-    Ok(provider_profiles_dto_from_snapshot(&next))
-}
 
 /// Phase 2.3 (write-through): keep `provider_credentials` aligned with
 /// per-provider state whenever the legacy upsert path mutates a profile. The
@@ -127,72 +101,6 @@ fn mirror_profile_credential_to_new_table(
             updated_at,
         },
     )
-}
-
-#[tauri::command]
-pub fn set_active_provider_profile<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, DesktopState>,
-    request: SetActiveProviderProfileRequestDto,
-) -> CommandResult<ProviderProfilesDto> {
-    let mut connection = open_global_database(&state.global_db_path(&app)?)?;
-    let current = load_provider_profiles_or_default(&connection)?;
-    let next = apply_active_profile_switch(&current, &request.profile_id)?;
-    persist_provider_profiles_to_db(&mut connection, &next)?;
-    Ok(provider_profiles_dto_from_snapshot(&next))
-}
-
-#[tauri::command]
-pub fn logout_provider_profile<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, DesktopState>,
-    request: LogoutProviderProfileRequestDto,
-) -> CommandResult<ProviderProfilesDto> {
-    let profile_id = request.profile_id.trim();
-    if profile_id.is_empty() {
-        return Err(CommandError::invalid_request("profileId"));
-    }
-
-    let current = load_provider_profiles_snapshot(&app, state.inner())?;
-    let profile = current.profile(profile_id).ok_or_else(|| {
-        CommandError::user_fixable(
-            "provider_profile_not_found",
-            format!("Cadence could not find provider profile `{profile_id}`."),
-        )
-    })?;
-
-    if profile.provider_id != OPENAI_CODEX_PROVIDER_ID {
-        return Err(CommandError::user_fixable(
-            "provider_profile_logout_unavailable",
-            format!(
-                "Cadence can only sign out browser-auth provider profiles. Profile `{profile_id}` belongs to provider `{}`.",
-                profile.provider_id
-            ),
-        ));
-    }
-
-    if let Some(link) = profile.credential_link.as_ref() {
-        if !matches!(link, ProviderProfileCredentialLink::OpenAiCodex { .. }) {
-            return Err(CommandError::user_fixable(
-                "provider_profiles_invalid",
-                format!(
-                    "Cadence rejected provider profile `{profile_id}` because the OpenAI profile uses a non-OpenAI credential link."
-                ),
-            ));
-        }
-    }
-
-    let auth_store_path = state
-        .auth_store_file_for_provider(&app, openai_codex_provider())
-        .map_err(map_auth_store_error_to_command_error)?;
-    clear_openai_codex_sessions(&auth_store_path).map_err(map_auth_store_error_to_command_error)?;
-    sync_openai_profile_link(&app, state.inner(), Some(profile_id), None)
-        .map_err(map_auth_store_error_to_command_error)?;
-    // sync_openai_profile_link already mirrors the cleared OAuth state into
-    // provider_credentials, so no extra delete is required here.
-
-    let next = load_provider_profiles_snapshot(&app, state.inner())?;
-    Ok(provider_profiles_dto_from_snapshot(&next))
 }
 
 pub(crate) fn load_provider_profiles_snapshot<R: Runtime>(

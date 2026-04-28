@@ -37,7 +37,6 @@ pub const RENAME_PROJECT_ENTRY_COMMAND: &str = "rename_project_entry";
 pub const DELETE_PROJECT_ENTRY_COMMAND: &str = "delete_project_entry";
 pub const GET_RUNTIME_RUN_COMMAND: &str = "get_runtime_run";
 pub const GET_RUNTIME_SESSION_COMMAND: &str = "get_runtime_session";
-pub const GET_RUNTIME_SETTINGS_COMMAND: &str = "get_runtime_settings";
 pub const LIST_MCP_SERVERS_COMMAND: &str = "list_mcp_servers";
 pub const UPSERT_MCP_SERVER_COMMAND: &str = "upsert_mcp_server";
 pub const REMOVE_MCP_SERVER_COMMAND: &str = "remove_mcp_server";
@@ -57,10 +56,6 @@ pub const SET_PLUGIN_ENABLED_COMMAND: &str = "set_plugin_enabled";
 pub const REMOVE_PLUGIN_COMMAND: &str = "remove_plugin";
 pub const GET_PROVIDER_MODEL_CATALOG_COMMAND: &str = "get_provider_model_catalog";
 pub const RUN_DOCTOR_REPORT_COMMAND: &str = "run_doctor_report";
-pub const LIST_PROVIDER_PROFILES_COMMAND: &str = "list_provider_profiles";
-pub const UPSERT_PROVIDER_PROFILE_COMMAND: &str = "upsert_provider_profile";
-pub const SET_ACTIVE_PROVIDER_PROFILE_COMMAND: &str = "set_active_provider_profile";
-pub const LOGOUT_PROVIDER_PROFILE_COMMAND: &str = "logout_provider_profile";
 pub const START_AUTONOMOUS_RUN_COMMAND: &str = "start_autonomous_run";
 pub const START_OPENAI_LOGIN_COMMAND: &str = "start_openai_login";
 pub const SUBMIT_OPENAI_CALLBACK_COMMAND: &str = "submit_openai_callback";
@@ -87,7 +82,6 @@ pub const RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND: &str =
     "record_notification_dispatch_outcome";
 pub const SUBMIT_NOTIFICATION_REPLY_COMMAND: &str = "submit_notification_reply";
 pub const SYNC_NOTIFICATION_ADAPTERS_COMMAND: &str = "sync_notification_adapters";
-pub const UPSERT_RUNTIME_SETTINGS_COMMAND: &str = "upsert_runtime_settings";
 pub const SPEECH_DICTATION_STATUS_COMMAND: &str = "speech_dictation_status";
 pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     IMPORT_REPOSITORY_COMMAND,
@@ -114,7 +108,6 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     DELETE_PROJECT_ENTRY_COMMAND,
     GET_RUNTIME_RUN_COMMAND,
     GET_RUNTIME_SESSION_COMMAND,
-    GET_RUNTIME_SETTINGS_COMMAND,
     LIST_MCP_SERVERS_COMMAND,
     UPSERT_MCP_SERVER_COMMAND,
     REMOVE_MCP_SERVER_COMMAND,
@@ -134,10 +127,6 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     REMOVE_PLUGIN_COMMAND,
     GET_PROVIDER_MODEL_CATALOG_COMMAND,
     RUN_DOCTOR_REPORT_COMMAND,
-    LIST_PROVIDER_PROFILES_COMMAND,
-    UPSERT_PROVIDER_PROFILE_COMMAND,
-    SET_ACTIVE_PROVIDER_PROFILE_COMMAND,
-    LOGOUT_PROVIDER_PROFILE_COMMAND,
     START_AUTONOMOUS_RUN_COMMAND,
     START_OPENAI_LOGIN_COMMAND,
     SUBMIT_OPENAI_CALLBACK_COMMAND,
@@ -162,7 +151,6 @@ pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     RECORD_NOTIFICATION_DISPATCH_OUTCOME_COMMAND,
     SUBMIT_NOTIFICATION_REPLY_COMMAND,
     SYNC_NOTIFICATION_ADAPTERS_COMMAND,
-    UPSERT_RUNTIME_SETTINGS_COMMAND,
     SPEECH_DICTATION_STATUS_COMMAND,
     SPEECH_DICTATION_SETTINGS_COMMAND,
     SPEECH_DICTATION_UPDATE_SETTINGS_COMMAND,
