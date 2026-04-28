@@ -22,8 +22,6 @@ import type {
   ProviderCredentialDto,
   ProviderCredentialsSnapshotDto,
   ProviderProfileDiagnosticsDto,
-  ProviderProfileReadinessDto,
-  ProviderProfilesDto,
   ReadProjectFileResponseDto,
   RenameProjectEntryRequestDto,
   RenameProjectEntryResponseDto,
@@ -69,8 +67,6 @@ import type {
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
   UpsertProviderCredentialRequestDto,
-  UpsertProviderProfileRequestDto,
-  UpsertRuntimeSettingsRequestDto,
   VerificationRecordView,
   WriteProjectFileResponseDto,
 } from '@/src/lib/cadence-model'
@@ -285,7 +281,6 @@ export interface WorkflowPaneView {
   selectedProviderLabel?: string
   selectedProviderSource?: SelectedRuntimeProviderSource | null
   selectedModelId?: string | null
-  selectedProfileReadiness?: ProviderProfileReadinessDto | null
   openrouterApiKeyConfigured?: boolean
   hasAnyReadyProvider?: boolean
   providerMismatch?: boolean
@@ -319,7 +314,6 @@ export interface AgentPaneView {
   selectedModelOption: AgentProviderModelView | null
   selectedModelThinkingEffortOptions: ProviderModelThinkingEffortDto[]
   selectedModelDefaultThinkingEffort: ProviderModelThinkingEffortDto | null
-  selectedProfileReadiness?: ProviderProfileReadinessDto | null
   openrouterApiKeyConfigured?: boolean
   hasAnyReadyProvider?: boolean
   providerMismatch?: boolean

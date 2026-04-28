@@ -639,12 +639,6 @@ describe('live views', () => {
         agent={makeAgent(makeProject(), {
           runtimeSession: null,
           runtimeRun: null,
-          selectedProfileReadiness: {
-            ready: true,
-            status: 'ready',
-            proof: 'oauth_session',
-            proofUpdatedAt: '2026-04-20T12:00:00Z',
-          },
         })}
         onStartRuntimeSession={onStartRuntimeSession}
         onStartRuntimeRun={onStartRuntimeRun}

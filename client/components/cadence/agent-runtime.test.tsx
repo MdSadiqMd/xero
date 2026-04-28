@@ -1242,12 +1242,6 @@ describe('AgentRuntime current UI', () => {
           selectedProviderLabel: 'OpenRouter',
           selectedModelId: 'openai/gpt-4.1-mini',
           selectedThinkingEffort: 'medium',
-          selectedProfileReadiness: {
-            ready: true,
-            status: 'ready',
-            proof: 'stored_secret',
-            proofUpdatedAt: '2026-04-20T12:00:00Z',
-          },
           providerModelCatalog: makeProviderModelCatalog({
             profileId: 'openrouter-default',
             profileLabel: 'OpenRouter',
@@ -1332,12 +1326,6 @@ describe('AgentRuntime current UI', () => {
           selectedProviderLabel: 'OpenRouter',
           selectedModelId: 'openai/gpt-4.1-mini',
           selectedThinkingEffort: 'medium',
-          selectedProfileReadiness: {
-            ready: true,
-            status: 'ready',
-            proof: 'stored_secret',
-            proofUpdatedAt: '2026-04-20T12:00:00Z',
-          },
           providerModelCatalog: makeProviderModelCatalog({
             profileId: 'openrouter-default',
             profileLabel: 'OpenRouter',

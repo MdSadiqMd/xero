@@ -16,7 +16,6 @@ import {
   type RuntimeRunPendingControlSnapshotView,
   type RuntimeRunView,
   type RuntimeSessionView,
-  type RuntimeSettingsDto,
 } from '@/src/lib/cadence-model/runtime'
 import {
   getRuntimeStreamStatusLabel,
@@ -26,8 +25,7 @@ import {
   type Phase,
   type ProjectDetailView,
   type ProviderCredentialsSnapshotDto,
-  type ProviderProfileDto,
-  type ProviderProfilesDto,
+  type RuntimeProviderIdDto,
 } from '@/src/lib/cadence-model'
 import { projectCheckpointControlLoops } from '../agent-runtime-projections/checkpoint-control-loops'
 import {
@@ -78,7 +76,7 @@ interface SelectedProviderProjection {
   selectedProvider: {
     profileId: string | null
     profileLabel: string | null
-    providerId: ProviderProfileDto['providerId']
+    providerId: RuntimeProviderIdDto
     providerLabel: string
     modelId: string | null
     source: 'credential_default' | 'fallback' | 'default'
@@ -101,8 +99,6 @@ interface AgentRunControlProjection {
   activeControls: RuntimeRunActiveControlSnapshotView | null
   pendingControls: RuntimeRunPendingControlSnapshotView | null
 }
-
-type ComposerProviderProfile = Pick<ProviderProfileDto, 'profileId' | 'providerId' | 'label' | 'modelId'>
 
 export interface BuildWorkflowViewDependencies {
   project: ProjectDetailView | null
@@ -169,7 +165,7 @@ export interface BuildExecutionViewDependencies {
 function getSelectedProviderProjection(
   selectedModel: SelectedModelView,
 ): SelectedProviderProjection {
-  const providerId = (selectedModel.providerId ?? 'openai_codex') as ProviderProfileDto['providerId']
+  const providerId = (selectedModel.providerId ?? 'openai_codex') as RuntimeProviderIdDto
   return {
     selectedProvider: {
       profileId: null,
@@ -524,7 +520,6 @@ export function buildWorkflowView({
     selectedProviderLabel: selectedProvider.providerLabel,
     selectedProviderSource: selectedProvider.source,
     selectedModelId: selectedProvider.modelId,
-    selectedProfileReadiness: null,
     openrouterApiKeyConfigured: selectedProvider.openrouterApiKeyConfigured,
     hasAnyReadyProvider,
     providerMismatch: false,
@@ -675,7 +670,6 @@ export function buildAgentView({
       selectedModelOption: providerModelCatalogProjection.selectedModelOption,
       selectedModelThinkingEffortOptions: providerModelCatalogProjection.selectedModelThinkingEffortOptions,
       selectedModelDefaultThinkingEffort: providerModelCatalogProjection.selectedModelDefaultThinkingEffort,
-      selectedProfileReadiness: null,
       openrouterApiKeyConfigured: selectedProvider.openrouterApiKeyConfigured,
       hasAnyReadyProvider: (providerCredentials?.credentials.length ?? 0) > 0,
       providerMismatch: false,

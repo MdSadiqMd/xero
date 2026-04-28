@@ -1940,7 +1940,7 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
       <div data-testid="provider-profiles-count">0</div>
       <div data-testid="provider-profiles-selected-profile-id">{state.agentView?.selectedProfileId ?? 'none'}</div>
       <div data-testid="provider-profiles-selected-profile-label">{state.agentView?.selectedProfileLabel ?? 'none'}</div>
-      <div data-testid="provider-profiles-selected-readiness-status">{state.agentView?.selectedProfileReadiness?.status ?? 'none'}</div>
+      <div data-testid="provider-profiles-selected-readiness-status">{'none'}</div>
       <div data-testid="provider-profiles-load-status">idle</div>
       <div data-testid="provider-profiles-load-error-code">none</div>
       <div data-testid="provider-profiles-load-error-message">none</div>
