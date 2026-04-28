@@ -5,17 +5,24 @@ pub mod store;
 use rusqlite::Connection;
 
 use crate::commands::CommandResult;
+use crate::provider_credentials::load_all_provider_credentials;
 
 pub use importer::import_legacy_provider_profiles;
 pub use sql::{load_provider_profiles_from_db, persist_provider_profiles_to_db};
 
-/// Loads the provider-profiles snapshot from the global database, falling back to the default
-/// snapshot when no metadata row has been persisted yet.
+/// Loads the provider-profiles snapshot. The legacy SQL tables are no longer
+/// the source of truth — synthesize the snapshot from the flat
+/// `provider_credentials` table so the seven legacy consumers (auth/store,
+/// provider_models, runtime/provider, runtime/diagnostics, doctor_report,
+/// provider_diagnostics, get_runtime_settings) keep compiling against the
+/// snapshot shape they expect.
 pub fn load_provider_profiles_or_default(
     connection: &Connection,
 ) -> CommandResult<ProviderProfilesSnapshot> {
-    Ok(load_provider_profiles_from_db(connection)?
-        .unwrap_or_else(default_provider_profiles_snapshot))
+    let records = load_all_provider_credentials(connection)?;
+    Ok(store::synthesize_provider_profiles_snapshot_from_credentials(
+        &records,
+    ))
 }
 pub use store::{
     default_provider_profiles_snapshot, AnthropicProfileCredentialEntry,
