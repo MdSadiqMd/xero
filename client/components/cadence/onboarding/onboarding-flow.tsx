@@ -16,24 +16,16 @@ import type {
   ProviderCredentialsLoadStatus,
   ProviderCredentialsSaveStatus,
   ProviderModelCatalogLoadStatus,
-  ProviderProfilesLoadStatus,
-  ProviderProfilesSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import {
   type ProviderCredentialsSnapshotDto,
   type ProviderModelCatalogDto,
-  type ProviderProfileDto,
-  type ProviderProfilesDto,
   type RuntimeProviderIdDto,
   type RuntimeSessionView,
   type UpsertNotificationRouteRequestDto,
   type UpsertProviderCredentialRequestDto,
-  type UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
-import {
-  formatProviderConnectionLabel,
-  getCloudProviderPreset,
-} from "@/src/lib/cadence-model/provider-presets"
+import { getCloudProviderPreset } from "@/src/lib/cadence-model/provider-presets"
 import { type OnboardingStepId } from "./types"
 
 const STEP_ORDER: Array<{ id: OnboardingStepId; showIndicator: boolean }> = [
@@ -51,85 +43,53 @@ interface ImportedProjectView {
   path: string
 }
 
-function getReadyProviderProfiles(providerProfiles: ProviderProfilesDto | null): ProviderProfileDto[] {
-  return (providerProfiles?.profiles ?? []).filter((profile) => profile.readiness.ready)
-}
-
-function getProviderReview(providerProfiles: ProviderProfilesDto | null, runtimeSession: RuntimeSessionView | null) {
-  const profiles = providerProfiles?.profiles ?? []
-  const readyProfiles = getReadyProviderProfiles(providerProfiles)
-  const connectedOpenAiProfile =
-    runtimeSession?.providerId === "openai_codex" && runtimeSession.isAuthenticated
-      ? readyProfiles.find((profile) => profile.providerId === "openai_codex") ?? null
-      : null
-  const reviewProfile = connectedOpenAiProfile ?? readyProfiles[0] ?? profiles[0] ?? null
-
-  if (!reviewProfile) {
+function getProviderReview(
+  providerCredentials: ProviderCredentialsSnapshotDto | null,
+  runtimeSession: RuntimeSessionView | null,
+) {
+  const credentials = providerCredentials?.credentials ?? []
+  if (credentials.length === 0) {
     return {
       ready: false,
-      value: "No provider set up yet",
+      value: 'No provider set up yet',
     }
   }
 
-  const preset = getCloudProviderPreset(reviewProfile.providerId)
-  const connectionSuffix = ` · ${formatProviderConnectionLabel(reviewProfile)}`
-  const additionalReadySuffix =
-    reviewProfile.readiness.ready && readyProfiles.length > 1 ? ` · ${readyProfiles.length - 1} more ready` : ""
+  // Prefer a connected OAuth provider; fall back to first credentialed provider.
+  const connectedOAuth =
+    runtimeSession?.isAuthenticated && runtimeSession.providerId === 'openai_codex'
+      ? credentials.find((c) => c.providerId === 'openai_codex') ?? null
+      : null
+  const review = connectedOAuth ?? credentials[0]
+  const preset = getCloudProviderPreset(review.providerId)
+  const label = preset?.label ?? review.providerId
+  const additionalSuffix = credentials.length > 1 ? ` · ${credentials.length - 1} more configured` : ''
 
-  switch (preset?.authMode) {
+  switch (review.kind) {
     case 'api_key':
-      return reviewProfile.readiness.ready
-        ? {
-            ready: true,
-            value: `${reviewProfile.label}${connectionSuffix} · API key saved${additionalReadySuffix}`,
-          }
-        : {
-            ready: false,
-            value: `${reviewProfile.label}${connectionSuffix} · API key required`,
-          }
-    case 'local':
-      return reviewProfile.readiness.ready
-        ? {
-            ready: true,
-            value: `${reviewProfile.label}${connectionSuffix} · local endpoint ready${additionalReadySuffix}`,
-          }
-        : {
-            ready: false,
-            value: `${reviewProfile.label}${connectionSuffix} · local profile needs repair`,
-          }
-    case 'ambient':
-      return reviewProfile.readiness.ready
-        ? {
-            ready: true,
-            value: `${reviewProfile.label}${connectionSuffix} · ambient auth ready${additionalReadySuffix}`,
-          }
-        : {
-            ready: false,
-            value: `${reviewProfile.label}${connectionSuffix} · ambient profile needs repair`,
-          }
-    default:
-      break
-  }
-
-  return connectedOpenAiProfile
-    ? {
+      return {
         ready: true,
-        value: `${reviewProfile.label} · signed in${additionalReadySuffix}`,
+        value: `${label} · API key saved${additionalSuffix}`,
       }
-    : {
-        ready: reviewProfile.readiness.ready,
-        value: reviewProfile.readiness.ready
-          ? `${reviewProfile.label}${connectionSuffix} · ready${additionalReadySuffix}`
-          : `${reviewProfile.label}${connectionSuffix} · sign in required`,
+    case 'oauth_session':
+      return {
+        ready: true,
+        value: `${label} · signed in${additionalSuffix}`,
       }
+    case 'local':
+      return {
+        ready: true,
+        value: `${label} · local endpoint ready${additionalSuffix}`,
+      }
+    case 'ambient':
+      return {
+        ready: true,
+        value: `${label} · ambient auth ready${additionalSuffix}`,
+      }
+  }
 }
 
 export interface OnboardingFlowProps {
-  providerProfiles: ProviderProfilesDto | null
-  providerProfilesLoadStatus: ProviderProfilesLoadStatus
-  providerProfilesLoadError: OperatorActionErrorView | null
-  providerProfilesSaveStatus: ProviderProfilesSaveStatus
-  providerProfilesSaveError: OperatorActionErrorView | null
   providerCredentials: ProviderCredentialsSnapshotDto | null
   providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
   providerCredentialsLoadError: OperatorActionErrorView | null
@@ -147,15 +107,10 @@ export interface OnboardingFlowProps {
   pendingNotificationRouteId: string | null
   notificationRouteMutationError: OperatorActionErrorView | null
   onImportProject: () => Promise<void>
-  onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
   onRefreshProviderModelCatalog?: (
     profileId: string,
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
-  onUpsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
-  onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
-  onLogout?: () => Promise<RuntimeSessionView | null>
-  onLogoutProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
   onRefreshProviderCredentials?: (options?: {
     force?: boolean
   }) => Promise<ProviderCredentialsSnapshotDto>
@@ -177,11 +132,6 @@ export interface OnboardingFlowProps {
 }
 
 export function OnboardingFlow({
-  providerProfiles,
-  providerProfilesLoadStatus,
-  providerProfilesLoadError,
-  providerProfilesSaveStatus,
-  providerProfilesSaveError,
   providerCredentials,
   providerCredentialsLoadStatus,
   providerCredentialsLoadError,
@@ -199,12 +149,7 @@ export function OnboardingFlow({
   pendingNotificationRouteId,
   notificationRouteMutationError,
   onImportProject,
-  onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
-  onUpsertProviderProfile,
-  onStartLogin,
-  onLogout,
-  onLogoutProviderProfile,
   onRefreshProviderCredentials,
   onUpsertProviderCredential,
   onDeleteProviderCredential,
@@ -217,7 +162,7 @@ export function OnboardingFlow({
   const directionRef = useRef<1 | -1>(1)
 
   const currentStep = STEP_ORDER[stepIndex]
-  const providerReview = getProviderReview(providerProfiles, runtimeSession)
+  const providerReview = getProviderReview(providerCredentials, runtimeSession)
 
   const goTo = useCallback((target: number) => {
     setStepIndex((current) => {

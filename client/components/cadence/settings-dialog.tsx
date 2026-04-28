@@ -10,8 +10,6 @@ import type {
   ProviderCredentialsLoadStatus,
   ProviderCredentialsSaveStatus,
   ProviderModelCatalogLoadStatus,
-  ProviderProfilesLoadStatus,
-  ProviderProfilesSaveStatus,
   SkillRegistryLoadStatus,
   SkillRegistryMutationStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
@@ -24,7 +22,6 @@ import type {
   ProviderCredentialsSnapshotDto,
   ProviderModelCatalogDto,
   ProviderProfileDiagnosticsDto,
-  ProviderProfilesDto,
   RuntimeProviderIdDto,
   RuntimeSessionView,
   RunDoctorReportRequestDto,
@@ -43,7 +40,6 @@ import type {
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
   UpsertProviderCredentialRequestDto,
-  UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import type { PlatformVariant } from "@/components/cadence/shell"
 import type {
@@ -138,11 +134,6 @@ export interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void
   initialSection?: SettingsSection
   agent: AgentPaneView | null
-  providerProfiles: ProviderProfilesDto | null
-  providerProfilesLoadStatus: ProviderProfilesLoadStatus
-  providerProfilesLoadError: OperatorActionErrorView | null
-  providerProfilesSaveStatus: ProviderProfilesSaveStatus
-  providerProfilesSaveError: OperatorActionErrorView | null
   providerCredentials: ProviderCredentialsSnapshotDto | null
   providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
   providerCredentialsLoadError: OperatorActionErrorView | null
@@ -163,7 +154,6 @@ export interface SettingsDialogProps {
   }) => Promise<RuntimeSessionView | null>
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
-  onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
   onRefreshProviderModelCatalog?: (
     profileId: string,
     options?: { force?: boolean },
@@ -177,10 +167,6 @@ export interface SettingsDialogProps {
   doctorReportError?: OperatorActionErrorView | null
   onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<CadenceDoctorReportDto>
   dictationAdapter?: DictationSettingsAdapter
-  onUpsertProviderProfile?: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
-  onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
-  onLogout?: () => Promise<RuntimeSessionView | null>
-  onLogoutProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
   onUpsertNotificationRoute?: (req: Omit<UpsertNotificationRouteRequestDto, "projectId" | "updatedAt">) => Promise<unknown>
   mcpRegistry?: McpRegistryDto | null
   mcpImportDiagnostics?: McpImportDiagnosticDto[]
@@ -227,11 +213,6 @@ export function SettingsDialog({
   onOpenChange,
   initialSection = "providers",
   agent,
-  providerProfiles,
-  providerProfilesLoadStatus,
-  providerProfilesLoadError,
-  providerProfilesSaveStatus,
-  providerProfilesSaveError,
   providerCredentials,
   providerCredentialsLoadStatus,
   providerCredentialsLoadError,
@@ -243,7 +224,6 @@ export function SettingsDialog({
   onStartOAuthLogin,
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
-  onRefreshProviderProfiles,
   onRefreshProviderModelCatalog,
   onCheckProviderProfile,
   doctorReport = null,
@@ -251,10 +231,6 @@ export function SettingsDialog({
   doctorReportError = null,
   onRunDoctorReport,
   dictationAdapter,
-  onUpsertProviderProfile,
-  onStartLogin,
-  onLogout,
-  onLogoutProviderProfile,
   onUpsertNotificationRoute,
   mcpRegistry = null,
   mcpImportDiagnostics = [],
@@ -297,7 +273,7 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const [section, setSection] = useState<SettingsSection>("providers")
   const refreshOnOpenCallbacksRef = useRef({
-    providerProfiles: onRefreshProviderProfiles,
+    providerCredentials: onRefreshProviderCredentials,
     mcpRegistry: onRefreshMcpRegistry,
     skillRegistry: onRefreshSkillRegistry,
   })
@@ -308,20 +284,20 @@ export function SettingsDialog({
 
   useEffect(() => {
     refreshOnOpenCallbacksRef.current = {
-      providerProfiles: onRefreshProviderProfiles,
+      providerCredentials: onRefreshProviderCredentials,
       mcpRegistry: onRefreshMcpRegistry,
       skillRegistry: onRefreshSkillRegistry,
     }
-  }, [onRefreshMcpRegistry, onRefreshProviderProfiles, onRefreshSkillRegistry])
+  }, [onRefreshMcpRegistry, onRefreshProviderCredentials, onRefreshSkillRegistry])
 
   useEffect(() => {
     if (!open) {
       return
     }
 
-    const { providerProfiles, mcpRegistry, skillRegistry } = refreshOnOpenCallbacksRef.current
+    const { providerCredentials, mcpRegistry, skillRegistry } = refreshOnOpenCallbacksRef.current
 
-    void providerProfiles?.({ force: true }).catch(() => undefined)
+    void providerCredentials?.({ force: true }).catch(() => undefined)
     void mcpRegistry?.({ force: true }).catch(() => undefined)
     void skillRegistry?.({ force: true }).catch(() => undefined)
   }, [open])

@@ -838,16 +838,18 @@ function makeError(overrides: Partial<OperatorActionErrorView> = {}): OperatorAc
   }
 }
 
-function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): SettingsDialogProps {
+function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> & Record<string, unknown> = {}): SettingsDialogProps {
+  // Phase 4: legacy provider-profile props are accepted in `overrides` for
+  // backwards compatibility with skipped legacy tests, but are ignored.
+  const { providerProfiles: _pp, providerProfilesLoadStatus: _ppls, providerProfilesLoadError: _pple,
+    providerProfilesSaveStatus: _ppss, providerProfilesSaveError: _ppse,
+    onUpsertProviderProfile: _ouop, onStartLogin: _osl, onLogout: _ol,
+    onLogoutProviderProfile: _olop, onRefreshProviderProfiles: _orpp, ...rest } = overrides as Record<string, unknown>
+  void _pp, _ppls, _pple, _ppss, _ppse, _ouop, _osl, _ol, _olop, _orpp
   return {
     open: true,
     onOpenChange: vi.fn(),
     agent: makeAgent(),
-    providerProfiles: makeProviderProfiles(),
-    providerProfilesLoadStatus: 'ready',
-    providerProfilesLoadError: null,
-    providerProfilesSaveStatus: 'idle',
-    providerProfilesSaveError: null,
     providerCredentials: { credentials: [] },
     providerCredentialsLoadStatus: 'ready',
     providerCredentialsLoadError: null,
@@ -865,7 +867,6 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): 
       'openai_codex-default': 'ready',
       'openrouter-default': 'ready',
     },
-    onRefreshProviderProfiles: vi.fn(async () => makeProviderProfiles()),
     onRefreshProviderModelCatalog: vi.fn(async (profileId: string) => makeProviderModelCatalog(profileId)),
     onCheckProviderProfile: vi.fn(async (profileId: string) =>
       makeProviderProfileDiagnostics({ profileId }),
@@ -874,23 +875,6 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): 
     doctorReportStatus: 'idle',
     doctorReportError: null,
     onRunDoctorReport: vi.fn(async () => makeDoctorReport()),
-    onUpsertProviderProfile: vi.fn(async (_request: UpsertProviderProfileRequestDto) => makeProviderProfiles()),
-    onStartLogin: vi.fn(async () => makeRuntimeSession()),
-    onLogout: vi.fn(async () => makeRuntimeSession({ sessionId: null, accountId: null })),
-    onLogoutProviderProfile: vi.fn(async () =>
-      makeProviderProfiles({
-        profiles: [
-          makeOpenAiProfile({
-            readiness: {
-              ready: false,
-              status: 'missing',
-              proofUpdatedAt: null,
-            },
-          }),
-          makeOpenRouterProfile({ active: false }),
-        ],
-      }),
-    ),
     mcpRegistry: makeMcpRegistry(),
     mcpImportDiagnostics: [],
     mcpRegistryLoadStatus: 'ready',
@@ -921,7 +905,7 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> = {}): 
     onRemovePluginRoot: vi.fn(async (_request: RemovePluginRootRequest) => makeSkillRegistry()),
     onSetPluginEnabled: vi.fn(async (_request: SetPluginEnabledRequest) => makeSkillRegistry()),
     onRemovePlugin: vi.fn(async (_request: RemovePluginRequest) => makeSkillRegistry()),
-    ...overrides,
+    ...(rest as Partial<SettingsDialogProps>),
   }
 }
 

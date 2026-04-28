@@ -675,11 +675,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         chromeOnly
       >
         <OnboardingFlow
-          providerProfiles={providerProfiles}
-          providerProfilesLoadStatus={providerProfilesLoadStatus}
-          providerProfilesLoadError={providerProfilesLoadError}
-          providerProfilesSaveStatus={providerProfilesSaveStatus}
-          providerProfilesSaveError={providerProfilesSaveError}
           providerCredentials={providerCredentials}
           providerCredentialsLoadStatus={providerCredentialsLoadStatus}
           providerCredentialsLoadError={providerCredentialsLoadError}
@@ -697,14 +692,9 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           pendingNotificationRouteId={agentView?.pendingNotificationRouteId ?? null}
           notificationRouteMutationError={agentView?.notificationRouteMutationError ?? null}
           onImportProject={() => importProject()}
-          onRefreshProviderProfiles={(options) => refreshProviderProfiles(options)}
           onRefreshProviderModelCatalog={(profileId, options) =>
             refreshProviderModelCatalog(profileId, options)
           }
-          onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
-          onStartLogin={(options) => startOpenAiLogin(options)}
-          onLogout={() => logoutRuntimeSession()}
-          onLogoutProviderProfile={(profileId) => logoutProviderProfile(profileId)}
           onRefreshProviderCredentials={(options) => refreshProviderCredentials(options)}
           onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
           onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
@@ -821,11 +811,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         onOpenChange={setSettingsOpen}
         initialSection={settingsInitialSection}
         agent={agentView}
-        providerProfiles={providerProfiles}
-        providerProfilesLoadStatus={providerProfilesLoadStatus}
-        providerProfilesLoadError={providerProfilesLoadError}
-        providerProfilesSaveStatus={providerProfilesSaveStatus}
-        providerProfilesSaveError={providerProfilesSaveError}
         providerCredentials={providerCredentials}
         providerCredentialsLoadStatus={providerCredentialsLoadStatus}
         providerCredentialsLoadError={providerCredentialsLoadError}
@@ -837,7 +822,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         onStartOAuthLogin={(request) => startOAuthLogin(request)}
         providerModelCatalogs={providerModelCatalogs}
         providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-        onRefreshProviderProfiles={(options) => refreshProviderProfiles(options)}
         onRefreshProviderModelCatalog={(profileId, options) =>
           refreshProviderModelCatalog(profileId, options)
         }
@@ -847,10 +831,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         doctorReportError={doctorReportError}
         onRunDoctorReport={(request) => runDoctorReport(request)}
         dictationAdapter={resolvedAdapter}
-        onUpsertProviderProfile={(request) => upsertProviderProfile(request)}
-        onStartLogin={(options) => startOpenAiLogin(options)}
-        onLogout={() => logoutRuntimeSession()}
-        onLogoutProviderProfile={(profileId) => logoutProviderProfile(profileId)}
         onUpsertNotificationRoute={(request) =>
           upsertNotificationRoute({ ...request, updatedAt: new Date().toISOString() })
         }
