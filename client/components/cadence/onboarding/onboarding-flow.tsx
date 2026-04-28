@@ -13,16 +13,21 @@ import type {
   NotificationRouteHealthView,
   NotificationRouteMutationStatus,
   OperatorActionErrorView,
+  ProviderCredentialsLoadStatus,
+  ProviderCredentialsSaveStatus,
   ProviderModelCatalogLoadStatus,
   ProviderProfilesLoadStatus,
   ProviderProfilesSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import {
+  type ProviderCredentialsSnapshotDto,
   type ProviderModelCatalogDto,
   type ProviderProfileDto,
   type ProviderProfilesDto,
+  type RuntimeProviderIdDto,
   type RuntimeSessionView,
   type UpsertNotificationRouteRequestDto,
+  type UpsertProviderCredentialRequestDto,
   type UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import {
@@ -125,6 +130,11 @@ export interface OnboardingFlowProps {
   providerProfilesLoadError: OperatorActionErrorView | null
   providerProfilesSaveStatus: ProviderProfilesSaveStatus
   providerProfilesSaveError: OperatorActionErrorView | null
+  providerCredentials: ProviderCredentialsSnapshotDto | null
+  providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
+  providerCredentialsLoadError: OperatorActionErrorView | null
+  providerCredentialsSaveStatus: ProviderCredentialsSaveStatus
+  providerCredentialsSaveError: OperatorActionErrorView | null
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
   runtimeSession: RuntimeSessionView | null
@@ -146,6 +156,19 @@ export interface OnboardingFlowProps {
   onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
   onLogout?: () => Promise<RuntimeSessionView | null>
   onLogoutProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
+  onRefreshProviderCredentials?: (options?: {
+    force?: boolean
+  }) => Promise<ProviderCredentialsSnapshotDto>
+  onUpsertProviderCredential: (
+    request: UpsertProviderCredentialRequestDto,
+  ) => Promise<ProviderCredentialsSnapshotDto>
+  onDeleteProviderCredential?: (
+    providerId: RuntimeProviderIdDto,
+  ) => Promise<ProviderCredentialsSnapshotDto>
+  onStartOAuthLogin?: (request: {
+    providerId: RuntimeProviderIdDto
+    originator?: string | null
+  }) => Promise<RuntimeSessionView | null>
   onUpsertNotificationRoute: (
     request: Omit<UpsertNotificationRouteRequestDto, "projectId">,
   ) => Promise<unknown>
@@ -159,6 +182,11 @@ export function OnboardingFlow({
   providerProfilesLoadError,
   providerProfilesSaveStatus,
   providerProfilesSaveError,
+  providerCredentials,
+  providerCredentialsLoadStatus,
+  providerCredentialsLoadError,
+  providerCredentialsSaveStatus,
+  providerCredentialsSaveError,
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
   runtimeSession,
@@ -177,6 +205,10 @@ export function OnboardingFlow({
   onStartLogin,
   onLogout,
   onLogoutProviderProfile,
+  onRefreshProviderCredentials,
+  onUpsertProviderCredential,
+  onDeleteProviderCredential,
+  onStartOAuthLogin,
   onUpsertNotificationRoute,
   onComplete,
   onDismiss,
@@ -240,20 +272,16 @@ export function OnboardingFlow({
           ) : null}
           {currentStep.id === "providers" ? (
             <ProvidersStep
-              providerProfiles={providerProfiles}
-              providerProfilesLoadStatus={providerProfilesLoadStatus}
-              providerProfilesLoadError={providerProfilesLoadError}
-              providerProfilesSaveStatus={providerProfilesSaveStatus}
-              providerProfilesSaveError={providerProfilesSaveError}
-              providerModelCatalogs={providerModelCatalogs}
-              providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
+              providerCredentials={providerCredentials}
+              providerCredentialsLoadStatus={providerCredentialsLoadStatus}
+              providerCredentialsLoadError={providerCredentialsLoadError}
+              providerCredentialsSaveStatus={providerCredentialsSaveStatus}
+              providerCredentialsSaveError={providerCredentialsSaveError}
               runtimeSession={runtimeSession}
-              onRefreshProviderProfiles={onRefreshProviderProfiles}
-              onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
-              onUpsertProviderProfile={onUpsertProviderProfile}
-              onStartLogin={onStartLogin}
-              onLogout={onLogout}
-              onLogoutProviderProfile={onLogoutProviderProfile}
+              onRefreshProviderCredentials={onRefreshProviderCredentials}
+              onUpsertProviderCredential={onUpsertProviderCredential}
+              onDeleteProviderCredential={onDeleteProviderCredential}
+              onStartOAuthLogin={onStartOAuthLogin}
             />
           ) : null}
           {currentStep.id === "project" ? (

@@ -1,76 +1,69 @@
 import type {
   OperatorActionErrorView,
-  ProviderModelCatalogLoadStatus,
-  ProviderProfilesLoadStatus,
-  ProviderProfilesSaveStatus,
+  ProviderCredentialsLoadStatus,
+  ProviderCredentialsSaveStatus,
 } from "@/src/features/cadence/use-cadence-desktop-state"
 import type {
-  ProviderModelCatalogDto,
-  ProviderProfilesDto,
+  ProviderCredentialsSnapshotDto,
+  RuntimeProviderIdDto,
   RuntimeSessionView,
-  UpsertProviderProfileRequestDto,
+  UpsertProviderCredentialRequestDto,
 } from "@/src/lib/cadence-model"
-import { ProviderProfileForm } from "@/components/cadence/provider-profiles/provider-profile-form"
+import { ProviderCredentialsList } from "@/components/cadence/provider-profiles/provider-credentials-list"
 
 interface ProvidersStepProps {
-  providerProfiles: ProviderProfilesDto | null
-  providerProfilesLoadStatus: ProviderProfilesLoadStatus
-  providerProfilesLoadError: OperatorActionErrorView | null
-  providerProfilesSaveStatus: ProviderProfilesSaveStatus
-  providerProfilesSaveError: OperatorActionErrorView | null
-  providerModelCatalogs: Record<string, ProviderModelCatalogDto>
-  providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
+  providerCredentials: ProviderCredentialsSnapshotDto | null
+  providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
+  providerCredentialsLoadError: OperatorActionErrorView | null
+  providerCredentialsSaveStatus: ProviderCredentialsSaveStatus
+  providerCredentialsSaveError: OperatorActionErrorView | null
   runtimeSession?: RuntimeSessionView | null
-  onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
-  onRefreshProviderModelCatalog?: (
-    profileId: string,
-    options?: { force?: boolean },
-  ) => Promise<ProviderModelCatalogDto>
-  onUpsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
-  onStartLogin?: (options?: { profileId?: string | null }) => Promise<RuntimeSessionView | null>
-  onLogout?: () => Promise<RuntimeSessionView | null>
-  onLogoutProviderProfile?: (profileId: string) => Promise<ProviderProfilesDto>
+  onRefreshProviderCredentials?: (options?: {
+    force?: boolean
+  }) => Promise<ProviderCredentialsSnapshotDto>
+  onUpsertProviderCredential: (
+    request: UpsertProviderCredentialRequestDto,
+  ) => Promise<ProviderCredentialsSnapshotDto>
+  onDeleteProviderCredential?: (
+    providerId: RuntimeProviderIdDto,
+  ) => Promise<ProviderCredentialsSnapshotDto>
+  onStartOAuthLogin?: (request: {
+    providerId: RuntimeProviderIdDto
+    originator?: string | null
+  }) => Promise<RuntimeSessionView | null>
 }
 
 export function ProvidersStep({
-  providerProfiles,
-  providerProfilesLoadStatus,
-  providerProfilesLoadError,
-  providerProfilesSaveStatus,
-  providerProfilesSaveError,
-  providerModelCatalogs,
-  providerModelCatalogLoadStatuses,
+  providerCredentials,
+  providerCredentialsLoadStatus,
+  providerCredentialsLoadError,
+  providerCredentialsSaveStatus,
+  providerCredentialsSaveError,
   runtimeSession = null,
-  onRefreshProviderProfiles,
-  onRefreshProviderModelCatalog,
-  onUpsertProviderProfile,
-  onStartLogin,
-  onLogout,
-  onLogoutProviderProfile,
+  onRefreshProviderCredentials,
+  onUpsertProviderCredential,
+  onDeleteProviderCredential,
+  onStartOAuthLogin,
 }: ProvidersStepProps) {
   return (
     <div>
       <StepHeader
         title="Configure providers"
-        description="Provider setup is app-wide. Add credentials or sign in once, then choose models from the agent composer."
+        description="Add credentials for any providers you want to use. The model picker in the agent composer determines which credential is used for each turn — there is no global active provider."
       />
 
       <div className="mt-7 animate-in fade-in-0 slide-in-from-bottom-1 motion-enter [animation-delay:60ms] [animation-fill-mode:both]">
-        <ProviderProfileForm
-          providerProfiles={providerProfiles}
-          providerProfilesLoadStatus={providerProfilesLoadStatus}
-          providerProfilesLoadError={providerProfilesLoadError}
-          providerProfilesSaveStatus={providerProfilesSaveStatus}
-          providerProfilesSaveError={providerProfilesSaveError}
-          providerModelCatalogs={providerModelCatalogs}
-          providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-          onRefreshProviderProfiles={onRefreshProviderProfiles}
-          onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
-          onUpsertProviderProfile={onUpsertProviderProfile}
+        <ProviderCredentialsList
+          providerCredentials={providerCredentials}
+          providerCredentialsLoadStatus={providerCredentialsLoadStatus}
+          providerCredentialsLoadError={providerCredentialsLoadError}
+          providerCredentialsSaveStatus={providerCredentialsSaveStatus}
+          providerCredentialsSaveError={providerCredentialsSaveError}
           runtimeSession={runtimeSession}
-          onStartLogin={onStartLogin}
-          onLogout={onLogout}
-          onLogoutProviderProfile={onLogoutProviderProfile}
+          onRefreshProviderCredentials={onRefreshProviderCredentials}
+          onUpsertProviderCredential={onUpsertProviderCredential}
+          onDeleteProviderCredential={onDeleteProviderCredential}
+          onStartOAuthLogin={onStartOAuthLogin}
         />
       </div>
     </div>

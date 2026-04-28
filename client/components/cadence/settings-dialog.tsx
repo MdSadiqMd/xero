@@ -7,6 +7,8 @@ import type {
   McpRegistryLoadStatus,
   McpRegistryMutationStatus,
   OperatorActionErrorView,
+  ProviderCredentialsLoadStatus,
+  ProviderCredentialsSaveStatus,
   ProviderModelCatalogLoadStatus,
   ProviderProfilesLoadStatus,
   ProviderProfilesSaveStatus,
@@ -19,9 +21,11 @@ import type {
   CadenceDoctorReportDto,
   McpImportDiagnosticDto,
   McpRegistryDto,
+  ProviderCredentialsSnapshotDto,
   ProviderModelCatalogDto,
   ProviderProfileDiagnosticsDto,
   ProviderProfilesDto,
+  RuntimeProviderIdDto,
   RuntimeSessionView,
   RunDoctorReportRequestDto,
   ListSkillRegistryRequestDto,
@@ -38,6 +42,7 @@ import type {
   UpsertSkillLocalRootRequestDto,
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
+  UpsertProviderCredentialRequestDto,
   UpsertProviderProfileRequestDto,
 } from "@/src/lib/cadence-model"
 import type { PlatformVariant } from "@/components/cadence/shell"
@@ -138,6 +143,24 @@ export interface SettingsDialogProps {
   providerProfilesLoadError: OperatorActionErrorView | null
   providerProfilesSaveStatus: ProviderProfilesSaveStatus
   providerProfilesSaveError: OperatorActionErrorView | null
+  providerCredentials: ProviderCredentialsSnapshotDto | null
+  providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
+  providerCredentialsLoadError: OperatorActionErrorView | null
+  providerCredentialsSaveStatus: ProviderCredentialsSaveStatus
+  providerCredentialsSaveError: OperatorActionErrorView | null
+  onRefreshProviderCredentials?: (options?: {
+    force?: boolean
+  }) => Promise<ProviderCredentialsSnapshotDto>
+  onUpsertProviderCredential?: (
+    request: UpsertProviderCredentialRequestDto,
+  ) => Promise<ProviderCredentialsSnapshotDto>
+  onDeleteProviderCredential?: (
+    providerId: RuntimeProviderIdDto,
+  ) => Promise<ProviderCredentialsSnapshotDto>
+  onStartOAuthLogin?: (request: {
+    providerId: RuntimeProviderIdDto
+    originator?: string | null
+  }) => Promise<RuntimeSessionView | null>
   providerModelCatalogs: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses: Record<string, ProviderModelCatalogLoadStatus>
   onRefreshProviderProfiles?: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
@@ -209,6 +232,15 @@ export function SettingsDialog({
   providerProfilesLoadError,
   providerProfilesSaveStatus,
   providerProfilesSaveError,
+  providerCredentials,
+  providerCredentialsLoadStatus,
+  providerCredentialsLoadError,
+  providerCredentialsSaveStatus,
+  providerCredentialsSaveError,
+  onRefreshProviderCredentials,
+  onUpsertProviderCredential,
+  onDeleteProviderCredential,
+  onStartOAuthLogin,
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
   onRefreshProviderProfiles,
@@ -367,20 +399,15 @@ export function SettingsDialog({
                 <ProvidersSection
                   active={open && section === "providers"}
                   agent={agent}
-                  providerProfiles={providerProfiles}
-                  providerProfilesLoadStatus={providerProfilesLoadStatus}
-                  providerProfilesLoadError={providerProfilesLoadError}
-                  providerProfilesSaveStatus={providerProfilesSaveStatus}
-                  providerProfilesSaveError={providerProfilesSaveError}
-                  providerModelCatalogs={providerModelCatalogs}
-                  providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
-                  onRefreshProviderProfiles={onRefreshProviderProfiles}
-                  onRefreshProviderModelCatalog={onRefreshProviderModelCatalog}
-                  onCheckProviderProfile={onCheckProviderProfile}
-                  onUpsertProviderProfile={onUpsertProviderProfile}
-                  onStartLogin={onStartLogin}
-                  onLogout={onLogout}
-                  onLogoutProviderProfile={onLogoutProviderProfile}
+                  providerCredentials={providerCredentials}
+                  providerCredentialsLoadStatus={providerCredentialsLoadStatus}
+                  providerCredentialsLoadError={providerCredentialsLoadError}
+                  providerCredentialsSaveStatus={providerCredentialsSaveStatus}
+                  providerCredentialsSaveError={providerCredentialsSaveError}
+                  onRefreshProviderCredentials={onRefreshProviderCredentials}
+                  onUpsertProviderCredential={onUpsertProviderCredential}
+                  onDeleteProviderCredential={onDeleteProviderCredential}
+                  onStartOAuthLogin={onStartOAuthLogin}
                 />
               ) : section === "diagnostics" ? (
                 <DiagnosticsSection

@@ -94,6 +94,11 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     providerProfilesLoadError,
     providerProfilesSaveStatus,
     providerProfilesSaveError,
+    providerCredentials,
+    providerCredentialsLoadStatus,
+    providerCredentialsLoadError,
+    providerCredentialsSaveStatus,
+    providerCredentialsSaveError,
     providerModelCatalogs,
     providerModelCatalogLoadStatuses,
     doctorReport,
@@ -143,6 +148,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     runDoctorReport,
     upsertProviderProfile,
     logoutProviderProfile,
+    refreshProviderCredentials,
+    upsertProviderCredential,
+    deleteProviderCredential,
+    startOAuthLogin,
     refreshMcpRegistry,
     upsertMcpServer,
     removeMcpServer,
@@ -671,6 +680,11 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           providerProfilesLoadError={providerProfilesLoadError}
           providerProfilesSaveStatus={providerProfilesSaveStatus}
           providerProfilesSaveError={providerProfilesSaveError}
+          providerCredentials={providerCredentials}
+          providerCredentialsLoadStatus={providerCredentialsLoadStatus}
+          providerCredentialsLoadError={providerCredentialsLoadError}
+          providerCredentialsSaveStatus={providerCredentialsSaveStatus}
+          providerCredentialsSaveError={providerCredentialsSaveError}
           providerModelCatalogs={providerModelCatalogs}
           providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
           runtimeSession={agentView?.runtimeSession ?? null}
@@ -691,6 +705,10 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
           onStartLogin={(options) => startOpenAiLogin(options)}
           onLogout={() => logoutRuntimeSession()}
           onLogoutProviderProfile={(profileId) => logoutProviderProfile(profileId)}
+          onRefreshProviderCredentials={(options) => refreshProviderCredentials(options)}
+          onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
+          onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
+          onStartOAuthLogin={(request) => startOAuthLogin(request)}
           onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
           onComplete={() => {
             setOnboardingDismissed(true)
@@ -808,6 +826,15 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
         providerProfilesLoadError={providerProfilesLoadError}
         providerProfilesSaveStatus={providerProfilesSaveStatus}
         providerProfilesSaveError={providerProfilesSaveError}
+        providerCredentials={providerCredentials}
+        providerCredentialsLoadStatus={providerCredentialsLoadStatus}
+        providerCredentialsLoadError={providerCredentialsLoadError}
+        providerCredentialsSaveStatus={providerCredentialsSaveStatus}
+        providerCredentialsSaveError={providerCredentialsSaveError}
+        onRefreshProviderCredentials={(options) => refreshProviderCredentials(options)}
+        onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
+        onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
+        onStartOAuthLogin={(request) => startOAuthLogin(request)}
         providerModelCatalogs={providerModelCatalogs}
         providerModelCatalogLoadStatuses={providerModelCatalogLoadStatuses}
         onRefreshProviderProfiles={(options) => refreshProviderProfiles(options)}

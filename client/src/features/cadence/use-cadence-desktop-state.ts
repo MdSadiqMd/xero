@@ -149,6 +149,8 @@ export type {
   OperatorActionErrorView,
   OperatorActionStatus,
   ProjectRemovalStatus,
+  ProviderCredentialsLoadStatus,
+  ProviderCredentialsSaveStatus,
   ProviderModelCatalogLoadStatus,
   ProviderProfilesLoadStatus,
   ProviderProfilesSaveStatus,
