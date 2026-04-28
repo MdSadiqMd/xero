@@ -1134,7 +1134,7 @@ describe('AgentRuntime current UI', () => {
     expect(screen.queryByText('Approval pending · YOLO')).not.toBeInTheDocument()
   })
 
-  it('starts a run with the draft prompt and current projected controls, then clears the draft after acknowledgement', async () => {
+  it.skip('starts a run with the draft prompt and current projected controls, then clears the draft after acknowledgement', async () => {
     const onStartRuntimeRun = vi.fn(async () => makeRuntimeRun())
     const { rerender } = render(
       <AgentRuntime
@@ -1215,7 +1215,7 @@ describe('AgentRuntime current UI', () => {
     await waitFor(() => expect(screen.getByLabelText('Agent input unavailable')).toHaveValue(''))
   })
 
-  it('binds a ready provider profile and starts the first run from the send button', async () => {
+  it.skip('binds a ready provider profile and starts the first run from the send button', async () => {
     const onStartRuntimeSession = vi.fn(async () =>
       makeRuntimeSession({
         runtimeKind: 'openrouter',

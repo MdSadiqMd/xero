@@ -107,32 +107,27 @@ export function AgentRuntime({
     agent.selectedModel?.providerId ?? agent.selectedProviderId ?? runtimeSession?.providerId ?? 'openai_codex'
   const selectedModelId =
     agent.selectedModel?.modelId?.trim() || agent.selectedModelId?.trim() || null
-  const composerModelOptionsView = useMemo<AgentProviderModelView[]>(() => {
-    const unionOptions = agent.composerModelOptions ?? []
-    if (unionOptions.length === 0) {
-      // Until tests migrate off the legacy AgentPaneView shape, fall back to
-      // the per-active-profile catalog. Real user flow always has the union
-      // list populated from the credentials snapshot.
-      return agent.providerModelCatalog.models
-    }
-    return unionOptions.map((option) => ({
-      selectionKey: option.selectionKey,
-      profileId: null,
-      profileLabel: null,
-      providerId: option.providerId,
-      providerLabel: option.providerLabel,
-      modelId: option.modelId,
-      label: option.modelId,
-      displayName: option.displayName,
-      groupId: option.providerId,
-      groupLabel: option.providerLabel,
-      availability: 'available',
-      availabilityLabel: 'Available',
-      thinkingSupported: option.thinking.supported,
-      thinkingEffortOptions: option.thinkingEffortOptions,
-      defaultThinkingEffort: option.defaultThinkingEffort,
-    }))
-  }, [agent.composerModelOptions, agent.providerModelCatalog.models])
+  const composerModelOptionsView = useMemo<AgentProviderModelView[]>(
+    () =>
+      (agent.composerModelOptions ?? []).map((option) => ({
+        selectionKey: option.selectionKey,
+        profileId: null,
+        profileLabel: null,
+        providerId: option.providerId,
+        providerLabel: option.providerLabel,
+        modelId: option.modelId,
+        label: option.modelId,
+        displayName: option.displayName,
+        groupId: option.providerId,
+        groupLabel: option.providerLabel,
+        availability: 'available',
+        availabilityLabel: 'Available',
+        thinkingSupported: option.thinking.supported,
+        thinkingEffortOptions: option.thinkingEffortOptions,
+        defaultThinkingEffort: option.defaultThinkingEffort,
+      })),
+    [agent.composerModelOptions],
+  )
   const availableModels = composerModelOptionsView
   const hasRepositoryBinding = Boolean(agent.repositoryPath?.trim())
   const agentRuntimeBlocked = agent.agentRuntimeBlocked ?? false

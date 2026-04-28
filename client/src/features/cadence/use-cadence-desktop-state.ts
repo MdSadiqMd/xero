@@ -1517,10 +1517,8 @@ export function useCadenceDesktopState(
       buildWorkflowView({
         project: activeProject,
         activePhase,
-        providerProfiles: null,
         providerCredentials,
         runtimeSession: activeRuntimeSession,
-        runtimeSettings: null,
       }),
     [activePhase, activeProject, activeRuntimeSession, providerCredentials],
   )
@@ -1531,10 +1529,8 @@ export function useCadenceDesktopState(
         project: activeProject,
         activePhase,
         repositoryStatus,
-        providerProfiles: null,
         providerCredentials,
         runtimeSession: activeRuntimeSession,
-        runtimeSettings: null,
         providerModelCatalogs,
         providerModelCatalogLoadStatuses,
         providerModelCatalogLoadErrors,

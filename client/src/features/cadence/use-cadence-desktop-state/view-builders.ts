@@ -107,26 +107,26 @@ type ComposerProviderProfile = Pick<ProviderProfileDto, 'profileId' | 'providerI
 export interface BuildWorkflowViewDependencies {
   project: ProjectDetailView | null
   activePhase: Phase | null
-  providerProfiles: ProviderProfilesDto | null
   providerCredentials?: ProviderCredentialsSnapshotDto | null
   runtimeSession: RuntimeSessionView | null
-  runtimeSettings: RuntimeSettingsDto | null
 }
 
 export interface BuildAgentViewDependencies {
   project: ProjectDetailView | null
   activePhase: Phase | null
   repositoryStatus: RepositoryStatusView | null
-  providerProfiles: ProviderProfilesDto | null
   providerCredentials?: ProviderCredentialsSnapshotDto | null
   runtimeSession: RuntimeSessionView | null
-  runtimeSettings: RuntimeSettingsDto | null
   providerModelCatalogs?: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses?: Record<string, ProviderModelCatalogLoadStatus>
   providerModelCatalogLoadErrors?: Record<string, OperatorActionErrorView | null>
-  activeProviderModelCatalog: ProviderModelCatalogDto | null
-  activeProviderModelCatalogLoadStatus: ProviderModelCatalogLoadStatus
-  activeProviderModelCatalogLoadError: OperatorActionErrorView | null
+  // Phase 4 legacy: the agent composer's active-profile catalog projection
+  // is gone; the union list (composerModelOptions) drives the picker. These
+  // fields are kept optional only so the orchestrator's existing wiring keeps
+  // compiling while consumers migrate away.
+  activeProviderModelCatalog?: ProviderModelCatalogDto | null
+  activeProviderModelCatalogLoadStatus?: ProviderModelCatalogLoadStatus
+  activeProviderModelCatalogLoadError?: OperatorActionErrorView | null
   runtimeRun: RuntimeRunView | null
   autonomousRun: ProjectDetailView['autonomousRun']
   runtimeErrorMessage: string | null
@@ -262,163 +262,6 @@ function getProjectionError(error: unknown, fallback: string): OperatorActionErr
   }
 }
 
-const MODEL_GROUP_LABELS: Record<string, string> = {
-  anthropic: 'Anthropic',
-  deepseek: 'DeepSeek',
-  google: 'Google',
-  meta: 'Meta',
-  'meta-llama': 'Meta Llama',
-  mistral: 'Mistral',
-  moonshot: 'Moonshot',
-  moonshotai: 'Moonshot',
-  openai: 'OpenAI',
-  openrouter: 'OpenRouter',
-  'x-ai': 'xAI',
-  xai: 'xAI',
-}
-
-function getCatalogOwnerLabel(selectedProvider: SelectedProviderProjection['selectedProvider']): string {
-  const profileLabel = selectedProvider.profileLabel?.trim() ?? ''
-  if (profileLabel.length > 0) {
-    return profileLabel
-  }
-
-  const profileId = selectedProvider.profileId?.trim() ?? ''
-  if (profileId.length > 0) {
-    return profileId
-  }
-
-  return selectedProvider.providerLabel
-}
-
-function createProviderModelSelectionKey(profileId: string | null | undefined, modelId: string): string {
-  const normalizedProfileId = profileId?.trim() || 'unscoped'
-  return `${encodeURIComponent(normalizedProfileId)}::${encodeURIComponent(modelId.trim())}`
-}
-
-function getProfileDisplayLabel(profile: ComposerProviderProfile): string {
-  const label = profile.label.trim()
-  return label.length > 0 ? label : profile.profileId
-}
-
-function getProviderProfileGroupLabel(profile: ComposerProviderProfile): string {
-  const providerLabel = getRuntimeProviderLabel(profile.providerId)
-  const profileLabel = getProfileDisplayLabel(profile)
-  return profileLabel === providerLabel ? providerLabel : `${profileLabel} · ${providerLabel}`
-}
-
-function getCatalogProjectionProvider(options: {
-  selectedProvider: SelectedProviderProjection['selectedProvider']
-  runtimeRun: RuntimeRunView | null
-  controlTruthSource: AgentRunControlProjection['source']
-}): SelectedProviderProjection['selectedProvider'] {
-  const runtimeRunProviderId = options.runtimeRun?.providerId?.trim() ?? ''
-  if (
-    options.controlTruthSource !== 'runtime_run' ||
-    runtimeRunProviderId.length === 0 ||
-    !isKnownRuntimeProviderId(runtimeRunProviderId) ||
-    runtimeRunProviderId === options.selectedProvider.providerId
-  ) {
-    return options.selectedProvider
-  }
-
-  return {
-    ...options.selectedProvider,
-    profileId: null,
-    profileLabel: null,
-    providerId: runtimeRunProviderId,
-    providerLabel: getRuntimeProviderLabel(runtimeRunProviderId),
-  }
-}
-
-function getGitHubScopedGroupLabel(providerLabel: string, groupLabel: string): string {
-  return providerLabel === groupLabel ? providerLabel : `${providerLabel} · ${groupLabel}`
-}
-
-function getModelGroupLabel(
-  modelId: string,
-  providerId: SelectedProviderProjection['selectedProvider']['providerId'],
-  providerLabel: string,
-): { groupId: string; groupLabel: string } {
-  const normalizedProviderLabel = providerLabel.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_') || 'provider_models'
-  const trimmedModelId = modelId.trim()
-  const namespace = trimmedModelId.includes('/') ? trimmedModelId.split('/')[0]?.trim() ?? '' : ''
-  if (namespace.length === 0) {
-    return {
-      groupId: normalizedProviderLabel,
-      groupLabel: providerLabel,
-    }
-  }
-
-  const normalizedNamespace = namespace.toLowerCase()
-  const knownLabel = MODEL_GROUP_LABELS[normalizedNamespace] ?? getRuntimeProviderLabel(namespace)
-  const groupId = normalizedNamespace.replace(/[^a-z0-9]+/g, '_')
-
-  if (providerId === 'github_models') {
-    return {
-      groupId: `github_models_${groupId}`,
-      groupLabel: getGitHubScopedGroupLabel(providerLabel, knownLabel),
-    }
-  }
-
-  return {
-    groupId,
-    groupLabel: knownLabel,
-  }
-}
-
-function getThinkingEffortOptions(model: ProviderModelDto): ProviderModelThinkingEffortDto[] {
-  if (!model.thinking.supported) {
-    return []
-  }
-
-  const effortOptions: ProviderModelThinkingEffortDto[] = []
-  for (const effort of model.thinking.effortOptions) {
-    if (!effortOptions.includes(effort)) {
-      effortOptions.push(effort)
-    }
-  }
-
-  return effortOptions
-}
-
-function buildAgentProviderModel(
-  model: ProviderModelDto,
-  profile: ComposerProviderProfile,
-  groupLabelOverride?: string,
-): AgentProviderModelView | null {
-  const modelId = model.modelId.trim()
-  if (modelId.length === 0) {
-    return null
-  }
-
-  const providerLabel = getRuntimeProviderLabel(profile.providerId)
-  const effortOptions = getThinkingEffortOptions(model)
-  const defaultThinkingEffort =
-    model.thinking.supported && model.thinking.defaultEffort && effortOptions.includes(model.thinking.defaultEffort)
-      ? model.thinking.defaultEffort
-      : effortOptions[0] ?? null
-  const modelGroup = getModelGroupLabel(modelId, profile.providerId, providerLabel)
-  const groupLabel = groupLabelOverride ?? getProviderProfileGroupLabel(profile)
-
-  return {
-    selectionKey: createProviderModelSelectionKey(profile.profileId, modelId),
-    profileId: profile.profileId,
-    profileLabel: getProfileDisplayLabel(profile),
-    providerId: profile.providerId,
-    providerLabel,
-    modelId,
-    label: modelId,
-    displayName: model.displayName.trim() || modelId,
-    groupId: groupLabelOverride ? modelGroup.groupId : profile.profileId,
-    groupLabel,
-    availability: 'available',
-    availabilityLabel: 'Available',
-    thinkingSupported: effortOptions.length > 0,
-    thinkingEffortOptions: effortOptions,
-    defaultThinkingEffort,
-  }
-}
 
 function buildOrphanedAgentProviderModel(
   modelId: string,
@@ -434,7 +277,7 @@ function buildOrphanedAgentProviderModel(
   }
 
   return {
-    selectionKey: createProviderModelSelectionKey(profileId, trimmedModelId),
+    selectionKey: `${providerId}:${trimmedModelId}`,
     profileId,
     profileLabel,
     providerId,
@@ -468,13 +311,14 @@ function getCatalogRefreshError(
 }
 
 function getCatalogStateCopy(options: {
-  selectedProvider: SelectedProviderProjection['selectedProvider']
+  providerId: string
+  providerLabel: string
   catalog: ProviderModelCatalogDto | null
   loadStatus: ProviderModelCatalogLoadStatus
   refreshError: OperatorActionErrorView | null
   discoveredModelCount: number
 }): Pick<AgentProviderModelCatalogView, 'state' | 'stateLabel' | 'detail'> {
-  const ownerLabel = getCatalogOwnerLabel(options.selectedProvider)
+  const ownerLabel = options.providerLabel
 
   if (options.catalog?.source === 'live' && options.discoveredModelCount > 0) {
     return {
@@ -526,18 +370,21 @@ function getCatalogStateCopy(options: {
   }
 }
 
+/**
+ * Phase 4: credentials-driven catalog projection. Replaces the legacy
+ * provider-profile catalog walk. The agent composer's primary picker now
+ * reads the union list from `buildComposerModelOptions`; this function
+ * only produces the AgentPaneView's `providerModelCatalog` field plus the
+ * selected-model details for the run-controls projection.
+ */
 function buildAgentProviderModelCatalog(options: {
-  selectedProvider: SelectedProviderProjection['selectedProvider']
-  providerProfiles: ProviderProfilesDto | null
+  selectedModel: SelectedModelView
+  composerModelOptions: ComposerModelOptionView[]
+  providerCredentials: ProviderCredentialsSnapshotDto | null
   providerModelCatalogs?: Record<string, ProviderModelCatalogDto>
   providerModelCatalogLoadStatuses?: Record<string, ProviderModelCatalogLoadStatus>
   providerModelCatalogLoadErrors?: Record<string, OperatorActionErrorView | null>
-  activeProviderModelCatalog: ProviderModelCatalogDto | null
-  activeProviderModelCatalogLoadStatus: ProviderModelCatalogLoadStatus
-  activeProviderModelCatalogLoadError: OperatorActionErrorView | null
-  selectedProviderProfileIdOverride?: string | null
   selectedModelIdOverride?: string | null
-  allowCatalogTruth?: boolean
 }): {
   providerModelCatalog: AgentProviderModelCatalogView
   selectedModelOption: AgentProviderModelView | null
@@ -545,186 +392,104 @@ function buildAgentProviderModelCatalog(options: {
   selectedModelDefaultThinkingEffort: ProviderModelThinkingEffortDto | null
   selectedModelId: string | null
 } {
-  const allowCatalogTruth = options.allowCatalogTruth ?? true
-  const activeCatalog = allowCatalogTruth ? options.activeProviderModelCatalog : null
-  const catalogRecords = {
-    ...(options.providerModelCatalogs ?? {}),
-  }
-  if (activeCatalog) {
-    catalogRecords[activeCatalog.profileId] = activeCatalog
-  }
-  const loadStatusRecords = {
-    ...(options.providerModelCatalogLoadStatuses ?? {}),
-  }
-  if (activeCatalog) {
-    loadStatusRecords[activeCatalog.profileId] = options.activeProviderModelCatalogLoadStatus
-  }
-  const loadErrorRecords = {
-    ...(options.providerModelCatalogLoadErrors ?? {}),
-  }
-  if (activeCatalog) {
-    loadErrorRecords[activeCatalog.profileId] = options.activeProviderModelCatalogLoadError
-  }
-  const discoveredModels: AgentProviderModelView[] = []
-  const seenSelectionKeys = new Set<string>()
-  const readyProfiles =
-    options.providerProfiles?.profiles.filter((profile) => profile.readiness.ready) ?? []
-  const activeProfile = options.providerProfiles?.profiles.find((profile) => profile.active) ?? null
-  const fallbackProfile: ComposerProviderProfile | null =
-    readyProfiles.length === 0
-      ? options.selectedProvider.profileId
-        ? {
-            profileId: options.selectedProvider.profileId,
-            providerId: options.selectedProvider.providerId,
-            label: options.selectedProvider.profileLabel ?? options.selectedProvider.providerLabel,
-            modelId: options.selectedProvider.modelId ?? '',
-          }
-        : activeCatalog
-          ? {
-              profileId: activeCatalog.profileId,
-              providerId: activeCatalog.providerId,
-              label: options.selectedProvider.profileLabel ?? getRuntimeProviderLabel(activeCatalog.providerId),
-              modelId: activeCatalog.configuredModelId,
-            }
-          : null
-      : null
-  const composerProfiles: ComposerProviderProfile[] =
-    readyProfiles.length > 0 ? readyProfiles : fallbackProfile ? [fallbackProfile] : []
-  let representativeCatalog: ProviderModelCatalogDto | null = null
-  let representativeLoadStatus: ProviderModelCatalogLoadStatus = 'idle'
-  let representativeRefreshError: OperatorActionErrorView | null = null
+  const providerId = options.selectedModel.providerId
+  const providerLabel = options.selectedModel.providerLabel
+  const catalog = providerId ? options.providerModelCatalogs?.[providerId] ?? null : null
+  const loadStatus =
+    providerId
+      ? options.providerModelCatalogLoadStatuses?.[providerId] ?? 'idle'
+      : ('idle' as ProviderModelCatalogLoadStatus)
+  const refreshError = providerId
+    ? getCatalogRefreshError(catalog, options.providerModelCatalogLoadErrors?.[providerId] ?? null)
+    : null
 
-  for (const profile of composerProfiles) {
-    const catalog = allowCatalogTruth ? catalogRecords[profile.profileId] ?? null : null
-    const loadStatus = loadStatusRecords[profile.profileId] ?? 'idle'
-    const refreshError = allowCatalogTruth
-      ? getCatalogRefreshError(catalog, loadErrorRecords[profile.profileId] ?? null)
-      : null
+  const credentialedProviders = new Set(
+    (options.providerCredentials?.credentials ?? []).map((c) => c.providerId),
+  )
+  // The agent composer's union list (composerModelOptions) is the source of
+  // truth for `models`; we adapt it to the legacy AgentProviderModelView shape.
+  const models: AgentProviderModelView[] = options.composerModelOptions.map((option) => ({
+    selectionKey: option.selectionKey,
+    profileId: null,
+    profileLabel: null,
+    providerId: option.providerId,
+    providerLabel: option.providerLabel,
+    modelId: option.modelId,
+    label: option.modelId,
+    displayName: option.displayName,
+    groupId: option.providerId,
+    groupLabel: option.providerLabel,
+    availability: 'available',
+    availabilityLabel: 'Available',
+    thinkingSupported: option.thinking.supported,
+    thinkingEffortOptions: option.thinkingEffortOptions,
+    defaultThinkingEffort: option.defaultThinkingEffort,
+  }))
 
-    if (
-      !representativeCatalog &&
-      (profile.profileId === options.selectedProviderProfileIdOverride ||
-        profile.profileId === options.selectedProvider.profileId ||
-        profile.profileId === activeProfile?.profileId ||
-        catalog)
-    ) {
-      representativeCatalog = catalog
-      representativeLoadStatus = loadStatus
-      representativeRefreshError = refreshError
-    }
-
-    for (const model of catalog?.models ?? []) {
-      const nextModel = buildAgentProviderModel(model, profile)
-      if (!nextModel || seenSelectionKeys.has(nextModel.selectionKey)) {
-        continue
-      }
-
-      seenSelectionKeys.add(nextModel.selectionKey)
-      discoveredModels.push(nextModel)
-    }
-  }
-
-  representativeCatalog ??= activeCatalog
-  representativeLoadStatus =
-    representativeCatalog?.profileId && loadStatusRecords[representativeCatalog.profileId]
-      ? loadStatusRecords[representativeCatalog.profileId]
-      : representativeLoadStatus
-  representativeRefreshError ??=
-    representativeCatalog?.profileId
-      ? getCatalogRefreshError(representativeCatalog, loadErrorRecords[representativeCatalog.profileId] ?? null)
-      : null
-  const selectedProfileId =
-    options.selectedProviderProfileIdOverride?.trim() ||
-    options.selectedProvider.profileId?.trim() ||
-    (allowCatalogTruth ? activeProfile?.profileId : null) ||
-    representativeCatalog?.profileId ||
-    null
-  const selectedProfile =
-    composerProfiles.find((profile) => profile.profileId === selectedProfileId) ??
-    (selectedProfileId
-      ? ({
-          profileId: selectedProfileId,
-          providerId: representativeCatalog?.providerId ?? options.selectedProvider.providerId,
-          label: options.selectedProvider.profileLabel ?? options.selectedProvider.providerLabel,
-          modelId: options.selectedProvider.modelId ?? representativeCatalog?.configuredModelId ?? '',
-        } satisfies ComposerProviderProfile)
-      : null)
-  const selectedProviderLabel = selectedProfile
-    ? getRuntimeProviderLabel(selectedProfile.providerId)
-    : options.selectedProvider.providerLabel
-  const selectedProfileLabel = selectedProfile ? getProfileDisplayLabel(selectedProfile) : options.selectedProvider.profileLabel
   const configuredModelId =
     options.selectedModelIdOverride?.trim() ||
-    (selectedProfile?.profileId ? catalogRecords[selectedProfile.profileId]?.configuredModelId.trim() : '') ||
-    selectedProfile?.modelId?.trim() ||
-    representativeCatalog?.configuredModelId.trim() ||
-    options.selectedProvider.modelId?.trim() ||
+    options.selectedModel.modelId?.trim() ||
+    catalog?.configuredModelId.trim() ||
     null
   const selectedModelId = configuredModelId && configuredModelId.length > 0 ? configuredModelId : null
-  const selectedSelectionKey =
-    selectedProfile && selectedModelId
-      ? createProviderModelSelectionKey(selectedProfile.profileId, selectedModelId)
-      : selectedModelId
-  const selectedDiscoveredModel =
-    selectedSelectionKey
-      ? discoveredModels.find((model) => model.selectionKey === selectedSelectionKey) ??
-        discoveredModels.find((model) => model.modelId === selectedModelId)
-      : null
-  const orphanGroupLabel = selectedProfile
-    ? getProviderProfileGroupLabel(selectedProfile)
-    : options.selectedProvider.providerId === 'github_models'
-      ? getGitHubScopedGroupLabel(selectedProviderLabel, 'Current selection')
-      : 'Current selection'
-  const selectedModelOption =
-    selectedDiscoveredModel ??
+  const selectionKey =
+    providerId && selectedModelId ? `${providerId}:${selectedModelId}` : null
+  const discoveredSelected = selectionKey
+    ? models.find((model) => model.selectionKey === selectionKey)
+    : null
+  const selectedModelOption: AgentProviderModelView | null =
+    discoveredSelected ??
     (selectedModelId
       ? buildOrphanedAgentProviderModel(
           selectedModelId,
-          selectedProfile?.providerId ?? options.selectedProvider.providerId,
-          selectedProviderLabel,
-          selectedProfile?.profileId ?? options.selectedProvider.profileId,
-          selectedProfileLabel ?? null,
-          orphanGroupLabel,
+          providerId ?? 'openai_codex',
+          providerLabel,
+          null,
+          null,
+          'Current selection',
         )
       : null)
-  const models = selectedModelOption && selectedModelOption.availability === 'orphaned'
-    ? [selectedModelOption, ...discoveredModels]
-    : discoveredModels
-  const stateCopy = allowCatalogTruth
+
+  const finalModels =
+    selectedModelOption && selectedModelOption.availability === 'orphaned'
+      ? [selectedModelOption, ...models]
+      : models
+
+  const aggregateProviderLabel =
+    models.length > 0 && credentialedProviders.size > 1 ? 'Configured providers' : providerLabel
+
+  // State copy: empty when no credentials, otherwise live/cache/manual based on
+  // the selected provider's catalog.
+  const stateCopy = options.selectedModel.hasCredential
     ? getCatalogStateCopy({
-        selectedProvider: options.selectedProvider,
-        catalog: representativeCatalog,
-        loadStatus: representativeLoadStatus,
-        refreshError: representativeRefreshError,
-        discoveredModelCount: discoveredModels.length,
+        providerId: providerId ?? 'openai_codex',
+        providerLabel,
+        catalog,
+        loadStatus,
+        refreshError,
+        discoveredModelCount: models.length,
       })
     : {
         state: 'unavailable' as const,
         stateLabel: 'Catalog unavailable',
-        detail: `Cadence is showing durable ${options.selectedProvider.providerLabel} run-scoped control truth from the active supervised run while keeping the current Settings selection out of the live projection.`,
+        detail: `Add a ${providerLabel} credential in Settings to discover models for this provider.`,
       }
-  const aggregateProviderId =
-    representativeCatalog?.providerId ?? selectedProfile?.providerId ?? options.selectedProvider.providerId
-  const aggregateProviderLabel =
-    discoveredModels.length > 0 && composerProfiles.length > 1
-      ? 'Configured providers'
-      : getRuntimeProviderLabel(aggregateProviderId)
 
   return {
     providerModelCatalog: {
-      profileId: selectedProfile?.profileId ?? representativeCatalog?.profileId ?? options.selectedProvider.profileId,
-      profileLabel: selectedProfileLabel ?? options.selectedProvider.profileLabel,
-      providerId: aggregateProviderId,
+      profileId: null,
+      profileLabel: null,
+      providerId: providerId ?? 'openai_codex',
       providerLabel: aggregateProviderLabel,
-      source: representativeCatalog?.source ?? null,
-      loadStatus: representativeLoadStatus,
+      source: catalog?.source ?? null,
+      loadStatus,
       state: stateCopy.state,
       stateLabel: stateCopy.stateLabel,
       detail: stateCopy.detail,
-      fetchedAt: getProviderModelCatalogFetchedAt(representativeCatalog),
-      lastSuccessAt: representativeCatalog?.lastSuccessAt ?? null,
-      lastRefreshError: representativeRefreshError,
-      models,
+      fetchedAt: getProviderModelCatalogFetchedAt(catalog),
+      lastSuccessAt: catalog?.lastSuccessAt ?? null,
+      lastRefreshError: refreshError,
+      models: finalModels,
     },
     selectedModelOption,
     selectedModelThinkingEffortOptions: selectedModelOption?.thinkingEffortOptions ?? [],
@@ -772,16 +537,11 @@ export function buildAgentView({
   project,
   activePhase,
   repositoryStatus,
-  providerProfiles,
   providerCredentials = null,
   runtimeSession,
-  runtimeSettings,
   providerModelCatalogs,
   providerModelCatalogLoadStatuses,
   providerModelCatalogLoadErrors,
-  activeProviderModelCatalog,
-  activeProviderModelCatalogLoadStatus,
-  activeProviderModelCatalogLoadError,
   runtimeRun,
   autonomousRun,
   runtimeErrorMessage,
@@ -868,25 +628,14 @@ export function buildAgentView({
       ? isAgentRuntimeBlocked(providerCredentials, selectedModel)
       : undefined
   const controlProjection = getAgentRunControlProjection(runtimeRun)
-  const catalogProjectionProvider = getCatalogProjectionProvider({
-    selectedProvider,
-    runtimeRun,
-    controlTruthSource: controlProjection.source,
-  })
-  const allowCatalogTruth =
-    controlProjection.source === 'fallback' || runtimeRun?.providerId === selectedProvider.providerId
   const providerModelCatalogProjection = buildAgentProviderModelCatalog({
-    selectedProvider: catalogProjectionProvider,
-    providerProfiles,
+    selectedModel,
+    composerModelOptions,
+    providerCredentials,
     providerModelCatalogs,
     providerModelCatalogLoadStatuses,
     providerModelCatalogLoadErrors,
-    activeProviderModelCatalog,
-    activeProviderModelCatalogLoadStatus,
-    activeProviderModelCatalogLoadError,
-    selectedProviderProfileIdOverride: controlProjection.selectedProviderProfileId,
     selectedModelIdOverride: controlProjection.selectedModelId,
-    allowCatalogTruth,
   })
   const selectedModelId =
     controlProjection.source === 'runtime_run'
