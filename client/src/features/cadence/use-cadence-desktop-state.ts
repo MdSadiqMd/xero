@@ -1407,20 +1407,41 @@ export function useCadenceDesktopState(
     : null
   const activeAutonomousRunErrorMessage = activeProjectId ? autonomousRunLoadErrors[activeProjectId] ?? null : null
   const activeRuntimeRunId = activeRuntimeRun?.runId ?? null
+  const activeRuntimeSessionId = activeRuntimeSession?.sessionId ?? null
+  const activeRuntimeSessionFlowId = activeRuntimeSession?.flowId ?? null
+  const activeRuntimeSessionKind = activeRuntimeSession?.runtimeKind ?? null
+  const activeRuntimeSessionAuthenticated = activeRuntimeSession?.isAuthenticated ?? false
+  const activeRuntimeSubscriptionSession = useMemo(
+    () => activeRuntimeSession,
+    [
+      activeRuntimeSessionAuthenticated,
+      activeRuntimeSessionFlowId,
+      activeRuntimeSessionId,
+      activeRuntimeSessionKind,
+    ],
+  )
   const activeRuntimeSubscriptionKey =
     activeProjectId
     && activeAgentSessionId
-    && activeRuntimeSession?.isAuthenticated
-    && activeRuntimeSession.sessionId
+    && activeRuntimeSessionAuthenticated
+    && activeRuntimeSessionId
     && activeRuntimeRunId
-      ? `${activeProjectId}:${activeAgentSessionId}:${activeRuntimeSession.sessionId}:${activeRuntimeRunId}:${runtimeStreamRetryToken}`
+      ? [
+          activeProjectId,
+          activeAgentSessionId,
+          activeRuntimeSessionKind,
+          activeRuntimeSessionId,
+          activeRuntimeSessionFlowId ?? 'none',
+          activeRuntimeRunId,
+          runtimeStreamRetryToken,
+        ].join(':')
       : null
 
   useEffect(() => {
     return attachRuntimeStreamSubscription({
       projectId: activeProjectId,
       agentSessionId: activeAgentSessionId,
-      runtimeSession: activeRuntimeSession,
+      runtimeSession: activeRuntimeSubscriptionSession,
       runId: activeRuntimeRunId,
       adapter,
       runtimeActionRefreshKeysRef,
@@ -1431,7 +1452,7 @@ export function useCadenceDesktopState(
     activeProjectId,
     activeAgentSessionId,
     activeRuntimeRunId,
-    activeRuntimeSession,
+    activeRuntimeSubscriptionSession,
     activeRuntimeSubscriptionKey,
     adapter,
     scheduleRuntimeMetadataRefresh,
