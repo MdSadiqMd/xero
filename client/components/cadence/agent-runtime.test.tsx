@@ -482,7 +482,7 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     selectedProfileLabel: overrides.selectedProfileLabel ?? null,
     selectedProviderId,
     selectedProviderLabel,
-    selectedProviderSource: overrides.selectedProviderSource ?? 'provider_profiles',
+    selectedProviderSource: overrides.selectedProviderSource ?? 'credential_default',
     controlTruthSource: overrides.controlTruthSource ?? (runtimeRun ? 'runtime_run' : 'fallback'),
     selectedModelId,
     selectedThinkingEffort: overrides.selectedThinkingEffort ?? selectedModelOption?.defaultThinkingEffort ?? null,

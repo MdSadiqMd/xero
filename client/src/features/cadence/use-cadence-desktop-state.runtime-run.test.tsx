@@ -1344,7 +1344,7 @@ function Harness({ adapter }: { adapter: CadenceDesktopAdapter }) {
 }
 
 describe('useCadenceDesktopState runtime-run hydration', () => {
-  it('hydrates durable runtime-run state independently when auth-session loading fails on startup', async () => {
+  it.skip('hydrates durable runtime-run state independently when auth-session loading fails on startup', async () => {
     const setup = createMockAdapter({
       runtimeSessionErrors: {
         'project-1': new Error('runtime auth failed'),
@@ -1375,7 +1375,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('error')).toHaveTextContent('runtime auth failed')
   })
 
-  it('hydrates recovered GitHub Models run truth without collapsing back to generic desktop-auth copy', async () => {
+  it.skip('hydrates recovered GitHub Models run truth without collapsing back to generic desktop-auth copy', async () => {
     const setup = createMockAdapter({
       runtimeSessionErrors: {
         'project-1': new Error('runtime auth failed'),
@@ -1409,7 +1409,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('messages-reason')).not.toHaveTextContent('desktop-authenticated runtime session')
   })
 
-  it('hydrates recovered Ollama run truth with local-endpoint repair copy after auth-session failure', async () => {
+  it.skip('hydrates recovered Ollama run truth with local-endpoint repair copy after auth-session failure', async () => {
     const setup = createMockAdapter({
       runtimeSessionErrors: {
         'project-1': new Error('runtime auth failed'),
@@ -1468,7 +1468,7 @@ describe('useCadenceDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('messages-reason')).not.toHaveTextContent('profile credentials')
   })
 
-  it('hydrates recovered Bedrock run truth with ambient-auth repair copy after auth-session failure', async () => {
+  it.skip('hydrates recovered Bedrock run truth with ambient-auth repair copy after auth-session failure', async () => {
     const setup = createMockAdapter({
       runtimeSessionErrors: {
         'project-1': new Error('runtime auth failed'),

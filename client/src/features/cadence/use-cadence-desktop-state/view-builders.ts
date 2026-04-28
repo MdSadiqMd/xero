@@ -39,16 +39,13 @@ import {
 } from './notification-health'
 import {
   buildComposerModelOptions,
-  getAgentMessagesUnavailableReason,
-  getAgentRuntimeRunUnavailableReason,
-  getAgentSessionUnavailableReason,
-  getProviderMismatchCopy,
+  getAgentMessagesUnavailableCredentialReason,
+  getAgentRuntimeRunUnavailableCredentialReason,
+  getAgentSessionUnavailableCredentialReason,
   getRuntimeProviderLabel,
-  hasProviderMismatch,
   isAgentRuntimeBlocked,
   isKnownRuntimeProviderId,
   resolveSelectedModel,
-  resolveSelectedRuntimeProvider,
   type ComposerModelOptionView,
   type SelectedModelView,
 } from './runtime-provider'
@@ -78,9 +75,16 @@ const REPOSITORY_DIFF_SCOPE_LABELS = {
 } as const
 
 interface SelectedProviderProjection {
-  providerMismatch: boolean
-  selectedProvider: ReturnType<typeof resolveSelectedRuntimeProvider>
-  providerMismatchCopy: ReturnType<typeof getProviderMismatchCopy>
+  selectedProvider: {
+    profileId: string | null
+    profileLabel: string | null
+    providerId: ProviderProfileDto['providerId']
+    providerLabel: string
+    modelId: string | null
+    source: 'credential_default' | 'fallback' | 'default'
+    openrouterApiKeyConfigured: boolean
+    anthropicApiKeyConfigured: boolean
+  }
 }
 
 interface AgentRunControlProjection {
@@ -163,17 +167,20 @@ export interface BuildExecutionViewDependencies {
 }
 
 function getSelectedProviderProjection(
-  providerProfiles: ProviderProfilesDto | null,
-  runtimeSettings: RuntimeSettingsDto | null,
-  runtimeSession: RuntimeSessionView | null,
+  selectedModel: SelectedModelView,
 ): SelectedProviderProjection {
-  const selectedProvider = resolveSelectedRuntimeProvider(providerProfiles, runtimeSettings, runtimeSession)
-  const providerMismatchCopy = getProviderMismatchCopy(selectedProvider, runtimeSession)
-
+  const providerId = (selectedModel.providerId ?? 'openai_codex') as ProviderProfileDto['providerId']
   return {
-    selectedProvider,
-    providerMismatch: hasProviderMismatch(selectedProvider, runtimeSession),
-    providerMismatchCopy,
+    selectedProvider: {
+      profileId: null,
+      profileLabel: null,
+      providerId,
+      providerLabel: selectedModel.providerLabel,
+      modelId: selectedModel.modelId,
+      source: selectedModel.source === 'runtime_run' ? 'credential_default' : selectedModel.source,
+      openrouterApiKeyConfigured: false,
+      anthropicApiKeyConfigured: false,
+    },
   }
 }
 
@@ -729,20 +736,16 @@ function buildAgentProviderModelCatalog(options: {
 export function buildWorkflowView({
   project,
   activePhase,
-  providerProfiles,
+  providerCredentials = null,
   runtimeSession,
-  runtimeSettings,
 }: BuildWorkflowViewDependencies): WorkflowPaneView | null {
   if (!project) {
     return null
   }
 
-  const { selectedProvider, providerMismatch, providerMismatchCopy } = getSelectedProviderProjection(
-    providerProfiles,
-    runtimeSettings,
-    runtimeSession,
-  )
-  const hasAnyReadyProvider = providerProfiles?.profiles.some((profile) => profile.readiness.ready) ?? false
+  const selectedModel = resolveSelectedModel(providerCredentials, null)
+  const { selectedProvider } = getSelectedProviderProjection(selectedModel)
+  const hasAnyReadyProvider = (providerCredentials?.credentials.length ?? 0) > 0
 
   return {
     project,
@@ -756,12 +759,12 @@ export function buildWorkflowView({
     selectedProviderLabel: selectedProvider.providerLabel,
     selectedProviderSource: selectedProvider.source,
     selectedModelId: selectedProvider.modelId,
-    selectedProfileReadiness: selectedProvider.readiness,
+    selectedProfileReadiness: null,
     openrouterApiKeyConfigured: selectedProvider.openrouterApiKeyConfigured,
     hasAnyReadyProvider,
-    providerMismatch,
-    providerMismatchReason: providerMismatchCopy?.reason ?? null,
-    providerMismatchRecoveryCopy: providerMismatchCopy?.sessionRecoveryCopy ?? null,
+    providerMismatch: false,
+    providerMismatchReason: null,
+    providerMismatchRecoveryCopy: null,
   }
 }
 
@@ -848,11 +851,22 @@ export function buildAgentView({
     resumeHistory: project.resumeHistory,
     notificationBroker: project.notificationBroker,
   })
-  const { selectedProvider, providerMismatch, providerMismatchCopy } = getSelectedProviderProjection(
-    providerProfiles,
-    runtimeSettings,
-    runtimeSession,
+  // Selected model + composer options + blocked flag (credentials-driven).
+  const selectedRunControls = runtimeRun?.controls.selected ?? null
+  const selectedModel: SelectedModelView = resolveSelectedModel(
+    providerCredentials,
+    selectedRunControls,
+    { runtimeRun },
   )
+  const { selectedProvider } = getSelectedProviderProjection(selectedModel)
+  const composerModelOptions: ComposerModelOptionView[] = buildComposerModelOptions(
+    providerCredentials,
+    providerModelCatalogs,
+  )
+  const agentRuntimeBlocked =
+    providerCredentials !== null
+      ? isAgentRuntimeBlocked(providerCredentials, selectedModel)
+      : undefined
   const controlProjection = getAgentRunControlProjection(runtimeRun)
   const catalogProjectionProvider = getCatalogProjectionProvider({
     selectedProvider,
@@ -884,26 +898,6 @@ export function buildAgentView({
       : providerModelCatalogProjection.selectedModelDefaultThinkingEffort
   const selectedApprovalMode = controlProjection.selectedApprovalMode
 
-  // Phase 3.4: credentials-driven projections that will eventually replace
-  // the legacy `selectedProvider` + `providerMismatch` fields above.
-  const selectedRunControls = runtimeRun?.controls.selected ?? null
-  const selectedModel: SelectedModelView = resolveSelectedModel(
-    providerCredentials,
-    selectedRunControls,
-    { runtimeRun },
-  )
-  const composerModelOptions: ComposerModelOptionView[] = buildComposerModelOptions(
-    providerCredentials,
-    providerModelCatalogs,
-  )
-  // Only block when credentials data has been loaded. When the snapshot is
-  // null (tests / legacy paths still using providerProfiles), leave the
-  // field undefined so consumers fall through to legacy logic.
-  const agentRuntimeBlocked =
-    providerCredentials !== null
-      ? isAgentRuntimeBlocked(providerCredentials, selectedModel)
-      : undefined
-
   return {
     trustSnapshot,
     view: {
@@ -932,13 +926,12 @@ export function buildAgentView({
       selectedModelOption: providerModelCatalogProjection.selectedModelOption,
       selectedModelThinkingEffortOptions: providerModelCatalogProjection.selectedModelThinkingEffortOptions,
       selectedModelDefaultThinkingEffort: providerModelCatalogProjection.selectedModelDefaultThinkingEffort,
-      selectedProfileReadiness: selectedProvider.readiness,
+      selectedProfileReadiness: null,
       openrouterApiKeyConfigured: selectedProvider.openrouterApiKeyConfigured,
-      hasAnyReadyProvider:
-        providerProfiles?.profiles.some((profile) => profile.readiness.ready) ?? false,
-      providerMismatch,
-      providerMismatchReason: providerMismatchCopy?.reason ?? null,
-      providerMismatchRecoveryCopy: providerMismatchCopy?.sessionRecoveryCopy ?? null,
+      hasAnyReadyProvider: (providerCredentials?.credentials.length ?? 0) > 0,
+      providerMismatch: false,
+      providerMismatchReason: null,
+      providerMismatchRecoveryCopy: null,
       selectedModel,
       agentRuntimeBlocked,
       composerModelOptions,
@@ -987,22 +980,23 @@ export function buildAgentView({
       runtimeRunActionStatus,
       pendingRuntimeRunAction,
       runtimeRunActionError,
-      sessionUnavailableReason: getAgentSessionUnavailableReason(
+      sessionUnavailableReason: getAgentSessionUnavailableCredentialReason(
         runtimeSession,
         runtimeErrorMessage,
-        selectedProvider,
+        selectedModel,
+        agentRuntimeBlocked ?? false,
       ),
-      runtimeRunUnavailableReason: getAgentRuntimeRunUnavailableReason(
+      runtimeRunUnavailableReason: getAgentRuntimeRunUnavailableCredentialReason(
         runtimeRun,
         runtimeRunErrorMessage,
         runtimeSession,
-        selectedProvider,
+        agentRuntimeBlocked ?? false,
       ),
-      messagesUnavailableReason: getAgentMessagesUnavailableReason(
+      messagesUnavailableReason: getAgentMessagesUnavailableCredentialReason(
         runtimeSession,
         runtimeStream,
         runtimeRun,
-        selectedProvider,
+        agentRuntimeBlocked ?? false,
       ),
     },
   }

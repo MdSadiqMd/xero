@@ -523,7 +523,7 @@ function makeAgent(project = makeProject(), overrides: Partial<AgentPaneView> = 
     selectedProfileLabel: overrides.selectedProfileLabel ?? providerModelCatalog.profileLabel,
     selectedProviderId: overrides.selectedProviderId ?? providerModelCatalog.providerId,
     selectedProviderLabel: overrides.selectedProviderLabel ?? providerModelCatalog.providerLabel,
-    selectedProviderSource: overrides.selectedProviderSource ?? 'provider_profiles',
+    selectedProviderSource: overrides.selectedProviderSource ?? 'credential_default',
     controlTruthSource:
       overrides.controlTruthSource ?? (selectedControls && !runtimeRun?.isTerminal ? 'runtime_run' : 'fallback'),
     selectedModelId: overrides.selectedModelId ?? selectedControls?.modelId ?? selectedModelOption?.modelId ?? null,
