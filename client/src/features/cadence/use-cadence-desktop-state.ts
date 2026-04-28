@@ -133,6 +133,7 @@ import type {
 
 export type {
   AgentPaneView,
+  AgentProviderModelView,
   AgentTrustSignalState,
   AgentTrustSnapshotView,
   AutonomousRunActionKind,

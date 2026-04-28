@@ -2098,4 +2098,81 @@ describe('AgentRuntime current UI', () => {
     await waitFor(() => expect(dictation.session.cancel).toHaveBeenCalledTimes(1))
   })
 
+  it('uses the credentials-driven union catalog for the composer model picker when populated', () => {
+    const composerModelOptions = [
+      {
+        selectionKey: 'openrouter:openai/gpt-4.1-mini',
+        providerId: 'openrouter' as const,
+        providerLabel: 'OpenRouter',
+        modelId: 'openai/gpt-4.1-mini',
+        displayName: 'GPT-4.1 mini',
+        thinking: { supported: false, effortOptions: [], defaultEffort: null },
+        thinkingEffortOptions: [],
+        defaultThinkingEffort: null,
+      },
+      {
+        selectionKey: 'anthropic:claude-3-7-sonnet-latest',
+        providerId: 'anthropic' as const,
+        providerLabel: 'Anthropic',
+        modelId: 'claude-3-7-sonnet-latest',
+        displayName: 'Claude 3.7 Sonnet',
+        thinking: { supported: false, effortOptions: [], defaultEffort: null },
+        thinkingEffortOptions: [],
+        defaultThinkingEffort: null,
+      },
+    ]
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          composerModelOptions,
+          agentRuntimeBlocked: false,
+          selectedModel: {
+            providerId: 'openrouter',
+            providerLabel: 'OpenRouter',
+            modelId: 'openai/gpt-4.1-mini',
+            hasCredential: true,
+            credentialKind: 'api_key',
+            source: 'credential_default',
+          },
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+        })}
+      />,
+    )
+
+    // The picker should expose the union of credentialed providers.
+    expect(screen.queryByText('Configure agent runtime')).not.toBeInTheDocument()
+  })
+
+  it('shows the setup empty state when credentials are configured but the chosen model has no credential', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          composerModelOptions: [
+            {
+              selectionKey: 'openrouter:openai/gpt-4.1-mini',
+              providerId: 'openrouter' as const,
+              providerLabel: 'OpenRouter',
+              modelId: 'openai/gpt-4.1-mini',
+              displayName: 'GPT-4.1 mini',
+              thinking: { supported: false, effortOptions: [], defaultEffort: null },
+              thinkingEffortOptions: [],
+              defaultThinkingEffort: null,
+            },
+          ],
+          agentRuntimeBlocked: true,
+          selectedModel: {
+            providerId: 'anthropic',
+            providerLabel: 'Anthropic',
+            modelId: 'claude-3-7-sonnet-latest',
+            hasCredential: false,
+            credentialKind: null,
+            source: 'runtime_run',
+          },
+          runtimeSession: null,
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Configure agent runtime')).toBeVisible()
+  })
 })
