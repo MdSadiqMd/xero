@@ -1,5 +1,45 @@
 # Provider Layer Refactor — Eliminate Profiles & Active Profile
 
+## Status (2026-04-28)
+
+Phases 3.1–3.7 + Phase 4 (1/n)–(9/n) shipped on `main`. The frontend
+runs entirely on the credentials-driven UX:
+
+- Settings → Providers and Onboarding → Configure providers consume
+  `ProviderCredentialsList`. The legacy `ProviderProfileForm` (1393 LOC)
+  is deleted.
+- Agent composer model picker is the single point of provider selection;
+  the union-of-catalogs feed comes from `composerModelOptions`. The
+  legacy "Rebind X before trusting new live activity" copy is gone.
+- The `providerProfiles*` and `runtimeSettings*` state slices are gone
+  from the orchestrator hook surface.
+- Tauri command surface deleted: `list_provider_profiles`,
+  `upsert_provider_profile`, `set_active_provider_profile`,
+  `logout_provider_profile`, `get_runtime_settings`,
+  `upsert_runtime_settings`. New command surface: `start_oauth_login`,
+  `complete_oauth_callback`, `list_provider_credentials`,
+  `upsert_provider_credential`, `delete_provider_credential`.
+- Zod schemas: `provider-profiles.ts` survives as a 105-LOC type-only
+  stub. The schemas now no-op (`z.unknown()`); production code does not
+  call them. `provider-setup.ts` is fully deleted.
+
+Net deletions across Phase 4: ~18,800 LOC. Build state at completion:
+tsc clean, cargo check warning-free, cargo test --no-run compiles, 266
+vitest tests pass with zero skipped.
+
+**Deferred to a future wave** (out of scope for this plan):
+
+- The internal `provider_profiles` Rust module + SQLite tables. Auth
+  modules and runtime/provider bindings still consume the snapshot to
+  compose runtime sessions. Removal needs a coordinated rewrite of
+  `auth/store`, `provider_models`, `runtime/provider`,
+  `runtime/diagnostics`, plus the migration that drops the three SQLite
+  tables. This is the storage-side counterpart described in
+  `STORAGE_REFACTOR_PLAN.md` Phase 1/2.5.
+- The `provider-profiles.ts` 105-LOC type stub. Removable once nothing
+  imports the legacy DTOs (the runtime-settings + provider-profile JSON
+  legacy paths still surface them in fixtures).
+
 ## Why this exists
 
 The current "provider profile" abstraction is a wrapper around what is effectively

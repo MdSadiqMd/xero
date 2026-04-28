@@ -37,7 +37,6 @@ import {
   type ProviderModelCatalogDto,
   type ProviderCredentialsSnapshotDto,
   type ProviderProfileDiagnosticsDto,
-  type ProviderProfilesDto,
   type ReadProjectFileResponseDto,
   type RenameProjectEntryRequestDto,
   type RenameProjectEntryResponseDto,
@@ -61,8 +60,6 @@ import {
   type SkillRegistryDto,
   type SyncNotificationAdaptersResponseDto,
   type UpsertNotificationRouteRequestDto,
-  type UpsertProviderProfileRequestDto,
-  type UpsertRuntimeSettingsRequestDto,
   type VerificationRecordView,
   type WriteProjectFileResponseDto,
 } from '@/src/lib/cadence-model'
@@ -95,7 +92,6 @@ import {
   buildExecutionView,
   buildWorkflowView,
 } from './use-cadence-desktop-state/view-builders'
-import { getCloudProviderAuthMode } from '@/src/lib/cadence-model/provider-presets'
 import type {
   AgentPaneView,
   AgentTrustSnapshotView,
@@ -277,44 +273,6 @@ function removeRecordKey<T>(records: Record<string, T>, key: string): Record<str
   return nextRecords
 }
 
-function getProviderModelCatalogDependencyKey(
-  profile: ProviderProfilesDto['profiles'][number],
-): string {
-  return [
-    profile.providerId,
-    profile.runtimeKind,
-    profile.modelId.trim(),
-    profile.presetId?.trim() || 'none',
-    profile.baseUrl?.trim() || 'none',
-    profile.apiVersion?.trim() || 'none',
-    profile.region?.trim() || 'none',
-    profile.projectId?.trim() || 'none',
-    profile.readiness.status,
-    profile.readiness.ready ? 'ready' : 'not_ready',
-    profile.readiness.proof ?? 'none',
-    profile.readiness.proofUpdatedAt ?? 'none',
-  ].join('|')
-}
-
-function getProviderModelCatalogDependencyKeys(
-  providerProfiles: ProviderProfilesDto | null,
-): Record<string, string> {
-  if (!providerProfiles) {
-    return {}
-  }
-
-  return Object.fromEntries(
-    providerProfiles.profiles.map((profile) => [
-      profile.profileId,
-      getProviderModelCatalogDependencyKey(profile),
-    ]),
-  )
-}
-
-function shouldRefreshProviderModelCatalog(profile: ProviderProfilesDto['profiles'][number]): boolean {
-  return profile.readiness.ready || getCloudProviderAuthMode(profile.providerId) === 'oauth'
-}
-
 export function useCadenceDesktopState(
   options: UseCadenceDesktopStateOptions = {},
 ): UseCadenceDesktopStateResult {
@@ -443,8 +401,6 @@ export function useCadenceDesktopState(
   const providerModelCatalogLoadInFlightRef = useRef<
     Record<string, { requestKey: string; promise: Promise<ProviderModelCatalogDto> }>
   >({})
-  const providerModelCatalogDependencyKeysRef = useRef<Record<string, string>>({})
-  const activeProviderProfileIdRef = useRef<string | null>(null)
   const mcpRegistryRef = useRef<McpRegistryDto | null>(null)
   const mcpRegistryLoadInFlightRef = useRef<Promise<McpRegistryDto> | null>(null)
   const skillRegistryRef = useRef<SkillRegistryDto | null>(null)
@@ -805,8 +761,7 @@ export function useCadenceDesktopState(
 
       const cachedCatalog = providerModelCatalogsRef.current[trimmedProfileId] ?? null
       const cachedStatus = providerModelCatalogLoadStatusesRef.current[trimmedProfileId] ?? 'idle'
-      const cachedDependencyKey = providerModelCatalogDependencyKeysRef.current[trimmedProfileId] ?? null
-      if (!options.force && cachedCatalog && cachedStatus === 'ready' && cachedDependencyKey === requestDependencyKey) {
+      if (!options.force && cachedCatalog && cachedStatus === 'ready') {
         return cachedCatalog
       }
 
@@ -1439,80 +1394,6 @@ export function useCadenceDesktopState(
     void refreshSkillRegistry({ force: true }).catch(() => undefined)
   }, [activeProjectId, refreshSkillRegistry, skillRegistryLoadStatus])
 
-  useEffect(() => {
-    // Phase 4: catalog dependency tracking is gone with provider profiles.
-    // Catalogs are now refreshed on-demand by the credentials list.
-    return
-    const nextDependencyKeys: Record<string, string> = {}
-    const previousDependencyKeys = providerModelCatalogDependencyKeysRef.current
-    const invalidatedProfileIds: string[] = []
-    const removedProfileIds = Object.keys(previousDependencyKeys).filter(
-      (profileId) => !(profileId in nextDependencyKeys),
-    )
-
-    for (const [profileId, dependencyKey] of Object.entries(nextDependencyKeys)) {
-      if (previousDependencyKeys[profileId] && previousDependencyKeys[profileId] !== dependencyKey) {
-        invalidatedProfileIds.push(profileId)
-      }
-    }
-
-    if (removedProfileIds.length > 0) {
-      setProviderModelCatalogs((currentCatalogs) => {
-        let nextCatalogs = currentCatalogs
-        for (const profileId of removedProfileIds) {
-          nextCatalogs = removeRecordKey(nextCatalogs, profileId)
-        }
-        return nextCatalogs
-      })
-      setProviderModelCatalogLoadStatuses((currentStatuses) => {
-        let nextStatuses = currentStatuses
-        for (const profileId of removedProfileIds) {
-          nextStatuses = removeRecordKey(nextStatuses, profileId)
-        }
-        return nextStatuses
-      })
-      setProviderModelCatalogLoadErrors((currentErrors) => {
-        let nextErrors = currentErrors
-        for (const profileId of removedProfileIds) {
-          nextErrors = removeRecordKey(nextErrors, profileId)
-        }
-        return nextErrors
-      })
-
-      for (const profileId of removedProfileIds) {
-        delete providerModelCatalogLoadRequestRef.current[profileId]
-        delete providerModelCatalogLoadInFlightRef.current[profileId]
-      }
-    }
-
-    if (invalidatedProfileIds.length > 0) {
-      for (const profileId of invalidatedProfileIds) {
-        providerModelCatalogLoadRequestRef.current[profileId] =
-          (providerModelCatalogLoadRequestRef.current[profileId] ?? 0) + 1
-        delete providerModelCatalogLoadInFlightRef.current[profileId]
-      }
-
-      setProviderModelCatalogLoadStatuses((currentStatuses) => {
-        const nextStatuses = { ...currentStatuses }
-        for (const profileId of invalidatedProfileIds) {
-          nextStatuses[profileId] = 'idle'
-        }
-        return nextStatuses
-      })
-      setProviderModelCatalogLoadErrors((currentErrors) => {
-        const nextErrors = { ...currentErrors }
-        for (const profileId of invalidatedProfileIds) {
-          nextErrors[profileId] = null
-        }
-        return nextErrors
-      })
-    }
-
-    providerModelCatalogDependencyKeysRef.current = nextDependencyKeys
-    activeProviderProfileIdRef.current = null
-  }, [refreshProviderModelCatalog])
-
-  const activeProviderProfileId: string | null = null
   const activeProviderModelCatalog: ProviderModelCatalogDto | null = null
   const activeProviderModelCatalogLoadStatus: ProviderModelCatalogLoadStatus = 'idle'
   const activeProviderModelCatalogLoadError: OperatorActionErrorView | null = null
