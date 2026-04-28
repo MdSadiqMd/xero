@@ -8,7 +8,6 @@ import type {
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
 import type {
   ProviderModelThinkingEffortDto,
-  ProviderProfileReadinessDto,
   RuntimeRunApprovalModeDto,
   RuntimeRunControlInputDto,
   RuntimeRunView,
@@ -22,12 +21,7 @@ import {
 
 import { displayValue } from './shared-helpers'
 import { hasUsableRuntimeRunId } from './runtime-stream-helpers'
-import {
-  getCloudProviderAuthMode,
-  getCloudProviderLabel,
-  getCloudProviderPreset,
-  isApiKeyCloudProvider,
-} from '@/src/lib/cadence-model/provider-presets'
+import { getCloudProviderLabel } from '@/src/lib/cadence-model/provider-presets'
 
 export interface ComposerModelOption {
   value: string
@@ -338,167 +332,6 @@ export function getComposerPromptStatusCopy(options: {
   return null
 }
 
-export function getSelectedProviderId(agent: AgentPaneView, runtimeSession: RuntimeSessionView | null): string {
-  return agent.selectedProviderId ?? runtimeSession?.providerId ?? 'openai_codex'
-}
-
-function getProviderDisplayLabel(providerId: string): string {
-  return getCloudProviderLabel(providerId)
-}
-
-function getSelectedProviderAuthMode(providerId: string) {
-  return getCloudProviderAuthMode(providerId)
-}
-
-function isApiKeyProvider(providerId: string): boolean {
-  return isApiKeyCloudProvider(providerId)
-}
-
-function getRequiredMetadataSuffix(providerId: string): string {
-  const preset = getCloudProviderPreset(providerId)
-  if (!preset) {
-    return ''
-  }
-
-  const parts: string[] = []
-  if (preset.regionMode === 'required') {
-    parts.push('region')
-  }
-  if (preset.projectIdMode === 'required') {
-    parts.push('project ID')
-  }
-
-  if (parts.length === 0) {
-    return ''
-  }
-
-  return ` with ${parts.join(' and ')}`
-}
-
-function hasConfiguredApiKey(options: {
-  selectedProviderId: string
-  selectedProfileReadiness?: ProviderProfileReadinessDto | null
-  openrouterApiKeyConfigured: boolean
-}): boolean {
-  if (!isApiKeyProvider(options.selectedProviderId)) {
-    return false
-  }
-
-  if (options.selectedProfileReadiness) {
-    return options.selectedProfileReadiness.status !== 'missing'
-  }
-
-  if (options.selectedProviderId === 'openrouter') {
-    return options.openrouterApiKeyConfigured
-  }
-
-  return false
-}
-
-export function isSelectedProviderReadyForSession(options: {
-  selectedProviderId: string
-  selectedProfileReadiness?: ProviderProfileReadinessDto | null
-  openrouterApiKeyConfigured: boolean
-}): boolean {
-  if (options.selectedProfileReadiness?.ready) {
-    return true
-  }
-
-  if (options.selectedProfileReadiness) {
-    return false
-  }
-
-  const authMode = getSelectedProviderAuthMode(options.selectedProviderId)
-  if (authMode === 'api_key') {
-    return hasConfiguredApiKey(options)
-  }
-
-  return false
-}
-
-function getApiKeyArticle(providerLabel: string): 'a' | 'an' {
-  const normalizedProviderLabel = providerLabel.trim().toLowerCase()
-  return normalizedProviderLabel.startsWith('a') ||
-    normalizedProviderLabel.startsWith('e') ||
-    normalizedProviderLabel.startsWith('i') ||
-    normalizedProviderLabel.startsWith('o') ||
-    normalizedProviderLabel.startsWith('u')
-    ? 'an'
-    : 'a'
-}
-
-function getApiKeySetupPlaceholder(options: {
-  selectedProviderId: string
-  selectedProfileReadiness?: ProviderProfileReadinessDto | null
-  openrouterApiKeyConfigured: boolean
-}): string {
-  const providerLabel = getProviderDisplayLabel(options.selectedProviderId)
-
-  if (options.selectedProfileReadiness?.status === 'malformed') {
-    return `Repair the ${providerLabel} API key in Settings to start.`
-  }
-
-  return hasConfiguredApiKey(options)
-    ? `Send a message to start with ${providerLabel}.`
-    : `Configure ${getApiKeyArticle(providerLabel)} ${providerLabel} API key in Settings to start.`
-}
-
-function getConfiguredProviderSetupPlaceholder(options: {
-  selectedProviderId: string
-  selectedProfileReadiness?: ProviderProfileReadinessDto | null
-  openrouterApiKeyConfigured: boolean
-}): string {
-  const providerLabel = getProviderDisplayLabel(options.selectedProviderId)
-  const authMode = getSelectedProviderAuthMode(options.selectedProviderId)
-
-  if (authMode === 'api_key') {
-    return getApiKeySetupPlaceholder(options)
-  }
-
-  if (authMode === 'local') {
-    if (options.selectedProfileReadiness?.status === 'malformed') {
-      return `Repair the ${providerLabel} local endpoint metadata in Settings to start.`
-    }
-
-    return options.selectedProfileReadiness?.ready
-      ? `Send a message to start with ${providerLabel}.`
-      : `Save the selected ${providerLabel} local endpoint profile in Settings to start.`
-  }
-
-  if (authMode === 'ambient') {
-    if (options.selectedProfileReadiness?.status === 'malformed') {
-      return `Repair the ${providerLabel} ambient-auth metadata in Settings to start.`
-    }
-
-    return options.selectedProfileReadiness?.ready
-      ? `Send a message to start with ${providerLabel}.`
-      : `Save the selected ${providerLabel} ambient-auth profile${getRequiredMetadataSuffix(options.selectedProviderId)} in Settings to start.`
-  }
-
-  if (authMode === 'oauth') {
-    return options.selectedProfileReadiness?.ready
-      ? `Send a message to start with ${providerLabel}.`
-      : 'Connect a provider to start.'
-  }
-
-  return 'Connect a provider in Settings to start.'
-}
-
-function getInProgressProviderBindPlaceholder(selectedProviderId: string): string {
-  const providerLabel = getProviderDisplayLabel(selectedProviderId)
-  const authMode = getSelectedProviderAuthMode(selectedProviderId)
-
-  if (authMode === 'api_key' || authMode === 'local' || authMode === 'ambient') {
-    return `Finish the ${providerLabel} bind to continue.`
-  }
-
-  return 'Finish the login flow to continue.'
-}
-
-export function getSelectedProviderLabel(agent: AgentPaneView, runtimeSession: RuntimeSessionView | null): string {
-  return agent.selectedProviderLabel ?? getProviderDisplayLabel(getSelectedProviderId(agent, runtimeSession))
-}
-
 export function getComposerPlaceholder(
   runtimeSession: RuntimeSessionView | null,
   streamStatus: RuntimeStreamStatus,
@@ -506,30 +339,24 @@ export function getComposerPlaceholder(
   streamRunId: string | undefined,
   options: {
     selectedProviderId: string
-    selectedProfileReadiness?: ProviderProfileReadinessDto | null
-    openrouterApiKeyConfigured: boolean
-    providerMismatch: boolean
+    agentRuntimeBlocked: boolean
   },
 ): string {
-  const selectedProviderLabel = getProviderDisplayLabel(options.selectedProviderId)
-  const selectedProviderAuthMode = getSelectedProviderAuthMode(options.selectedProviderId)
+  const providerLabel = getCloudProviderLabel(options.selectedProviderId)
 
-  if (!runtimeSession) {
-    return getConfiguredProviderSetupPlaceholder(options)
+  if (options.agentRuntimeBlocked) {
+    return 'Add a provider credential in Settings to start chatting.'
   }
 
-  if (options.providerMismatch) {
-    return selectedProviderAuthMode && selectedProviderAuthMode !== 'oauth'
-      ? `Rebind ${selectedProviderLabel} before trusting new live activity.`
-      : 'Rebind this provider before trusting new live activity.'
+  if (!runtimeSession) {
+    return `Send a message to start with ${providerLabel}.`
   }
 
   if (!runtimeSession.isAuthenticated) {
     if (runtimeSession.isLoginInProgress) {
-      return getInProgressProviderBindPlaceholder(options.selectedProviderId)
+      return `Finish the ${providerLabel} bind to continue.`
     }
-
-    return getConfiguredProviderSetupPlaceholder(options)
+    return `Send a message to start with ${providerLabel}.`
   }
 
   if (!hasUsableRuntimeRunId(runtimeRun)) {

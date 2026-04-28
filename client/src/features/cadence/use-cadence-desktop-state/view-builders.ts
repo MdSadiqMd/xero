@@ -896,7 +896,13 @@ export function buildAgentView({
     providerCredentials,
     providerModelCatalogs,
   )
-  const agentRuntimeBlocked = isAgentRuntimeBlocked(providerCredentials, selectedModel)
+  // Only block when credentials data has been loaded. When the snapshot is
+  // null (tests / legacy paths still using providerProfiles), leave the
+  // field undefined so consumers fall through to legacy logic.
+  const agentRuntimeBlocked =
+    providerCredentials !== null
+      ? isAgentRuntimeBlocked(providerCredentials, selectedModel)
+      : undefined
 
   return {
     trustSnapshot,

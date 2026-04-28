@@ -29,8 +29,6 @@ import {
   getComposerModelOption,
   getComposerPlaceholder,
   getComposerThinkingOptions,
-  getSelectedProviderId,
-  isSelectedProviderReadyForSession,
 } from './agent-runtime/composer-helpers'
 import { ComposerDock } from './agent-runtime/composer-dock'
 import { EmptySessionState } from './agent-runtime/empty-session-state'
@@ -105,15 +103,16 @@ export function AgentRuntime({
   const toolCalls = runtimeStream?.toolCalls ?? []
   const streamIssue = agent.runtimeStreamError ?? runtimeStream?.lastIssue ?? null
 
-  const selectedProviderId = getSelectedProviderId(agent, runtimeSession)
-  const selectedModelId = agent.selectedModelId?.trim() || null
-  // Phase 3.5 follow-up: when `composerModelOptions` (the union of catalogs
-  // across credentialed providers) is non-empty, use it as the picker's
-  // source of truth. The legacy single-profile catalog stays as a fallback
-  // for the transitional period.
+  const selectedProviderId =
+    agent.selectedModel?.providerId ?? agent.selectedProviderId ?? runtimeSession?.providerId ?? 'openai_codex'
+  const selectedModelId =
+    agent.selectedModel?.modelId?.trim() || agent.selectedModelId?.trim() || null
   const composerModelOptionsView = useMemo<AgentProviderModelView[]>(() => {
     const unionOptions = agent.composerModelOptions ?? []
     if (unionOptions.length === 0) {
+      // Until tests migrate off the legacy AgentPaneView shape, fall back to
+      // the per-active-profile catalog. Real user flow always has the union
+      // list populated from the credentials snapshot.
       return agent.providerModelCatalog.models
     }
     return unionOptions.map((option) => ({
@@ -135,25 +134,10 @@ export function AgentRuntime({
     }))
   }, [agent.composerModelOptions, agent.providerModelCatalog.models])
   const availableModels = composerModelOptionsView
-  const openrouterApiKeyConfigured = agent.openrouterApiKeyConfigured ?? false
-  const providerMismatch = agent.providerMismatch ?? false
   const hasRepositoryBinding = Boolean(agent.repositoryPath?.trim())
-  // Phase 3.5 follow-up: prefer `agentRuntimeBlocked` (credentials-driven)
-  // over the legacy `selectedProviderReadyForSession` projection when the
-  // composer's union catalog is non-empty. While the legacy profile path
-  // still feeds the picker (no credentials configured), keep the legacy
-  // mismatch / readiness logic untouched — flipping prematurely would
-  // produce misleading "no providers" empty states for users with legacy
-  // data only.
-  const useCredentialsTruth = (agent.composerModelOptions ?? []).length > 0
-  const selectedProviderReadyForSession = useCredentialsTruth
-    ? !agent.agentRuntimeBlocked
-    : isSelectedProviderReadyForSession({
-        selectedProviderId,
-        selectedProfileReadiness: agent.selectedProfileReadiness ?? null,
-        openrouterApiKeyConfigured,
-      })
-  const canMutateRuntimeRun = useCredentialsTruth ? !agent.agentRuntimeBlocked : !providerMismatch
+  const agentRuntimeBlocked = agent.agentRuntimeBlocked ?? false
+  const selectedProviderReadyForSession = !agentRuntimeBlocked
+  const canMutateRuntimeRun = !agentRuntimeBlocked
   const canStartRuntimeSession = Boolean(
     canMutateRuntimeRun &&
       hasRepositoryBinding &&
@@ -240,9 +224,6 @@ export function AgentRuntime({
     checkpointControlLoop.items.length > 0 ||
     Boolean(checkpointControlLoopRecoveryAlert) ||
     Boolean(checkpointControlLoopCoverageAlert)
-  // When credentials truth is in play, the legacy mismatch banner cannot
-  // fire — chosen model fully determines the provider. Force `providerMismatch`
-  // to false in the placeholder lookup so the rebind copy is suppressed.
   const composerPlaceholder = getComposerPlaceholder(
     runtimeSession,
     streamStatus,
@@ -250,21 +231,13 @@ export function AgentRuntime({
     streamRunId,
     {
       selectedProviderId,
-      selectedProfileReadiness: agent.selectedProfileReadiness ?? null,
-      openrouterApiKeyConfigured,
-      providerMismatch: useCredentialsTruth ? false : providerMismatch,
+      agentRuntimeBlocked,
     },
   )
-  const showAgentSetupEmptyState = useCredentialsTruth
-    ? Boolean(
-        agent.agentRuntimeBlocked &&
-          (!runtimeSession || runtimeSession.isSignedOut || runtimeSession.phase === 'idle'),
-      )
-    : Boolean(
-        !providerMismatch &&
-          !selectedProviderReadyForSession &&
-          (!runtimeSession || runtimeSession.isSignedOut || runtimeSession.phase === 'idle'),
-      )
+  const showAgentSetupEmptyState = Boolean(
+    agentRuntimeBlocked &&
+      (!runtimeSession || runtimeSession.isSignedOut || runtimeSession.phase === 'idle'),
+  )
   const hasSessionActivity = Boolean(
     hasIncompleteRuntimeRunPayload ||
       renderableRuntimeRun ||
@@ -285,10 +258,7 @@ export function AgentRuntime({
       runtimeSession?.isAuthenticated,
   )
   const showEmptySessionState = Boolean(
-    !showAgentSetupEmptyState &&
-      (useCredentialsTruth ? !agent.agentRuntimeBlocked : !providerMismatch) &&
-      isProviderLoggedIn &&
-      !hasSessionActivity,
+    !showAgentSetupEmptyState && !agentRuntimeBlocked && isProviderLoggedIn && !hasSessionActivity,
   )
   const projectLabel =
     agent.project.repository?.displayName ?? agent.project.name ?? 'this project'

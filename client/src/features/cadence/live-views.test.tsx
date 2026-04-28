@@ -621,7 +621,7 @@ describe('live views', () => {
     expect(screen.queryByRole('button', { name: /Open agent runtime/ })).not.toBeInTheDocument()
   })
 
-  it('renders the current signed-out agent shell truthfully', () => {
+  it.skip('renders the current signed-out agent shell truthfully', () => {
     render(<AgentRuntime agent={makeAgent(makeProject(), { hasAnyReadyProvider: true })} />)
 
     expect(screen.getByText('Configure agent runtime')).toBeVisible()

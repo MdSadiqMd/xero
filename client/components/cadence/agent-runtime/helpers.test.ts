@@ -6,10 +6,7 @@ import {
   getCheckpointControlLoopRecoveryAlertMeta,
   getPerActionResumeStateMeta,
 } from '@/components/cadence/agent-runtime/checkpoint-control-loop-helpers'
-import {
-  getComposerPlaceholder,
-  isSelectedProviderReadyForSession,
-} from '@/components/cadence/agent-runtime/composer-helpers'
+import { getComposerPlaceholder } from '@/components/cadence/agent-runtime/composer-helpers'
 import { getStreamStatusMeta, getToolSummaryContext } from '@/components/cadence/agent-runtime/runtime-stream-helpers'
 import { displayValue, formatSequence } from '@/components/cadence/agent-runtime/shared-helpers'
 import type { AgentPaneView } from '@/src/features/cadence/use-cadence-desktop-state'
@@ -298,65 +295,29 @@ describe('agent-runtime helpers', () => {
     expect(coverage?.body).toContain('1 card still lacks durable evidence inside the bounded artifact window.')
   })
 
-  it('keeps provider mismatch and signed-out placeholder copy stable', () => {
+  it('uses generic blocked copy when no credentials are configured for the chosen provider', () => {
     expect(
       getComposerPlaceholder(null, 'idle', null, undefined, {
         selectedProviderId: 'openrouter',
-        openrouterApiKeyConfigured: false,
-        providerMismatch: false,
+        agentRuntimeBlocked: true,
       }),
-    ).toBe('Configure an OpenRouter API key in Settings to start.')
-
-    expect(
-      getComposerPlaceholder(makeRuntimeSession({ isAuthenticated: true, isSignedOut: false }), 'idle', null, undefined, {
-        selectedProviderId: 'openrouter',
-        openrouterApiKeyConfigured: true,
-        providerMismatch: true,
-      }),
-    ).toBe('Rebind OpenRouter before trusting new live activity.')
+    ).toBe('Add a provider credential in Settings to start chatting.')
   })
 
-  it('keeps GitHub Models placeholder copy grammatical and provider-specific', () => {
+  it('falls through to a per-provider start prompt when not blocked and signed out', () => {
+    expect(
+      getComposerPlaceholder(null, 'idle', null, undefined, {
+        selectedProviderId: 'openrouter',
+        agentRuntimeBlocked: false,
+      }),
+    ).toBe('Send a message to start with OpenRouter.')
+
     expect(
       getComposerPlaceholder(null, 'idle', null, undefined, {
         selectedProviderId: 'github_models',
-        selectedProfileReadiness: {
-          ready: false,
-          status: 'missing',
-          proofUpdatedAt: null,
-        },
-        openrouterApiKeyConfigured: false,
-        providerMismatch: false,
+        agentRuntimeBlocked: false,
       }),
-    ).toBe('Configure a GitHub Models API key in Settings to start.')
-
-    expect(
-      getComposerPlaceholder(makeRuntimeSession({ isAuthenticated: true, isSignedOut: false }), 'idle', null, undefined, {
-        selectedProviderId: 'github_models',
-        selectedProfileReadiness: {
-          ready: true,
-          status: 'ready',
-          proofUpdatedAt: '2026-04-20T12:00:00Z',
-        },
-        openrouterApiKeyConfigured: false,
-        providerMismatch: true,
-      }),
-    ).toBe('Rebind GitHub Models before trusting new live activity.')
-  })
-
-  it('does not allow malformed API-key readiness to masquerade as session-ready', () => {
-    expect(
-      isSelectedProviderReadyForSession({
-        selectedProviderId: 'openrouter',
-        selectedProfileReadiness: {
-          ready: false,
-          status: 'malformed',
-          proof: 'stored_secret',
-          proofUpdatedAt: '2026-04-20T12:00:00Z',
-        },
-        openrouterApiKeyConfigured: true,
-      }),
-    ).toBe(false)
+    ).toBe('Send a message to start with GitHub Models.')
   })
 
   it('keeps the stream meta and degraded checkpoint alert copy stable', () => {
