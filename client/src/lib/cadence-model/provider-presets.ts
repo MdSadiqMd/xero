@@ -1,4 +1,3 @@
-import type { ProviderProfileDto } from './provider-profiles'
 import type { RuntimeProviderIdDto } from './runtime'
 
 export type ProviderBaseUrlMode = 'none' | 'optional' | 'required'
@@ -7,15 +6,35 @@ export type ProviderRegionMode = 'none' | 'required'
 export type ProviderProjectIdMode = 'none' | 'required'
 export type ProviderAuthMode = 'oauth' | 'api_key' | 'local' | 'ambient'
 
+// Runtime kinds and preset ids used to be derived from ProviderProfileDto.
+// After Phase 4 (provider profiles deletion) they are inlined as closed
+// string unions to keep CloudProviderPreset self-contained.
+export type ProviderRuntimeKind =
+  | 'openai_codex'
+  | 'openrouter'
+  | 'anthropic'
+  | 'openai_compatible'
+  | 'gemini'
+export type ProviderPresetId =
+  | 'openrouter'
+  | 'anthropic'
+  | 'github_models'
+  | 'openai_api'
+  | 'ollama'
+  | 'azure_openai'
+  | 'gemini_ai_studio'
+  | 'bedrock'
+  | 'vertex'
+
 export interface CloudProviderPreset {
   providerId: RuntimeProviderIdDto
-  runtimeKind: ProviderProfileDto['runtimeKind']
+  runtimeKind: ProviderRuntimeKind
   label: string
   description: string
   defaultProfileId: string
   defaultProfileLabel: string
   defaultModelId: string
-  presetId: ProviderProfileDto['presetId']
+  presetId: ProviderPresetId | null
   authMode: ProviderAuthMode
   baseUrlMode: ProviderBaseUrlMode
   apiVersionMode: ProviderApiVersionMode
@@ -279,8 +298,15 @@ export function usesAmbientCloudProvider(
   return getCloudProviderAuthMode(providerId) === 'ambient'
 }
 
+export interface ProviderConnectionLabelInput {
+  providerId: RuntimeProviderIdDto | string
+  baseUrl?: string | null
+  region?: string | null
+  projectId?: string | null
+}
+
 export function formatProviderConnectionLabel(
-  profile: Pick<ProviderProfileDto, 'providerId' | 'baseUrl' | 'region' | 'projectId'>,
+  profile: ProviderConnectionLabelInput,
 ): string {
   if (profile.baseUrl?.trim()) {
     return `Custom endpoint · ${profile.baseUrl.trim()}`
@@ -299,7 +325,7 @@ export function formatProviderConnectionLabel(
 }
 
 export function formatProviderEndpointLabel(
-  profile: Pick<ProviderProfileDto, 'providerId' | 'baseUrl' | 'region' | 'projectId'>,
+  profile: ProviderConnectionLabelInput,
 ): string {
   return formatProviderConnectionLabel(profile)
 }

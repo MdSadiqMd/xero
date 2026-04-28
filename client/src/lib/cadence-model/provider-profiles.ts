@@ -1,731 +1,121 @@
+// Phase 4: legacy provider-profile types are retained as opaque shapes so
+// the still-skipped legacy tests stay typeable. The Zod schemas, helpers
+// (`getActiveProviderProfile`, `projectRuntimeSettingsFromProviderProfiles`),
+// and runtime use of these types is gone — anything reaching for these
+// types now is by definition exercising a deleted code path.
+//
+// Once the skipped tests are rewritten or deleted, this file can be removed
+// entirely and the cadence-model barrel pruned.
+
 import { z } from 'zod'
-import { isoTimestampSchema, optionalIsoTimestampSchema } from './shared'
-import { runtimeProviderIdSchema, runtimeSettingsSchema, type RuntimeSettingsDto } from './runtime'
+import type { RuntimeProviderIdDto } from './runtime'
 
-const providerProfileRuntimeKindSchema = z.enum([
-  'openai_codex',
-  'openrouter',
-  'anthropic',
-  'openai_compatible',
-  'gemini',
-])
+export type ProviderProfileReadinessStatusDto = 'ready' | 'missing' | 'malformed'
+export type ProviderProfileReadinessProofDto =
+  | 'oauth_session'
+  | 'stored_secret'
+  | 'local'
+  | 'ambient'
 
-const providerProfilePresetIdSchema = z.enum([
-  'openrouter',
-  'anthropic',
-  'github_models',
-  'openai_api',
-  'ollama',
-  'azure_openai',
-  'gemini_ai_studio',
-  'bedrock',
-  'vertex',
-])
-
-const optionalUrlSchema = z.string().url().nullable().optional()
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+export interface ProviderProfileReadinessDto {
+  ready: boolean
+  status: ProviderProfileReadinessStatusDto
+  proof?: ProviderProfileReadinessProofDto | null
+  proofUpdatedAt?: string | null
 }
 
-function normalizeObjectAliases(
-  value: unknown,
-  aliases: Record<string, readonly string[]>,
-): unknown {
-  if (!isRecord(value)) {
-    return value
-  }
-
-  const consumedKeys = new Set<string>()
-  const normalized: Record<string, unknown> = {}
-
-  for (const [normalizedKey, candidateKeys] of Object.entries(aliases)) {
-    for (const key of candidateKeys) {
-      consumedKeys.add(key)
-    }
-
-    const matchedKey = candidateKeys.find((key) => Object.prototype.hasOwnProperty.call(value, key))
-    if (matchedKey) {
-      normalized[normalizedKey] = value[matchedKey]
-    }
-  }
-
-  for (const [key, fieldValue] of Object.entries(value)) {
-    if (!consumedKeys.has(key)) {
-      normalized[key] = fieldValue
-    }
-  }
-
-  return normalized
+export interface ProviderProfileDto {
+  profileId: string
+  providerId: RuntimeProviderIdDto
+  runtimeKind: 'openai_codex' | 'openrouter' | 'anthropic' | 'openai_compatible' | 'gemini'
+  label: string
+  modelId: string
+  presetId?:
+    | 'openrouter'
+    | 'anthropic'
+    | 'github_models'
+    | 'openai_api'
+    | 'ollama'
+    | 'azure_openai'
+    | 'gemini_ai_studio'
+    | 'bedrock'
+    | 'vertex'
+    | null
+  baseUrl?: string | null
+  apiVersion?: string | null
+  region?: string | null
+  projectId?: string | null
+  active: boolean
+  readiness: ProviderProfileReadinessDto
+  migratedFromLegacy: boolean
+  migratedAt?: string | null
 }
 
-function normalizeProviderProfileReadinessPayload(value: unknown): unknown {
-  const normalized = normalizeObjectAliases(value, {
-    ready: ['ready'],
-    status: ['status'],
-    proof: ['proof'],
-    proofUpdatedAt: ['proofUpdatedAt', 'proof_updated_at'],
-  })
-
-  if (isRecord(normalized) && normalized.proof === 'o_auth_session') {
-    return {
-      ...normalized,
-      proof: 'oauth_session',
-    }
-  }
-
-  return normalized
+export interface ProviderProfilesMigrationDto {
+  source: string
+  migratedAt: string
+  runtimeSettingsUpdatedAt?: string | null
+  openrouterCredentialsUpdatedAt?: string | null
+  openaiAuthUpdatedAt?: string | null
+  openrouterModelInferred?: boolean | null
 }
 
-function normalizeProviderProfilePayload(value: unknown): unknown {
-  return normalizeObjectAliases(value, {
-    profileId: ['profileId', 'profile_id'],
-    providerId: ['providerId', 'provider_id'],
-    runtimeKind: ['runtimeKind', 'runtime_kind'],
-    label: ['label'],
-    modelId: ['modelId', 'model_id'],
-    presetId: ['presetId', 'preset_id'],
-    baseUrl: ['baseUrl', 'base_url'],
-    apiVersion: ['apiVersion', 'api_version'],
-    region: ['region'],
-    projectId: ['projectId', 'project_id'],
-    active: ['active'],
-    readiness: ['readiness'],
-    migratedFromLegacy: ['migratedFromLegacy', 'migrated_from_legacy'],
-    migratedAt: ['migratedAt', 'migrated_at'],
-  })
+export interface ProviderProfilesDto {
+  activeProfileId: string
+  profiles: ProviderProfileDto[]
+  migration?: ProviderProfilesMigrationDto | null
 }
 
-function normalizeProviderProfilesMigrationPayload(value: unknown): unknown {
-  return normalizeObjectAliases(value, {
-    source: ['source'],
-    migratedAt: ['migratedAt', 'migrated_at'],
-    runtimeSettingsUpdatedAt: ['runtimeSettingsUpdatedAt', 'runtime_settings_updated_at'],
-    openrouterCredentialsUpdatedAt: [
-      'openrouterCredentialsUpdatedAt',
-      'openrouter_credentials_updated_at',
-    ],
-    openaiAuthUpdatedAt: ['openaiAuthUpdatedAt', 'openai_auth_updated_at'],
-    openrouterModelInferred: ['openrouterModelInferred', 'openrouter_model_inferred'],
-  })
+export interface UpsertProviderProfileRequestDto {
+  profileId: string
+  providerId: RuntimeProviderIdDto
+  runtimeKind: ProviderProfileDto['runtimeKind']
+  label: string
+  modelId: string
+  presetId?: ProviderProfileDto['presetId']
+  baseUrl?: string | null
+  apiVersion?: string | null
+  region?: string | null
+  projectId?: string | null
+  apiKey?: string | null
+  activate?: boolean
 }
 
-function normalizeProviderProfilesPayload(value: unknown): unknown {
-  const normalized = normalizeObjectAliases(value, {
-    activeProfileId: ['activeProfileId', 'active_profile_id'],
-    profiles: ['profiles'],
-    migration: ['migration'],
-  })
-
-  if (!isRecord(normalized) || !Array.isArray(normalized.profiles)) {
-    return normalized
-  }
-
-  const activeProfileId =
-    typeof normalized.activeProfileId === 'string' && normalized.activeProfileId.trim().length > 0
-      ? normalized.activeProfileId
-      : null
-
-  const seen = new Map<string, unknown>()
-  const droppedProfileIds = new Set<string>()
-  for (const raw of normalized.profiles) {
-    const profile = normalizeProviderProfilePayload(raw)
-    if (!isRecord(profile)) continue
-    const providerId = typeof profile.providerId === 'string' ? profile.providerId : null
-    if (!providerId) continue
-    const profileId = typeof profile.profileId === 'string' ? profile.profileId : null
-    if (!profileId) continue
-
-    const existing = seen.get(providerId)
-    if (!existing) {
-      seen.set(providerId, profile)
-      continue
-    }
-
-    const existingProfileId = isRecord(existing) && typeof existing.profileId === 'string' ? existing.profileId : null
-    const canonicalId = `${providerId}-default`
-    const candidatePriority =
-      profileId === canonicalId ? 0 : profileId === activeProfileId ? 1 : 2
-    const existingPriority =
-      existingProfileId === canonicalId ? 0 : existingProfileId === activeProfileId ? 1 : 2
-
-    if (candidatePriority < existingPriority) {
-      if (existingProfileId) droppedProfileIds.add(existingProfileId)
-      seen.set(providerId, profile)
-    } else {
-      droppedProfileIds.add(profileId)
-    }
-  }
-
-  const dedupedProfiles = Array.from(seen.values())
-
-  let nextActiveProfileId = normalized.activeProfileId
-  if (typeof nextActiveProfileId === 'string' && droppedProfileIds.has(nextActiveProfileId)) {
-    const fallback =
-      dedupedProfiles.find((profile) => isRecord(profile) && profile.providerId === 'openai_codex') ??
-      dedupedProfiles[0]
-    if (isRecord(fallback) && typeof fallback.profileId === 'string') {
-      nextActiveProfileId = fallback.profileId
-    }
-  }
-
-  return {
-    ...normalized,
-    activeProfileId: nextActiveProfileId,
-    profiles: dedupedProfiles,
-  }
-}
-
-function expectedRuntimeKindForProvider(providerId: z.infer<typeof runtimeProviderIdSchema>): z.infer<typeof providerProfileRuntimeKindSchema> {
-  switch (providerId) {
-    case 'openai_codex':
-      return 'openai_codex'
-    case 'openrouter':
-      return 'openrouter'
-    case 'anthropic':
-      return 'anthropic'
-    case 'github_models':
-    case 'openai_api':
-    case 'ollama':
-    case 'azure_openai':
-      return 'openai_compatible'
-    case 'gemini_ai_studio':
-      return 'gemini'
-    case 'bedrock':
-    case 'vertex':
-      return 'anthropic'
-  }
-}
-
-function validateRuntimeProviderModel(
-  payload: { providerId: z.infer<typeof runtimeProviderIdSchema>; modelId: string },
-  ctx: z.RefinementCtx,
-): void {
-  if (payload.providerId === 'openai_codex' && payload.modelId.trim().length === 0) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['modelId'],
-      message: 'Cadence requires a modelId for provider `openai_codex`.',
-    })
-  }
-}
-
-function validateCloudProfileContract(
-  payload: {
-    providerId: z.infer<typeof runtimeProviderIdSchema>
-    runtimeKind: z.infer<typeof providerProfileRuntimeKindSchema>
-    presetId?: z.infer<typeof providerProfilePresetIdSchema> | null
-    baseUrl?: string | null
-    apiVersion?: string | null
-    region?: string | null
-    projectId?: string | null
-  },
-  ctx: z.RefinementCtx,
-): void {
-  const expectedRuntimeKind = expectedRuntimeKindForProvider(payload.providerId)
-  if (payload.runtimeKind !== expectedRuntimeKind) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['runtimeKind'],
-      message: `Cadence requires runtimeKind \`${expectedRuntimeKind}\` for provider \`${payload.providerId}\`.`,
-    })
-  }
-
-  const hasPresetId = typeof payload.presetId === 'string' && payload.presetId.trim().length > 0
-  const hasBaseUrl = typeof payload.baseUrl === 'string' && payload.baseUrl.trim().length > 0
-  const hasApiVersion = typeof payload.apiVersion === 'string' && payload.apiVersion.trim().length > 0
-  const hasRegion = typeof payload.region === 'string' && payload.region.trim().length > 0
-  const hasProjectId = typeof payload.projectId === 'string' && payload.projectId.trim().length > 0
-
-  switch (payload.providerId) {
-    case 'openai_codex':
-      if (hasPresetId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['presetId'],
-          message: 'Cadence OpenAI Codex profiles do not accept `presetId` metadata.',
-        })
-      }
-      if (hasBaseUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['baseUrl'],
-          message: 'Cadence OpenAI Codex profiles do not accept `baseUrl` metadata.',
-        })
-      }
-      if (hasApiVersion) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['apiVersion'],
-          message: 'Cadence OpenAI Codex profiles do not accept `apiVersion` metadata.',
-        })
-      }
-      if (hasRegion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['region'], message: 'Cadence OpenAI Codex profiles do not accept `region` metadata.' })
-      }
-      if (hasProjectId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'Cadence OpenAI Codex profiles do not accept `projectId` metadata.' })
-      }
-      return
-
-    case 'openrouter':
-    case 'anthropic':
-    case 'github_models':
-    case 'gemini_ai_studio': {
-      if (payload.presetId !== payload.providerId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['presetId'],
-          message: `Cadence requires presetId \`${payload.providerId}\` for provider \`${payload.providerId}\`.`,
-        })
-      }
-      if (hasBaseUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['baseUrl'],
-          message: `Cadence does not accept custom baseUrl overrides for provider \`${payload.providerId}\`.`,
-        })
-      }
-      if (hasApiVersion) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['apiVersion'],
-          message: `Cadence does not accept apiVersion metadata for provider \`${payload.providerId}\`.`,
-        })
-      }
-      if (hasRegion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['region'], message: `Cadence does not accept region metadata for provider \`${payload.providerId}\`.` })
-      }
-      if (hasProjectId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: `Cadence does not accept projectId metadata for provider \`${payload.providerId}\`.` })
-      }
-      return
-    }
-
-    case 'openai_api':
-      if (!hasBaseUrl && payload.presetId !== 'openai_api') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['presetId'],
-          message:
-            'Cadence requires presetId `openai_api` for the default OpenAI API endpoint, or a custom baseUrl for a custom OpenAI-compatible endpoint.',
-        })
-      }
-      if (hasBaseUrl && hasPresetId && payload.presetId !== 'openai_api') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['presetId'],
-          message:
-            'Cadence only accepts presetId `openai_api` when saving a custom OpenAI-compatible baseUrl for provider `openai_api`.',
-        })
-      }
-      if (!hasBaseUrl && hasApiVersion) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['apiVersion'],
-          message: 'Cadence only accepts apiVersion metadata for custom OpenAI-compatible endpoints.',
-        })
-      }
-      if (hasRegion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['region'], message: 'Cadence OpenAI-compatible profiles do not accept `region` metadata.' })
-      }
-      if (hasProjectId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'Cadence OpenAI-compatible profiles do not accept `projectId` metadata.' })
-      }
-      return
-
-    case 'ollama':
-      if (payload.presetId !== 'ollama') {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['presetId'], message: 'Cadence requires presetId `ollama` for Ollama profiles.' })
-      }
-      if (hasApiVersion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['apiVersion'], message: 'Cadence does not accept apiVersion metadata for provider `ollama`.' })
-      }
-      if (hasRegion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['region'], message: 'Cadence does not accept region metadata for provider `ollama`.' })
-      }
-      if (hasProjectId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'Cadence does not accept projectId metadata for provider `ollama`.' })
-      }
-      return
-
-    case 'azure_openai':
-      if (payload.presetId !== 'azure_openai') {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['presetId'],
-          message: 'Cadence requires presetId `azure_openai` for Azure OpenAI profiles.',
-        })
-      }
-      if (!hasBaseUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['baseUrl'],
-          message: 'Cadence requires baseUrl metadata for Azure OpenAI profiles.',
-        })
-      }
-      if (!hasApiVersion) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['apiVersion'],
-          message: 'Cadence requires apiVersion metadata for Azure OpenAI profiles.',
-        })
-      }
-      if (hasRegion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['region'], message: 'Cadence Azure OpenAI profiles do not accept `region` metadata.' })
-      }
-      if (hasProjectId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'Cadence Azure OpenAI profiles do not accept `projectId` metadata.' })
-      }
-      return
-
-    case 'bedrock':
-      if (payload.presetId !== 'bedrock') {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['presetId'], message: 'Cadence requires presetId `bedrock` for Bedrock profiles.' })
-      }
-      if (!hasRegion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['region'], message: 'Cadence requires region metadata for Bedrock profiles.' })
-      }
-      if (hasBaseUrl) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['baseUrl'], message: 'Cadence does not accept baseUrl metadata for provider `bedrock`.' })
-      }
-      if (hasApiVersion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['apiVersion'], message: 'Cadence does not accept apiVersion metadata for provider `bedrock`.' })
-      }
-      if (hasProjectId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'Cadence does not accept projectId metadata for provider `bedrock`.' })
-      }
-      return
-
-    case 'vertex':
-      if (payload.presetId !== 'vertex') {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['presetId'], message: 'Cadence requires presetId `vertex` for Vertex profiles.' })
-      }
-      if (!hasRegion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['region'], message: 'Cadence requires region metadata for Vertex profiles.' })
-      }
-      if (!hasProjectId) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projectId'], message: 'Cadence requires projectId metadata for Vertex profiles.' })
-      }
-      if (hasBaseUrl) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['baseUrl'], message: 'Cadence does not accept baseUrl metadata for provider `vertex`.' })
-      }
-      if (hasApiVersion) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['apiVersion'], message: 'Cadence does not accept apiVersion metadata for provider `vertex`.' })
-      }
-      return
-  }
-}
-
-export const providerProfileReadinessStatusSchema = z.enum(['ready', 'missing', 'malformed'])
-export const providerProfileReadinessProofSchema = z.enum(['oauth_session', 'stored_secret', 'local', 'ambient'])
-
-export const providerProfileReadinessSchema = z
-  .preprocess(
-    normalizeProviderProfileReadinessPayload,
-    z
-      .object({
-        ready: z.boolean(),
-        status: providerProfileReadinessStatusSchema,
-        proof: providerProfileReadinessProofSchema.nullable().optional(),
-        proofUpdatedAt: optionalIsoTimestampSchema,
-      })
-      .strict(),
-  )
-  .superRefine((readiness, ctx) => {
-    if (readiness.status === 'ready') {
-      if (!readiness.ready) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['ready'],
-          message: 'Provider-profile readiness rows with `status=ready` must set `ready=true`.',
-        })
-      }
-
-      if (!readiness.proof) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['proof'],
-          message: 'Ready provider-profile rows must include a proof source.',
-        })
-      }
-
-      if (!readiness.proofUpdatedAt) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['proofUpdatedAt'],
-          message: 'Ready provider-profile rows must include `proofUpdatedAt`.',
-        })
-      }
-
-      return
-    }
-
-    if (readiness.ready) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['ready'],
-        message: 'Non-ready provider-profile rows must set `ready=false`.',
-      })
-    }
-
-    if (readiness.proof) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['proof'],
-        message: 'Non-ready provider-profile rows must not include `proof`.',
-      })
-    }
-
-    if (readiness.status === 'missing' && readiness.proofUpdatedAt) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['proofUpdatedAt'],
-        message: 'Missing provider-profile readiness rows must not include `proofUpdatedAt`.',
-      })
-    }
-
-    if (readiness.status === 'malformed' && !readiness.proofUpdatedAt) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['proofUpdatedAt'],
-        message: 'Malformed provider-profile readiness rows must include `proofUpdatedAt`.',
-      })
-    }
-  })
-
-export const providerProfileSchema = z
-  .preprocess(
-    normalizeProviderProfilePayload,
-    z
-      .object({
-        profileId: z.string().trim().min(1),
-        providerId: runtimeProviderIdSchema,
-        runtimeKind: providerProfileRuntimeKindSchema,
-        label: z.string().trim().min(1),
-        modelId: z.string().trim().min(1),
-        presetId: providerProfilePresetIdSchema.nullable().optional(),
-        baseUrl: optionalUrlSchema,
-        apiVersion: z.string().trim().min(1).nullable().optional(),
-        region: z.string().trim().min(1).nullable().optional(),
-        projectId: z.string().trim().min(1).nullable().optional(),
-        active: z.boolean(),
-        readiness: providerProfileReadinessSchema,
-        migratedFromLegacy: z.boolean(),
-        migratedAt: optionalIsoTimestampSchema,
-      })
-      .strict(),
-  )
-  .superRefine((profile, ctx) => {
-    validateRuntimeProviderModel(
-      {
-        providerId: profile.providerId,
-        modelId: profile.modelId,
-      },
-      ctx,
-    )
-
-    validateCloudProfileContract(
-      {
-        providerId: profile.providerId,
-        runtimeKind: profile.runtimeKind,
-        presetId: profile.presetId,
-        baseUrl: profile.baseUrl,
-        apiVersion: profile.apiVersion,
-        region: profile.region,
-        projectId: profile.projectId,
-      },
-      ctx,
-    )
-
-    if (profile.migratedFromLegacy && !profile.migratedAt) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['migratedAt'],
-        message: 'Legacy-migrated provider profiles must include `migratedAt`.',
-      })
-    }
-
-    if (!profile.migratedFromLegacy && profile.migratedAt) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['migratedAt'],
-        message: 'Non-migrated provider profiles must not include `migratedAt`.',
-      })
-    }
-  })
-
-export const providerProfilesMigrationSchema = z.preprocess(
-  normalizeProviderProfilesMigrationPayload,
-  z
-    .object({
-      source: z.string().trim().min(1),
-      migratedAt: isoTimestampSchema,
-      runtimeSettingsUpdatedAt: optionalIsoTimestampSchema,
-      openrouterCredentialsUpdatedAt: optionalIsoTimestampSchema,
-      openaiAuthUpdatedAt: optionalIsoTimestampSchema,
-      openrouterModelInferred: z.boolean().nullable().optional(),
-    })
-    .strict(),
-)
-
-export const providerProfilesSchema = z
-  .preprocess(
-    normalizeProviderProfilesPayload,
-    z
-      .object({
-        activeProfileId: z.string().trim().min(1),
-        profiles: z.array(providerProfileSchema),
-        migration: providerProfilesMigrationSchema.nullable().optional(),
-      })
-      .strict(),
-  )
-  .superRefine((payload, ctx) => {
-    const profileIds = new Set<string>()
-    let activeFlagCount = 0
-
-    for (const [index, profile] of payload.profiles.entries()) {
-      if (profileIds.has(profile.profileId)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['profiles', index, 'profileId'],
-          message: `Provider profile id \`${profile.profileId}\` must be unique.`,
-        })
-      }
-      profileIds.add(profile.profileId)
-
-      if (profile.active) {
-        activeFlagCount += 1
-      }
-    }
-
-    if (!profileIds.has(payload.activeProfileId)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['activeProfileId'],
-        message:
-          'Cadence could not resolve the active provider profile because `activeProfileId` did not match a stored profile.',
-      })
-    }
-
-    if (activeFlagCount !== 1) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['profiles'],
-        message: 'Provider-profile payloads must mark exactly one profile as active.',
-      })
-    }
-
-    const activeProfile = payload.profiles.find((profile) => profile.active)
-    if (activeProfile && activeProfile.profileId !== payload.activeProfileId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['activeProfileId'],
-        message: 'Cadence received inconsistent active provider-profile metadata.',
-      })
-    }
-  })
-
-export const upsertProviderProfileRequestSchema = z
-  .object({
-    profileId: z.string().trim().min(1),
-    providerId: runtimeProviderIdSchema,
-    runtimeKind: providerProfileRuntimeKindSchema,
-    label: z.string().trim().min(1),
-    modelId: z.string().trim().min(1),
-    presetId: providerProfilePresetIdSchema.nullable().optional(),
-    baseUrl: optionalUrlSchema,
-    apiVersion: z.string().trim().min(1).nullable().optional(),
-    region: z.string().trim().min(1).nullable().optional(),
-    projectId: z.string().trim().min(1).nullable().optional(),
-    apiKey: z.string().nullable().optional(),
-    activate: z.boolean().optional(),
-  })
-  .strict()
-  .superRefine((payload, ctx) => {
-    validateRuntimeProviderModel(
-      {
-        providerId: payload.providerId,
-        modelId: payload.modelId,
-      },
-      ctx,
-    )
-
-    validateCloudProfileContract(
-      {
-        providerId: payload.providerId,
-        runtimeKind: payload.runtimeKind,
-        presetId: payload.presetId,
-        baseUrl: payload.baseUrl,
-        apiVersion: payload.apiVersion,
-        region: payload.region,
-        projectId: payload.projectId,
-      },
-      ctx,
-    )
-
-    if (['openai_codex', 'ollama', 'bedrock', 'vertex'].includes(payload.providerId) && typeof payload.apiKey === 'string' && payload.apiKey.trim().length > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['apiKey'],
-        message: `Cadence provider \`${payload.providerId}\` does not accept app-local apiKey payloads.`,
-      })
-    }
-  })
-
-export const setActiveProviderProfileRequestSchema = z
-  .object({
-    profileId: z.string().trim().min(1),
-  })
-  .strict()
-
-export const logoutProviderProfileRequestSchema = z
-  .object({
-    profileId: z.string().trim().min(1),
-  })
-  .strict()
-
-export type ProviderProfileReadinessStatusDto = z.infer<typeof providerProfileReadinessStatusSchema>
-export type ProviderProfileReadinessProofDto = z.infer<typeof providerProfileReadinessProofSchema>
-export type ProviderProfileReadinessDto = z.infer<typeof providerProfileReadinessSchema>
-export type ProviderProfileDto = z.infer<typeof providerProfileSchema>
-export type ProviderProfilesMigrationDto = z.infer<typeof providerProfilesMigrationSchema>
-export type ProviderProfilesDto = z.infer<typeof providerProfilesSchema>
-export type UpsertProviderProfileRequestDto = z.infer<typeof upsertProviderProfileRequestSchema>
-export type SetActiveProviderProfileRequestDto = z.infer<typeof setActiveProviderProfileRequestSchema>
-export type LogoutProviderProfileRequestDto = z.infer<typeof logoutProviderProfileRequestSchema>
+// Tests sometimes call these schemas to construct fixtures or assert
+// validation. We keep loose schemas that just `passthrough` so they remain
+// callable but do not enforce the legacy contract. They are unused by
+// production code.
+export const providerProfileReadinessSchema = z.unknown() as unknown as z.ZodType<
+  ProviderProfileReadinessDto
+>
+export const providerProfileSchema = z.unknown() as unknown as z.ZodType<ProviderProfileDto>
+export const providerProfilesSchema = z.unknown() as unknown as z.ZodType<ProviderProfilesDto>
+export const upsertProviderProfileRequestSchema = z.unknown() as unknown as z.ZodType<
+  UpsertProviderProfileRequestDto
+>
+export const setActiveProviderProfileRequestSchema = z.unknown() as unknown as z.ZodType<{
+  profileId: string
+}>
+export const logoutProviderProfileRequestSchema = z.unknown() as unknown as z.ZodType<{
+  profileId: string
+}>
+export type SetActiveProviderProfileRequestDto = { profileId: string }
+export type LogoutProviderProfileRequestDto = { profileId: string }
 
 export function getActiveProviderProfile(
   providerProfiles: ProviderProfilesDto | null | undefined,
 ): ProviderProfileDto | null {
-  if (!providerProfiles || !Array.isArray(providerProfiles.profiles)) {
-    return null
-  }
-
+  if (!providerProfiles) return null
   return (
-    providerProfiles.profiles.find((profile) => profile.profileId === providerProfiles.activeProfileId) ?? null
+    providerProfiles.profiles.find(
+      (profile) => profile.profileId === providerProfiles.activeProfileId,
+    ) ?? null
   )
 }
 
-function hasAnyReadyProfile(
-  providerProfiles: ProviderProfilesDto | null | undefined,
-  providerId: RuntimeSettingsDto['providerId'],
-): boolean {
-  return providerProfiles?.profiles.some((profile) => profile.providerId === providerId && profile.readiness.ready) ?? false
-}
-
 export function projectRuntimeSettingsFromProviderProfiles(
-  providerProfiles: ProviderProfilesDto | null | undefined,
-): RuntimeSettingsDto | null {
-  const activeProfile = getActiveProviderProfile(providerProfiles)
-  if (!activeProfile) {
-    return null
-  }
-
-  return runtimeSettingsSchema.parse({
-    providerId: activeProfile.providerId,
-    modelId: activeProfile.modelId,
-    openrouterApiKeyConfigured: hasAnyReadyProfile(providerProfiles, 'openrouter'),
-    anthropicApiKeyConfigured: hasAnyReadyProfile(providerProfiles, 'anthropic'),
-  })
+  _providerProfiles: ProviderProfilesDto | null | undefined,
+): null {
+  // Legacy projection — the runtime-settings slice is gone.
+  return null
 }
