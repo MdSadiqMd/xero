@@ -130,15 +130,6 @@ pub struct ProviderProfileCredentialsFile {
     pub api_keys: Vec<ProviderApiKeyCredentialEntry>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct LegacyProviderProfileCredentialsFile {
-    #[serde(default)]
-    pub(crate) openrouter_api_keys: Vec<ProviderApiKeyCredentialEntry>,
-    #[serde(default)]
-    pub(crate) anthropic_api_keys: Vec<ProviderApiKeyCredentialEntry>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderProfilesSnapshot {
     pub metadata: ProviderProfilesMetadataFile,
@@ -535,49 +526,6 @@ fn synthesized_profile_metadata(provider_id: &str) -> (String, String, &'static 
     }
 }
 
-pub(crate) fn decode_provider_profile_credentials_file(
-    contents: &str,
-    path: &Path,
-) -> CommandResult<ProviderProfileCredentialsFile> {
-    let value = serde_json::from_str::<serde_json::Value>(contents).map_err(|error| {
-        CommandError::user_fixable(
-            "provider_profile_credentials_decode_failed",
-            format!(
-                "Cadence could not decode the app-local provider-profile credential file at {}: {error}",
-                path.display()
-            ),
-        )
-    })?;
-
-    if value.get("apiKeys").is_some() {
-        return serde_json::from_value::<ProviderProfileCredentialsFile>(value).map_err(|error| {
-            CommandError::user_fixable(
-                "provider_profile_credentials_decode_failed",
-                format!(
-                    "Cadence could not decode the app-local provider-profile credential file at {}: {error}",
-                    path.display()
-                ),
-            )
-        });
-    }
-
-    let legacy = serde_json::from_value::<LegacyProviderProfileCredentialsFile>(value).map_err(
-        |error| {
-            CommandError::user_fixable(
-                "provider_profile_credentials_decode_failed",
-                format!(
-                    "Cadence could not decode the app-local provider-profile credential file at {}: {error}",
-                    path.display()
-                ),
-            )
-        },
-    )?;
-
-    let mut api_keys = legacy.openrouter_api_keys;
-    api_keys.extend(legacy.anthropic_api_keys);
-    Ok(ProviderProfileCredentialsFile { api_keys })
-}
-
 pub(crate) fn validate_provider_profiles_contract(
     metadata: ProviderProfilesMetadataFile,
     credentials: ProviderProfileCredentialsFile,
@@ -691,30 +639,6 @@ pub(crate) fn build_openai_default_profile(
         label: OPENAI_CODEX_DEFAULT_PROFILE_LABEL.into(),
         model_id: normalize_openai_codex_model_id(OPENAI_CODEX_PROVIDER_ID),
         preset_id: None,
-        base_url: None,
-        api_version: None,
-        region: None,
-        project_id: None,
-        credential_link,
-        migrated_from_legacy: migrated_at.is_some(),
-        migrated_at: migrated_at.map(str::to_owned),
-        updated_at: updated_at.to_owned(),
-    }
-}
-
-pub(crate) fn build_openrouter_default_profile(
-    model_id: &str,
-    credential_link: Option<ProviderProfileCredentialLink>,
-    migrated_at: Option<&str>,
-    updated_at: &str,
-) -> ProviderProfileRecord {
-    ProviderProfileRecord {
-        profile_id: OPENROUTER_DEFAULT_PROFILE_ID.into(),
-        provider_id: OPENROUTER_PROVIDER_ID.into(),
-        runtime_kind: OPENROUTER_PROVIDER_ID.into(),
-        label: OPENROUTER_DEFAULT_PROFILE_LABEL.into(),
-        model_id: model_id.trim().to_owned(),
-        preset_id: Some(OPENROUTER_PROVIDER_ID.into()),
         base_url: None,
         api_version: None,
         region: None,

@@ -8,7 +8,6 @@ use rusqlite::Connection;
 use crate::commands::CommandError;
 
 pub mod importer;
-pub(crate) mod legacy_runtime_settings;
 pub mod migrations;
 pub mod permissions;
 
