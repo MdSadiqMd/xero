@@ -1287,6 +1287,43 @@ function createAdapter(options?: {
     return currentRuntimeSettings
   })
 
+  let currentProviderCredentials: { credentials: import('@/src/lib/cadence-model').ProviderCredentialDto[] } = {
+    credentials: [],
+  }
+  const listProviderCredentials = vi.fn(async () => currentProviderCredentials)
+  const upsertProviderCredential = vi.fn(async (request: import('@/src/lib/cadence-model').UpsertProviderCredentialRequestDto) => {
+    const next = currentProviderCredentials.credentials.filter((c) => c.providerId !== request.providerId)
+    next.push({
+      providerId: request.providerId,
+      kind: request.kind,
+      hasApiKey: typeof request.apiKey === 'string' && request.apiKey.length > 0,
+      oauthAccountId: null,
+      oauthSessionId: null,
+      hasOauthAccessToken: false,
+      oauthExpiresAt: null,
+      baseUrl: request.baseUrl ?? null,
+      apiVersion: request.apiVersion ?? null,
+      region: request.region ?? null,
+      projectId: request.projectId ?? null,
+      defaultModelId: request.defaultModelId ?? null,
+      readinessProof:
+        request.kind === 'api_key'
+          ? 'stored_secret'
+          : request.kind === 'local'
+            ? 'local'
+            : 'ambient',
+      updatedAt: '2026-04-15T20:00:00.000Z',
+    })
+    currentProviderCredentials = { credentials: next }
+    return currentProviderCredentials
+  })
+  const deleteProviderCredential = vi.fn(async (providerId: string) => {
+    currentProviderCredentials = {
+      credentials: currentProviderCredentials.credentials.filter((c) => c.providerId !== providerId),
+    }
+    return currentProviderCredentials
+  })
+
   const upsertProviderProfile = vi.fn(async (request: UpsertProviderProfileRequestDto) => {
     const parsedRequest = upsertProviderProfileRequestSchema.parse(request)
     const preset = getRequiredCloudProviderPreset(parsedRequest.providerId, 'createAdapter.upsertProviderProfile')
@@ -1861,9 +1898,9 @@ function createAdapter(options?: {
     upsertProviderProfile,
     setActiveProviderProfile,
     logoutProviderProfile,
-    listProviderCredentials: vi.fn(async () => ({ credentials: [] })),
-    upsertProviderCredential: vi.fn(async () => ({ credentials: [] })),
-    deleteProviderCredential: vi.fn(async () => ({ credentials: [] })),
+    listProviderCredentials,
+    upsertProviderCredential,
+    deleteProviderCredential,
     startOAuthLogin: async () => {
       currentRuntimeSession = makeRuntimeSession('project-1')
       return currentRuntimeSession
@@ -2095,6 +2132,9 @@ function createAdapter(options?: {
     upsertProviderProfile,
     setActiveProviderProfile,
     logoutProviderProfile,
+    listProviderCredentials,
+    upsertProviderCredential,
+    deleteProviderCredential,
     listMcpServers,
     upsertMcpServer,
     removeMcpServer,
@@ -2464,8 +2504,8 @@ describe('CadenceApp current UI', () => {
     expect(screen.getByText('Google Vertex AI · Region us-central1 · Project vertex-project · ambient profile needs repair')).toBeVisible()
   })
 
-  it.skip('saves OpenRouter provider settings from onboarding', async () => {
-    const { adapter, upsertProviderProfile } = createAdapter({
+  it('saves an OpenRouter API-key credential from onboarding', async () => {
+    const { adapter, upsertProviderCredential } = createAdapter({
       projects: [],
       runtimeSession: makeRuntimeSession('project-1', {
         phase: 'idle',
@@ -2477,30 +2517,27 @@ describe('CadenceApp current UI', () => {
     render(<CadenceApp adapter={adapter} />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
-    fireEvent.click(within(getProviderCard('OpenRouter')).getByRole('button', { name: 'API key' }))
-    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-or-v1-test-secret' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => expect(upsertProviderProfile).toHaveBeenCalledTimes(1))
-    expect(upsertProviderProfile).toHaveBeenCalledWith({
-      profileId: 'openrouter-default',
-      providerId: 'openrouter',
-      runtimeKind: 'openrouter',
-      label: 'OpenRouter',
-      modelId: 'openai/gpt-4.1-mini',
-      presetId: 'openrouter',
-      baseUrl: null,
-      apiVersion: null,
-      region: null,
-      projectId: null,
-      apiKey: 'sk-or-v1-test-secret',
-      activate: false,
+    const card = getProviderCard('OpenRouter')
+    fireEvent.click(within(card).getByRole('button', { name: /configure/i }))
+    fireEvent.change(within(card).getByLabelText(/API key/i), {
+      target: { value: 'sk-or-v1-test-secret' },
     })
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: /save/i }))
+    })
+
+    await waitFor(() => expect(upsertProviderCredential).toHaveBeenCalledTimes(1))
+    expect(upsertProviderCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'openrouter',
+        kind: 'api_key',
+        apiKey: 'sk-or-v1-test-secret',
+      }),
+    )
   })
 
-  it.skip('saves Anthropic provider settings from onboarding', async () => {
-    const { adapter, upsertProviderProfile } = createAdapter({
+  it('saves an Anthropic API-key credential from onboarding', async () => {
+    const { adapter, upsertProviderCredential } = createAdapter({
       projects: [],
       runtimeSession: makeRuntimeSession('project-1', {
         phase: 'idle',
@@ -2512,25 +2549,23 @@ describe('CadenceApp current UI', () => {
     render(<CadenceApp adapter={adapter} />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
-    fireEvent.click(within(getProviderCard('Anthropic')).getByRole('button', { name: 'API key' }))
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-ant-test-secret' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => expect(upsertProviderProfile).toHaveBeenCalledTimes(1))
-    expect(upsertProviderProfile).toHaveBeenCalledWith({
-      profileId: 'anthropic-default',
-      providerId: 'anthropic',
-      runtimeKind: 'anthropic',
-      label: 'Anthropic',
-      modelId: 'claude-3-7-sonnet-latest',
-      presetId: 'anthropic',
-      baseUrl: null,
-      apiVersion: null,
-      region: null,
-      projectId: null,
-      apiKey: 'sk-ant-test-secret',
-      activate: false,
+    const card = getProviderCard('Anthropic')
+    fireEvent.click(within(card).getByRole('button', { name: /configure/i }))
+    fireEvent.change(within(card).getByLabelText(/API key/i), {
+      target: { value: 'sk-ant-test-secret' },
     })
+    await act(async () => {
+      fireEvent.click(within(card).getByRole('button', { name: /save/i }))
+    })
+
+    await waitFor(() => expect(upsertProviderCredential).toHaveBeenCalledTimes(1))
+    expect(upsertProviderCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'anthropic',
+        kind: 'api_key',
+        apiKey: 'sk-ant-test-secret',
+      }),
+    )
   })
 
   it('rejects legacy provider upsert fields instead of coercing them into generic profile saves', async () => {
