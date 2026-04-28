@@ -55,7 +55,7 @@ export function useOperatorAuthMutations({
   | 'resolveOperatorAction'
   | 'resumeOperatorRun'
 > {
-  const { activeProjectIdRef, activeProjectRef, providerProfilesRef } = refs
+  const { activeProjectIdRef, activeProjectRef } = refs
   const {
     setErrorMessage,
     setOperatorActionStatus,
@@ -269,7 +269,7 @@ export function useOperatorAuthMutations({
       'Select an imported project before starting OpenAI login.',
     )
     const selectedProfileId = getSelectedProfileId(
-      options.profileId ?? providerProfilesRef.current?.activeProfileId,
+      options.profileId ?? null,
       'start OpenAI login',
     )
 
@@ -300,7 +300,6 @@ export function useOperatorAuthMutations({
     activeProjectIdRef,
     adapter,
     applyRuntimeSessionUpdate,
-    providerProfilesRef,
     scheduleOpenAiCallbackCompletion,
     syncRuntimeSession,
   ])
@@ -311,10 +310,7 @@ export function useOperatorAuthMutations({
         activeProjectIdRef,
         'Select an imported project before completing OpenAI login.',
       )
-      const selectedProfileId = getSelectedProfileId(
-        providerProfilesRef.current?.activeProfileId,
-        'complete OpenAI login',
-      )
+      const selectedProfileId = getSelectedProfileId(null, 'complete OpenAI login')
       cancelOpenAiCallbackPoll(projectId, flowId)
 
       try {
@@ -338,7 +334,6 @@ export function useOperatorAuthMutations({
       adapter,
       applyRuntimeSessionUpdate,
       cancelOpenAiCallbackPoll,
-      providerProfilesRef,
       syncRuntimeSession,
     ],
   )

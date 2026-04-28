@@ -13,15 +13,11 @@ import { type SkillRegistryDto } from '@/src/lib/cadence-model/skills'
 import { type NotificationRouteDto } from '@/src/lib/cadence-model/notifications'
 import { type ProjectListItem } from '@/src/lib/cadence-model/project'
 import {
-  type ProviderProfilesDto,
-} from '@/src/lib/cadence-model/provider-profiles'
-import {
   type ProviderCredentialsSnapshotDto,
 } from '@/src/lib/cadence-model/provider-credentials'
 import {
   type RuntimeRunView,
   type RuntimeSessionView,
-  type RuntimeSettingsDto,
 } from '@/src/lib/cadence-model/runtime'
 import { type ProjectDetailView } from '@/src/lib/cadence-model'
 
@@ -37,13 +33,9 @@ import type {
   ProjectRemovalStatus,
   ProviderCredentialsLoadStatus,
   ProviderCredentialsSaveStatus,
-  ProviderProfilesLoadStatus,
-  ProviderProfilesSaveStatus,
   RefreshSource,
   RuntimeRunActionKind,
   RuntimeRunActionStatus,
-  RuntimeSettingsLoadStatus,
-  RuntimeSettingsSaveStatus,
   McpRegistryLoadStatus,
   McpRegistryMutationStatus,
   SkillRegistryLoadStatus,
@@ -81,17 +73,11 @@ export type CadenceDesktopMutationActions = Pick<
   | 'logoutRuntimeSession'
   | 'resolveOperatorAction'
   | 'resumeOperatorRun'
-  | 'refreshProviderProfiles'
-  | 'upsertProviderProfile'
-  | 'setActiveProviderProfile'
-  | 'logoutProviderProfile'
   | 'refreshProviderCredentials'
   | 'upsertProviderCredential'
   | 'deleteProviderCredential'
   | 'startOAuthLogin'
   | 'completeOAuthCallback'
-  | 'refreshRuntimeSettings'
-  | 'upsertRuntimeSettings'
   | 'refreshMcpRegistry'
   | 'upsertMcpServer'
   | 'removeMcpServer'
@@ -123,12 +109,8 @@ export interface UseCadenceDesktopMutationsRefs {
   activeProjectIdRef: MutableRefObject<string | null>
   activeProjectRef: MutableRefObject<ProjectDetailView | null>
   runtimeRunsRef: MutableRefObject<Record<string, RuntimeRunView>>
-  providerProfilesRef: MutableRefObject<ProviderProfilesDto | null>
-  providerProfilesLoadInFlightRef: MutableRefObject<Promise<ProviderProfilesDto> | null>
   providerCredentialsRef: MutableRefObject<ProviderCredentialsSnapshotDto | null>
   providerCredentialsLoadInFlightRef: MutableRefObject<Promise<ProviderCredentialsSnapshotDto> | null>
-  runtimeSettingsRef: MutableRefObject<RuntimeSettingsDto | null>
-  runtimeSettingsLoadInFlightRef: MutableRefObject<Promise<RuntimeSettingsDto> | null>
   mcpRegistryRef: MutableRefObject<McpRegistryDto | null>
   mcpRegistryLoadInFlightRef: MutableRefObject<Promise<McpRegistryDto> | null>
   skillRegistryRef: MutableRefObject<SkillRegistryDto | null>
@@ -157,21 +139,11 @@ export interface UseCadenceDesktopMutationsSetters {
   setNotificationRouteMutationStatus: SetState<NotificationRouteMutationStatus>
   setPendingNotificationRouteId: SetState<string | null>
   setNotificationRouteMutationError: SetState<OperatorActionErrorView | null>
-  setProviderProfiles: SetState<ProviderProfilesDto | null>
-  setProviderProfilesLoadStatus: SetState<ProviderProfilesLoadStatus>
-  setProviderProfilesLoadError: SetState<OperatorActionErrorView | null>
-  setProviderProfilesSaveStatus: SetState<ProviderProfilesSaveStatus>
-  setProviderProfilesSaveError: SetState<OperatorActionErrorView | null>
   setProviderCredentials: SetState<ProviderCredentialsSnapshotDto | null>
   setProviderCredentialsLoadStatus: SetState<ProviderCredentialsLoadStatus>
   setProviderCredentialsLoadError: SetState<OperatorActionErrorView | null>
   setProviderCredentialsSaveStatus: SetState<ProviderCredentialsSaveStatus>
   setProviderCredentialsSaveError: SetState<OperatorActionErrorView | null>
-  setRuntimeSettings: SetState<RuntimeSettingsDto | null>
-  setRuntimeSettingsLoadStatus: SetState<RuntimeSettingsLoadStatus>
-  setRuntimeSettingsLoadError: SetState<OperatorActionErrorView | null>
-  setRuntimeSettingsSaveStatus: SetState<RuntimeSettingsSaveStatus>
-  setRuntimeSettingsSaveError: SetState<OperatorActionErrorView | null>
   setMcpRegistry: SetState<McpRegistryDto | null>
   setMcpImportDiagnostics: SetState<McpImportDiagnosticDto[]>
   setMcpRegistryLoadStatus: SetState<McpRegistryLoadStatus>
@@ -218,9 +190,7 @@ export interface UseCadenceDesktopMutationsArgs {
   refs: UseCadenceDesktopMutationsRefs
   setters: UseCadenceDesktopMutationsSetters
   operations: UseCadenceDesktopMutationsOperations
-  providerProfilesLoadStatus: ProviderProfilesLoadStatus
   providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
-  runtimeSettingsLoadStatus: RuntimeSettingsLoadStatus
   mcpRegistryLoadStatus: McpRegistryLoadStatus
   skillRegistryLoadStatus: SkillRegistryLoadStatus
 }

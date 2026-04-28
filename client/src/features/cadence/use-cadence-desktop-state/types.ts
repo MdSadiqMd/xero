@@ -416,11 +416,6 @@ export interface UseCadenceDesktopStateResult {
   projectRemovalStatus: ProjectRemovalStatus
   pendingProjectRemovalId: string | null
   errorMessage: string | null
-  providerProfiles: ProviderProfilesDto | null
-  providerProfilesLoadStatus: ProviderProfilesLoadStatus
-  providerProfilesLoadError: OperatorActionErrorView | null
-  providerProfilesSaveStatus: ProviderProfilesSaveStatus
-  providerProfilesSaveError: OperatorActionErrorView | null
   providerCredentials: ProviderCredentialsSnapshotDto | null
   providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
   providerCredentialsLoadError: OperatorActionErrorView | null
@@ -435,11 +430,6 @@ export interface UseCadenceDesktopStateResult {
   doctorReport: CadenceDoctorReportDto | null
   doctorReportStatus: DoctorReportRunStatus
   doctorReportError: OperatorActionErrorView | null
-  runtimeSettings: RuntimeSettingsDto | null
-  runtimeSettingsLoadStatus: RuntimeSettingsLoadStatus
-  runtimeSettingsLoadError: OperatorActionErrorView | null
-  runtimeSettingsSaveStatus: RuntimeSettingsSaveStatus
-  runtimeSettingsSaveError: OperatorActionErrorView | null
   mcpRegistry: McpRegistryDto | null
   mcpImportDiagnostics: McpImportDiagnosticDto[]
   mcpRegistryLoadStatus: McpRegistryLoadStatus
@@ -497,7 +487,6 @@ export interface UseCadenceDesktopStateResult {
     actionId: string,
     options?: { userAnswer?: string | null },
   ) => Promise<ProjectDetailView | null>
-  refreshProviderProfiles: (options?: { force?: boolean }) => Promise<ProviderProfilesDto>
   refreshProviderCredentials: (options?: { force?: boolean }) => Promise<ProviderCredentialsSnapshotDto>
   upsertProviderCredential: (
     request: UpsertProviderCredentialRequestDto,
@@ -527,11 +516,6 @@ export interface UseCadenceDesktopStateResult {
     options?: { includeNetwork?: boolean },
   ) => Promise<ProviderProfileDiagnosticsDto>
   runDoctorReport: (request?: Partial<RunDoctorReportRequestDto>) => Promise<CadenceDoctorReportDto>
-  upsertProviderProfile: (request: UpsertProviderProfileRequestDto) => Promise<ProviderProfilesDto>
-  setActiveProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
-  logoutProviderProfile: (profileId: string) => Promise<ProviderProfilesDto>
-  refreshRuntimeSettings: (options?: { force?: boolean }) => Promise<RuntimeSettingsDto>
-  upsertRuntimeSettings: (request: UpsertRuntimeSettingsRequestDto) => Promise<RuntimeSettingsDto>
   refreshMcpRegistry: (options?: { force?: boolean }) => Promise<McpRegistryDto>
   upsertMcpServer: (request: UpsertMcpServerRequestDto) => Promise<McpRegistryDto>
   removeMcpServer: (serverId: string) => Promise<McpRegistryDto>

@@ -89,11 +89,6 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     projectRemovalStatus,
     pendingProjectRemovalId,
     errorMessage,
-    providerProfiles,
-    providerProfilesLoadStatus,
-    providerProfilesLoadError,
-    providerProfilesSaveStatus,
-    providerProfilesSaveError,
     providerCredentials,
     providerCredentialsLoadStatus,
     providerCredentialsLoadError,
@@ -142,12 +137,9 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
     logoutRuntimeSession,
     resolveOperatorAction,
     resumeOperatorRun,
-    refreshProviderProfiles,
     refreshProviderModelCatalog,
     checkProviderProfile,
     runDoctorReport,
-    upsertProviderProfile,
-    logoutProviderProfile,
     refreshProviderCredentials,
     upsertProviderCredential,
     deleteProviderCredential,
@@ -461,9 +453,7 @@ export function CadenceApp({ adapter }: CadenceAppProps) {
 
     if (!activeProject) {
       if (activeView === 'agent') {
-        const hasReadyProvider = Boolean(
-          (providerProfiles?.profiles ?? []).some((profile) => profile.readiness.ready),
-        )
+        const hasReadyProvider = (providerCredentials?.credentials.length ?? 0) > 0
         return (
           <div className="flex flex-1 items-center justify-center overflow-y-auto scrollbar-thin px-6 py-5">
             <SetupEmptyState

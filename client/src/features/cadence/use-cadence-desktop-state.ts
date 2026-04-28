@@ -366,15 +366,6 @@ export function useCadenceDesktopState(
   const [pendingNotificationRouteId, setPendingNotificationRouteId] = useState<string | null>(null)
   const [notificationRouteMutationError, setNotificationRouteMutationError] =
     useState<OperatorActionErrorView | null>(null)
-  const [providerProfiles, setProviderProfiles] = useState<ProviderProfilesDto | null>(null)
-  const [providerProfilesLoadStatus, setProviderProfilesLoadStatus] =
-    useState<ProviderProfilesLoadStatus>('idle')
-  const [providerProfilesLoadError, setProviderProfilesLoadError] =
-    useState<OperatorActionErrorView | null>(null)
-  const [providerProfilesSaveStatus, setProviderProfilesSaveStatus] =
-    useState<ProviderProfilesSaveStatus>('idle')
-  const [providerProfilesSaveError, setProviderProfilesSaveError] =
-    useState<OperatorActionErrorView | null>(null)
   const [providerCredentials, setProviderCredentials] =
     useState<ProviderCredentialsSnapshotDto | null>(null)
   const [providerCredentialsLoadStatus, setProviderCredentialsLoadStatus] =
@@ -395,11 +386,6 @@ export function useCadenceDesktopState(
   const [doctorReport, setDoctorReport] = useState<CadenceDoctorReportDto | null>(null)
   const [doctorReportStatus, setDoctorReportStatus] = useState<DoctorReportRunStatus>('idle')
   const [doctorReportError, setDoctorReportError] = useState<OperatorActionErrorView | null>(null)
-  const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettingsDto | null>(null)
-  const [runtimeSettingsLoadStatus, setRuntimeSettingsLoadStatus] = useState<RuntimeSettingsLoadStatus>('idle')
-  const [runtimeSettingsLoadError, setRuntimeSettingsLoadError] = useState<OperatorActionErrorView | null>(null)
-  const [runtimeSettingsSaveStatus, setRuntimeSettingsSaveStatus] = useState<RuntimeSettingsSaveStatus>('idle')
-  const [runtimeSettingsSaveError, setRuntimeSettingsSaveError] = useState<OperatorActionErrorView | null>(null)
   const [mcpRegistry, setMcpRegistry] = useState<McpRegistryDto | null>(null)
   const [mcpImportDiagnostics, setMcpImportDiagnostics] = useState<McpImportDiagnosticDto[]>([])
   const [mcpRegistryLoadStatus, setMcpRegistryLoadStatus] = useState<McpRegistryLoadStatus>('idle')
@@ -446,8 +432,6 @@ export function useCadenceDesktopState(
   const notificationSyncSummariesRef = useRef<Record<string, SyncNotificationAdaptersResponseDto | null>>({})
   const notificationDispatchesRef = useRef<Record<string, NotificationDispatchDto[]>>({})
   const trustSnapshotRef = useRef<Record<string, AgentTrustSnapshotView>>({})
-  const providerProfilesRef = useRef<ProviderProfilesDto | null>(null)
-  const providerProfilesLoadInFlightRef = useRef<Promise<ProviderProfilesDto> | null>(null)
   const providerCredentialsRef = useRef<ProviderCredentialsSnapshotDto | null>(null)
   const providerCredentialsLoadInFlightRef = useRef<Promise<ProviderCredentialsSnapshotDto> | null>(
     null,
@@ -461,8 +445,6 @@ export function useCadenceDesktopState(
   >({})
   const providerModelCatalogDependencyKeysRef = useRef<Record<string, string>>({})
   const activeProviderProfileIdRef = useRef<string | null>(null)
-  const runtimeSettingsRef = useRef<RuntimeSettingsDto | null>(null)
-  const runtimeSettingsLoadInFlightRef = useRef<Promise<RuntimeSettingsDto> | null>(null)
   const mcpRegistryRef = useRef<McpRegistryDto | null>(null)
   const mcpRegistryLoadInFlightRef = useRef<Promise<McpRegistryDto> | null>(null)
   const skillRegistryRef = useRef<SkillRegistryDto | null>(null)
@@ -524,9 +506,6 @@ export function useCadenceDesktopState(
     notificationSyncSummariesRef.current = notificationSyncSummaries
   }, [notificationSyncSummaries])
 
-  useEffect(() => {
-    providerProfilesRef.current = providerProfiles
-  }, [providerProfiles])
 
   useEffect(() => {
     providerCredentialsRef.current = providerCredentials
@@ -544,9 +523,6 @@ export function useCadenceDesktopState(
     providerModelCatalogLoadErrorsRef.current = providerModelCatalogLoadErrors
   }, [providerModelCatalogLoadErrors])
 
-  useEffect(() => {
-    runtimeSettingsRef.current = runtimeSettings
-  }, [runtimeSettings])
 
   useEffect(() => {
     mcpRegistryRef.current = mcpRegistry
@@ -820,12 +796,7 @@ export function useCadenceDesktopState(
   const refreshProviderModelCatalog = useCallback(
     async (profileId: string, options: { force?: boolean } = {}): Promise<ProviderModelCatalogDto> => {
       const trimmedProfileId = profileId.trim()
-      const profile = providerProfilesRef.current?.profiles.find(
-        (candidate) => candidate.profileId === trimmedProfileId,
-      )
-      const requestDependencyKey = profile
-        ? getProviderModelCatalogDependencyKey(profile)
-        : `missing:${trimmedProfileId}`
+      const requestDependencyKey = `missing:${trimmedProfileId}`
       const requestKey = `${options.force ? 'force' : 'cached'}:${requestDependencyKey}`
       const inFlight = providerModelCatalogLoadInFlightRef.current[trimmedProfileId]
       if (inFlight && inFlight.requestKey === requestKey) {
@@ -919,15 +890,6 @@ export function useCadenceDesktopState(
 
       const modelCatalog = response.modelCatalog
       if (modelCatalog) {
-        const profile = providerProfilesRef.current?.profiles.find(
-          (candidate) => candidate.profileId === response.profileId,
-        )
-
-        if (profile) {
-          providerModelCatalogDependencyKeysRef.current[response.profileId] =
-            getProviderModelCatalogDependencyKey(profile)
-        }
-
         setProviderModelCatalogs((currentCatalogs) => ({
           ...currentCatalogs,
           [response.profileId]: modelCatalog,
@@ -1128,7 +1090,6 @@ export function useCadenceDesktopState(
         activeProjectIdRef,
         runtimeSessionsRef,
         runtimeRunRefreshKeyRef,
-        providerProfilesRef,
       },
       setters: {
         setProjects,
@@ -1138,7 +1099,6 @@ export function useCadenceDesktopState(
         setRuntimeSessions,
         setRuntimeLoadErrors,
         setRuntimeStreams,
-        setProviderProfiles,
         setErrorMessage,
       },
       handleAdapterEventError,
@@ -1341,17 +1301,11 @@ export function useCadenceDesktopState(
     logoutRuntimeSession,
     resolveOperatorAction,
     resumeOperatorRun,
-    refreshProviderProfiles,
-    upsertProviderProfile,
-    setActiveProviderProfile,
-    logoutProviderProfile,
     refreshProviderCredentials,
     upsertProviderCredential,
     deleteProviderCredential,
     startOAuthLogin,
     completeOAuthCallback,
-    refreshRuntimeSettings,
-    upsertRuntimeSettings,
     refreshMcpRegistry,
     upsertMcpServer,
     removeMcpServer,
@@ -1383,12 +1337,8 @@ export function useCadenceDesktopState(
       activeProjectIdRef,
       activeProjectRef,
       runtimeRunsRef,
-      providerProfilesRef,
-      providerProfilesLoadInFlightRef,
       providerCredentialsRef,
       providerCredentialsLoadInFlightRef,
-      runtimeSettingsRef,
-      runtimeSettingsLoadInFlightRef,
       mcpRegistryRef,
       mcpRegistryLoadInFlightRef,
       skillRegistryRef,
@@ -1416,21 +1366,11 @@ export function useCadenceDesktopState(
       setNotificationRouteMutationStatus,
       setPendingNotificationRouteId,
       setNotificationRouteMutationError,
-      setProviderProfiles,
-      setProviderProfilesLoadStatus,
-      setProviderProfilesLoadError,
-      setProviderProfilesSaveStatus,
-      setProviderProfilesSaveError,
       setProviderCredentials,
       setProviderCredentialsLoadStatus,
       setProviderCredentialsLoadError,
       setProviderCredentialsSaveStatus,
       setProviderCredentialsSaveError,
-      setRuntimeSettings,
-      setRuntimeSettingsLoadStatus,
-      setRuntimeSettingsLoadError,
-      setRuntimeSettingsSaveStatus,
-      setRuntimeSettingsSaveError,
       setMcpRegistry,
       setMcpImportDiagnostics,
       setMcpRegistryLoadStatus,
@@ -1456,28 +1396,19 @@ export function useCadenceDesktopState(
       applyRuntimeRunUpdate,
       applyAutonomousRunStateUpdate,
     },
-    providerProfilesLoadStatus,
     providerCredentialsLoadStatus,
-    runtimeSettingsLoadStatus,
     mcpRegistryLoadStatus,
     skillRegistryLoadStatus,
   })
 
   useEffect(() => {
-    if (providerProfilesLoadStatus !== 'idle') {
+    if (providerCredentialsLoadStatus !== 'idle') {
       return
     }
 
-    void refreshProviderProfiles().catch(() => undefined)
-  }, [providerProfilesLoadStatus, refreshProviderProfiles])
+    void refreshProviderCredentials().catch(() => undefined)
+  }, [providerCredentialsLoadStatus, refreshProviderCredentials])
 
-  useEffect(() => {
-    if (runtimeSettingsLoadStatus !== 'idle') {
-      return
-    }
-
-    void refreshRuntimeSettings().catch(() => undefined)
-  }, [refreshRuntimeSettings, runtimeSettingsLoadStatus])
 
   useEffect(() => {
     if (mcpRegistryLoadStatus !== 'idle') {
@@ -1509,7 +1440,10 @@ export function useCadenceDesktopState(
   }, [activeProjectId, refreshSkillRegistry, skillRegistryLoadStatus])
 
   useEffect(() => {
-    const nextDependencyKeys = getProviderModelCatalogDependencyKeys(providerProfiles)
+    // Phase 4: catalog dependency tracking is gone with provider profiles.
+    // Catalogs are now refreshed on-demand by the credentials list.
+    return
+    const nextDependencyKeys: Record<string, string> = {}
     const previousDependencyKeys = providerModelCatalogDependencyKeysRef.current
     const invalidatedProfileIds: string[] = []
     const removedProfileIds = Object.keys(previousDependencyKeys).filter(
@@ -1574,44 +1508,14 @@ export function useCadenceDesktopState(
       })
     }
 
-    const nextActiveProviderProfileId = providerProfiles?.activeProfileId ?? null
-
     providerModelCatalogDependencyKeysRef.current = nextDependencyKeys
-    activeProviderProfileIdRef.current = nextActiveProviderProfileId
+    activeProviderProfileIdRef.current = null
+  }, [refreshProviderModelCatalog])
 
-    const readyProfileIds =
-      providerProfiles?.profiles
-        .filter(shouldRefreshProviderModelCatalog)
-        .map((profile) => profile.profileId) ?? []
-
-    for (const profileId of readyProfileIds) {
-      const profileInvalidated = invalidatedProfileIds.includes(profileId)
-      const catalog = providerModelCatalogsRef.current[profileId] ?? null
-      const loadStatus = providerModelCatalogLoadStatusesRef.current[profileId] ?? 'idle'
-
-      if (
-        profileInvalidated ||
-        !catalog ||
-        loadStatus === 'error' ||
-        loadStatus === 'idle'
-      ) {
-        void refreshProviderModelCatalog(profileId, {
-          force: profileInvalidated,
-        }).catch(() => undefined)
-      }
-    }
-  }, [providerProfiles, refreshProviderModelCatalog])
-
-  const activeProviderProfileId = providerProfiles?.activeProfileId ?? null
-  const activeProviderModelCatalog = activeProviderProfileId
-    ? providerModelCatalogs[activeProviderProfileId] ?? null
-    : null
-  const activeProviderModelCatalogLoadStatus: ProviderModelCatalogLoadStatus = activeProviderProfileId
-    ? providerModelCatalogLoadStatuses[activeProviderProfileId] ?? 'idle'
-    : 'idle'
-  const activeProviderModelCatalogLoadError = activeProviderProfileId
-    ? providerModelCatalogLoadErrors[activeProviderProfileId] ?? null
-    : null
+  const activeProviderProfileId: string | null = null
+  const activeProviderModelCatalog: ProviderModelCatalogDto | null = null
+  const activeProviderModelCatalogLoadStatus: ProviderModelCatalogLoadStatus = 'idle'
+  const activeProviderModelCatalogLoadError: OperatorActionErrorView | null = null
 
   const activeRuntimeSession = activeProjectId
     ? runtimeSessions[activeProjectId] ?? activeProject?.runtimeSession ?? null
@@ -1667,9 +1571,9 @@ export function useCadenceDesktopState(
     }
     previousRuntimeAuthRef.current = next
     if (shouldRefresh) {
-      void refreshProviderProfiles({ force: true }).catch(() => undefined)
+      void refreshProviderCredentials({ force: true }).catch(() => undefined)
     }
-  }, [refreshProviderProfiles, runtimeSessions])
+  }, [refreshProviderCredentials, runtimeSessions])
 
   const activePhase = useMemo(() => getActivePhase(activeProject), [activeProject])
   const activeRuntimeErrorMessage = activeProject ? runtimeLoadErrors[activeProject.id] ?? null : null
@@ -1732,19 +1636,12 @@ export function useCadenceDesktopState(
       buildWorkflowView({
         project: activeProject,
         activePhase,
-        providerProfiles,
+        providerProfiles: null,
         providerCredentials,
         runtimeSession: activeRuntimeSession,
-        runtimeSettings,
+        runtimeSettings: null,
       }),
-    [
-      activePhase,
-      activeProject,
-      activeRuntimeSession,
-      providerCredentials,
-      providerProfiles,
-      runtimeSettings,
-    ],
+    [activePhase, activeProject, activeRuntimeSession, providerCredentials],
   )
 
   const agentViewProjection = useMemo(
@@ -1753,10 +1650,10 @@ export function useCadenceDesktopState(
         project: activeProject,
         activePhase,
         repositoryStatus,
-        providerProfiles,
+        providerProfiles: null,
         providerCredentials,
         runtimeSession: activeRuntimeSession,
-        runtimeSettings,
+        runtimeSettings: null,
         providerModelCatalogs,
         providerModelCatalogLoadStatuses,
         providerModelCatalogLoadErrors,
@@ -1825,8 +1722,6 @@ export function useCadenceDesktopState(
       runtimeRunActionError,
       runtimeRunActionStatus,
       providerCredentials,
-      providerProfiles,
-      runtimeSettings,
     ],
   )
   const agentView = agentViewProjection.view
@@ -1867,11 +1762,6 @@ export function useCadenceDesktopState(
     projectRemovalStatus,
     pendingProjectRemovalId,
     errorMessage,
-    providerProfiles,
-    providerProfilesLoadStatus,
-    providerProfilesLoadError,
-    providerProfilesSaveStatus,
-    providerProfilesSaveError,
     providerCredentials,
     providerCredentialsLoadStatus,
     providerCredentialsLoadError,
@@ -1886,11 +1776,6 @@ export function useCadenceDesktopState(
     doctorReport,
     doctorReportStatus,
     doctorReportError,
-    runtimeSettings,
-    runtimeSettingsLoadStatus,
-    runtimeSettingsLoadError,
-    runtimeSettingsSaveStatus,
-    runtimeSettingsSaveError,
     mcpRegistry,
     mcpImportDiagnostics,
     mcpRegistryLoadStatus,
@@ -1941,20 +1826,14 @@ export function useCadenceDesktopState(
     logoutRuntimeSession,
     resolveOperatorAction,
     resumeOperatorRun,
-    refreshProviderProfiles,
     refreshProviderModelCatalog,
     checkProviderProfile,
     runDoctorReport,
-    upsertProviderProfile,
-    setActiveProviderProfile,
-    logoutProviderProfile,
     refreshProviderCredentials,
     upsertProviderCredential,
     deleteProviderCredential,
     startOAuthLogin,
     completeOAuthCallback,
-    refreshRuntimeSettings,
-    upsertRuntimeSettings,
     refreshMcpRegistry,
     upsertMcpServer,
     removeMcpServer,
