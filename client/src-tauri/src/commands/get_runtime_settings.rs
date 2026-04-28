@@ -1,20 +1,15 @@
 use std::{fs, io::Write, path::Path};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime};
 use tempfile::NamedTempFile;
 
 use crate::{
-    commands::{
-        provider_profiles::load_provider_profiles_snapshot, CommandError, CommandResult,
-        RuntimeSettingsDto,
-    },
+    commands::{CommandError, CommandResult},
     provider_profiles::{ProviderProfileRecord, ProviderProfilesSnapshot},
     runtime::{
         normalize_openai_codex_model_id, resolve_runtime_provider_identity, ANTHROPIC_PROVIDER_ID,
         OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
     },
-    state::DesktopState,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,26 +36,6 @@ pub(crate) struct RuntimeSettingsSnapshot {
     pub openrouter_credentials_updated_at: Option<String>,
     pub anthropic_api_key: Option<String>,
     pub anthropic_credentials_updated_at: Option<String>,
-}
-
-impl RuntimeSettingsSnapshot {
-    pub(crate) fn dto(&self) -> RuntimeSettingsDto {
-        RuntimeSettingsDto {
-            provider_id: self.settings.provider_id.clone(),
-            model_id: self.settings.model_id.clone(),
-            openrouter_api_key_configured: self.settings.openrouter_api_key_configured,
-            anthropic_api_key_configured: self.anthropic_api_key.is_some(),
-        }
-    }
-}
-
-
-pub(crate) fn load_runtime_settings_snapshot<R: Runtime>(
-    app: &AppHandle<R>,
-    state: &DesktopState,
-) -> CommandResult<RuntimeSettingsSnapshot> {
-    let provider_profiles = load_provider_profiles_snapshot(app, state)?;
-    runtime_settings_snapshot_from_provider_profiles(&provider_profiles)
 }
 
 pub(crate) fn runtime_settings_file_from_request(
@@ -164,19 +139,6 @@ pub(crate) fn write_json_file_atomically(
     })?;
 
     Ok(())
-}
-
-pub(crate) fn runtime_settings_snapshot_from_provider_profiles(
-    provider_profiles: &ProviderProfilesSnapshot,
-) -> CommandResult<RuntimeSettingsSnapshot> {
-    let active_profile = provider_profiles.active_profile().ok_or_else(|| {
-        CommandError::user_fixable(
-            "provider_profiles_invalid",
-            "Cadence could not project runtime settings because the active provider profile was missing.",
-        )
-    })?;
-
-    runtime_settings_snapshot_for_provider_profile(provider_profiles, active_profile)
 }
 
 pub(crate) fn runtime_settings_snapshot_for_provider_profile(

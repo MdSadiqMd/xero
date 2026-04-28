@@ -30,7 +30,6 @@ pub const OPENROUTER_FALLBACK_MODEL_ID: &str = "openai/gpt-4.1-mini";
 const PROVIDER_PROFILES_SCHEMA_VERSION: u32 = 3;
 const OPENAI_CODEX_DEFAULT_PROFILE_LABEL: &str = "OpenAI Codex";
 const OPENROUTER_DEFAULT_PROFILE_LABEL: &str = "OpenRouter";
-const ANTHROPIC_DEFAULT_PROFILE_LABEL: &str = "Anthropic";
 
 type CloudProfileMetadata = (
     Option<String>,
@@ -520,30 +519,6 @@ pub(crate) fn build_openrouter_default_profile(
         label: OPENROUTER_DEFAULT_PROFILE_LABEL.into(),
         model_id: model_id.trim().to_owned(),
         preset_id: Some(OPENROUTER_PROVIDER_ID.into()),
-        base_url: None,
-        api_version: None,
-        region: None,
-        project_id: None,
-        credential_link,
-        migrated_from_legacy: migrated_at.is_some(),
-        migrated_at: migrated_at.map(str::to_owned),
-        updated_at: updated_at.to_owned(),
-    }
-}
-
-pub(crate) fn build_anthropic_default_profile(
-    model_id: &str,
-    credential_link: Option<ProviderProfileCredentialLink>,
-    migrated_at: Option<&str>,
-    updated_at: &str,
-) -> ProviderProfileRecord {
-    ProviderProfileRecord {
-        profile_id: ANTHROPIC_DEFAULT_PROFILE_ID.into(),
-        provider_id: ANTHROPIC_PROVIDER_ID.into(),
-        runtime_kind: ANTHROPIC_PROVIDER_ID.into(),
-        label: ANTHROPIC_DEFAULT_PROFILE_LABEL.into(),
-        model_id: model_id.trim().to_owned(),
-        preset_id: Some(ANTHROPIC_PROVIDER_ID.into()),
         base_url: None,
         api_version: None,
         region: None,

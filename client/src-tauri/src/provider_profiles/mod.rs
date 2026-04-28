@@ -27,6 +27,4 @@ pub use store::{
     OPENAI_CODEX_DEFAULT_PROFILE_ID, OPENROUTER_DEFAULT_PROFILE_ID, OPENROUTER_FALLBACK_MODEL_ID,
 };
 
-pub(crate) use store::{
-    build_anthropic_default_profile, build_openai_default_profile, build_openrouter_default_profile,
-};
+pub(crate) use store::build_openai_default_profile;
