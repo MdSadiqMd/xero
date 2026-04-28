@@ -1,4 +1,3 @@
-pub mod sql;
 pub mod store;
 
 use rusqlite::Connection;
