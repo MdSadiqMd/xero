@@ -371,8 +371,34 @@ pub enum SessionContextContributorKindDto {
     CompactionSummary,
     ConversationTail,
     ToolResult,
+    ToolSummary,
     ToolDescriptor,
+    FileObservation,
+    CodeSymbol,
+    DependencyMetadata,
+    RunArtifact,
     ProviderUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionContextTaskPhaseDto {
+    Intake,
+    ContextGather,
+    Plan,
+    Execute,
+    Verify,
+    Summarize,
+    RunArtifact,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionContextDispositionDto {
+    Include,
+    Summarize,
+    Defer,
+    RetrieveOnDemand,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -421,10 +447,65 @@ pub struct SessionContextContributorDto {
     pub sequence: u64,
     pub estimated_tokens: u64,
     pub estimated_chars: u64,
+    pub recency_score: u8,
+    pub relevance_score: u8,
+    pub authority_score: u8,
+    pub rank_score: u16,
+    pub task_phase: SessionContextTaskPhaseDto,
+    pub disposition: SessionContextDispositionDto,
     pub included: bool,
     pub model_visible: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omitted_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    pub redaction: SessionContextRedactionDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionContextCodeSymbolDto {
+    pub symbol_id: String,
+    pub name: String,
+    pub kind: String,
+    pub path: String,
+    pub line: u64,
+    pub estimated_tokens: u64,
+    pub redaction: SessionContextRedactionDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionContextDependencyManifestDto {
+    pub path: String,
+    pub ecosystem: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_name: Option<String>,
+    pub dependency_count: u64,
+    pub redaction: SessionContextRedactionDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionContextCodeMapDto {
+    pub generated_from_root: String,
+    pub source_roots: Vec<String>,
+    pub package_manifests: Vec<SessionContextDependencyManifestDto>,
+    pub symbols: Vec<SessionContextCodeSymbolDto>,
+    pub redaction: SessionContextRedactionDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionContextSnapshotDiffDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_snapshot_id: Option<String>,
+    pub added_contributor_ids: Vec<String>,
+    pub removed_contributor_ids: Vec<String>,
+    pub changed_contributor_ids: Vec<String>,
+    pub estimated_token_delta: i64,
     pub redaction: SessionContextRedactionDto,
 }
 
@@ -441,6 +522,12 @@ pub struct SessionContextSnapshotDto {
     pub model_id: String,
     pub generated_at: String,
     pub budget: SessionContextBudgetDto,
+    pub provider_request_hash: String,
+    pub included_token_estimate: u64,
+    pub deferred_token_estimate: u64,
+    pub code_map: SessionContextCodeMapDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<SessionContextSnapshotDiffDto>,
     pub contributors: Vec<SessionContextContributorDto>,
     pub policy_decisions: Vec<SessionContextPolicyDecisionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1387,8 +1474,16 @@ pub fn approved_memory_context_contributors(
                 sequence: (index as u64).saturating_add(1),
                 estimated_tokens: estimate_tokens(&text),
                 estimated_chars: text.chars().count() as u64,
+                recency_score: 100,
+                relevance_score: 70,
+                authority_score: 82,
+                rank_score: 638,
+                task_phase: SessionContextTaskPhaseDto::ContextGather,
+                disposition: SessionContextDispositionDto::Include,
                 included: true,
                 model_visible: true,
+                summary: None,
+                omitted_reason: None,
                 text: Some(text),
                 prompt_fragment_id: None,
                 prompt_fragment_priority: None,
@@ -1559,7 +1654,17 @@ pub fn validate_context_snapshot_contract(
     if snapshot.contract_version != XERO_SESSION_CONTEXT_CONTRACT_VERSION {
         return Err("context snapshot contract version is unsupported".into());
     }
+    if snapshot.provider_request_hash.len() != 64
+        || !snapshot
+            .provider_request_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("context snapshot provider request hash must be lowercase SHA-256".into());
+    }
     let mut previous_sequence = 0_u64;
+    let mut included_tokens = 0_u64;
+    let mut deferred_tokens = 0_u64;
     for contributor in &snapshot.contributors {
         if contributor.sequence <= previous_sequence {
             return Err("context contributor sequences must be strictly increasing".into());
@@ -1568,6 +1673,20 @@ pub fn validate_context_snapshot_contract(
         if contributor.model_visible && !contributor.included {
             return Err("model-visible contributors must also be included".into());
         }
+        if contributor.rank_score == 0 {
+            return Err("context contributors must be ranked before snapshot emission".into());
+        }
+        if contributor.included && contributor.model_visible {
+            included_tokens = included_tokens.saturating_add(contributor.estimated_tokens);
+        } else {
+            deferred_tokens = deferred_tokens.saturating_add(contributor.estimated_tokens);
+        }
+    }
+    if snapshot.included_token_estimate != included_tokens {
+        return Err("context snapshot included token estimate must match contributors".into());
+    }
+    if snapshot.deferred_token_estimate != deferred_tokens {
+        return Err("context snapshot deferred token estimate must match contributors".into());
     }
     ensure_secret_free_json(snapshot)
 }

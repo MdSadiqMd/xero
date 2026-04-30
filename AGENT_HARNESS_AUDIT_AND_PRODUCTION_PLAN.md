@@ -16,7 +16,7 @@ The right direction is not to add more ad hoc prompt text. Xero needs a versione
 
 Status date: April 30, 2026.
 
-Overall status: Milestones 1 and 2 are complete. About 30% of the full production plan is now implemented; roughly 70% remains. The work completed so far establishes the prompt compiler and progressive registry foundation, but the state machine, policy engine, context graph, native MCP/skill projection, async subagents, eval suite, and product inspector surfaces are still open.
+Overall status: Milestones 1, 2, and 7 are complete. About 40% of the full production plan is now implemented; roughly 60% remains. The work completed so far establishes the prompt compiler, progressive registry foundation, and token-budget-aware context engine, but the state machine, policy engine, native MCP/skill projection, async subagents, eval suite, and product inspector surfaces are still open.
 
 Completed in the April 30, 2026 pass:
 
@@ -42,6 +42,16 @@ Completed in the Milestone 2 pass:
 - Persisted catalog metadata alongside every `tool_registry_snapshot` event and made registry replay prefer the latest durable snapshot while still incorporating new user prompt/tool-access requests.
 - Preserved registry options during expansion so skill-tool gating and browser preference survive `tool_access` turns.
 
+Completed in the Milestone 7 pass:
+
+- Added first-class context graph metadata for prompt fragments, instruction files, memory, transcript tail, tool results, tool summaries, file observations, code symbols, dependency metadata, run artifacts, tool descriptors, compaction summaries, and usage.
+- Added recency, relevance, authority, task-phase, rank, disposition, summary, and omission metadata to every context contributor.
+- Added a context budget planner that decides which contributors are included, summarized, deferred, or retrievable on demand under known provider budgets.
+- Added project code map generation from package manifests, source roots, lightweight symbols, and recent file-change observations.
+- Added provider request hashing and context snapshot diff metadata so the Context panel can explain what changed between provider-facing snapshots.
+- Added a bounded project code map fragment to the owned-agent system prompt so models receive relevant code navigation context before editing while still being required to read authoritative file contents.
+- Updated backend and frontend session-context contracts, validation, and tests for the richer context engine metadata.
+
 Milestone 1 is complete:
 
 - Prompt construction is deterministic and testable.
@@ -55,13 +65,18 @@ Milestone 2 is complete:
 - Obscure capabilities can be discovered through ranked `tool_search` metadata and activated through `tool_access`.
 - Active tool sets are durable, explainable, and replayable through enriched `tool_registry_snapshot` events.
 
+Milestone 7 is complete:
+
+- Context snapshots are token-budget-aware, ranked, diffable, and include code/dependency/file/run-artifact context.
+- The provider-facing prompt and Context panel now share the prompt compiler and code-map context path.
+- Large or low-rank context nodes can be summarized or deferred without losing durable transcript/search/export access.
+
 Still left:
 
 - Native MCP and skill projection into model-native tool descriptors.
 - A formal agent state machine with plan and verification gates.
 - Central safety policy engine and scoped approval grants.
 - Canonical multi-file patch tooling and broader tool runtime hardening.
-- Token-budget-aware context graph and code map.
 - Async subagents with ownership boundaries.
 - Harness eval suite and nightly reporting.
 - Product surfaces for prompt/context/tool registry inspection, verification summaries, approvals, and rollback.

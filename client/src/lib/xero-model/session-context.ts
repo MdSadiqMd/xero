@@ -294,9 +294,24 @@ export const sessionContextContributorKindSchema = z.enum([
   'compaction_summary',
   'conversation_tail',
   'tool_result',
+  'tool_summary',
   'tool_descriptor',
+  'file_observation',
+  'code_symbol',
+  'dependency_metadata',
+  'run_artifact',
   'provider_usage',
 ])
+export const sessionContextTaskPhaseSchema = z.enum([
+  'intake',
+  'context_gather',
+  'plan',
+  'execute',
+  'verify',
+  'summarize',
+  'run_artifact',
+])
+export const sessionContextDispositionSchema = z.enum(['include', 'summarize', 'defer', 'retrieve_on_demand'])
 export const sessionContextBudgetPressureSchema = z.enum(['unknown', 'low', 'medium', 'high', 'over'])
 export const sessionContextBudgetSchema = z
   .object({
@@ -324,8 +339,16 @@ export const sessionContextContributorSchema = z
     sequence: z.number().int().positive(),
     estimatedTokens: z.number().int().nonnegative(),
     estimatedChars: z.number().int().nonnegative(),
+    recencyScore: z.number().int().min(0).max(100),
+    relevanceScore: z.number().int().min(0).max(100),
+    authorityScore: z.number().int().min(0).max(100),
+    rankScore: z.number().int().positive(),
+    taskPhase: sessionContextTaskPhaseSchema,
+    disposition: sessionContextDispositionSchema,
     included: z.boolean(),
     modelVisible: z.boolean(),
+    summary: nonEmptyOptionalTextSchema,
+    omittedReason: nonEmptyOptionalTextSchema,
     text: nonEmptyOptionalTextSchema,
     redaction: sessionContextRedactionSchema,
   })
@@ -339,6 +362,49 @@ export const sessionContextContributorSchema = z
       })
     }
   })
+
+export const sessionContextCodeSymbolSchema = z
+  .object({
+    symbolId: z.string().trim().min(1),
+    name: z.string().trim().min(1),
+    kind: z.string().trim().min(1),
+    path: z.string().trim().min(1),
+    line: z.number().int().positive(),
+    estimatedTokens: z.number().int().nonnegative(),
+    redaction: sessionContextRedactionSchema,
+  })
+  .strict()
+
+export const sessionContextDependencyManifestSchema = z
+  .object({
+    path: z.string().trim().min(1),
+    ecosystem: z.string().trim().min(1),
+    packageName: nonEmptyOptionalTextSchema,
+    dependencyCount: z.number().int().nonnegative(),
+    redaction: sessionContextRedactionSchema,
+  })
+  .strict()
+
+export const sessionContextCodeMapSchema = z
+  .object({
+    generatedFromRoot: z.string().trim().min(1),
+    sourceRoots: z.array(z.string().trim().min(1)),
+    packageManifests: z.array(sessionContextDependencyManifestSchema),
+    symbols: z.array(sessionContextCodeSymbolSchema),
+    redaction: sessionContextRedactionSchema,
+  })
+  .strict()
+
+export const sessionContextSnapshotDiffSchema = z
+  .object({
+    previousSnapshotId: nonEmptyOptionalTextSchema,
+    addedContributorIds: z.array(z.string().trim().min(1)),
+    removedContributorIds: z.array(z.string().trim().min(1)),
+    changedContributorIds: z.array(z.string().trim().min(1)),
+    estimatedTokenDelta: z.number().int(),
+    redaction: sessionContextRedactionSchema,
+  })
+  .strict()
 
 export const sessionContextPolicyDecisionKindSchema = z.enum(['compaction', 'memory_injection', 'instruction_file'])
 export const sessionContextPolicyActionSchema = z.enum([
@@ -386,6 +452,11 @@ export const sessionContextSnapshotSchema = z
     modelId: z.string().trim().min(1),
     generatedAt: isoTimestampSchema,
     budget: sessionContextBudgetSchema,
+    providerRequestHash: z.string().regex(/^[0-9a-f]{64}$/),
+    includedTokenEstimate: z.number().int().nonnegative(),
+    deferredTokenEstimate: z.number().int().nonnegative(),
+    codeMap: sessionContextCodeMapSchema,
+    diff: sessionContextSnapshotDiffSchema.nullable().optional(),
     contributors: z.array(sessionContextContributorSchema),
     policyDecisions: z.array(sessionContextPolicyDecisionSchema),
     usageTotals: sessionUsageTotalsSchema.nullable().optional(),
@@ -394,6 +465,26 @@ export const sessionContextSnapshotSchema = z
   .strict()
   .superRefine((snapshot, ctx) => {
     validateStrictSequence(snapshot.contributors, ctx, ['contributors'])
+    const includedTokens = snapshot.contributors
+      .filter((contributor) => contributor.included && contributor.modelVisible)
+      .reduce((total, contributor) => total + contributor.estimatedTokens, 0)
+    if (snapshot.includedTokenEstimate !== includedTokens) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['includedTokenEstimate'],
+        message: 'Included token estimate must match model-visible contributors.',
+      })
+    }
+    const deferredTokens = snapshot.contributors
+      .filter((contributor) => !(contributor.included && contributor.modelVisible))
+      .reduce((total, contributor) => total + contributor.estimatedTokens, 0)
+    if (snapshot.deferredTokenEstimate !== deferredTokens) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['deferredTokenEstimate'],
+        message: 'Deferred token estimate must match deferred contributors.',
+      })
+    }
   })
 
 export const sessionCompactionDiagnosticSchema = z
@@ -673,9 +764,15 @@ export type SaveSessionTranscriptExportRequestDto = z.infer<typeof saveSessionTr
 export type SearchSessionTranscriptsRequestDto = z.infer<typeof searchSessionTranscriptsRequestSchema>
 export type SearchSessionTranscriptsResponseDto = z.infer<typeof searchSessionTranscriptsResponseSchema>
 export type SessionContextContributorKindDto = z.infer<typeof sessionContextContributorKindSchema>
+export type SessionContextTaskPhaseDto = z.infer<typeof sessionContextTaskPhaseSchema>
+export type SessionContextDispositionDto = z.infer<typeof sessionContextDispositionSchema>
 export type SessionContextBudgetPressureDto = z.infer<typeof sessionContextBudgetPressureSchema>
 export type SessionContextBudgetDto = z.infer<typeof sessionContextBudgetSchema>
 export type SessionContextContributorDto = z.infer<typeof sessionContextContributorSchema>
+export type SessionContextCodeSymbolDto = z.infer<typeof sessionContextCodeSymbolSchema>
+export type SessionContextDependencyManifestDto = z.infer<typeof sessionContextDependencyManifestSchema>
+export type SessionContextCodeMapDto = z.infer<typeof sessionContextCodeMapSchema>
+export type SessionContextSnapshotDiffDto = z.infer<typeof sessionContextSnapshotDiffSchema>
 export type SessionContextPolicyDecisionKindDto = z.infer<typeof sessionContextPolicyDecisionKindSchema>
 export type SessionContextPolicyActionDto = z.infer<typeof sessionContextPolicyActionSchema>
 export type SessionCompactionTriggerDto = z.infer<typeof sessionCompactionTriggerSchema>

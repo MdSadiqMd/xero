@@ -29,9 +29,11 @@ use crate::{
         ListSessionMemoriesRequestDto, ListSessionMemoriesResponseDto,
         RewindAgentSessionRequestDto, SaveSessionTranscriptExportRequestDto,
         SearchSessionTranscriptsRequestDto, SearchSessionTranscriptsResponseDto,
-        SessionCompactionPolicyInput, SessionContextContributorDto,
-        SessionContextContributorKindDto, SessionContextRedactionClassDto,
-        SessionContextRedactionDto, SessionContextSnapshotDto, SessionMemoryDiagnosticDto,
+        SessionCompactionPolicyInput, SessionContextCodeMapDto, SessionContextCodeSymbolDto,
+        SessionContextContributorDto, SessionContextContributorKindDto,
+        SessionContextDependencyManifestDto, SessionContextDispositionDto,
+        SessionContextRedactionClassDto, SessionContextRedactionDto, SessionContextSnapshotDiffDto,
+        SessionContextSnapshotDto, SessionContextTaskPhaseDto, SessionMemoryDiagnosticDto,
         SessionMemoryRecordDto, SessionMemoryReviewStateDto, SessionTranscriptDto,
         SessionTranscriptExportFormatDto, SessionTranscriptExportPayloadDto,
         SessionTranscriptExportResponseDto, SessionTranscriptItemDto, SessionTranscriptScopeDto,
@@ -73,6 +75,10 @@ const MAX_RAW_TAIL_MESSAGE_COUNT: u32 = 24;
 const MAX_COMPACTION_SUMMARY_TOKENS: u64 = 1_500;
 const MAX_MEMORY_CANDIDATES: u8 = 8;
 const MIN_MEMORY_CONFIDENCE: u8 = 50;
+const MAX_CODE_MAP_FILES: usize = 240;
+const MAX_CODE_SYMBOLS: usize = 160;
+const LARGE_CONTEXT_NODE_TOKENS: u64 = 700;
+const CONTEXT_BUDGET_RESERVE_PERCENT: u64 = 15;
 
 #[tauri::command]
 pub fn get_session_transcript<R: Runtime>(
@@ -681,6 +687,13 @@ fn build_session_context_snapshot(
         &snapshots,
         active_compaction.as_ref(),
     );
+    append_run_artifact_contributors(&mut contributors, project_id, agent_session_id, &snapshots);
+    append_file_observation_contributors(
+        &mut contributors,
+        project_id,
+        agent_session_id,
+        &snapshots,
+    );
     append_usage_contributors(&mut contributors, project_id, agent_session_id, &snapshots);
     append_pending_prompt_contributor(
         &mut contributors,
@@ -689,15 +702,35 @@ fn build_session_context_snapshot(
         run_id.or_else(|| latest_snapshot.map(|snapshot| snapshot.run.run_id.as_str())),
         pending_prompt,
     );
+    let code_map = build_project_code_map(repo_root)?;
+    append_code_map_contributors(
+        &mut contributors,
+        project_id,
+        agent_session_id,
+        run_id.or_else(|| latest_snapshot.map(|snapshot| snapshot.run.run_id.as_str())),
+        &code_map,
+    );
 
     let usage_totals = context_usage_totals(&session, &snapshots, run_id);
+    let budget_tokens = provider_context_budget_tokens(&provider_id, &model_id);
+    rank_and_plan_context(
+        &mut contributors,
+        budget_tokens,
+        pending_prompt,
+        latest_snapshot.map(|snapshot| snapshot.run.run_id.as_str()),
+    );
     let estimated_tokens = contributors
         .iter()
         .filter(|contributor| contributor.included && contributor.model_visible)
         .fold(0_u64, |total, contributor| {
             total.saturating_add(contributor.estimated_tokens)
         });
-    let budget_tokens = provider_context_budget_tokens(&provider_id, &model_id);
+    let deferred_token_estimate = contributors
+        .iter()
+        .filter(|contributor| !contributor.model_visible)
+        .fold(0_u64, |total, contributor| {
+            total.saturating_add(contributor.estimated_tokens)
+        });
     let estimation_source = if usage_totals.is_some() {
         SessionUsageSourceDto::Mixed
     } else if contributors.is_empty() {
@@ -706,6 +739,13 @@ fn build_session_context_snapshot(
         SessionUsageSourceDto::Estimated
     };
     let budget = context_budget_with_source(estimated_tokens, budget_tokens, estimation_source);
+    let provider_request_hash = provider_request_hash(&prompt_compilation, &contributors);
+    let diff = context_snapshot_diff(
+        project_id,
+        agent_session_id,
+        run_id.or_else(|| latest_snapshot.map(|snapshot| snapshot.run.run_id.as_str())),
+        &contributors,
+    );
     let mut policy_decisions = vec![evaluate_compaction_policy(SessionCompactionPolicyInput {
         manual_requested: false,
         auto_enabled: false,
@@ -754,6 +794,11 @@ fn build_session_context_snapshot(
         model_id,
         generated_at,
         budget,
+        provider_request_hash,
+        included_token_estimate: estimated_tokens,
+        deferred_token_estimate,
+        code_map,
+        diff,
         contributors,
         policy_decisions,
         usage_totals,
@@ -1821,6 +1866,186 @@ fn append_usage_contributors(
     }
 }
 
+fn append_run_artifact_contributors(
+    contributors: &mut Vec<SessionContextContributorDto>,
+    project_id: &str,
+    agent_session_id: &str,
+    snapshots: &[(
+        AgentRunSnapshotRecord,
+        Option<project_store::AgentUsageRecord>,
+    )],
+) {
+    for (snapshot, _) in snapshots {
+        for checkpoint in &snapshot.checkpoints {
+            let checkpoint_id = checkpoint.id.to_string();
+            append_context_contributor(
+                contributors,
+                ContextContributorParts {
+                    contributor_id: format!(
+                        "run_artifact:checkpoint:{}:{}",
+                        snapshot.run.run_id, checkpoint.id
+                    ),
+                    kind: SessionContextContributorKindDto::RunArtifact,
+                    label: format!("Checkpoint: {}", checkpoint.checkpoint_kind),
+                    prompt_fragment_id: None,
+                    prompt_fragment_priority: None,
+                    prompt_fragment_hash: None,
+                    prompt_fragment_provenance: None,
+                    project_id: Some(project_id),
+                    agent_session_id: Some(agent_session_id),
+                    run_id: Some(snapshot.run.run_id.as_str()),
+                    source_id: Some(checkpoint_id.as_str()),
+                    raw_text: Some(checkpoint.summary.as_str()),
+                    estimate_text: Some(checkpoint.summary.as_str()),
+                    estimated_tokens: None,
+                    included: true,
+                    model_visible: true,
+                },
+            );
+        }
+        for action in &snapshot.action_requests {
+            let text = format!("{} [{}]: {}", action.title, action.status, action.detail);
+            append_context_contributor(
+                contributors,
+                ContextContributorParts {
+                    contributor_id: format!(
+                        "run_artifact:action:{}:{}",
+                        snapshot.run.run_id, action.action_id
+                    ),
+                    kind: SessionContextContributorKindDto::RunArtifact,
+                    label: format!("Action request: {}", action.title),
+                    prompt_fragment_id: None,
+                    prompt_fragment_priority: None,
+                    prompt_fragment_hash: None,
+                    prompt_fragment_provenance: None,
+                    project_id: Some(project_id),
+                    agent_session_id: Some(agent_session_id),
+                    run_id: Some(snapshot.run.run_id.as_str()),
+                    source_id: Some(action.action_id.as_str()),
+                    raw_text: Some(text.as_str()),
+                    estimate_text: Some(text.as_str()),
+                    estimated_tokens: None,
+                    included: true,
+                    model_visible: true,
+                },
+            );
+        }
+    }
+}
+
+fn append_file_observation_contributors(
+    contributors: &mut Vec<SessionContextContributorDto>,
+    project_id: &str,
+    agent_session_id: &str,
+    snapshots: &[(
+        AgentRunSnapshotRecord,
+        Option<project_store::AgentUsageRecord>,
+    )],
+) {
+    for (snapshot, _) in snapshots {
+        for change in &snapshot.file_changes {
+            let change_id = change.id.to_string();
+            let text = format!(
+                "{} {} old={} new={}",
+                change.operation,
+                change.path,
+                change.old_hash.as_deref().unwrap_or("none"),
+                change.new_hash.as_deref().unwrap_or("none")
+            );
+            append_context_contributor(
+                contributors,
+                ContextContributorParts {
+                    contributor_id: format!(
+                        "file_observation:{}:{}",
+                        snapshot.run.run_id, change.id
+                    ),
+                    kind: SessionContextContributorKindDto::FileObservation,
+                    label: format!("File observation: {}", change.path),
+                    prompt_fragment_id: None,
+                    prompt_fragment_priority: None,
+                    prompt_fragment_hash: None,
+                    prompt_fragment_provenance: None,
+                    project_id: Some(project_id),
+                    agent_session_id: Some(agent_session_id),
+                    run_id: Some(snapshot.run.run_id.as_str()),
+                    source_id: Some(change_id.as_str()),
+                    raw_text: Some(text.as_str()),
+                    estimate_text: Some(text.as_str()),
+                    estimated_tokens: None,
+                    included: true,
+                    model_visible: true,
+                },
+            );
+        }
+    }
+}
+
+fn append_code_map_contributors(
+    contributors: &mut Vec<SessionContextContributorDto>,
+    project_id: &str,
+    agent_session_id: &str,
+    run_id: Option<&str>,
+    code_map: &SessionContextCodeMapDto,
+) {
+    for manifest in &code_map.package_manifests {
+        let text = format!(
+            "{} manifest {} package={} dependencies={}",
+            manifest.ecosystem,
+            manifest.path,
+            manifest.package_name.as_deref().unwrap_or("unknown"),
+            manifest.dependency_count
+        );
+        append_context_contributor(
+            contributors,
+            ContextContributorParts {
+                contributor_id: format!("dependency_metadata:{}", manifest.path),
+                kind: SessionContextContributorKindDto::DependencyMetadata,
+                label: format!("Dependency metadata: {}", manifest.path),
+                prompt_fragment_id: None,
+                prompt_fragment_priority: None,
+                prompt_fragment_hash: None,
+                prompt_fragment_provenance: None,
+                project_id: Some(project_id),
+                agent_session_id: Some(agent_session_id),
+                run_id,
+                source_id: Some(manifest.path.as_str()),
+                raw_text: Some(text.as_str()),
+                estimate_text: Some(text.as_str()),
+                estimated_tokens: None,
+                included: true,
+                model_visible: true,
+            },
+        );
+    }
+    for symbol in &code_map.symbols {
+        let text = format!(
+            "{} {} at {}:{}",
+            symbol.kind, symbol.name, symbol.path, symbol.line
+        );
+        append_context_contributor(
+            contributors,
+            ContextContributorParts {
+                contributor_id: format!("code_symbol:{}", symbol.symbol_id),
+                kind: SessionContextContributorKindDto::CodeSymbol,
+                label: format!("{} {}", symbol.kind, symbol.name),
+                prompt_fragment_id: None,
+                prompt_fragment_priority: None,
+                prompt_fragment_hash: None,
+                prompt_fragment_provenance: None,
+                project_id: Some(project_id),
+                agent_session_id: Some(agent_session_id),
+                run_id,
+                source_id: Some(symbol.symbol_id.as_str()),
+                raw_text: Some(text.as_str()),
+                estimate_text: Some(text.as_str()),
+                estimated_tokens: Some(symbol.estimated_tokens),
+                included: true,
+                model_visible: true,
+            },
+        );
+    }
+}
+
 fn append_pending_prompt_contributor(
     contributors: &mut Vec<SessionContextContributorDto>,
     project_id: &str,
@@ -1857,6 +2082,254 @@ fn append_pending_prompt_contributor(
     );
 }
 
+fn rank_and_plan_context(
+    contributors: &mut [SessionContextContributorDto],
+    budget_tokens: Option<u64>,
+    pending_prompt: Option<&str>,
+    latest_run_id: Option<&str>,
+) {
+    let max_sequence = contributors
+        .iter()
+        .map(|contributor| contributor.sequence)
+        .max()
+        .unwrap_or(1);
+    let relevance_terms = pending_prompt
+        .unwrap_or_default()
+        .split(|character: char| {
+            !character.is_ascii_alphanumeric() && character != '_' && character != '-'
+        })
+        .filter(|term| term.len() > 2)
+        .map(str::to_ascii_lowercase)
+        .collect::<BTreeSet<_>>();
+    for contributor in contributors.iter_mut() {
+        contributor.authority_score = authority_score(&contributor.kind);
+        contributor.recency_score = recency_score(contributor.sequence, max_sequence);
+        contributor.relevance_score = relevance_score(contributor, &relevance_terms, latest_run_id);
+        contributor.task_phase = task_phase_for_kind(&contributor.kind);
+        contributor.rank_score = (contributor.authority_score as u16 * 4)
+            .saturating_add(contributor.relevance_score as u16 * 3)
+            .saturating_add(contributor.recency_score as u16 * 2);
+        if contributor.estimated_tokens >= LARGE_CONTEXT_NODE_TOKENS
+            && matches!(
+                contributor.kind,
+                SessionContextContributorKindDto::ToolResult
+                    | SessionContextContributorKindDto::ConversationTail
+            )
+        {
+            contributor.disposition = SessionContextDispositionDto::Summarize;
+            contributor.summary = contributor
+                .text
+                .as_deref()
+                .map(summary_for_large_context_node)
+                .filter(|summary| !summary.trim().is_empty());
+        } else if contributor.included {
+            contributor.disposition = SessionContextDispositionDto::Include;
+        } else {
+            contributor.disposition = SessionContextDispositionDto::RetrieveOnDemand;
+        }
+    }
+
+    let Some(budget_tokens) = budget_tokens else {
+        return;
+    };
+    let planning_budget =
+        budget_tokens.saturating_mul(100_u64.saturating_sub(CONTEXT_BUDGET_RESERVE_PERCENT)) / 100;
+    let mut ranked = contributors
+        .iter()
+        .enumerate()
+        .filter(|(_, contributor)| contributor.included && contributor.model_visible)
+        .map(|(index, contributor)| (index, contributor.rank_score, contributor.estimated_tokens))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    let mut spent = 0_u64;
+    let mut include = BTreeSet::new();
+    for (index, _, tokens) in ranked {
+        if spent.saturating_add(tokens) <= planning_budget
+            || is_required_context(&contributors[index].kind)
+        {
+            spent = spent.saturating_add(tokens);
+            include.insert(index);
+        }
+    }
+    for (index, contributor) in contributors.iter_mut().enumerate() {
+        if !contributor.model_visible {
+            continue;
+        }
+        if include.contains(&index) {
+            continue;
+        }
+        contributor.model_visible = false;
+        contributor.included = false;
+        contributor.disposition = if contributor.summary.is_some() {
+            SessionContextDispositionDto::Summarize
+        } else {
+            SessionContextDispositionDto::Defer
+        };
+        contributor.omitted_reason = Some(format!(
+            "Deferred by context budget planner: rank {} would exceed {} planned tokens.",
+            contributor.rank_score, planning_budget
+        ));
+    }
+}
+
+fn authority_score(kind: &SessionContextContributorKindDto) -> u8 {
+    match kind {
+        SessionContextContributorKindDto::SystemPrompt => 100,
+        SessionContextContributorKindDto::InstructionFile => 88,
+        SessionContextContributorKindDto::ApprovedMemory => 82,
+        SessionContextContributorKindDto::CompactionSummary => 78,
+        SessionContextContributorKindDto::FileObservation => 76,
+        SessionContextContributorKindDto::DependencyMetadata => 70,
+        SessionContextContributorKindDto::CodeSymbol => 66,
+        SessionContextContributorKindDto::ConversationTail => 62,
+        SessionContextContributorKindDto::ToolSummary => 60,
+        SessionContextContributorKindDto::ToolDescriptor => 58,
+        SessionContextContributorKindDto::RunArtifact => 56,
+        SessionContextContributorKindDto::ToolResult => 52,
+        SessionContextContributorKindDto::SkillContext => 50,
+        SessionContextContributorKindDto::ProviderUsage => 20,
+    }
+}
+
+fn recency_score(sequence: u64, max_sequence: u64) -> u8 {
+    if max_sequence <= 1 {
+        return 100;
+    }
+    ((sequence.saturating_mul(100)) / max_sequence).min(100) as u8
+}
+
+fn relevance_score(
+    contributor: &SessionContextContributorDto,
+    terms: &BTreeSet<String>,
+    latest_run_id: Option<&str>,
+) -> u8 {
+    let mut score: u8 = if is_required_context(&contributor.kind) {
+        70
+    } else {
+        35
+    };
+    if contributor
+        .run_id
+        .as_deref()
+        .zip(latest_run_id)
+        .is_some_and(|(left, right)| left == right)
+    {
+        score += 20;
+    }
+    let haystack = format!(
+        "{} {} {}",
+        contributor.label,
+        contributor.source_id.as_deref().unwrap_or_default(),
+        contributor.text.as_deref().unwrap_or_default()
+    )
+    .to_ascii_lowercase();
+    let matches = terms
+        .iter()
+        .filter(|term| haystack.contains(term.as_str()))
+        .count() as u8;
+    score.saturating_add(matches.saturating_mul(8)).min(100)
+}
+
+fn task_phase_for_kind(kind: &SessionContextContributorKindDto) -> SessionContextTaskPhaseDto {
+    match kind {
+        SessionContextContributorKindDto::SystemPrompt
+        | SessionContextContributorKindDto::InstructionFile
+        | SessionContextContributorKindDto::ApprovedMemory
+        | SessionContextContributorKindDto::SkillContext
+        | SessionContextContributorKindDto::DependencyMetadata
+        | SessionContextContributorKindDto::CodeSymbol => SessionContextTaskPhaseDto::ContextGather,
+        SessionContextContributorKindDto::FileObservation
+        | SessionContextContributorKindDto::ToolResult
+        | SessionContextContributorKindDto::ToolSummary => SessionContextTaskPhaseDto::Execute,
+        SessionContextContributorKindDto::CompactionSummary
+        | SessionContextContributorKindDto::ConversationTail => SessionContextTaskPhaseDto::Intake,
+        SessionContextContributorKindDto::RunArtifact => SessionContextTaskPhaseDto::RunArtifact,
+        SessionContextContributorKindDto::ToolDescriptor => SessionContextTaskPhaseDto::Plan,
+        SessionContextContributorKindDto::ProviderUsage => SessionContextTaskPhaseDto::Summarize,
+    }
+}
+
+fn is_required_context(kind: &SessionContextContributorKindDto) -> bool {
+    matches!(
+        kind,
+        SessionContextContributorKindDto::SystemPrompt
+            | SessionContextContributorKindDto::InstructionFile
+            | SessionContextContributorKindDto::ApprovedMemory
+            | SessionContextContributorKindDto::CompactionSummary
+            | SessionContextContributorKindDto::FileObservation
+    )
+}
+
+fn summary_for_large_context_node(text: &str) -> String {
+    let first_line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Large context node");
+    format!(
+        "{}... ({} chars summarized by context planner)",
+        first_line.chars().take(180).collect::<String>(),
+        text.chars().count()
+    )
+}
+
+fn provider_request_hash(
+    compilation: &PromptCompilation,
+    contributors: &[SessionContextContributorDto],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(compilation.prompt.as_bytes());
+    for contributor in contributors
+        .iter()
+        .filter(|contributor| contributor.included && contributor.model_visible)
+    {
+        hasher.update(contributor.contributor_id.as_bytes());
+        hasher.update(contributor.estimated_tokens.to_le_bytes());
+        if let Some(hash) = contributor.prompt_fragment_hash.as_ref() {
+            hasher.update(hash.as_bytes());
+        }
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn context_snapshot_diff(
+    project_id: &str,
+    agent_session_id: &str,
+    run_id: Option<&str>,
+    contributors: &[SessionContextContributorDto],
+) -> Option<SessionContextSnapshotDiffDto> {
+    let run_id = run_id?;
+    let current_ids = contributors
+        .iter()
+        .filter(|contributor| contributor.run_id.as_deref() == Some(run_id))
+        .map(|contributor| contributor.contributor_id.clone())
+        .collect::<Vec<_>>();
+    if current_ids.is_empty() {
+        return None;
+    }
+    let estimated_tokens = contributors
+        .iter()
+        .filter(|contributor| contributor.run_id.as_deref() == Some(run_id))
+        .map(|contributor| contributor.estimated_tokens as i64)
+        .sum();
+    Some(SessionContextSnapshotDiffDto {
+        previous_snapshot_id: Some(format!(
+            "context:{project_id}:{agent_session_id}:{run_id}:previous"
+        )),
+        added_contributor_ids: current_ids,
+        removed_contributor_ids: Vec::new(),
+        changed_contributor_ids: Vec::new(),
+        estimated_token_delta: estimated_tokens,
+        redaction: SessionContextRedactionDto::public(),
+    })
+}
+
 fn context_usage_totals(
     session: &AgentSessionRecord,
     snapshots: &[(
@@ -1877,6 +2350,264 @@ fn context_usage_totals(
         .map(|(snapshot, usage)| run_transcript_from_agent_snapshot(snapshot, usage.as_ref()))
         .collect::<Vec<_>>();
     session_transcript_from_runs(session, run_transcripts).usage_totals
+}
+
+fn build_project_code_map(repo_root: &Path) -> CommandResult<SessionContextCodeMapDto> {
+    let mut source_roots = BTreeSet::new();
+    let mut package_manifests = Vec::new();
+    let mut symbols = Vec::new();
+    collect_project_code_map(
+        repo_root,
+        repo_root,
+        &mut source_roots,
+        &mut package_manifests,
+        &mut symbols,
+        &mut 0,
+    )?;
+    let (root, root_redaction) = sanitize_context_path(repo_root.to_string_lossy().as_ref());
+    let redaction = strongest_context_redaction(
+        package_manifests
+            .iter()
+            .map(|manifest| &manifest.redaction)
+            .chain(symbols.iter().map(|symbol| &symbol.redaction))
+            .chain(std::iter::once(&root_redaction)),
+    );
+    Ok(SessionContextCodeMapDto {
+        generated_from_root: root,
+        source_roots: source_roots.into_iter().collect(),
+        package_manifests,
+        symbols,
+        redaction,
+    })
+}
+
+fn collect_project_code_map(
+    repo_root: &Path,
+    dir: &Path,
+    source_roots: &mut BTreeSet<String>,
+    package_manifests: &mut Vec<SessionContextDependencyManifestDto>,
+    symbols: &mut Vec<SessionContextCodeSymbolDto>,
+    files_seen: &mut usize,
+) -> CommandResult<()> {
+    if *files_seen >= MAX_CODE_MAP_FILES {
+        return Ok(());
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        if *files_seen >= MAX_CODE_MAP_FILES {
+            break;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if should_skip_code_map_path(&name) {
+            continue;
+        }
+        if path.is_dir() {
+            collect_project_code_map(
+                repo_root,
+                &path,
+                source_roots,
+                package_manifests,
+                symbols,
+                files_seen,
+            )?;
+            continue;
+        }
+        *files_seen = (*files_seen).saturating_add(1);
+        if let Some(manifest) = dependency_manifest_from_path(repo_root, &path)? {
+            package_manifests.push(manifest);
+        }
+        if symbols.len() >= MAX_CODE_SYMBOLS {
+            continue;
+        }
+        if !is_symbol_source_file(&path) {
+            continue;
+        }
+        if let Some(parent) = path
+            .parent()
+            .and_then(|parent| repo_relative_path(repo_root, parent))
+        {
+            if is_likely_source_root(&parent) {
+                source_roots.insert(parent);
+            }
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        append_symbols_from_source(repo_root, &path, &content, symbols);
+    }
+    Ok(())
+}
+
+fn should_skip_code_map_path(name: &str) -> bool {
+    matches!(
+        name,
+        ".git" | "node_modules" | "target" | ".next" | "dist" | "build" | ".xero"
+    )
+}
+
+fn dependency_manifest_from_path(
+    repo_root: &Path,
+    path: &Path,
+) -> CommandResult<Option<SessionContextDependencyManifestDto>> {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return Ok(None);
+    };
+    let ecosystem = match file_name {
+        "package.json" => "node",
+        "Cargo.toml" => "rust",
+        "pyproject.toml" => "python",
+        "requirements.txt" => "python",
+        _ => return Ok(None),
+    };
+    let raw = fs::read_to_string(path).unwrap_or_default();
+    let package_name = if file_name == "package.json" {
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("name")
+                    .and_then(|name| name.as_str())
+                    .map(str::to_string)
+            })
+    } else {
+        manifest_name_from_toml_like(&raw)
+    };
+    let dependency_count = dependency_count_from_manifest(file_name, &raw);
+    let (relative_path, redaction) = repo_relative_path(repo_root, path)
+        .map(|value| sanitize_context_path(&value))
+        .unwrap_or_else(|| sanitize_context_path(path.to_string_lossy().as_ref()));
+    Ok(Some(SessionContextDependencyManifestDto {
+        path: relative_path,
+        ecosystem: ecosystem.into(),
+        package_name,
+        dependency_count,
+        redaction,
+    }))
+}
+
+fn manifest_name_from_toml_like(raw: &str) -> Option<String> {
+    raw.lines().find_map(|line| {
+        let line = line.trim();
+        line.strip_prefix("name")
+            .and_then(|rest| rest.trim_start().strip_prefix('='))
+            .map(|value| value.trim().trim_matches('"').to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn dependency_count_from_manifest(file_name: &str, raw: &str) -> u64 {
+    if file_name == "package.json" {
+        return serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .map(|value| {
+                [
+                    "dependencies",
+                    "devDependencies",
+                    "peerDependencies",
+                    "optionalDependencies",
+                ]
+                .iter()
+                .filter_map(|key| value.get(*key).and_then(|deps| deps.as_object()))
+                .map(|deps| deps.len() as u64)
+                .sum()
+            })
+            .unwrap_or(0);
+    }
+    raw.lines()
+        .filter(|line| line.trim_start().starts_with('[') && line.contains("dependencies"))
+        .count() as u64
+}
+
+fn is_symbol_source_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some("rs" | "ts" | "tsx" | "js" | "jsx")
+    )
+}
+
+fn is_likely_source_root(path: &str) -> bool {
+    path == "src" || path.ends_with("/src") || path.contains("/src/")
+}
+
+fn append_symbols_from_source(
+    repo_root: &Path,
+    path: &Path,
+    content: &str,
+    symbols: &mut Vec<SessionContextCodeSymbolDto>,
+) {
+    let relative_path =
+        repo_relative_path(repo_root, path).unwrap_or_else(|| path.to_string_lossy().to_string());
+    for (index, line) in content.lines().enumerate() {
+        if symbols.len() >= MAX_CODE_SYMBOLS {
+            return;
+        }
+        let trimmed = line.trim_start();
+        let Some((kind, name)) = symbol_from_line(trimmed) else {
+            continue;
+        };
+        let symbol_id = format!("{}:{}:{}", relative_path, index + 1, name);
+        let (path, path_redaction) = sanitize_context_path(&relative_path);
+        symbols.push(SessionContextCodeSymbolDto {
+            symbol_id,
+            name,
+            kind,
+            path,
+            line: index as u64 + 1,
+            estimated_tokens: estimate_tokens(trimmed),
+            redaction: path_redaction,
+        });
+    }
+}
+
+fn symbol_from_line(line: &str) -> Option<(String, String)> {
+    let normalized = line
+        .strip_prefix("pub ")
+        .or_else(|| line.strip_prefix("export "))
+        .unwrap_or(line);
+    for (prefix, kind) in [
+        ("async fn ", "function"),
+        ("fn ", "function"),
+        ("struct ", "struct"),
+        ("enum ", "enum"),
+        ("trait ", "trait"),
+        ("impl ", "impl"),
+        ("mod ", "module"),
+        ("function ", "function"),
+        ("class ", "class"),
+        ("interface ", "interface"),
+        ("type ", "type"),
+        ("const ", "constant"),
+    ] {
+        if let Some(rest) = normalized.strip_prefix(prefix) {
+            let name = rest
+                .split(|character: char| {
+                    character.is_whitespace()
+                        || matches!(character, '(' | '<' | ':' | '=' | '{' | ';')
+                })
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if !name.is_empty() {
+                return Some((kind.into(), name));
+            }
+        }
+    }
+    None
+}
+
+fn repo_relative_path(repo_root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(repo_root)
+        .ok()
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        .filter(|value| !value.is_empty())
 }
 
 fn tool_result_label(content: &str) -> String {
@@ -1949,8 +2680,20 @@ fn append_context_contributor(
             .or_else(|| parts.estimate_text.map(estimate_tokens))
             .unwrap_or(0),
         estimated_chars: char_text.chars().count() as u64,
+        recency_score: 0,
+        relevance_score: 0,
+        authority_score: 0,
+        rank_score: 0,
+        task_phase: SessionContextTaskPhaseDto::ContextGather,
+        disposition: if parts.included {
+            SessionContextDispositionDto::Include
+        } else {
+            SessionContextDispositionDto::RetrieveOnDemand
+        },
         included: parts.included,
         model_visible: parts.model_visible,
+        summary: None,
+        omitted_reason: None,
         text,
         redaction,
     });
@@ -2005,6 +2748,34 @@ fn context_redaction_rank(class: &SessionContextRedactionClassDto) -> u8 {
         SessionContextRedactionClassDto::RawPayload => 3,
         SessionContextRedactionClassDto::Secret => 4,
     }
+}
+
+fn sanitize_context_path(value: &str) -> (String, SessionContextRedactionDto) {
+    let normalized = value.trim().replace('\\', "/");
+    if normalized.starts_with("/Users/")
+        || normalized.starts_with("/home/")
+        || normalized.contains("/.ssh/")
+        || normalized.contains("/.aws/")
+    {
+        return (
+            normalized
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .rev()
+                .take(3)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("/"),
+            SessionContextRedactionDto {
+                redaction_class: SessionContextRedactionClassDto::LocalPath,
+                redacted: true,
+                reason: Some("Local absolute path shortened for context metadata.".into()),
+            },
+        );
+    }
+    (normalized, SessionContextRedactionDto::public())
 }
 
 fn ensure_run_belongs_to_session(

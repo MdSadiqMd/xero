@@ -152,6 +152,11 @@ describe('session context contract', () => {
       modelId,
       generatedAt: '2026-04-26T10:10:00Z',
       budget: createContextBudget(800, 1000),
+      providerRequestHash: 'b'.repeat(64),
+      includedTokenEstimate: 40,
+      deferredTokenEstimate: 0,
+      codeMap: makeCodeMap(),
+      diff: null,
       contributors: [contributor, instruction],
       policyDecisions: [policy],
       usageTotals: null,
@@ -542,6 +547,18 @@ describe('session context contract', () => {
       modelId,
       generatedAt: '2026-04-26T10:10:00Z',
       budget: createContextBudget(480, 1000),
+      providerRequestHash: 'c'.repeat(64),
+      includedTokenEstimate: 20,
+      deferredTokenEstimate: 0,
+      codeMap: makeCodeMap(),
+      diff: {
+        previousSnapshotId: 'context-snapshot-compacted-previous',
+        addedContributorIds: ['compaction_summary:compact-1'],
+        removedContributorIds: [],
+        changedContributorIds: [],
+        estimatedTokenDelta: 20,
+        redaction: createPublicSessionContextRedaction(),
+      },
       contributors: [
         makeContributor('compaction_summary:compact-1', 1, {
           kind: 'compaction_summary',
@@ -655,10 +672,46 @@ function makeContributor(
     sequence,
     estimatedTokens: 20,
     estimatedChars: 80,
+    recencyScore: 100,
+    relevanceScore: 70,
+    authorityScore: 82,
+    rankScore: 638,
+    taskPhase: 'context_gather',
+    disposition: 'include',
     included: true,
     modelVisible: true,
+    summary: null,
+    omittedReason: null,
     text: 'Use the native owned-agent runtime.',
     redaction: createPublicSessionContextRedaction(),
     ...overrides,
+  }
+}
+
+function makeCodeMap() {
+  return {
+    generatedFromRoot: 'joe',
+    sourceRoots: ['client/src-tauri/src'],
+    packageManifests: [
+      {
+        path: 'client/src-tauri/Cargo.toml',
+        ecosystem: 'rust',
+        packageName: 'xero-desktop',
+        dependencyCount: 1,
+        redaction: createPublicSessionContextRedaction(),
+      },
+    ],
+    symbols: [
+      {
+        symbolId: 'client/src-tauri/src/lib.rs:1:run',
+        name: 'run',
+        kind: 'function',
+        path: 'client/src-tauri/src/lib.rs',
+        line: 1,
+        estimatedTokens: 4,
+        redaction: createPublicSessionContextRedaction(),
+      },
+    ],
+    redaction: createPublicSessionContextRedaction(),
   }
 }
