@@ -107,6 +107,29 @@ describe('owned agent run schemas', () => {
     })
   })
 
+  it('accepts durable tool registry snapshot events', () => {
+    const parsed = agentRunSchema.parse(
+      makeAgentRunDto({
+        events: [
+          {
+            id: 1,
+            projectId: 'project-1',
+            runId: 'run-agent-1',
+            eventKind: 'tool_registry_snapshot',
+            payload: {
+              kind: 'active_tool_registry',
+              turnIndex: 0,
+              toolNames: ['read', 'tool_search', 'todo'],
+            },
+            createdAt: '2026-04-24T12:00:02Z',
+          },
+        ],
+      }),
+    )
+
+    expect(parsed.events[0].eventKind).toBe('tool_registry_snapshot')
+  })
+
   it('validates task-start controls and stream replay metadata', () => {
     const request = startAgentTaskRequestSchema.parse({
       projectId: 'project-1',

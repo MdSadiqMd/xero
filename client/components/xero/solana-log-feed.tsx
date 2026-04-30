@@ -6,12 +6,14 @@ import {
   BadgeCheck,
   Loader2,
   Radio,
+  RadioTower,
   RefreshCw,
   Rows4,
   Trash2,
   XCircle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { PanelHeader } from "./solana-panel-shell"
 import type {
   ClusterKind,
   LogDecodedEventPayload,
@@ -144,8 +146,17 @@ export function SolanaLogFeed({
 
   return (
     <div className="flex flex-col gap-4">
-      <section className="space-y-1.5">
-        <div className="text-[11.5px] font-medium text-foreground">Live log stream</div>
+      <PanelHeader
+        icon={RadioTower}
+        title="Logs"
+        description="Stream Solana program logs and decoded Anchor events."
+        busy={busy}
+      />
+
+      <section className="flex flex-col gap-1.5">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Live log stream
+        </div>
         <input
           aria-label="Program IDs"
           className="h-8 rounded-md border border-border/60 bg-background px-2.5 text-[12px] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
@@ -174,7 +185,7 @@ export function SolanaLogFeed({
             onClick={handleFetchRecent}
             disabled={busy}
             className={cn(
-              "ml-auto inline-flex h-8 items-center gap-1 rounded-md border border-border/60 bg-background px-2 text-[11px] text-foreground/85 transition-colors",
+              "ml-auto inline-flex h-8 items-center gap-1 rounded-md border border-border/70 bg-background/40 px-2.5 text-[11px] text-foreground/85 transition-colors",
               "hover:border-primary/40 hover:text-foreground disabled:opacity-50",
             )}
           >
@@ -189,8 +200,8 @@ export function SolanaLogFeed({
             onClick={handleSubscribe}
             disabled={busy}
             className={cn(
-              "inline-flex h-8 items-center gap-1 rounded-md border border-primary/50 bg-primary/10 px-2 text-[11px] font-medium text-primary",
-              "hover:bg-primary/20 disabled:opacity-50",
+              "inline-flex h-8 items-center gap-1 rounded-md border border-primary/50 bg-primary/15 px-2.5 text-[11px] font-medium text-primary transition-colors",
+              "hover:bg-primary/25 disabled:opacity-50",
             )}
           >
             <Radio className="h-3 w-3" />
@@ -201,8 +212,8 @@ export function SolanaLogFeed({
             onClick={handleUnsubscribe}
             disabled={busy || !selectedToken}
             className={cn(
-              "inline-flex h-8 items-center gap-1 rounded-md border border-border/60 bg-background px-2 text-[11px] text-foreground/80",
-              "hover:border-destructive/60 hover:text-destructive disabled:opacity-50",
+              "inline-flex h-8 items-center gap-1 rounded-md border border-border/70 bg-background/40 px-2.5 text-[11px] text-foreground/80 transition-colors",
+              "hover:border-destructive/50 hover:text-destructive disabled:opacity-50",
             )}
           >
             <XCircle className="h-3 w-3" />
@@ -211,7 +222,7 @@ export function SolanaLogFeed({
           <button
             type="button"
             onClick={() => void onRefreshSubscriptions()}
-            className="inline-flex h-8 items-center gap-1 rounded-md border border-border/60 bg-background px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-border/70 bg-background/40 px-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
           >
             <RefreshCw className="h-3 w-3" />
             Tokens
@@ -219,7 +230,7 @@ export function SolanaLogFeed({
           <button
             type="button"
             onClick={onClear}
-            className="inline-flex h-8 items-center gap-1 rounded-md border border-border/60 bg-background px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-border/70 bg-background/40 px-2.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
           >
             <Trash2 className="h-3 w-3" />
             Clear feed
@@ -236,20 +247,20 @@ export function SolanaLogFeed({
 
       <section className="space-y-2">
         <div className="flex items-center justify-between">
-          <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Subscriptions
           </div>
-          <span className="text-[11px] text-muted-foreground">{activeSubscriptions.length}</span>
+          <span className="font-mono text-[10.5px] tabular-nums text-muted-foreground">{activeSubscriptions.length}</span>
         </div>
         {activeSubscriptions.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">No active subscriptions.</p>
+          <p className="text-[11px] italic text-muted-foreground">No active subscriptions.</p>
         ) : (
           <ul className="space-y-1">
             {activeSubscriptions.map((subscription) => (
               <li
                 key={subscription.token}
                 className={cn(
-                  "rounded-md border border-border/50 bg-background/40 px-2 py-1",
+                  "rounded-md border border-border/70 bg-background/40 px-2 py-1",
                   selectedToken === subscription.token && "border-primary/50",
                 )}
               >
@@ -273,11 +284,11 @@ export function SolanaLogFeed({
 
       <section className="space-y-2">
         <div className="flex items-center justify-between">
-          <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Feed
           </div>
           <div className="text-[10.5px] text-muted-foreground">
-            decoded events: {decodedEvents.length}
+            decoded events <span className="font-mono tabular-nums text-foreground/70">{decodedEvents.length}</span>
           </div>
         </div>
 
@@ -309,7 +320,7 @@ export function SolanaLogFeed({
         ) : null}
 
         {filteredEntries.length === 0 ? (
-          <p className="text-[11.5px] text-muted-foreground">
+          <p className="rounded-md border border-dashed border-border/70 bg-background/30 px-3 py-3 text-[11.5px] italic text-muted-foreground">
             No log entries yet. Subscribe or fetch recent logs to populate the feed.
           </p>
         ) : (
@@ -317,7 +328,7 @@ export function SolanaLogFeed({
             {filteredEntries.map((entry) => (
               <li
                 key={`${entry.cluster}:${entry.signature}:${entry.slot ?? "na"}`}
-                className="rounded-md border border-border/50 bg-background/40 px-2 py-1.5"
+                className="rounded-md border border-border/70 bg-background/40 px-2 py-1.5"
               >
                 <details>
                   <summary className="cursor-pointer list-none">
@@ -332,7 +343,7 @@ export function SolanaLogFeed({
                       </div>
                       <div className="flex items-center gap-1 text-[10.5px]">
                         {entry.explanation.ok ? (
-                          <BadgeCheck className="h-3.5 w-3.5 text-emerald-400" />
+                          <BadgeCheck className="h-3.5 w-3.5 text-success" />
                         ) : (
                           <XCircle className="h-3.5 w-3.5 text-destructive" />
                         )}
@@ -351,7 +362,7 @@ export function SolanaLogFeed({
                         events: {entry.anchorEvents.map((event) => event.eventName ?? event.discriminatorHex).join(", ")}
                       </div>
                     ) : null}
-                    <pre className="max-h-36 overflow-auto rounded border border-border/50 bg-background p-2 font-mono text-[10px] text-foreground/80">
+                    <pre className="max-h-36 overflow-auto rounded border border-border/70 bg-background p-2 font-mono text-[10px] text-foreground/80">
                       {entry.rawLogs.join("\n")}
                     </pre>
                   </div>

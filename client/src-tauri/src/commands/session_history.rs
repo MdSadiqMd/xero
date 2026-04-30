@@ -13,16 +13,16 @@ use tauri::{AppHandle, Runtime, State};
 use crate::{
     auth::now_timestamp,
     commands::{
-        approved_memory_context_contributors, context_budget_with_source, estimate_tokens,
-        evaluate_compaction_policy, memory_policy_decision, provider_context_budget_tokens,
-        redact_session_context_text, run_transcript_from_agent_snapshot,
-        session_compaction_record_dto, session_memory_diagnostic_dto, session_memory_record_dto,
-        session_transcript_from_runs, usage_totals_from_agent_usage,
-        validate_context_snapshot_contract, validate_export_payload_contract,
-        validate_session_compaction_record_contract, validate_session_memory_record_contract,
-        validate_session_transcript_contract, AgentSessionBranchResponseDto,
-        AgentSessionLineageBoundaryKindDto, BranchAgentSessionRequestDto, CommandError,
-        CommandResult, CompactSessionHistoryRequestDto, CompactSessionHistoryResponseDto,
+        context_budget_with_source, estimate_tokens, evaluate_compaction_policy,
+        memory_policy_decision, provider_context_budget_tokens, redact_session_context_text,
+        run_transcript_from_agent_snapshot, session_compaction_record_dto,
+        session_memory_diagnostic_dto, session_memory_record_dto, session_transcript_from_runs,
+        usage_totals_from_agent_usage, validate_context_snapshot_contract,
+        validate_export_payload_contract, validate_session_compaction_record_contract,
+        validate_session_memory_record_contract, validate_session_transcript_contract,
+        AgentSessionBranchResponseDto, AgentSessionLineageBoundaryKindDto,
+        BranchAgentSessionRequestDto, BrowserControlPreferenceDto, CommandError, CommandResult,
+        CompactSessionHistoryRequestDto, CompactSessionHistoryResponseDto,
         DeleteSessionMemoryRequestDto, ExportSessionTranscriptRequestDto,
         ExtractSessionMemoryCandidatesRequestDto, ExtractSessionMemoryCandidatesResponseDto,
         GetSessionContextSnapshotRequestDto, GetSessionTranscriptRequestDto,
@@ -46,9 +46,11 @@ use crate::{
     },
     runtime::{
         agent_core::{
-            create_provider_adapter, runtime_controls_from_request, tool_registry_for_snapshot,
-            ProviderAdapter, ProviderCompactionRequest, ProviderMemoryCandidate,
-            ProviderMemoryExtractionRequest,
+            compile_system_prompt_for_session, create_provider_adapter,
+            provider_messages_from_snapshot, runtime_controls_from_request,
+            skill_contexts_from_provider_messages, tool_registry_for_snapshot, PromptCompilation,
+            PromptFragment, ProviderAdapter, ProviderCompactionRequest, ProviderMemoryCandidate,
+            ProviderMemoryExtractionRequest, ToolRegistry, ToolRegistryOptions,
         },
         AgentToolDescriptor,
     },
@@ -630,38 +632,33 @@ fn build_session_context_snapshot(
         .unwrap_or(UNAVAILABLE_CONTEXT_ID)
         .to_string();
     let generated_at = now_timestamp();
-    let instruction_text = read_instruction_file(repo_root);
     let approved_memories =
         project_store::list_approved_agent_memories(repo_root, project_id, Some(agent_session_id))?
             .iter()
             .map(session_memory_record_dto)
             .collect::<Vec<_>>();
     let mut contributors = Vec::new();
-
-    if let Some(snapshot) = latest_snapshot {
-        append_system_prompt_contributor(
-            &mut contributors,
-            project_id,
-            agent_session_id,
-            snapshot,
-            instruction_text.as_deref(),
-            approved_memories.as_slice(),
-        );
-    }
-    append_instruction_file_contributor(
+    let (prompt_compilation, active_tool_descriptors) = compile_prompt_context_for_snapshot(
+        repo_root,
+        project_id,
+        agent_session_id,
+        latest_snapshot,
+        pending_prompt,
+    )?;
+    append_prompt_fragment_contributors(
         &mut contributors,
         project_id,
         agent_session_id,
-        instruction_text.as_deref(),
+        latest_snapshot.map(|snapshot| snapshot.run.run_id.as_str()),
+        &prompt_compilation,
     );
-    append_approved_memory_contributors(&mut contributors, approved_memories.as_slice());
     if let Some(snapshot) = latest_snapshot {
         append_tool_descriptor_contributors(
             &mut contributors,
-            repo_root,
             project_id,
             agent_session_id,
             snapshot,
+            active_tool_descriptors.as_slice(),
         )?;
     }
     let active_compaction =
@@ -1456,85 +1453,113 @@ fn load_context_snapshots(
     project_store::load_agent_session_run_snapshots(repo_root, project_id, agent_session_id)
 }
 
-fn read_instruction_file(repo_root: &Path) -> Option<String> {
-    fs::read_to_string(repo_root.join("AGENTS.md"))
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn append_system_prompt_contributor(
-    contributors: &mut Vec<SessionContextContributorDto>,
+fn compile_prompt_context_for_snapshot(
+    repo_root: &Path,
     project_id: &str,
     agent_session_id: &str,
-    snapshot: &AgentRunSnapshotRecord,
-    instruction_text: Option<&str>,
-    approved_memories: &[SessionMemoryRecordDto],
-) {
-    let system_prompt = system_prompt_without_known_context_text(
-        snapshot.run.system_prompt.as_str(),
-        instruction_text.unwrap_or_default(),
-        approved_memories,
-    );
-    if system_prompt.trim().is_empty() {
-        return;
-    }
-
-    append_context_contributor(
-        contributors,
-        ContextContributorParts {
-            contributor_id: format!("system_prompt:{}", snapshot.run.run_id),
-            kind: SessionContextContributorKindDto::SystemPrompt,
-            label: "System prompt".into(),
-            project_id: Some(project_id),
-            agent_session_id: Some(agent_session_id),
-            run_id: Some(snapshot.run.run_id.as_str()),
-            source_id: Some("owned_agent_system_prompt"),
-            raw_text: Some(system_prompt.as_str()),
-            estimate_text: Some(system_prompt.as_str()),
-            included: true,
-            model_visible: true,
-        },
-    );
-}
-
-fn append_instruction_file_contributor(
-    contributors: &mut Vec<SessionContextContributorDto>,
-    project_id: &str,
-    agent_session_id: &str,
-    instruction_text: Option<&str>,
-) {
-    let Some(instruction_text) = instruction_text else {
-        return;
+    latest_snapshot: Option<&AgentRunSnapshotRecord>,
+    pending_prompt: Option<&str>,
+) -> CommandResult<(PromptCompilation, Vec<AgentToolDescriptor>)> {
+    let controls = runtime_controls_from_request(None);
+    let descriptors = if let Some(snapshot) = latest_snapshot {
+        tool_registry_for_snapshot(
+            repo_root,
+            snapshot,
+            &controls,
+            true,
+            BrowserControlPreferenceDto::Default,
+            None,
+        )?
+        .into_descriptors()
+    } else {
+        ToolRegistry::for_prompt_with_options(
+            repo_root,
+            pending_prompt.unwrap_or_default(),
+            &controls,
+            ToolRegistryOptions {
+                skill_tool_enabled: true,
+                browser_control_preference: BrowserControlPreferenceDto::Default,
+            },
+        )
+        .into_descriptors()
     };
-    append_context_contributor(
-        contributors,
-        ContextContributorParts {
-            contributor_id: "instruction:AGENTS.md".into(),
-            kind: SessionContextContributorKindDto::InstructionFile,
-            label: "Project instructions".into(),
-            project_id: Some(project_id),
-            agent_session_id: Some(agent_session_id),
-            run_id: None,
-            source_id: Some("AGENTS.md"),
-            raw_text: Some(instruction_text),
-            estimate_text: Some(instruction_text),
-            included: true,
-            model_visible: true,
-        },
-    );
+    let skill_contexts = if let Some(snapshot) = latest_snapshot {
+        let provider_messages = provider_messages_from_snapshot(repo_root, snapshot)?;
+        skill_contexts_from_provider_messages(&provider_messages)?
+    } else {
+        Vec::new()
+    };
+    let compilation = compile_system_prompt_for_session(
+        repo_root,
+        Some(project_id),
+        Some(agent_session_id),
+        BrowserControlPreferenceDto::Default,
+        descriptors.as_slice(),
+        None,
+        skill_contexts,
+    )?;
+    Ok((compilation, descriptors))
+}
+
+fn append_prompt_fragment_contributors(
+    contributors: &mut Vec<SessionContextContributorDto>,
+    project_id: &str,
+    agent_session_id: &str,
+    run_id: Option<&str>,
+    compilation: &PromptCompilation,
+) {
+    for fragment in &compilation.fragments {
+        append_context_contributor(
+            contributors,
+            ContextContributorParts {
+                contributor_id: format!("prompt_fragment:{}", fragment.id),
+                kind: prompt_fragment_contributor_kind(fragment),
+                label: fragment.title.clone(),
+                project_id: Some(project_id),
+                agent_session_id: Some(agent_session_id),
+                run_id,
+                source_id: Some(prompt_fragment_source_id(fragment)),
+                raw_text: Some(fragment.body.as_str()),
+                estimate_text: Some(fragment.body.as_str()),
+                estimated_tokens: Some(fragment.token_estimate),
+                included: true,
+                model_visible: true,
+                prompt_fragment_id: Some(fragment.id.as_str()),
+                prompt_fragment_priority: Some(fragment.priority),
+                prompt_fragment_hash: Some(fragment.sha256.as_str()),
+                prompt_fragment_provenance: Some(fragment.provenance.as_str()),
+            },
+        );
+    }
+}
+
+fn prompt_fragment_contributor_kind(fragment: &PromptFragment) -> SessionContextContributorKindDto {
+    if fragment.id.starts_with("project.instructions.") {
+        SessionContextContributorKindDto::InstructionFile
+    } else if fragment.id.starts_with("skill.context.") {
+        SessionContextContributorKindDto::SkillContext
+    } else if fragment.id == "xero.approved_memory" {
+        SessionContextContributorKindDto::ApprovedMemory
+    } else {
+        SessionContextContributorKindDto::SystemPrompt
+    }
+}
+
+fn prompt_fragment_source_id(fragment: &PromptFragment) -> &str {
+    fragment
+        .provenance
+        .strip_prefix("project:")
+        .unwrap_or(fragment.provenance.as_str())
 }
 
 fn append_tool_descriptor_contributors(
     contributors: &mut Vec<SessionContextContributorDto>,
-    repo_root: &Path,
     project_id: &str,
     agent_session_id: &str,
     snapshot: &AgentRunSnapshotRecord,
+    descriptors: &[AgentToolDescriptor],
 ) -> CommandResult<()> {
-    let controls = runtime_controls_from_request(None);
-    let registry = tool_registry_for_snapshot(repo_root, snapshot, &controls, true)?;
-    let mut descriptors = registry.into_descriptors();
+    let mut descriptors = descriptors.to_vec();
     descriptors.sort_by(|left, right| left.name.cmp(&right.name));
 
     for descriptor in descriptors {
@@ -1551,24 +1576,17 @@ fn append_tool_descriptor_contributors(
                 source_id: Some(descriptor.name.as_str()),
                 raw_text: Some(descriptor.description.as_str()),
                 estimate_text: Some(estimate_text.as_str()),
+                estimated_tokens: None,
                 included: true,
                 model_visible: true,
+                prompt_fragment_id: None,
+                prompt_fragment_priority: None,
+                prompt_fragment_hash: None,
+                prompt_fragment_provenance: None,
             },
         );
     }
     Ok(())
-}
-
-fn append_approved_memory_contributors(
-    contributors: &mut Vec<SessionContextContributorDto>,
-    memories: &[SessionMemoryRecordDto],
-) {
-    let start_sequence = contributors.len() as u64;
-    let memory_contributors = approved_memory_context_contributors(memories, true);
-    for (index, mut contributor) in memory_contributors.into_iter().enumerate() {
-        contributor.sequence = start_sequence + index as u64 + 1;
-        contributors.push(contributor);
-    }
 }
 
 fn tool_descriptor_estimate_text(descriptor: &AgentToolDescriptor) -> CommandResult<String> {
@@ -1634,12 +1652,17 @@ fn append_history_contributors(
                             ),
                             kind: SessionContextContributorKindDto::ToolResult,
                             label: tool_result_label(&message.content),
+                            prompt_fragment_id: None,
+                            prompt_fragment_priority: None,
+                            prompt_fragment_hash: None,
+                            prompt_fragment_provenance: None,
                             project_id: Some(project_id),
                             agent_session_id: Some(agent_session_id),
                             run_id: Some(message.run_id.as_str()),
                             source_id: Some(message_id.as_str()),
                             raw_text: Some(message.content.as_str()),
                             estimate_text: Some(message.content.as_str()),
+                            estimated_tokens: None,
                             included: true,
                             model_visible: true,
                         },
@@ -1655,12 +1678,17 @@ fn append_history_contributors(
                             contributor_id: format!("message:{}:{}", message.run_id, message.id),
                             kind: SessionContextContributorKindDto::ConversationTail,
                             label: format!("{} message", message_role_label(&message.role)),
+                            prompt_fragment_id: None,
+                            prompt_fragment_priority: None,
+                            prompt_fragment_hash: None,
+                            prompt_fragment_provenance: None,
                             project_id: Some(project_id),
                             agent_session_id: Some(agent_session_id),
                             run_id: Some(message.run_id.as_str()),
                             source_id: Some(message_id.as_str()),
                             raw_text: Some(message.content.as_str()),
                             estimate_text: Some(message.content.as_str()),
+                            estimated_tokens: None,
                             included: true,
                             model_visible: true,
                         },
@@ -1686,12 +1714,17 @@ fn append_compaction_summary_contributor(
             contributor_id: format!("compaction_summary:{}", compaction.compaction_id),
             kind: SessionContextContributorKindDto::CompactionSummary,
             label: "Compacted history summary".into(),
+            prompt_fragment_id: None,
+            prompt_fragment_priority: None,
+            prompt_fragment_hash: None,
+            prompt_fragment_provenance: None,
             project_id: Some(project_id),
             agent_session_id: Some(agent_session_id),
             run_id: Some(compaction.source_run_id.as_str()),
             source_id: Some(compaction.compaction_id.as_str()),
             raw_text: Some(compaction.summary.as_str()),
             estimate_text: Some(compaction.summary.as_str()),
+            estimated_tokens: None,
             included: true,
             model_visible: true,
         },
@@ -1727,12 +1760,17 @@ fn append_run_prompt_contributor_if_needed(
             contributor_id: format!("run_prompt:{}", snapshot.run.run_id),
             kind: SessionContextContributorKindDto::ConversationTail,
             label: "Run prompt".into(),
+            prompt_fragment_id: None,
+            prompt_fragment_priority: None,
+            prompt_fragment_hash: None,
+            prompt_fragment_provenance: None,
             project_id: Some(project_id),
             agent_session_id: Some(agent_session_id),
             run_id: Some(snapshot.run.run_id.as_str()),
             source_id: Some(snapshot.run.run_id.as_str()),
             raw_text: Some(snapshot.run.prompt.as_str()),
             estimate_text: Some(snapshot.run.prompt.as_str()),
+            estimated_tokens: None,
             included: true,
             model_visible: true,
         },
@@ -1765,12 +1803,17 @@ fn append_usage_contributors(
                 contributor_id: format!("provider_usage:{}", snapshot.run.run_id),
                 kind: SessionContextContributorKindDto::ProviderUsage,
                 label: "Provider usage".into(),
+                prompt_fragment_id: None,
+                prompt_fragment_priority: None,
+                prompt_fragment_hash: None,
+                prompt_fragment_provenance: None,
                 project_id: Some(project_id),
                 agent_session_id: Some(agent_session_id),
                 run_id: Some(snapshot.run.run_id.as_str()),
                 source_id: Some(snapshot.run.run_id.as_str()),
                 raw_text: Some(text.as_str()),
                 estimate_text: None,
+                estimated_tokens: None,
                 included: false,
                 model_visible: false,
             },
@@ -1797,12 +1840,17 @@ fn append_pending_prompt_contributor(
             contributor_id: "pending_prompt".into(),
             kind: SessionContextContributorKindDto::ConversationTail,
             label: "Pending prompt".into(),
+            prompt_fragment_id: None,
+            prompt_fragment_priority: None,
+            prompt_fragment_hash: None,
+            prompt_fragment_provenance: None,
             project_id: Some(project_id),
             agent_session_id: Some(agent_session_id),
             run_id,
             source_id: Some("pending_prompt"),
             raw_text: Some(pending_prompt),
             estimate_text: Some(pending_prompt),
+            estimated_tokens: None,
             included: true,
             model_visible: true,
         },
@@ -1829,37 +1877,6 @@ fn context_usage_totals(
         .map(|(snapshot, usage)| run_transcript_from_agent_snapshot(snapshot, usage.as_ref()))
         .collect::<Vec<_>>();
     session_transcript_from_runs(session, run_transcripts).usage_totals
-}
-
-fn system_prompt_without_known_context_text(
-    system_prompt: &str,
-    instruction_text: &str,
-    approved_memories: &[SessionMemoryRecordDto],
-) -> String {
-    let trimmed_prompt = system_prompt.trim();
-    let trimmed_instruction = instruction_text.trim();
-    if trimmed_prompt.is_empty() {
-        return trimmed_prompt.to_string();
-    }
-
-    let mut prompt = trimmed_prompt.to_string();
-    if !trimmed_instruction.is_empty() {
-        prompt = prompt.replacen(
-            trimmed_instruction,
-            "(project instructions counted separately)",
-            1,
-        );
-    }
-    for memory in approved_memories {
-        if !memory.text.trim().is_empty() {
-            prompt = prompt.replacen(
-                memory.text.trim(),
-                "(approved memory counted separately)",
-                1,
-            );
-        }
-    }
-    prompt.trim().to_string()
 }
 
 fn tool_result_label(content: &str) -> String {
@@ -1889,12 +1906,17 @@ struct ContextContributorParts<'a> {
     contributor_id: String,
     kind: SessionContextContributorKindDto,
     label: String,
+    prompt_fragment_id: Option<&'a str>,
+    prompt_fragment_priority: Option<u16>,
+    prompt_fragment_hash: Option<&'a str>,
+    prompt_fragment_provenance: Option<&'a str>,
     project_id: Option<&'a str>,
     agent_session_id: Option<&'a str>,
     run_id: Option<&'a str>,
     source_id: Option<&'a str>,
     raw_text: Option<&'a str>,
     estimate_text: Option<&'a str>,
+    estimated_tokens: Option<u64>,
     included: bool,
     model_visible: bool,
 }
@@ -1913,12 +1935,19 @@ fn append_context_contributor(
         contributor_id: parts.contributor_id,
         kind: parts.kind,
         label: parts.label,
+        prompt_fragment_id: parts.prompt_fragment_id.map(ToOwned::to_owned),
+        prompt_fragment_priority: parts.prompt_fragment_priority,
+        prompt_fragment_hash: parts.prompt_fragment_hash.map(ToOwned::to_owned),
+        prompt_fragment_provenance: parts.prompt_fragment_provenance.map(ToOwned::to_owned),
         project_id: parts.project_id.map(ToOwned::to_owned),
         agent_session_id: parts.agent_session_id.map(ToOwned::to_owned),
         run_id: parts.run_id.map(ToOwned::to_owned),
         source_id: parts.source_id.map(ToOwned::to_owned),
         sequence: contributors.len() as u64 + 1,
-        estimated_tokens: parts.estimate_text.map(estimate_tokens).unwrap_or(0),
+        estimated_tokens: parts
+            .estimated_tokens
+            .or_else(|| parts.estimate_text.map(estimate_tokens))
+            .unwrap_or(0),
         estimated_chars: char_text.chars().count() as u64,
         included: parts.included,
         model_visible: parts.model_visible,

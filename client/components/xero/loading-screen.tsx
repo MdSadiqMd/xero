@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { AppLogo } from './app-logo'
 
 interface LoadingScreenProps {
   className?: string
@@ -24,12 +25,7 @@ export function LoadingScreen({ className }: LoadingScreenProps) {
             border: '1px solid color-mix(in oklab, var(--primary) 40%, transparent)',
           }}
         />
-        <img
-          src="/icon-logo.svg"
-          alt=""
-          draggable={false}
-          className="h-7 w-7 xero-loading-breathe"
-        />
+        <AppLogo className="h-7 w-7 xero-loading-breathe" />
       </div>
     </div>
   )

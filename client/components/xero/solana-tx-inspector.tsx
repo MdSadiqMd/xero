@@ -1,8 +1,16 @@
 "use client"
 
 import { useCallback, useMemo, useState } from "react"
-import { AlertCircle, CheckCircle2, Gauge, Loader2, Search } from "lucide-react"
+import {
+  AlertCircle,
+  BookOpen,
+  CheckCircle2,
+  Gauge,
+  Loader2,
+  Search,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
+import { PanelHeader, UnderlineTab, UnderlineTabs } from "./solana-panel-shell"
 import type {
   ClusterKind,
   FeeEstimate,
@@ -77,33 +85,43 @@ export function SolanaTxInspector({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="inline-flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
-        <TabButton
+      <PanelHeader
+        icon={Search}
+        title="Transaction inspector"
+        description="Simulate, decode, and price-estimate Solana transactions."
+        busy={txBusy}
+      />
+
+      <UnderlineTabs ariaLabel="Inspector mode">
+        <UnderlineTab
           active={tab === "simulate"}
           onClick={() => setTab("simulate")}
+          icon={Gauge}
           label="Simulate"
         />
-        <TabButton
+        <UnderlineTab
           active={tab === "explain"}
           onClick={() => setTab("explain")}
+          icon={BookOpen}
           label="Explain"
         />
-        <TabButton
+        <UnderlineTab
           active={tab === "priority"}
           onClick={() => setTab("priority")}
+          icon={Gauge}
           label="Priority fee"
         />
-      </div>
+      </UnderlineTabs>
 
       {!clusterRunning ? (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="rounded-md border border-dashed border-border/70 bg-background/30 px-3 py-2 text-[11px] text-muted-foreground">
           Start a cluster on <span className="font-mono text-foreground/80">{cluster}</span> to use the tx inspector.
         </p>
       ) : null}
 
       {tab === "simulate" ? (
         <div className="flex flex-col gap-2">
-          <label className="text-[11px] font-medium text-muted-foreground">
+          <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Base64 v0 transaction
           </label>
           <textarea
@@ -118,8 +136,8 @@ export function SolanaTxInspector({
             disabled={disabled}
             onClick={handleSimulate}
             className={cn(
-              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
-              "hover:bg-primary/90 disabled:opacity-50",
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-3 text-[12px] font-medium text-primary transition-colors",
+              "hover:bg-primary/25 disabled:opacity-50",
             )}
           >
             {txBusy ? (
@@ -137,7 +155,7 @@ export function SolanaTxInspector({
 
       {tab === "explain" ? (
         <div className="flex flex-col gap-2">
-          <label className="text-[11px] font-medium text-muted-foreground">
+          <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Signature
           </label>
           <input
@@ -152,8 +170,8 @@ export function SolanaTxInspector({
             disabled={disabled}
             onClick={handleExplain}
             className={cn(
-              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
-              "hover:bg-primary/90 disabled:opacity-50",
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-3 text-[12px] font-medium text-primary transition-colors",
+              "hover:bg-primary/25 disabled:opacity-50",
             )}
           >
             {txBusy ? (
@@ -171,8 +189,11 @@ export function SolanaTxInspector({
 
       {tab === "priority" ? (
         <div className="flex flex-col gap-2">
-          <label className="text-[11px] font-medium text-muted-foreground">
-            Program IDs <span className="font-normal">(comma or newline separated, optional)</span>
+          <label className="flex items-baseline gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <span>Program IDs</span>
+            <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
+              (comma or newline separated, optional)
+            </span>
           </label>
           <textarea
             className="w-full resize-y rounded-md border border-border/60 bg-background p-2 font-mono text-[11px] leading-snug outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
@@ -186,8 +207,8 @@ export function SolanaTxInspector({
             disabled={txBusy || !clusterRunning}
             onClick={handleEstimateFee}
             className={cn(
-              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
-              "hover:bg-primary/90 disabled:opacity-50",
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-3 text-[12px] font-medium text-primary transition-colors",
+              "hover:bg-primary/25 disabled:opacity-50",
             )}
           >
             {txBusy ? (
@@ -208,38 +229,13 @@ export function SolanaTxInspector({
   )
 }
 
-function TabButton({
-  active,
-  onClick,
-  label,
-}: {
-  active: boolean
-  onClick: () => void
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex-1 rounded px-2 py-1 text-[11.5px] font-medium transition-colors",
-        active
-          ? "bg-background text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {label}
-    </button>
-  )
-}
-
 function SimulationSummary({ result }: { result: SimulationResult }) {
   const logs = useMemo(() => result.logs.slice(-12), [result.logs])
   return (
-    <div className="rounded-md border border-border/60 bg-background/40 p-2">
+    <div className="rounded-md border border-border/70 bg-background/40 p-2.5">
       <div className="mb-1 flex items-center gap-1.5 text-[10.5px]">
         {result.success ? (
-          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+          <CheckCircle2 className="h-3 w-3 text-success" />
         ) : (
           <AlertCircle className="h-3 w-3 text-destructive" />
         )}
@@ -269,10 +265,10 @@ function SimulationSummary({ result }: { result: SimulationResult }) {
 
 function TxResultSummary({ result }: { result: TxResult }) {
   return (
-    <div className="rounded-md border border-border/60 bg-background/40 p-2">
+    <div className="rounded-md border border-border/70 bg-background/40 p-2.5">
       <div className="mb-1 flex items-center gap-1.5 text-[10.5px]">
         {result.explanation.ok ? (
-          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+          <CheckCircle2 className="h-3 w-3 text-success" />
         ) : (
           <AlertCircle className="h-3 w-3 text-destructive" />
         )}
@@ -303,7 +299,7 @@ function TxResultSummary({ result }: { result: TxResult }) {
 
 function FeeEstimateSummary({ estimate }: { estimate: FeeEstimate }) {
   return (
-    <div className="rounded-md border border-border/60 bg-background/40 p-2">
+    <div className="rounded-md border border-border/70 bg-background/40 p-2.5">
       <div className="mb-1 text-[10.5px]">
         Recommended:{" "}
         <span className="font-mono tabular-nums">

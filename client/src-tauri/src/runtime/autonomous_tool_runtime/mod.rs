@@ -19,6 +19,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value as JsonValue};
 use tauri::{AppHandle, Manager, Runtime};
 
 use super::autonomous_web_runtime::{
@@ -35,8 +36,9 @@ use super::autonomous_skill_runtime::{
 };
 use crate::{
     commands::{
-        BranchSummaryDto, CommandError, CommandResult, RepositoryDiffScope,
-        RepositoryStatusEntryDto, RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
+        browser::load_browser_control_settings, BranchSummaryDto, BrowserControlPreferenceDto,
+        CommandError, CommandResult, RepositoryDiffScope, RepositoryStatusEntryDto,
+        RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
     },
     runtime::AgentRunCancellationToken,
     state::DesktopState,
@@ -106,6 +108,7 @@ pub const AUTONOMOUS_TOOL_LSP: &str = "lsp";
 pub const AUTONOMOUS_TOOL_POWERSHELL: &str = "powershell";
 pub const AUTONOMOUS_TOOL_TOOL_SEARCH: &str = "tool_search";
 pub const AUTONOMOUS_TOOL_SKILL: &str = "skill";
+pub const AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX: &str = "mcp__";
 
 const DEFAULT_READ_LINE_COUNT: usize = 200;
 const MAX_READ_LINE_COUNT: usize = 400;
@@ -125,6 +128,8 @@ const TOOL_ACCESS_CORE_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_GIT_STATUS,
     AUTONOMOUS_TOOL_GIT_DIFF,
     AUTONOMOUS_TOOL_TOOL_ACCESS,
+    AUTONOMOUS_TOOL_TOOL_SEARCH,
+    AUTONOMOUS_TOOL_TODO,
     AUTONOMOUS_TOOL_LIST,
     AUTONOMOUS_TOOL_HASH,
 ];
@@ -144,10 +149,26 @@ const TOOL_ACCESS_COMMAND_TOOLS: &[&str] = &[
 ];
 const TOOL_ACCESS_PROCESS_MANAGER_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_PROCESS_MANAGER];
 const TOOL_ACCESS_MACOS_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_MACOS_AUTOMATION];
+const TOOL_ACCESS_WEB_SEARCH_ONLY_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_WEB_SEARCH];
+const TOOL_ACCESS_WEB_FETCH_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_WEB_FETCH];
+const TOOL_ACCESS_BROWSER_OBSERVE_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_BROWSER];
+const TOOL_ACCESS_BROWSER_CONTROL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_BROWSER];
 const TOOL_ACCESS_WEB_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_WEB_SEARCH,
     AUTONOMOUS_TOOL_WEB_FETCH,
     AUTONOMOUS_TOOL_BROWSER,
+];
+const TOOL_ACCESS_COMMAND_READONLY_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_COMMAND];
+const TOOL_ACCESS_COMMAND_MUTATING_TOOLS: &[&str] = &[
+    AUTONOMOUS_TOOL_COMMAND,
+    AUTONOMOUS_TOOL_COMMAND_SESSION_START,
+    AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+    AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
+];
+const TOOL_ACCESS_COMMAND_SESSION_TOOLS: &[&str] = &[
+    AUTONOMOUS_TOOL_COMMAND_SESSION_START,
+    AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+    AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
 ];
 const TOOL_ACCESS_EMULATOR_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_EMULATOR];
 const TOOL_ACCESS_SOLANA_TOOLS: &[&str] = &[
@@ -176,81 +197,779 @@ const TOOL_ACCESS_SOLANA_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_SOLANA_COST,
     AUTONOMOUS_TOOL_SOLANA_DOCS,
 ];
-const TOOL_ACCESS_AGENT_OPS_TOOLS: &[&str] = &[
-    AUTONOMOUS_TOOL_SUBAGENT,
-    AUTONOMOUS_TOOL_TODO,
-    AUTONOMOUS_TOOL_TOOL_SEARCH,
-];
+const TOOL_ACCESS_AGENT_OPS_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_SUBAGENT];
 const TOOL_ACCESS_MCP_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_MCP];
+const TOOL_ACCESS_MCP_LIST_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_MCP];
+const TOOL_ACCESS_MCP_INVOKE_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_MCP];
 const TOOL_ACCESS_INTELLIGENCE_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_LSP];
 const TOOL_ACCESS_NOTEBOOK_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_NOTEBOOK_EDIT];
 const TOOL_ACCESS_POWERSHELL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_POWERSHELL];
 const TOOL_ACCESS_SKILL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_SKILL];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToolAccessGroupDefinition {
+    name: &'static str,
+    description: &'static str,
+    tools: &'static [&'static str],
+    risk_class: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutonomousToolCatalogEntry {
+    pub tool_name: &'static str,
+    pub group: &'static str,
+    pub description: &'static str,
+    pub tags: &'static [&'static str],
+    pub schema_fields: &'static [&'static str],
+    pub examples: &'static [&'static str],
+    pub risk_class: &'static str,
+}
+
+const TOOL_ACCESS_GROUP_DEFINITIONS: &[ToolAccessGroupDefinition] = &[
+    ToolAccessGroupDefinition {
+        name: "core",
+        description: "Always-on repository inspection, git status, tool discovery, and planning tools.",
+        tools: TOOL_ACCESS_CORE_TOOLS,
+        risk_class: "observe",
+    },
+    ToolAccessGroupDefinition {
+        name: "mutation",
+        description: "Repo-scoped file creation and mutation tools with observation guards.",
+        tools: TOOL_ACCESS_MUTATION_TOOLS,
+        risk_class: "write",
+    },
+    ToolAccessGroupDefinition {
+        name: "command_readonly",
+        description: "Short repo-scoped commands for tests, builds, linting, and diagnostics.",
+        tools: TOOL_ACCESS_COMMAND_READONLY_TOOLS,
+        risk_class: "command",
+    },
+    ToolAccessGroupDefinition {
+        name: "command_mutating",
+        description: "Repo-scoped commands and command sessions that may change generated files or local state.",
+        tools: TOOL_ACCESS_COMMAND_MUTATING_TOOLS,
+        risk_class: "command_mutating",
+    },
+    ToolAccessGroupDefinition {
+        name: "command_session",
+        description: "Long-running command session start/read/stop tools.",
+        tools: TOOL_ACCESS_COMMAND_SESSION_TOOLS,
+        risk_class: "long_running_process",
+    },
+    ToolAccessGroupDefinition {
+        name: "command",
+        description: "Repo-scoped short and long-running command tools.",
+        tools: TOOL_ACCESS_COMMAND_TOOLS,
+        risk_class: "command",
+    },
+    ToolAccessGroupDefinition {
+        name: "process_manager",
+        description: "Xero-owned process lifecycle, output, and external process observation/control surfaces.",
+        tools: TOOL_ACCESS_PROCESS_MANAGER_TOOLS,
+        risk_class: "process_control",
+    },
+    ToolAccessGroupDefinition {
+        name: "macos",
+        description: "macOS permissions, app/window inspection, screenshots, and approval-gated automation.",
+        tools: TOOL_ACCESS_MACOS_TOOLS,
+        risk_class: "os_control",
+    },
+    ToolAccessGroupDefinition {
+        name: "web_search_only",
+        description: "Search the web without exposing page fetch or browser-control schemas.",
+        tools: TOOL_ACCESS_WEB_SEARCH_ONLY_TOOLS,
+        risk_class: "network",
+    },
+    ToolAccessGroupDefinition {
+        name: "web_fetch",
+        description: "Fetch HTTP/HTTPS text content without exposing browser-control schemas.",
+        tools: TOOL_ACCESS_WEB_FETCH_TOOLS,
+        risk_class: "network",
+    },
+    ToolAccessGroupDefinition {
+        name: "browser_observe",
+        description: "Observe the in-app browser with page text, URL, screenshots, console, network, accessibility, and state reads.",
+        tools: TOOL_ACCESS_BROWSER_OBSERVE_TOOLS,
+        risk_class: "browser_observe",
+    },
+    ToolAccessGroupDefinition {
+        name: "browser_control",
+        description: "Control the in-app browser with navigation, clicks, typing, storage, cookies, and tab actions.",
+        tools: TOOL_ACCESS_BROWSER_CONTROL_TOOLS,
+        risk_class: "browser_control",
+    },
+    ToolAccessGroupDefinition {
+        name: "web",
+        description: "Full web bundle: search, fetch, and in-app browser automation.",
+        tools: TOOL_ACCESS_WEB_TOOLS,
+        risk_class: "network_browser_control",
+    },
+    ToolAccessGroupDefinition {
+        name: "emulator",
+        description: "Mobile emulator/device automation.",
+        tools: TOOL_ACCESS_EMULATOR_TOOLS,
+        risk_class: "device_control",
+    },
+    ToolAccessGroupDefinition {
+        name: "solana",
+        description: "Solana cluster, program, audit, transaction, deploy, and documentation tools.",
+        tools: TOOL_ACCESS_SOLANA_TOOLS,
+        risk_class: "external_chain",
+    },
+    ToolAccessGroupDefinition {
+        name: "agent_ops",
+        description: "Subagent delegation tools; todo and tool_search stay in core.",
+        tools: TOOL_ACCESS_AGENT_OPS_TOOLS,
+        risk_class: "agent_delegation",
+    },
+    ToolAccessGroupDefinition {
+        name: "mcp_list",
+        description: "List connected MCP servers, tools, resources, and prompts.",
+        tools: TOOL_ACCESS_MCP_LIST_TOOLS,
+        risk_class: "external_capability_observe",
+    },
+    ToolAccessGroupDefinition {
+        name: "mcp_invoke",
+        description: "Invoke MCP tools, read resources, and get prompts through the app-local registry.",
+        tools: TOOL_ACCESS_MCP_INVOKE_TOOLS,
+        risk_class: "external_capability_invoke",
+    },
+    ToolAccessGroupDefinition {
+        name: "mcp",
+        description: "Full MCP bundle for listing and invoking connected server capabilities.",
+        tools: TOOL_ACCESS_MCP_TOOLS,
+        risk_class: "external_capability",
+    },
+    ToolAccessGroupDefinition {
+        name: "intelligence",
+        description: "Code symbols and diagnostics through native code intelligence and LSP.",
+        tools: TOOL_ACCESS_INTELLIGENCE_TOOLS,
+        risk_class: "observe",
+    },
+    ToolAccessGroupDefinition {
+        name: "notebook",
+        description: "Jupyter notebook cell editing.",
+        tools: TOOL_ACCESS_NOTEBOOK_TOOLS,
+        risk_class: "write",
+    },
+    ToolAccessGroupDefinition {
+        name: "powershell",
+        description: "PowerShell commands through repo-scoped command policy.",
+        tools: TOOL_ACCESS_POWERSHELL_TOOLS,
+        risk_class: "command",
+    },
+    ToolAccessGroupDefinition {
+        name: "skills",
+        description: "Discover, load, install, invoke, reload, and create Xero skills.",
+        tools: TOOL_ACCESS_SKILL_TOOLS,
+        risk_class: "skill_runtime",
+    },
+];
+
 pub fn tool_access_group_tools(group: &str) -> Option<&'static [&'static str]> {
-    match group.trim() {
-        "core" => Some(TOOL_ACCESS_CORE_TOOLS),
-        "mutation" => Some(TOOL_ACCESS_MUTATION_TOOLS),
-        "command" => Some(TOOL_ACCESS_COMMAND_TOOLS),
-        "process_manager" => Some(TOOL_ACCESS_PROCESS_MANAGER_TOOLS),
-        "macos" => Some(TOOL_ACCESS_MACOS_TOOLS),
-        "web" => Some(TOOL_ACCESS_WEB_TOOLS),
-        "emulator" => Some(TOOL_ACCESS_EMULATOR_TOOLS),
-        "solana" => Some(TOOL_ACCESS_SOLANA_TOOLS),
-        "agent_ops" => Some(TOOL_ACCESS_AGENT_OPS_TOOLS),
-        "mcp" => Some(TOOL_ACCESS_MCP_TOOLS),
-        "intelligence" => Some(TOOL_ACCESS_INTELLIGENCE_TOOLS),
-        "notebook" => Some(TOOL_ACCESS_NOTEBOOK_TOOLS),
-        "powershell" => Some(TOOL_ACCESS_POWERSHELL_TOOLS),
-        "skills" => Some(TOOL_ACCESS_SKILL_TOOLS),
-        _ => None,
-    }
+    tool_access_group_definition(group.trim()).map(|definition| definition.tools)
 }
 
 pub fn tool_access_all_known_tools() -> std::collections::BTreeSet<&'static str> {
-    [
-        TOOL_ACCESS_CORE_TOOLS,
-        TOOL_ACCESS_MUTATION_TOOLS,
-        TOOL_ACCESS_COMMAND_TOOLS,
-        TOOL_ACCESS_PROCESS_MANAGER_TOOLS,
-        TOOL_ACCESS_MACOS_TOOLS,
-        TOOL_ACCESS_WEB_TOOLS,
-        TOOL_ACCESS_EMULATOR_TOOLS,
-        TOOL_ACCESS_SOLANA_TOOLS,
-        TOOL_ACCESS_AGENT_OPS_TOOLS,
-        TOOL_ACCESS_MCP_TOOLS,
-        TOOL_ACCESS_INTELLIGENCE_TOOLS,
-        TOOL_ACCESS_NOTEBOOK_TOOLS,
-        TOOL_ACCESS_POWERSHELL_TOOLS,
-        TOOL_ACCESS_SKILL_TOOLS,
-    ]
-    .into_iter()
-    .flat_map(|tools| tools.iter().copied())
-    .collect()
+    TOOL_ACCESS_GROUP_DEFINITIONS
+        .iter()
+        .flat_map(|definition| definition.tools.iter().copied())
+        .collect()
 }
 
 pub fn tool_access_group_descriptors() -> Vec<AutonomousToolAccessGroup> {
+    TOOL_ACCESS_GROUP_DEFINITIONS
+        .iter()
+        .map(|definition| AutonomousToolAccessGroup {
+            name: definition.name.into(),
+            description: definition.description.into(),
+            tools: definition
+                .tools
+                .iter()
+                .map(|tool| (*tool).to_owned())
+                .collect(),
+            risk_class: definition.risk_class.into(),
+        })
+        .collect()
+}
+
+fn tool_access_group_definition(group: &str) -> Option<&'static ToolAccessGroupDefinition> {
+    TOOL_ACCESS_GROUP_DEFINITIONS
+        .iter()
+        .find(|definition| definition.name == group)
+}
+
+pub fn tool_catalog_activation_groups(tool_name: &str) -> Vec<String> {
+    TOOL_ACCESS_GROUP_DEFINITIONS
+        .iter()
+        .filter(|definition| definition.tools.contains(&tool_name))
+        .map(|definition| definition.name.to_owned())
+        .collect()
+}
+
+pub fn tool_catalog_metadata_for_tool(
+    tool_name: &str,
+    skill_tool_enabled: bool,
+) -> Option<JsonValue> {
+    deferred_tool_catalog(skill_tool_enabled)
+        .into_iter()
+        .find(|entry| entry.tool_name == tool_name)
+        .map(|entry| {
+            json!({
+                "toolName": entry.tool_name,
+                "group": entry.group,
+                "activationGroups": tool_catalog_activation_groups(entry.tool_name),
+                "activationTools": [entry.tool_name],
+                "tags": entry.tags,
+                "schemaFields": entry.schema_fields,
+                "examples": entry.examples,
+                "riskClass": entry.risk_class,
+                "runtimeAvailable": true,
+            })
+        })
+}
+
+pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCatalogEntry> {
+    let mut catalog = vec![
+        catalog_entry(
+            AUTONOMOUS_TOOL_READ,
+            "core",
+            "Read a repo-relative file as text, image preview, binary metadata, byte range, or line-hash anchored text.",
+            &["file", "inspect", "read", "line_hash", "image", "binary"],
+            &["path", "systemPath", "mode", "startLine", "lineCount", "byteOffset", "byteCount", "includeLineHashes"],
+            &["Read src/lib.rs with line hashes before editing.", "Inspect an image preview in the imported repo."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_SEARCH,
+            "core",
+            "Search repo-scoped files with regex or literal matching, globs, context lines, hidden/ignored controls, and deterministic capped results.",
+            &["file", "search", "regex", "grep", "ripgrep", "code"],
+            &["query", "path", "regex", "ignoreCase", "includeHidden", "includeIgnored", "includeGlobs", "excludeGlobs", "contextLines", "maxResults"],
+            &["Search for a symbol before editing.", "Find TODO references with context lines."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_FIND,
+            "core",
+            "Find glob/pattern matches in repo-scoped files.",
+            &["file", "glob", "find", "tree"],
+            &["pattern", "path"],
+            &["Find **/*.rs files under src-tauri."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_GIT_STATUS,
+            "core",
+            "Inspect repository status.",
+            &["git", "status", "dirty_worktree"],
+            &[],
+            &["Check dirty worktree state before editing."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_GIT_DIFF,
+            "core",
+            "Inspect repository diffs.",
+            &["git", "diff", "changes", "review"],
+            &["scope"],
+            &["Review unstaged changes before final summary."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_TOOL_ACCESS,
+            "core",
+            "List or activate deferred tool groups and exact tools.",
+            &["tool", "activation", "capability", "registry"],
+            &["action", "groups", "tools", "reason"],
+            &["Request command_readonly before running tests.", "Activate solana_alt after tool_search finds it."],
+            "registry_control",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_TOOL_SEARCH,
+            "core",
+            "Search deferred tool capabilities before requesting activation.",
+            &["tool", "search", "discovery", "catalog", "bm25", "capability"],
+            &["query", "limit"],
+            &["Search for address lookup table tools.", "Find the smallest browser observation capability."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_TODO,
+            "core",
+            "Maintain model-visible planning state for the current owned-agent run.",
+            &["plan", "todo", "task", "state"],
+            &["action", "id", "title", "notes", "status"],
+            &["Track inspect, edit, verify steps for a multi-file change."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_LIST,
+            "core",
+            "List repo-scoped files.",
+            &["file", "list", "tree", "directory"],
+            &["path", "maxDepth"],
+            &["List top-level project directories."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_HASH,
+            "core",
+            "Hash a repo-relative file with SHA-256.",
+            &["file", "hash", "sha256", "stale_write"],
+            &["path"],
+            &["Hash a file before guarded mutation."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_WRITE,
+            "mutation",
+            "Write a UTF-8 text file by repo-relative path.",
+            &["file", "write", "create", "replace"],
+            &["path", "content"],
+            &["Create a new generated source file."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_EDIT,
+            "mutation",
+            "Apply an exact expected-text line-range edit with optional file and line hash anchors.",
+            &["file", "edit", "line", "expected_text", "hash_guard"],
+            &["path", "startLine", "endLine", "expected", "replacement", "expectedHash", "startLineHash", "endLineHash"],
+            &["Replace a small function body after reading it."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_PATCH,
+            "mutation",
+            "Patch a UTF-8 text file by replacing exact search text.",
+            &["file", "patch", "replace", "exact_text"],
+            &["path", "search", "replace", "replaceAll", "expectedHash"],
+            &["Replace an exact import statement."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_DELETE,
+            "mutation",
+            "Delete a repo-relative file or directory.",
+            &["file", "delete", "remove"],
+            &["path", "recursive", "expectedHash"],
+            &["Delete an obsolete generated file with an expected hash."],
+            "write_destructive",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_RENAME,
+            "mutation",
+            "Rename or move a repo-relative path.",
+            &["file", "rename", "move"],
+            &["fromPath", "toPath", "expectedHash"],
+            &["Move a source file inside the repo."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_MKDIR,
+            "mutation",
+            "Create a repo-relative directory and missing parents.",
+            &["file", "directory", "mkdir", "create"],
+            &["path"],
+            &["Create a new feature directory."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_COMMAND,
+            "command",
+            "Run a repo-scoped command.",
+            &["command", "shell", "test", "lint", "build", "cargo", "npm", "pnpm"],
+            &["argv", "cwd", "timeoutMs"],
+            &["Run npm test.", "Run cargo test for the changed crate."],
+            "command",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_COMMAND_SESSION_START,
+            "command",
+            "Start a repo-scoped long-running command session and capture live output chunks.",
+            &["command", "session", "long_running", "dev_server", "watch"],
+            &["argv", "cwd", "timeoutMs"],
+            &["Start a dev server or watcher."],
+            "long_running_process",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+            "command",
+            "Read new output chunks and exit state from a command session.",
+            &["command", "session", "output", "read"],
+            &["sessionId", "afterSequence", "maxBytes"],
+            &["Read new output from a running test watcher."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
+            "command",
+            "Stop a command session and return final captured output chunks.",
+            &["command", "session", "stop", "cleanup"],
+            &["sessionId"],
+            &["Stop a dev server after verification."],
+            "process_control",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_PROCESS_MANAGER,
+            "process_manager",
+            "Manage Xero-owned long-running, interactive, grouped, restartable, and async-job processes, plus system process visibility and approval-gated external signaling.",
+            &["process", "pty", "async", "background", "output", "signal", "port"],
+            &["action", "processId", "groupId", "argv", "input", "timeoutMs", "maxBytes"],
+            &["Start an async build and await completion.", "Inspect system ports."],
+            "process_control",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_MACOS_AUTOMATION,
+            "macos",
+            "macOS app/system automation: check permissions, list/launch/activate/quit apps, list/focus windows, and capture approval-gated screenshots.",
+            &["macos", "desktop", "window", "app", "screenshot", "permission"],
+            &["action", "bundleId", "appName", "windowId", "target"],
+            &["List running apps.", "Capture a screenshot after approval."],
+            "os_control",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_WEB_SEARCH,
+            "web",
+            "Search the web through the configured backend.",
+            &["web", "search", "internet", "docs", "latest"],
+            &["query", "limit"],
+            &["Search current official documentation."],
+            "network",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_WEB_FETCH,
+            "web",
+            "Fetch HTTP or HTTPS text content.",
+            &["web", "fetch", "http", "docs", "page"],
+            &["url", "contentKind", "maxBytes"],
+            &["Fetch a documentation page after search."],
+            "network",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_BROWSER,
+            "web",
+            "Drive the in-app browser with navigation, DOM actions, screenshots, diagnostics, accessibility snapshots, and state save/restore.",
+            &["browser", "frontend", "ui", "dom", "screenshot", "accessibility", "console", "network", "storage", "cookies"],
+            &["action", "url", "selector", "text", "timeoutMs", "tabId", "area", "key"],
+            &["Observe current URL and page text.", "Click and type into a local app after activation."],
+            "browser_control",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_EMULATOR,
+            "emulator",
+            "Drive mobile emulator automation.",
+            &["emulator", "mobile", "android", "ios", "device", "tap", "swipe", "screenshot"],
+            &["action", "input"],
+            &["Launch an app and capture a screenshot."],
+            "device_control",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_MCP,
+            "mcp",
+            "List and invoke connected MCP tools, resources, and prompts over stdio, HTTP, or SSE.",
+            &["mcp", "model_context_protocol", "tool", "resource", "prompt", "external"],
+            &["action", "serverId", "name", "uri", "arguments", "timeoutMs"],
+            &["List MCP server tools.", "Invoke a named MCP tool after activation."],
+            "external_capability",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_SUBAGENT,
+            "agent_ops",
+            "Spawn built-in model-routed subagent tasks.",
+            &["agent", "subagent", "delegate", "explore", "verify", "parallel"],
+            &["agentType", "prompt", "modelId"],
+            &["Spawn an explorer for a bounded codebase question."],
+            "agent_delegation",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
+            "notebook",
+            "Edit a Jupyter notebook cell source.",
+            &["notebook", "jupyter", "ipynb", "cell", "edit"],
+            &["path", "cellIndex", "expectedSource", "replacementSource"],
+            &["Replace a notebook cell after reading it."],
+            "write",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_CODE_INTEL,
+            "intelligence",
+            "Inspect source symbols or JSON diagnostics without requiring command execution.",
+            &["code", "symbol", "diagnostic", "intelligence", "static"],
+            &["action", "query", "path", "limit"],
+            &["Find symbols named greet.", "Read diagnostics for a source file."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_LSP,
+            "intelligence",
+            "Inspect language-server availability and resolve source symbols or diagnostics through LSP with native fallback.",
+            &["lsp", "language_server", "symbol", "diagnostic", "install_suggestion"],
+            &["action", "query", "path", "limit", "serverId", "timeoutMs"],
+            &["List available language servers.", "Resolve symbol references with LSP."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_POWERSHELL,
+            "powershell",
+            "Run PowerShell through the same repo-scoped command policy used for shell commands.",
+            &["powershell", "pwsh", "windows", "command", "script"],
+            &["script", "cwd", "timeoutMs"],
+            &["Run a Windows shell diagnostic inside the repo."],
+            "command",
+        ),
+    ];
+
+    catalog.extend(solana_tool_catalog_entries());
+
+    if skill_tool_enabled {
+        catalog.push(catalog_entry(
+            AUTONOMOUS_TOOL_SKILL,
+            "skills",
+            "Discover, resolve, install, invoke, reload, or create Xero skills.",
+            &["skill", "skills", "capability", "instructions", "plugin"],
+            &["operation", "query", "sourceId", "context", "limit"],
+            &[
+                "Discover relevant skills before implementation.",
+                "Invoke a trusted skill as bounded prompt context.",
+            ],
+            "skill_runtime",
+        ));
+    }
+
+    catalog
+}
+
+fn catalog_entry(
+    tool_name: &'static str,
+    group: &'static str,
+    description: &'static str,
+    tags: &'static [&'static str],
+    schema_fields: &'static [&'static str],
+    examples: &'static [&'static str],
+    risk_class: &'static str,
+) -> AutonomousToolCatalogEntry {
+    AutonomousToolCatalogEntry {
+        tool_name,
+        group,
+        description,
+        tags,
+        schema_fields,
+        examples,
+        risk_class,
+    }
+}
+
+fn solana_tool_catalog_entries() -> Vec<AutonomousToolCatalogEntry> {
     [
-        ("core", TOOL_ACCESS_CORE_TOOLS),
-        ("mutation", TOOL_ACCESS_MUTATION_TOOLS),
-        ("command", TOOL_ACCESS_COMMAND_TOOLS),
-        ("process_manager", TOOL_ACCESS_PROCESS_MANAGER_TOOLS),
-        ("macos", TOOL_ACCESS_MACOS_TOOLS),
-        ("web", TOOL_ACCESS_WEB_TOOLS),
-        ("emulator", TOOL_ACCESS_EMULATOR_TOOLS),
-        ("solana", TOOL_ACCESS_SOLANA_TOOLS),
-        ("agent_ops", TOOL_ACCESS_AGENT_OPS_TOOLS),
-        ("mcp", TOOL_ACCESS_MCP_TOOLS),
-        ("intelligence", TOOL_ACCESS_INTELLIGENCE_TOOLS),
-        ("notebook", TOOL_ACCESS_NOTEBOOK_TOOLS),
-        ("powershell", TOOL_ACCESS_POWERSHELL_TOOLS),
-        ("skills", TOOL_ACCESS_SKILL_TOOLS),
+        (
+            AUTONOMOUS_TOOL_SOLANA_CLUSTER,
+            "Inspect and control local or forked Solana clusters.",
+            &["cluster", "validator", "localnet"][..],
+            &["action", "clusterId"][..],
+            &["List local Solana clusters."][..],
+            "external_chain_control",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_LOGS,
+            "Read Solana validator, program, and transaction logs.",
+            &["logs", "validator", "program", "transaction"][..],
+            &["action", "clusterId", "signature", "programId"][..],
+            &["Read validator logs for a failing transaction."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_TX,
+            "Inspect Solana transaction signatures, statuses, and metadata.",
+            &["transaction", "signature", "status", "metadata"][..],
+            &["action", "signature", "clusterId"][..],
+            &["Inspect a confirmed transaction signature."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_SIMULATE,
+            "Simulate Solana transactions before sending them.",
+            &["simulate", "transaction", "preflight"][..],
+            &["transaction", "clusterId", "accounts"][..],
+            &["Simulate a transaction before deploy work."][..],
+            "external_chain_simulation",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_EXPLAIN,
+            "Explain Solana transactions, errors, and account changes.",
+            &["explain", "error", "account", "transaction"][..],
+            &["signature", "error", "logs"][..],
+            &["Explain a custom program error."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_ALT,
+            "Inspect Solana address lookup table data.",
+            &["alt", "address_lookup_table", "lookup", "address"][..],
+            &["address", "clusterId"][..],
+            &["Inspect an address lookup table."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_IDL,
+            "Inspect Anchor IDLs and generated Solana interface metadata.",
+            &["idl", "anchor", "interface", "schema"][..],
+            &["action", "path", "programId"][..],
+            &["Compare an Anchor IDL against generated clients."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_CODAMA,
+            "Run Codama schema and client-generation helpers.",
+            &["codama", "client", "generate", "schema"][..],
+            &["action", "path", "outputDir"][..],
+            &["Generate clients from a Codama schema."][..],
+            "write",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_PDA,
+            "Derive and inspect Solana program-derived addresses.",
+            &["pda", "seed", "program_derived_address", "bump"][..],
+            &["programId", "seeds", "clusterId"][..],
+            &["Derive a PDA from known seeds."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_PROGRAM,
+            "Inspect Solana program metadata and build state.",
+            &["program", "metadata", "build", "anchor"][..],
+            &["action", "programId", "manifestPath"][..],
+            &["Inspect program build metadata."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_DEPLOY,
+            "Run Solana deploy planning and guarded deploy actions.",
+            &["deploy", "program", "upgrade", "authority"][..],
+            &["action", "clusterId", "programPath"][..],
+            &["Plan a guarded program deploy."][..],
+            "external_chain_mutation",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_UPGRADE_CHECK,
+            "Check Solana upgrade authority and deployment safety.",
+            &["upgrade", "authority", "safety", "deploy"][..],
+            &["programId", "clusterId", "idlPath"][..],
+            &["Check upgrade authority before deploy."][..],
+            "external_chain_observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_SQUADS,
+            "Inspect Squads multisig proposals and governance state.",
+            &["squads", "multisig", "governance", "proposal"][..],
+            &["action", "vault", "proposalId"][..],
+            &["Inspect a Squads proposal."][..],
+            "external_chain_observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD,
+            "Run verified-build checks for Solana programs.",
+            &["verified_build", "build", "program", "audit"][..],
+            &["manifestPath", "programId"][..],
+            &["Run verified build checks."][..],
+            "command",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_AUDIT_STATIC,
+            "Run static audit checks for Solana programs.",
+            &["audit", "static", "security", "program"][..],
+            &["path", "programId"][..],
+            &["Run a static Solana audit."][..],
+            "command",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_AUDIT_EXTERNAL,
+            "Run external-reference audit checks for Solana programs.",
+            &["audit", "external", "reference", "security"][..],
+            &["path", "programId"][..],
+            &["Audit external references."][..],
+            "network",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_AUDIT_FUZZ,
+            "Run fuzzing-oriented audit checks for Solana programs.",
+            &["audit", "fuzz", "security", "test"][..],
+            &["path", "target"][..],
+            &["Run fuzzing audit checks."][..],
+            "command",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_AUDIT_COVERAGE,
+            "Inspect Solana audit and test coverage evidence.",
+            &["audit", "coverage", "test", "evidence"][..],
+            &["path", "programId"][..],
+            &["Inspect Solana coverage evidence."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_REPLAY,
+            "Replay Solana transactions or ledger events.",
+            &["replay", "transaction", "ledger"][..],
+            &["signature", "clusterId", "slot"][..],
+            &["Replay a transaction for debugging."][..],
+            "external_chain_simulation",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_INDEXER,
+            "Inspect and manage Solana indexer state.",
+            &["indexer", "state", "events", "accounts"][..],
+            &["action", "indexerId", "programId"][..],
+            &["Inspect indexer lag."][..],
+            "external_chain_observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_SECRETS,
+            "Inspect Solana secret references without exposing raw values.",
+            &["secret", "keypair", "wallet", "redaction"][..],
+            &["action", "scope"][..],
+            &["Check whether a deploy keypair reference is configured."][..],
+            "secret_reference",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_CLUSTER_DRIFT,
+            "Detect drift between expected and live Solana cluster state.",
+            &["drift", "cluster", "program", "state"][..],
+            &["clusterId", "trackedPrograms"][..],
+            &["Detect localnet drift against expected programs."][..],
+            "external_chain_observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_COST,
+            "Estimate Solana transaction, account, and runtime costs.",
+            &["cost", "rent", "compute", "fee"][..],
+            &["action", "transaction", "accounts"][..],
+            &["Estimate account rent and transaction fee."][..],
+            "observe",
+        ),
+        (
+            AUTONOMOUS_TOOL_SOLANA_DOCS,
+            "Search and retrieve Solana documentation guidance.",
+            &["docs", "documentation", "solana", "anchor"][..],
+            &["query", "topic", "limit"][..],
+            &["Search Solana documentation for address lookup tables."][..],
+            "network",
+        ),
     ]
     .into_iter()
-    .map(|(name, tools)| AutonomousToolAccessGroup {
-        name: name.into(),
-        tools: tools.iter().map(|tool| (*tool).to_owned()).collect(),
-    })
+    .map(
+        |(tool_name, description, tags, schema_fields, examples, risk_class)| {
+            catalog_entry(
+                tool_name,
+                "solana",
+                description,
+                tags,
+                schema_fields,
+                examples,
+                risk_class,
+            )
+        },
+    )
     .collect()
 }
 
@@ -291,6 +1010,7 @@ pub struct AutonomousToolRuntime {
     pub(super) limits: AutonomousToolRuntimeLimits,
     pub(super) web_runtime: AutonomousWebRuntime,
     pub(super) command_controls: Option<RuntimeRunControlStateDto>,
+    pub(super) browser_control_preference: BrowserControlPreferenceDto,
     pub(super) browser_executor: Option<Arc<dyn BrowserExecutor>>,
     pub(super) emulator_executor: Option<Arc<dyn EmulatorExecutor>>,
     pub(super) solana_executor: Option<Arc<dyn SolanaExecutor>>,
@@ -311,6 +1031,10 @@ impl std::fmt::Debug for AutonomousToolRuntime {
             .field("repo_root", &self.repo_root)
             .field("limits", &self.limits)
             .field("command_controls", &self.command_controls)
+            .field(
+                "browser_control_preference",
+                &self.browser_control_preference,
+            )
             .field("mcp_registry_path", &self.mcp_registry_path)
             .field("subagent_execution_depth", &self.subagent_execution_depth)
             .field("skill_tool_enabled", &self.skill_tool.is_some())
@@ -373,6 +1097,7 @@ impl AutonomousToolRuntime {
             limits,
             web_runtime: AutonomousWebRuntime::new(web_config),
             command_controls: None,
+            browser_control_preference: BrowserControlPreferenceDto::Default,
             browser_executor: None,
             emulator_executor: None,
             solana_executor: None,
@@ -395,6 +1120,18 @@ impl AutonomousToolRuntime {
 
     pub fn browser_executor(&self) -> Option<&Arc<dyn BrowserExecutor>> {
         self.browser_executor.as_ref()
+    }
+
+    pub fn with_browser_control_preference(
+        mut self,
+        preference: BrowserControlPreferenceDto,
+    ) -> Self {
+        self.browser_control_preference = preference;
+        self
+    }
+
+    pub fn browser_control_preference(&self) -> BrowserControlPreferenceDto {
+        self.browser_control_preference
     }
 
     pub fn with_emulator_executor(mut self, executor: Arc<dyn EmulatorExecutor>) -> Self {
@@ -422,6 +1159,7 @@ impl AutonomousToolRuntime {
     ) -> CommandResult<Self> {
         let browser_executor = browser::tauri_browser_executor(app.clone(), state.clone());
         let repo_root = resolve_imported_repo_root(app, state, project_id)?;
+        let browser_control_preference = load_browser_control_settings(app, state)?.preference;
         let skill_settings = load_skill_source_settings_from_path(&state.global_db_path(app)?)?;
         let skill_runtime_config = AutonomousSkillRuntimeConfig {
             default_source_repo: skill_settings.github.repo.clone(),
@@ -459,6 +1197,7 @@ impl AutonomousToolRuntime {
             AutonomousToolRuntimeLimits::default(),
             state.autonomous_web_config(),
         )?
+        .with_browser_control_preference(browser_control_preference)
         .with_browser_executor(browser_executor)
         .with_emulator_executor(emulator::tauri_emulator_executor(app.clone()))
         .with_mcp_registry_path(state.global_db_path(app)?)
@@ -869,6 +1608,8 @@ impl AutonomousToolRuntime {
                     if known_tools.contains(tool.as_str())
                         && self.tool_available_by_runtime(tool.as_str())
                     {
+                        requested.insert(tool);
+                    } else if self.dynamic_tool_descriptor(&tool)?.is_some() {
                         requested.insert(tool);
                     } else {
                         denied.insert(tool);
@@ -1763,7 +2504,9 @@ pub struct AutonomousGitDiffOutput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutonomousToolAccessGroup {
     pub name: String,
+    pub description: String,
     pub tools: Vec<String>,
+    pub risk_class: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2365,7 +3108,22 @@ pub struct AutonomousLspOutput {
 pub struct AutonomousToolSearchMatch {
     pub tool_name: String,
     pub group: String,
+    pub catalog_kind: String,
     pub description: String,
+    pub score: u32,
+    pub activation_groups: Vec<String>,
+    pub activation_tools: Vec<String>,
+    pub tags: Vec<String>,
+    pub schema_fields: Vec<String>,
+    pub examples: Vec<String>,
+    pub risk_class: String,
+    pub runtime_available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2374,6 +3132,7 @@ pub struct AutonomousToolSearchOutput {
     pub query: String,
     pub matches: Vec<AutonomousToolSearchMatch>,
     pub truncated: bool,
+    pub searched_catalog_size: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2393,6 +3152,27 @@ pub struct AutonomousBundledSkillRoot {
 pub struct AutonomousPluginRoot {
     pub root_id: String,
     pub root_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum AutonomousDynamicToolRoute {
+    McpTool {
+        server_id: String,
+        tool_name: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutonomousDynamicToolDescriptor {
+    pub name: String,
+    pub description: String,
+    pub input_schema: JsonValue,
+    pub route: AutonomousDynamicToolRoute,
+    pub server_id: String,
+    pub capability_name: String,
+    pub risk_class: String,
 }
 
 #[derive(Clone)]

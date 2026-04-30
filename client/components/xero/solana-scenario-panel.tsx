@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ChevronRight, Loader2, PlayCircle } from "lucide-react"
+import { ChevronRight, Loader2, PlayCircle, Zap } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   Select,
@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { PanelHeader } from "./solana-panel-shell"
 import type {
   ClusterKind,
   Persona,
@@ -82,8 +83,15 @@ export function SolanaScenarioPanel({
 
   return (
     <div className="flex flex-col gap-4">
+      <PanelHeader
+        icon={Zap}
+        title="Scenarios"
+        description="Replay-able runbooks against the active cluster."
+        busy={busy}
+      />
+
       {applicableScenarios.length === 0 ? (
-        <p className="text-[11.5px] text-muted-foreground">
+        <p className="rounded-md border border-dashed border-border/70 bg-background/30 px-3 py-3 text-[11.5px] italic text-muted-foreground">
           No scenarios available on {cluster}. Switch clusters to see available runbooks.
         </p>
       ) : (
@@ -118,8 +126,8 @@ export function SolanaScenarioPanel({
                     className={cn(
                       "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
                       scenario.kind === "self_contained"
-                        ? "bg-emerald-500/15 text-emerald-400"
-                        : "bg-amber-500/15 text-amber-400",
+                        ? "bg-success/15 text-success"
+                        : "bg-warning/15 text-warning",
                     )}
                   >
                     {kindLabel}
@@ -136,9 +144,9 @@ export function SolanaScenarioPanel({
 
       {selectedScenario ? (
         <div>
-          <div className="mb-2 text-[11.5px] font-medium text-foreground">
-            Launch
-            <span className="ml-1.5 font-normal text-muted-foreground">
+          <div className="mb-2 flex items-baseline gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <span>Launch</span>
+            <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
               {selectedScenario.label}
             </span>
           </div>
@@ -176,8 +184,8 @@ export function SolanaScenarioPanel({
               onClick={handleRun}
               disabled={!selectedPersona || busy || !clusterRunning}
               className={cn(
-                "mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors",
-                "hover:bg-primary/90 disabled:opacity-50",
+                "mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-3 text-[12px] font-medium text-primary transition-colors",
+                "hover:bg-primary/25 disabled:opacity-50",
               )}
             >
               {busy ? (
@@ -192,11 +200,13 @@ export function SolanaScenarioPanel({
       ) : null}
 
       {lastRun ? (
-        <div className="border-t border-border/50 pt-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0 text-[11px] text-muted-foreground">
-              Last run ·{" "}
-              <span className="font-mono text-foreground/80">{lastRun.id}</span>
+        <div className="border-t border-border/70 pt-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-baseline gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              <span>Last run</span>
+              <span className="truncate font-mono text-[10.5px] font-normal normal-case tracking-normal text-foreground/70">
+                {lastRun.id}
+              </span>
             </div>
             <span
               className={cn(
@@ -208,7 +218,7 @@ export function SolanaScenarioPanel({
             </span>
           </div>
           {lastRun.pipelineHint ? (
-            <p className="mt-1.5 text-[11px] text-amber-400/90">{lastRun.pipelineHint}</p>
+            <p className="mt-1.5 text-[11px] text-warning/90">{lastRun.pipelineHint}</p>
           ) : null}
           <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-foreground/80">
             {lastRun.steps.map((step, idx) => (
@@ -229,10 +239,10 @@ export function SolanaScenarioPanel({
 function statusColor(status: ScenarioRun["status"]): string {
   switch (status) {
     case "succeeded":
-      return "bg-emerald-500/15 text-emerald-400"
+      return "bg-success/15 text-success"
     case "failed":
       return "bg-destructive/15 text-destructive"
     case "pendingPipeline":
-      return "bg-amber-500/15 text-amber-400"
+      return "bg-warning/15 text-warning"
   }
 }

@@ -1,5 +1,6 @@
 import { ArrowRight, Bell, FolderGit2, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AppLogo } from "@/components/xero/app-logo"
 
 interface WelcomeStepProps {
   onContinue: () => void
@@ -44,7 +45,7 @@ export function WelcomeStep({ onContinue, onSkipAll }: WelcomeStepProps) {
           aria-hidden
           className="absolute -inset-3 rounded-2xl bg-primary/10 blur-xl"
         />
-        <img src="/icon-logo.svg" alt="" className="relative h-14 w-14" />
+        <AppLogo className="relative h-14 w-14" />
       </div>
 
       <h1 className="mt-7 text-[34px] font-semibold leading-[1.05] tracking-tight text-foreground">

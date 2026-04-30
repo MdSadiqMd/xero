@@ -152,7 +152,7 @@ function PreviewCard({
           className={cn(
             "flex size-12 shrink-0 items-center justify-center rounded-full ring-1 ring-inset",
             tone === "warn"
-              ? "bg-amber-500/10 ring-amber-500/25"
+              ? "bg-warning/10 ring-warning/25"
               : "bg-muted/40 ring-border/60",
           )}
           aria-hidden
@@ -161,7 +161,7 @@ function PreviewCard({
             className={cn(
               "h-5 w-5",
               tone === "warn"
-                ? "text-amber-600 dark:text-amber-400"
+                ? "text-warning dark:text-warning"
                 : "text-muted-foreground",
             )}
           />
@@ -240,14 +240,14 @@ function PreviewPill({ tone, label }: { tone: "warn" | "muted"; label: string })
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.08em] ring-1 ring-inset",
         tone === "warn"
-          ? "bg-amber-500/10 text-amber-600 ring-amber-500/25 dark:text-amber-400"
+          ? "bg-warning/10 text-warning ring-warning/25 dark:text-warning"
           : "bg-muted/40 text-muted-foreground ring-border/60",
       )}
     >
       <span
         className={cn(
           "size-1.5 rounded-full",
-          tone === "warn" ? "bg-amber-500 dark:bg-amber-400" : "bg-muted-foreground/60",
+          tone === "warn" ? "bg-warning dark:bg-warning" : "bg-muted-foreground/60",
         )}
         aria-hidden
       />

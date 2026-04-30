@@ -356,10 +356,10 @@ export function InspectOverlay({ pageLabel, onSubmit, onExit }: InspectOverlayPr
               "absolute rounded-md text-left transition-colors",
               "border bg-background/45 backdrop-blur-[1px]",
               isSelected
-                ? "border-emerald-400/80 bg-emerald-400/10 ring-2 ring-emerald-400/60"
+                ? "border-success/80 bg-success/10 ring-2 ring-success/60"
                 : isHovered
-                  ? "border-emerald-400/60 bg-emerald-400/5"
-                  : "border-border/50 hover:border-emerald-400/60",
+                  ? "border-success/60 bg-success/5"
+                  : "border-border/50 hover:border-success/60",
             )}
             style={{
               top: geometry.top,
@@ -376,7 +376,7 @@ export function InspectOverlay({ pageLabel, onSubmit, onExit }: InspectOverlayPr
             <span className={cn(
               "absolute -top-5 left-0 rounded-sm px-1.5 py-0.5 text-[10px] font-mono leading-none",
               isSelected || isHovered
-                ? "bg-emerald-400/85 text-black"
+                ? "bg-success/85 text-black"
                 : "bg-background/80 text-muted-foreground",
             )}>
               {spec.tag}
@@ -390,7 +390,7 @@ export function InspectOverlay({ pageLabel, onSubmit, onExit }: InspectOverlayPr
 
       <div className="pointer-events-none absolute inset-x-0 top-2 flex justify-center">
         <div className="pointer-events-auto flex items-center gap-2 rounded-full border border-border/60 bg-card/85 px-3 py-1 text-[10.5px] text-muted-foreground shadow-lg backdrop-blur">
-          <Sparkles className="h-3 w-3 text-emerald-400" />
+          <Sparkles className="h-3 w-3 text-success" />
           <span className="font-medium text-foreground">Inspect mode</span>
           <span aria-hidden="true">·</span>
           <span>{pageLabel ? `On ${pageLabel}` : "Hover an element to select it"}</span>
@@ -457,7 +457,7 @@ function MiniComposer({ anchor, accent, title, placeholder, onSubmit, onClose }:
     setText("")
   }
 
-  const accentRing = accent === "emerald" ? "ring-emerald-400/40" : "ring-primary/30"
+  const accentRing = accent === "emerald" ? "ring-success/40" : "ring-primary/30"
 
   return (
     <div
@@ -479,7 +479,7 @@ function MiniComposer({ anchor, accent, title, placeholder, onSubmit, onClose }:
                 ))}
               </span>
             ) : (
-              <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              <span aria-hidden="true" className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
             )}
             <span className="text-[11.5px] font-semibold text-foreground">{title}</span>
           </div>

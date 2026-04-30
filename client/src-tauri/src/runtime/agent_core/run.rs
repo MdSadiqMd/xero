@@ -24,12 +24,14 @@ pub fn create_owned_agent_run(
         &controls,
         ToolRegistryOptions {
             skill_tool_enabled: request.tool_runtime.skill_tool_enabled(),
+            browser_control_preference: request.tool_runtime.browser_control_preference(),
         },
     );
     let system_prompt = assemble_system_prompt_for_session(
         &request.repo_root,
         Some(&request.project_id),
         Some(&request.agent_session_id),
+        request.tool_runtime.browser_control_preference(),
         tool_registry.descriptors(),
     )?;
     let provider = create_provider_adapter(request.provider_config.clone())?;
@@ -112,12 +114,19 @@ pub fn drive_owned_agent_run(
         project_store::load_agent_run(&request.repo_root, &request.project_id, &request.run_id)?;
     let controls = runtime_controls_from_request(request.controls.as_ref());
     let skill_tool_enabled = request.tool_runtime.skill_tool_enabled();
+    let browser_control_preference = request.tool_runtime.browser_control_preference();
     let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
         .with_cancellation_token(cancellation.clone());
-    let tool_registry =
-        tool_registry_for_snapshot(&request.repo_root, &snapshot, &controls, skill_tool_enabled)?;
+    let tool_registry = tool_registry_for_snapshot(
+        &request.repo_root,
+        &snapshot,
+        &controls,
+        skill_tool_enabled,
+        browser_control_preference,
+        Some(&base_tool_runtime),
+    )?;
     let provider = create_provider_adapter(request.provider_config.clone())?;
     if provider.provider_id() != snapshot.run.provider_id
         || provider.model_id() != snapshot.run.model_id
@@ -264,6 +273,7 @@ pub fn prepare_owned_agent_continuation(
         )?;
         let tool_registry = ToolRegistry::builtin_with_options(ToolRegistryOptions {
             skill_tool_enabled: request.tool_runtime.skill_tool_enabled(),
+            browser_control_preference: request.tool_runtime.browser_control_preference(),
         });
         let replay_tool_runtime = request
             .tool_runtime
@@ -420,11 +430,14 @@ fn estimate_continuation_context_tokens(
         snapshot,
         &controls,
         request.tool_runtime.skill_tool_enabled(),
+        request.tool_runtime.browser_control_preference(),
+        Some(&request.tool_runtime),
     )?;
     let system_prompt = assemble_system_prompt_for_session(
         &request.repo_root,
         Some(&snapshot.run.project_id),
         Some(&snapshot.run.agent_session_id),
+        request.tool_runtime.browser_control_preference(),
         tool_registry.descriptors(),
     )?;
     let provider_messages = provider_messages_from_snapshot(&request.repo_root, snapshot)?;
@@ -493,12 +506,19 @@ pub fn drive_owned_agent_continuation(
     let messages = provider_messages_from_snapshot(&request.repo_root, &snapshot)?;
     let controls = runtime_controls_from_request(request.controls.as_ref());
     let skill_tool_enabled = request.tool_runtime.skill_tool_enabled();
+    let browser_control_preference = request.tool_runtime.browser_control_preference();
     let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
         .with_cancellation_token(cancellation.clone());
-    let tool_registry =
-        tool_registry_for_snapshot(&request.repo_root, &snapshot, &controls, skill_tool_enabled)?;
+    let tool_registry = tool_registry_for_snapshot(
+        &request.repo_root,
+        &snapshot,
+        &controls,
+        skill_tool_enabled,
+        browser_control_preference,
+        Some(&base_tool_runtime),
+    )?;
     let tool_runtime = tool_runtime_with_subagent_executor(
         base_tool_runtime,
         &request.repo_root,

@@ -73,29 +73,29 @@ const PRIVACY_OPTIONS: Array<{ value: DictationPrivacyModeDto; label: string; de
 type StatusTone = "ok" | "warn" | "bad" | "muted"
 
 const TONE_BG: Record<StatusTone, string> = {
-  ok: "bg-emerald-500/10",
-  warn: "bg-amber-500/10",
+  ok: "bg-success/10",
+  warn: "bg-warning/10",
   bad: "bg-destructive/10",
   muted: "bg-muted/40",
 }
 
 const TONE_RING: Record<StatusTone, string> = {
-  ok: "ring-emerald-500/20",
-  warn: "ring-amber-500/25",
+  ok: "ring-success/20",
+  warn: "ring-warning/25",
   bad: "ring-destructive/25",
   muted: "ring-border/60",
 }
 
 const TONE_TEXT: Record<StatusTone, string> = {
-  ok: "text-emerald-600 dark:text-emerald-400",
-  warn: "text-amber-600 dark:text-amber-400",
+  ok: "text-success dark:text-success",
+  warn: "text-warning dark:text-warning",
   bad: "text-destructive",
   muted: "text-muted-foreground",
 }
 
 const TONE_DOT: Record<StatusTone, string> = {
-  ok: "bg-emerald-500 dark:bg-emerald-400",
-  warn: "bg-amber-500 dark:bg-amber-400",
+  ok: "bg-success dark:bg-success",
+  warn: "bg-warning dark:bg-warning",
   bad: "bg-destructive",
   muted: "bg-muted-foreground/60",
 }
@@ -459,7 +459,7 @@ function LocaleCard({
       <p
         className={cn(
           "text-[11.5px] leading-[1.45]",
-          selectedLocaleUnsupported ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground",
+          selectedLocaleUnsupported ? "text-warning dark:text-warning" : "text-muted-foreground",
         )}
       >
         {selectedLocaleUnsupported

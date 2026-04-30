@@ -5,45 +5,56 @@ import {
   Globe2,
   Loader2,
   Lock,
+  MonitorCog,
+  MonitorUp,
   RefreshCw,
   ShieldCheck,
+  SlidersHorizontal,
 } from "lucide-react"
-import { useEffect } from "react"
+import { invoke, isTauri } from "@tauri-apps/api/core"
+import { useCallback, useEffect, useRef, useState, type ElementType } from "react"
 import {
   useCookieImport,
   type CookieImportStatus,
   type DetectedBrowser,
 } from "@/components/xero/browser-cookie-import"
 import { Button } from "@/components/ui/button"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { cn } from "@/lib/utils"
+import {
+  browserControlSettingsSchema,
+  upsertBrowserControlSettingsRequestSchema,
+  type BrowserControlPreferenceDto,
+  type BrowserControlSettingsDto,
+} from "@/src/lib/xero-model/browser"
 import { SectionHeader } from "./section-header"
 
 type StatusTone = "ok" | "warn" | "bad" | "muted"
 
 const TONE_BG: Record<StatusTone, string> = {
-  ok: "bg-emerald-500/10",
-  warn: "bg-amber-500/10",
+  ok: "bg-success/10",
+  warn: "bg-warning/10",
   bad: "bg-destructive/10",
   muted: "bg-muted/40",
 }
 
 const TONE_RING: Record<StatusTone, string> = {
-  ok: "ring-emerald-500/20",
-  warn: "ring-amber-500/25",
+  ok: "ring-success/20",
+  warn: "ring-warning/25",
   bad: "ring-destructive/25",
   muted: "ring-border/60",
 }
 
 const TONE_TEXT: Record<StatusTone, string> = {
-  ok: "text-emerald-600 dark:text-emerald-400",
-  warn: "text-amber-600 dark:text-amber-400",
+  ok: "text-success dark:text-success",
+  warn: "text-warning dark:text-warning",
   bad: "text-destructive",
   muted: "text-muted-foreground",
 }
 
 const TONE_DOT: Record<StatusTone, string> = {
-  ok: "bg-emerald-500 dark:bg-emerald-400",
-  warn: "bg-amber-500 dark:bg-amber-400",
+  ok: "bg-success dark:bg-success",
+  warn: "bg-warning dark:bg-warning",
   bad: "bg-destructive",
   muted: "bg-muted-foreground/60",
 }
@@ -52,6 +63,13 @@ export function BrowserSection() {
   const { browsers, status, refresh, importFrom } = useCookieImport({
     autoLoad: true,
   })
+  const {
+    settings: browserControlSettings,
+    loadState: browserControlLoadState,
+    saveState: browserControlSaveState,
+    error: browserControlError,
+    updatePreference: updateBrowserControlPreference,
+  } = useBrowserControlSettings()
 
   useEffect(() => {
     if (status.kind !== "success") return
@@ -88,6 +106,14 @@ export function BrowserSection() {
       />
 
       <ReadinessCard summary={summary} availableCount={available.length} status={status} />
+
+      <BrowserControlPreferenceCard
+        settings={browserControlSettings}
+        loadState={browserControlLoadState}
+        saveState={browserControlSaveState}
+        error={browserControlError}
+        onChange={updateBrowserControlPreference}
+      />
 
       <section className="flex flex-col gap-3">
         <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
@@ -146,6 +172,220 @@ export function BrowserSection() {
 
       <ImportDetails />
     </div>
+  )
+}
+
+type BrowserControlLoadState = "idle" | "loading" | "ready" | "error"
+type BrowserControlSaveState = "idle" | "saving"
+
+const DEFAULT_BROWSER_CONTROL_SETTINGS: BrowserControlSettingsDto = {
+  preference: "default",
+  updatedAt: null,
+}
+
+const BROWSER_CONTROL_OPTIONS: Array<{
+  value: BrowserControlPreferenceDto
+  label: string
+  body: string
+  icon: ElementType
+}> = [
+  {
+    value: "default",
+    label: "Default",
+    body: "Try the in-app browser first, then fall back to the device browser.",
+    icon: SlidersHorizontal,
+  },
+  {
+    value: "in_app_browser",
+    label: "In-app browser",
+    body: "Keep agent browser work inside Xero's tabbed browser.",
+    icon: MonitorUp,
+  },
+  {
+    value: "native_browser",
+    label: "Native browser",
+    body: "Prefer the user's device browser and desktop automation.",
+    icon: MonitorCog,
+  },
+]
+
+function useBrowserControlSettings() {
+  const [settings, setSettings] = useState<BrowserControlSettingsDto>(DEFAULT_BROWSER_CONTROL_SETTINGS)
+  const [loadState, setLoadState] = useState<BrowserControlLoadState>("idle")
+  const [saveState, setSaveState] = useState<BrowserControlSaveState>("idle")
+  const [error, setError] = useState<string | null>(null)
+  const loadedRef = useRef(false)
+
+  const load = useCallback(async () => {
+    if (!isTauri()) {
+      setSettings(DEFAULT_BROWSER_CONTROL_SETTINGS)
+      setLoadState("ready")
+      return DEFAULT_BROWSER_CONTROL_SETTINGS
+    }
+
+    setLoadState("loading")
+    setError(null)
+    try {
+      const response = await invoke<unknown>("browser_control_settings")
+      const parsed = browserControlSettingsSchema.parse(response)
+      setSettings(parsed)
+      setLoadState("ready")
+      return parsed
+    } catch (loadError) {
+      setLoadState("error")
+      setError(getErrorMessage(loadError, "Xero could not load browser control settings."))
+      setSettings(DEFAULT_BROWSER_CONTROL_SETTINGS)
+      return DEFAULT_BROWSER_CONTROL_SETTINGS
+    }
+  }, [])
+
+  useEffect(() => {
+    if (loadedRef.current) return
+    loadedRef.current = true
+    void load()
+  }, [load])
+
+  const updatePreference = useCallback(
+    async (preference: BrowserControlPreferenceDto) => {
+      const previous = settings
+      const request = upsertBrowserControlSettingsRequestSchema.parse({ preference })
+      setSettings((current) => ({ ...current, preference }))
+      setSaveState("saving")
+      setError(null)
+
+      if (!isTauri()) {
+        const localSettings: BrowserControlSettingsDto = { preference, updatedAt: null }
+        setSettings(localSettings)
+        setSaveState("idle")
+        return localSettings
+      }
+
+      try {
+        const response = await invoke<unknown>("browser_control_update_settings", { request })
+        const parsed = browserControlSettingsSchema.parse(response)
+        setSettings(parsed)
+        return parsed
+      } catch (saveError) {
+        setSettings(previous)
+        setError(getErrorMessage(saveError, "Xero could not save browser control settings."))
+        return previous
+      } finally {
+        setSaveState("idle")
+      }
+    },
+    [settings],
+  )
+
+  return {
+    settings,
+    loadState,
+    saveState,
+    error,
+    updatePreference,
+  }
+}
+
+function BrowserControlPreferenceCard({
+  settings,
+  loadState,
+  saveState,
+  error,
+  onChange,
+}: {
+  settings: BrowserControlSettingsDto
+  loadState: BrowserControlLoadState
+  saveState: BrowserControlSaveState
+  error: string | null
+  onChange: (preference: BrowserControlPreferenceDto) => Promise<BrowserControlSettingsDto>
+}) {
+  const busy = loadState === "loading" || saveState === "saving"
+  const selectedOption = BROWSER_CONTROL_OPTIONS.find((option) => option.value === settings.preference)
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+          Agent browser control
+        </h4>
+        {busy ? (
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {loadState === "loading" ? "Loading" : "Saving"}
+          </span>
+        ) : selectedOption ? (
+          <span className="text-[11px] text-muted-foreground">{selectedOption.label}</span>
+        ) : null}
+      </div>
+
+      <RadioGroup
+        value={settings.preference}
+        onValueChange={(value) => void onChange(value as BrowserControlPreferenceDto)}
+        className="grid grid-cols-1 gap-2 sm:grid-cols-3"
+        aria-label="Agent browser control preference"
+        disabled={busy}
+      >
+        {BROWSER_CONTROL_OPTIONS.map((option) => (
+          <BrowserControlPreferenceOption
+            key={option.value}
+            option={option}
+            checked={settings.preference === option.value}
+            disabled={busy}
+          />
+        ))}
+      </RadioGroup>
+
+      {error ? (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg border border-destructive/35 bg-destructive/10 px-3.5 py-3"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+          <p className="text-[12px] leading-[1.5] text-destructive/90">{error}</p>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function BrowserControlPreferenceOption({
+  option,
+  checked,
+  disabled,
+}: {
+  option: (typeof BROWSER_CONTROL_OPTIONS)[number]
+  checked: boolean
+  disabled: boolean
+}) {
+  const Icon = option.icon
+
+  return (
+    <label
+      className={cn(
+        "group flex min-h-[118px] cursor-pointer flex-col gap-3 rounded-lg border border-border/60 bg-card/30 p-3.5 text-left transition-colors",
+        "hover:border-primary/35 hover:bg-card/60",
+        checked && "border-primary/45 bg-primary/5 ring-1 ring-primary/15",
+        disabled && "cursor-not-allowed opacity-65 hover:border-border/60 hover:bg-card/30",
+      )}
+    >
+      <span className="flex items-center justify-between gap-3">
+        <span
+          className={cn(
+            "flex size-8 items-center justify-center rounded-md border border-border/60 bg-background/60 text-muted-foreground transition-colors",
+            checked && "border-primary/30 text-primary",
+          )}
+          aria-hidden
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+        <RadioGroupItem value={option.value} aria-label={option.label} disabled={disabled} />
+      </span>
+      <span>
+        <span className="block text-[12.5px] font-medium text-foreground">{option.label}</span>
+        <span className="mt-1 block text-[11.5px] leading-[1.45] text-muted-foreground">
+          {option.body}
+        </span>
+      </span>
+    </label>
   )
 }
 
@@ -251,7 +491,7 @@ function BrowserCard({ browser, running, disabled, onClick, lastResult }: Browse
       </div>
       {lastResult && !running ? (
         <span
-          className="flex size-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+          className="flex size-5 shrink-0 items-center justify-center rounded-full bg-success/15 text-success dark:text-success"
           aria-hidden
         >
           <Check className="h-3 w-3" />
@@ -386,4 +626,13 @@ function summarize(
       availableCount === 1 ? "browser is" : "browsers are"
     } ready to import from. Pick a source below — Xero reads cookies locally and never uploads them.`,
   }
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "object" && error && "message" in error) {
+    const message = String((error as { message?: unknown }).message ?? "").trim()
+    if (message.length > 0) return message
+  }
+  const message = String(error ?? "").trim()
+  return message.length > 0 ? message : fallback
 }

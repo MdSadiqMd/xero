@@ -44,6 +44,7 @@ function run(cmd, args, opts = {}) {
     cwd: opts.cwd,
     env: opts.env ?? process.env,
     timeout: opts.timeout,
+    shell: platform() === 'win32',
   })
   return result
 }
@@ -58,6 +59,7 @@ function streamRun(cmd, args, opts = {}) {
       stdio: 'inherit',
       cwd: opts.cwd,
       env: opts.env ?? process.env,
+      shell: platform() === 'win32',
     })
     child.on('exit', (code) => {
       if (code === 0) {
@@ -79,14 +81,43 @@ function dockerDaemonReady() {
   return probe.status === 0
 }
 
+function commandExists(command) {
+  const locator = platform() === 'win32' ? 'where.exe' : 'which'
+  return quiet(locator, [command]).status === 0
+}
+
+function psSingleQuoted(value) {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+function launchDockerDesktopOnWindows() {
+  const candidates = [
+    process.env.ProgramFiles && resolve(process.env.ProgramFiles, 'Docker', 'Docker', 'Docker Desktop.exe'),
+    process.env['ProgramFiles(x86)'] &&
+      resolve(process.env['ProgramFiles(x86)'], 'Docker', 'Docker', 'Docker Desktop.exe'),
+    process.env.LOCALAPPDATA && resolve(process.env.LOCALAPPDATA, 'Docker', 'Docker Desktop.exe'),
+  ].filter(Boolean)
+
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue
+    const launch = quiet('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Start-Process -FilePath ${psSingleQuoted(candidate)}`,
+    ])
+    if (launch.status === 0) return true
+  }
+
+  return false
+}
+
 async function ensureDockerRunning() {
   if (dockerDaemonReady()) {
     ok('Docker daemon is running.')
     return
   }
 
-  const which = quiet('which', ['docker'])
-  if (which.status !== 0) {
+  if (!commandExists('docker')) {
     fail('Docker CLI not found on PATH. Install Docker Desktop and retry.')
     process.exit(1)
   }
@@ -108,6 +139,12 @@ async function ensureDockerRunning() {
       fail(
         'Could not start dockerd via systemctl (sudo may have prompted). Start Docker manually and retry.',
       )
+      process.exit(1)
+    }
+  } else if (host === 'win32') {
+    log('Docker daemon is not running — launching Docker Desktop...')
+    if (!launchDockerDesktopOnWindows()) {
+      fail('Could not launch Docker Desktop automatically. Start Docker Desktop manually and retry.')
       process.exit(1)
     }
   } else {

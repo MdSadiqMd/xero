@@ -640,6 +640,29 @@ fn tool_dirs_from_root(root: &Path) -> Vec<PathBuf> {
 
 fn fallback_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
+
+    #[cfg(windows)]
+    {
+        if let Some(profile) = env::var_os("USERPROFILE") {
+            let profile = PathBuf::from(profile);
+            dirs.push(
+                profile
+                    .join(".local")
+                    .join("share")
+                    .join("solana")
+                    .join("install")
+                    .join("active_release")
+                    .join("bin"),
+            );
+            dirs.push(profile.join(".cargo").join("bin"));
+            dirs.push(profile.join(".avm").join("bin"));
+        }
+        if let Some(app_data) = env::var_os("APPDATA") {
+            dirs.push(PathBuf::from(app_data).join("npm"));
+        }
+    }
+
+    #[cfg(not(windows))]
     if let Some(home) = env::var_os("HOME") {
         let home = PathBuf::from(home);
         dirs.push(home.join(".local/share/solana/install/active_release/bin"));
@@ -647,10 +670,24 @@ fn fallback_dirs() -> Vec<PathBuf> {
         dirs.push(home.join(".avm/bin"));
         dirs.push(home.join(".nvm/versions/node"));
     }
-    // Homebrew common locations (Apple Silicon + Intel).
-    dirs.push(PathBuf::from("/opt/homebrew/bin"));
-    dirs.push(PathBuf::from("/usr/local/bin"));
+
+    #[cfg(target_os = "macos")]
+    {
+        // Homebrew common locations (Apple Silicon + Intel).
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/usr/bin"));
+        dirs.push(PathBuf::from("/bin"));
+    }
+
+    #[cfg(target_os = "macos")]
     dirs.push(PathBuf::from("/usr/bin"));
+
     dirs
 }
 

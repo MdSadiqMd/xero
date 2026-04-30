@@ -694,7 +694,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
               className={cn(
                 "flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground",
                 toolMode === "inspect"
-                  ? "bg-emerald-400/15 text-emerald-400 hover:bg-emerald-400/20 hover:text-emerald-400"
+                  ? "bg-success/15 text-success hover:bg-success/20 hover:text-success"
                   : null,
               )}
               onClick={() =>

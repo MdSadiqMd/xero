@@ -527,19 +527,19 @@ export function getFileIcon(filename: string, className = 'h-3.5 w-3.5'): React.
   }
 
   if (lower === 'package.json' || lower === 'package-lock.json' || lower === 'pnpm-lock.yaml') {
-    return <FileJson className={cn(className, 'text-rose-400')} />
+    return <FileJson className={cn(className, 'text-destructive')} />
   }
 
   if (ext === 'tsx' || ext === 'jsx') {
-    return <FileCode className={cn(className, 'text-sky-400')} />
+    return <FileCode className={cn(className, 'text-info')} />
   }
   if (ext === 'ts') return <FileCode className={cn(className, 'text-blue-400')} />
   if (ext === 'js' || ext === 'mjs' || ext === 'cjs') {
-    return <FileCode className={cn(className, 'text-yellow-400')} />
+    return <FileCode className={cn(className, 'text-warning')} />
   }
-  if (ext === 'py') return <FileCode className={cn(className, 'text-emerald-400')} />
-  if (ext === 'rs') return <FileCode className={cn(className, 'text-orange-400')} />
-  if (ext === 'go') return <FileCode className={cn(className, 'text-cyan-400')} />
+  if (ext === 'py') return <FileCode className={cn(className, 'text-success')} />
+  if (ext === 'rs') return <FileCode className={cn(className, 'text-warning')} />
+  if (ext === 'go') return <FileCode className={cn(className, 'text-info')} />
   if (['java', 'c', 'cpp', 'h', 'hpp'].includes(ext)) {
     return <FileCode className={cn(className, 'text-indigo-400')} />
   }
@@ -548,18 +548,18 @@ export function getFileIcon(filename: string, className = 'h-3.5 w-3.5'): React.
     return <FileCode className={cn(className, 'text-fuchsia-400')} />
   }
   if (ext === 'html' || ext === 'htm' || ext === 'vue' || ext === 'svelte') {
-    return <FileCode className={cn(className, 'text-orange-300')} />
+    return <FileCode className={cn(className, 'text-warning')} />
   }
 
   if (ext === 'json' || ext === 'jsonc') {
-    return <FileJson className={cn(className, 'text-amber-300')} />
+    return <FileJson className={cn(className, 'text-warning')} />
   }
 
   if (['md', 'mdx', 'txt'].includes(ext)) {
     return <FileText className={cn(className, 'text-slate-300')} />
   }
   if (['yaml', 'yml', 'toml'].includes(ext)) {
-    return <FileText className={cn(className, 'text-amber-400')} />
+    return <FileText className={cn(className, 'text-warning')} />
   }
 
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico'].includes(ext)) {

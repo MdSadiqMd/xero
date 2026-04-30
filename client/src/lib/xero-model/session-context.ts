@@ -289,6 +289,7 @@ export const searchSessionTranscriptsResponseSchema = z
 export const sessionContextContributorKindSchema = z.enum([
   'system_prompt',
   'instruction_file',
+  'skill_context',
   'approved_memory',
   'compaction_summary',
   'conversation_tail',
@@ -312,6 +313,10 @@ export const sessionContextContributorSchema = z
     contributorId: z.string().trim().min(1),
     kind: sessionContextContributorKindSchema,
     label: z.string().trim().min(1),
+    promptFragmentId: nonEmptyOptionalTextSchema,
+    promptFragmentPriority: z.number().int().nonnegative().nullable().optional(),
+    promptFragmentHash: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
+    promptFragmentProvenance: nonEmptyOptionalTextSchema,
     projectId: nonEmptyOptionalTextSchema,
     agentSessionId: nonEmptyOptionalTextSchema,
     runId: nonEmptyOptionalTextSchema,

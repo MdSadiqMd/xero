@@ -264,10 +264,10 @@ function IosAxPermissionCard({
   return (
     <div
       aria-live="polite"
-      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed"
+      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-warning/10 px-3 py-2 text-[11px] leading-relaxed"
       role="region"
     >
-      <div className="font-medium text-amber-200">Accessibility permission needed</div>
+      <div className="font-medium text-warning">Accessibility permission needed</div>
       <div className="text-muted-foreground">
         Xero taps the iOS Simulator by posting synthetic mouse events — macOS
         requires Accessibility permission for that to work. Without it, taps
@@ -277,8 +277,8 @@ function IosAxPermissionCard({
       <div className="flex flex-wrap items-center gap-2">
         <button
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border border-amber-500/60 bg-amber-500/20 px-2 py-0.5",
-            "font-medium text-[11px] text-amber-100 transition-colors hover:border-amber-400 hover:bg-amber-500/30 disabled:opacity-60",
+            "inline-flex items-center gap-1 rounded-md border border-warning/60 bg-warning/20 px-2 py-0.5",
+            "font-medium text-[11px] text-warning transition-colors hover:border-warning hover:bg-warning/30 disabled:opacity-60",
           )}
           disabled={busy}
           onClick={handleOpenSettings}
@@ -389,13 +389,13 @@ function AndroidMissingCard({
   return (
     <div
       aria-live="polite"
-      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed"
+      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-warning/10 px-3 py-2 text-[11px] leading-relaxed"
       role="region"
     >
-      <div className="font-medium text-amber-200">{panel.title}</div>
+      <div className="font-medium text-warning">{panel.title}</div>
       <div className="text-muted-foreground">{panel.detail}</div>
       {failure ? (
-        <div className="flex items-start gap-1.5 rounded-md border border-red-500/40 bg-red-500/10 px-2 py-1 text-red-200">
+        <div className="flex items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-destructive">
           <XCircle className="mt-[2px] h-3 w-3 shrink-0" />
           <span className="break-words">{failure}</span>
         </div>
@@ -403,8 +403,8 @@ function AndroidMissingCard({
       <div className="flex flex-wrap items-center gap-2">
         <button
           className={cn(
-            "inline-flex items-center gap-1 rounded-md border border-amber-500/60 bg-amber-500/20 px-2 py-0.5",
-            "font-medium text-[11px] text-amber-100 transition-colors hover:border-amber-400 hover:bg-amber-500/30",
+            "inline-flex items-center gap-1 rounded-md border border-warning/60 bg-warning/20 px-2 py-0.5",
+            "font-medium text-[11px] text-warning transition-colors hover:border-warning hover:bg-warning/30",
           )}
           onClick={onProvision}
           type="button"
@@ -469,10 +469,10 @@ function PanelCard({
   return (
     <div
       aria-live="polite"
-      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed"
+      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-warning/10 px-3 py-2 text-[11px] leading-relaxed"
       role="region"
     >
-      <div className="font-medium text-amber-200">{title}</div>
+      <div className="font-medium text-warning">{title}</div>
       <div className="text-muted-foreground">{detail}</div>
       <div className="flex flex-wrap items-center gap-2">
         {actions.map((action) => (
@@ -527,20 +527,20 @@ function ProvisionProgressCard({ state }: { state: ProvisionState }) {
       className={cn(
         "flex shrink-0 flex-col gap-2 border-b px-3 py-2 text-[11px] leading-relaxed",
         failed
-          ? "border-red-500/40 bg-red-500/10"
+          ? "border-destructive/40 bg-destructive/10"
           : completed
-            ? "border-emerald-500/40 bg-emerald-500/10"
-            : "border-border/60 bg-amber-500/10",
+            ? "border-success/40 bg-success/10"
+            : "border-border/60 bg-warning/10",
       )}
       role="region"
     >
       <div className="flex items-center gap-2">
         {failed ? (
-          <XCircle className="h-3.5 w-3.5 text-red-300" />
+          <XCircle className="h-3.5 w-3.5 text-destructive" />
         ) : completed ? (
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />
+          <CheckCircle2 className="h-3.5 w-3.5 text-success" />
         ) : (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-200" />
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-warning" />
         )}
         <span className="font-medium text-foreground">
           {failed ? "Provisioning failed" : completed ? "Provisioning complete" : label}
@@ -555,7 +555,7 @@ function ProvisionProgressCard({ state }: { state: ProvisionState }) {
         </div>
       ) : null}
       {state.error ? (
-        <div className="break-words text-red-200" title={state.error}>
+        <div className="break-words text-destructive" title={state.error}>
           {state.error}
         </div>
       ) : null}
@@ -564,12 +564,12 @@ function ProvisionProgressCard({ state }: { state: ProvisionState }) {
           className={cn(
             "h-full motion-progress",
             failed
-              ? "bg-red-400"
+              ? "bg-destructive"
               : completed
-                ? "bg-emerald-400"
+                ? "bg-success"
                 : percent != null
-                  ? "bg-amber-300"
-                  : "animate-pulse bg-amber-400/60",
+                  ? "bg-warning"
+                  : "animate-pulse bg-warning/60",
           )}
           style={{ transform: `scaleX(${percent != null ? Math.max(0, Math.min(100, percent)) / 100 : 1})` }}
         />

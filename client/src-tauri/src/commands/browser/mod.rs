@@ -5,6 +5,7 @@ mod diagnostics;
 mod events;
 mod screenshot;
 mod script;
+pub mod settings;
 pub mod tabs;
 
 use std::sync::{Arc, Mutex};
@@ -31,6 +32,11 @@ pub use events::{
     BROWSER_TAB_UPDATED_EVENT, BROWSER_URL_CHANGED_EVENT,
 };
 pub use screenshot::capture_webview as screenshot_webview;
+pub(crate) use settings::load_browser_control_settings;
+pub use settings::{
+    browser_control_settings, browser_control_update_settings, BrowserControlPreferenceDto,
+    BrowserControlSettingsDto, UpsertBrowserControlSettingsRequestDto,
+};
 pub use tabs::{BrowserTabMetadata, BROWSER_TAB_PREFIX};
 
 use bridge::{BridgeReply, BridgeWaiters};

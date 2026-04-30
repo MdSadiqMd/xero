@@ -43,6 +43,7 @@ pub enum AgentRunEventKindDto {
     CommandOutput,
     ValidationStarted,
     ValidationCompleted,
+    ToolRegistrySnapshot,
     ActionRequired,
     RunCompleted,
     RunFailed,

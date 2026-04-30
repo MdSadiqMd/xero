@@ -111,7 +111,7 @@ export function StatusFooter({
           <CircleDot
             className={cn(
               "h-3 w-3",
-              workingTree.dirty ? "text-amber-500" : "text-emerald-500",
+              workingTree.dirty ? "text-warning" : "text-success",
             )}
           />
           <span>

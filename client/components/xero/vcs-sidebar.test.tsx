@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { VcsSidebar, type VcsSidebarProps } from './vcs-sidebar'
@@ -55,7 +55,10 @@ function makeDiff(patch: string): RepositoryDiffResponseDto {
 
 function renderVcsSidebar(
   patch: string,
-  options: { status?: RepositoryStatusView } = {},
+  options: {
+    status?: RepositoryStatusView
+    onGenerateCommitMessage?: VcsSidebarProps['onGenerateCommitMessage']
+  } = {},
 ) {
   const onLoadDiff = vi.fn(async () => makeDiff(patch))
   const props: VcsSidebarProps = {
@@ -66,6 +69,18 @@ function renderVcsSidebar(
     onClose: vi.fn(),
     onRefreshStatus: vi.fn(),
     onLoadDiff,
+    commitMessageModel: {
+      providerProfileId: 'openai-api-default',
+      modelId: 'gpt-5.4',
+      thinkingEffort: 'medium',
+      label: 'gpt-5.4',
+    },
+    onGenerateCommitMessage: options.onGenerateCommitMessage ?? vi.fn(async () => ({
+      message: 'feat: update project file',
+      providerId: 'openai_api',
+      modelId: 'gpt-5.4',
+      diffTruncated: false,
+    })),
     onStage: vi.fn(async () => undefined),
     onUnstage: vi.fn(async () => undefined),
     onDiscard: vi.fn(async () => undefined),
@@ -105,8 +120,8 @@ describe('VcsSidebar', () => {
 
     await waitFor(() => expect(screen.getByText('removed line')).toBeInTheDocument())
 
-    expect(screen.getByText('removed line').closest('div')).toHaveClass('bg-red-950/70')
-    expect(screen.getByText('added line').closest('div')).toHaveClass('bg-green-950/70')
+    expect(screen.getByText('removed line').closest('div')).toHaveClass('bg-destructive/70')
+    expect(screen.getByText('added line').closest('div')).toHaveClass('bg-success/70')
   })
 
   it('does not render the diff pane when there are no changes to display', () => {
@@ -127,5 +142,40 @@ describe('VcsSidebar', () => {
     expect(screen.queryByLabelText('Resize source control sidebar')).not.toBeInTheDocument()
     expect(screen.queryByText('Select a file')).not.toBeInTheDocument()
     expect(onLoadDiff).not.toHaveBeenCalled()
+  })
+
+  it('generates a commit message from the staged diff', async () => {
+    const onGenerateCommitMessage = vi.fn(async () => ({
+      message: 'fix: tighten source control actions',
+      providerId: 'openai_api',
+      modelId: 'gpt-5.4',
+      diffTruncated: false,
+    }))
+    renderVcsSidebar('', {
+      status: makeStatus({
+        stagedCount: 1,
+        unstagedCount: 0,
+        statusCount: 1,
+        entries: [
+          {
+            path: 'file.txt',
+            staged: 'modified',
+            unstaged: null,
+            untracked: false,
+          },
+        ],
+      }),
+      onGenerateCommitMessage,
+    })
+
+    fireEvent.click(screen.getByLabelText('Generate commit message with gpt-5.4'))
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue('fix: tighten source control actions')).toBeInTheDocument(),
+    )
+    expect(onGenerateCommitMessage).toHaveBeenCalledWith(
+      'project-1',
+      expect.objectContaining({ modelId: 'gpt-5.4' }),
+    )
   })
 })

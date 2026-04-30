@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { PanelHeader, UnderlineTab, UnderlineTabs } from "./solana-panel-shell"
 import type {
   ClusterKind,
   ExtensionMatrix,
@@ -40,9 +41,9 @@ interface SolanaTokenPanelProps {
 type Tab = "matrix" | "create" | "mint"
 
 const SUPPORT_LEVEL_COLORS: Record<TokenSupportLevel, string> = {
-  full: "text-emerald-400 border-emerald-400/30 bg-emerald-400/10",
-  partial: "text-amber-400 border-amber-400/30 bg-amber-400/10",
-  unsupported: "text-rose-400 border-rose-400/30 bg-rose-400/10",
+  full: "text-success border-success/30 bg-success/10",
+  partial: "text-warning border-warning/30 bg-warning/10",
+  unsupported: "text-destructive border-destructive/30 bg-destructive/10",
   unknown: "text-muted-foreground border-border/60 bg-background/40",
 }
 
@@ -61,26 +62,32 @@ export function SolanaTokenPanel({
 
   return (
     <div className="flex flex-col gap-3">
-      <div role="tablist" className="flex gap-0.5 border-b border-border/60">
-        <TabButton
+      <PanelHeader
+        icon={Coins}
+        title="Token"
+        description="Mint Token-2022 mints and Metaplex NFTs against the active cluster."
+        busy={busy}
+      />
+      <UnderlineTabs ariaLabel="Token sections">
+        <UnderlineTab
           icon={Coins}
           label="Extensions"
           active={activeTab === "matrix"}
           onClick={() => setActiveTab("matrix")}
         />
-        <TabButton
+        <UnderlineTab
           icon={Coins}
           label="Create"
           active={activeTab === "create"}
           onClick={() => setActiveTab("create")}
         />
-        <TabButton
+        <UnderlineTab
           icon={Image}
           label="NFT"
           active={activeTab === "mint"}
           onClick={() => setActiveTab("mint")}
         />
-      </div>
+      </UnderlineTabs>
 
       {activeTab === "matrix" ? <MatrixView matrix={matrix} /> : null}
 
@@ -107,36 +114,6 @@ export function SolanaTokenPanel({
         />
       ) : null}
     </div>
-  )
-}
-
-function TabButton({
-  icon: Icon,
-  label,
-  active,
-  onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] transition-colors",
-        active
-          ? "text-foreground border-b-[1.5px] border-primary"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <Icon className="h-3.5 w-3.5" />
-      {label}
-    </button>
   )
 }
 
@@ -269,7 +246,7 @@ function CreateTokenForm({
   return (
     <div className="flex flex-col gap-2.5">
       {!clusterRunning ? (
-        <p className="text-[11px] text-amber-400">
+        <p className="text-[11px] text-warning">
           Validator is not running — start the cluster before creating a token.
         </p>
       ) : null}
@@ -308,7 +285,7 @@ function CreateTokenForm({
         />
       </Field>
       <div>
-        <span className="block text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+        <span className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground mb-1">
           Extensions
         </span>
         <div className="flex flex-wrap gap-1.5">
@@ -401,9 +378,9 @@ function TokenReport({ report }: { report: TokenCreateReport }) {
     <div className="rounded border border-border/70 bg-background/40 p-2.5 text-[11px]">
       <div className="flex items-center gap-1.5">
         {report.success ? (
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+          <CheckCircle2 className="h-3.5 w-3.5 text-success" />
         ) : (
-          <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+          <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
         )}
         <span className="font-medium">
           {report.success ? "Token created" : "spl-token create-token failed"}
@@ -419,7 +396,7 @@ function TokenReport({ report }: { report: TokenCreateReport }) {
       </p>
       {report.incompatibilities.length > 0 ? (
         <div className="mt-2 space-y-1">
-          <p className="text-[10.5px] font-medium text-amber-400">
+          <p className="text-[10.5px] font-medium text-warning">
             {report.incompatibilities.length} SDK incompatibility
             {report.incompatibilities.length === 1 ? "" : "s"}:
           </p>
@@ -427,7 +404,7 @@ function TokenReport({ report }: { report: TokenCreateReport }) {
             {report.incompatibilities.map((hit, idx) => (
               <li
                 key={`${hit.extension}-${hit.sdk}-${idx}`}
-                className="rounded border border-amber-400/30 bg-amber-400/5 px-2 py-1 text-[10.5px]"
+                className="rounded border border-warning/30 bg-warning/5 px-2 py-1 text-[10.5px]"
               >
                 <span className="font-mono">{hit.extension}</span> ·{" "}
                 <span>{hit.sdk}</span>{" "}
@@ -441,7 +418,7 @@ function TokenReport({ report }: { report: TokenCreateReport }) {
         </div>
       ) : null}
       {report.stderrExcerpt ? (
-        <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-1.5 font-mono text-[10.5px] text-rose-300/90">
+        <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-1.5 font-mono text-[10.5px] text-destructive/90">
           {report.stderrExcerpt}
         </pre>
       ) : null}
@@ -492,7 +469,7 @@ function MetaplexForm({
   return (
     <div className="flex flex-col gap-2.5">
       {!clusterRunning ? (
-        <p className="text-[11px] text-amber-400">
+        <p className="text-[11px] text-warning">
           Validator is not running — start a cluster or point at a remote RPC first.
         </p>
       ) : null}
@@ -611,9 +588,9 @@ function MetaplexForm({
         <div className="rounded border border-border/70 bg-background/40 p-2.5 text-[11px]">
           <div className="flex items-center gap-1.5">
             {lastResult.success ? (
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+              <CheckCircle2 className="h-3.5 w-3.5 text-success" />
             ) : (
-              <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />
+              <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
             )}
             <span className="font-medium">
               {lastResult.success ? "Mint landed" : "Mint failed"}
@@ -634,7 +611,7 @@ function MetaplexForm({
             {lastResult.exitCode ?? "?"} · {lastResult.elapsedMs}ms
           </p>
           {lastResult.stderrExcerpt ? (
-            <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-1.5 font-mono text-[10.5px] text-rose-300/90">
+            <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-1.5 font-mono text-[10.5px] text-destructive/90">
               {lastResult.stderrExcerpt}
             </pre>
           ) : null}
@@ -653,7 +630,7 @@ function Field({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
         {label}
       </span>
       {children}

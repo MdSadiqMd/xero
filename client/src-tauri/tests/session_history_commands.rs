@@ -271,6 +271,11 @@ fn transcript_export_and_search_cover_active_archived_and_deleted_sessions() {
     assert!(context_snapshot.contributors.iter().any(|contributor| {
         contributor.kind == SessionContextContributorKindDto::InstructionFile
             && contributor.source_id.as_deref() == Some("AGENTS.md")
+            && contributor.prompt_fragment_id.as_deref() == Some("project.instructions.AGENTS.md")
+            && contributor
+                .prompt_fragment_hash
+                .as_deref()
+                .is_some_and(|hash| hash.len() == 64)
     }));
     assert!(context_snapshot.contributors.iter().any(|contributor| {
         contributor.kind == SessionContextContributorKindDto::ToolDescriptor
@@ -993,6 +998,7 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
     assert!(approved_snapshot.contributors.iter().any(|contributor| {
         contributor.kind == SessionContextContributorKindDto::ApprovedMemory
             && contributor.model_visible
+            && contributor.prompt_fragment_id.as_deref() == Some("xero.approved_memory")
             && contributor
                 .text
                 .as_deref()
@@ -1031,10 +1037,14 @@ fn memory_extraction_review_and_context_injection_are_review_gated() {
         },
     )
     .expect("context snapshot with disabled memory");
-    assert!(!disabled_snapshot
-        .contributors
-        .iter()
-        .any(|contributor| contributor.kind == SessionContextContributorKindDto::ApprovedMemory));
+    assert!(disabled_snapshot.contributors.iter().any(|contributor| {
+        contributor.kind == SessionContextContributorKindDto::ApprovedMemory
+            && contributor.prompt_fragment_id.as_deref() == Some("xero.approved_memory")
+            && contributor
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains("(none)"))
+    }));
     assert!(disabled_snapshot.policy_decisions.iter().any(|decision| {
         decision.kind == SessionContextPolicyDecisionKindDto::MemoryInjection
             && decision.action == SessionContextPolicyActionDto::ExcludeMemory

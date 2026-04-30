@@ -76,6 +76,7 @@ export * from './xero-model/mcp'
 export * from './xero-model/skills'
 export * from './xero-model/session-context'
 export * from './xero-model/dictation'
+export * from './xero-model/browser'
 export * from './xero-model/usage'
 
 export const projectSnapshotResponseSchema = z

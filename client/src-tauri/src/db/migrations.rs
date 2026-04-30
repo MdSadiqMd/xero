@@ -456,6 +456,7 @@ const BASELINE_SCHEMA_SQL: &str = r#"
             'command_output',
             'validation_started',
             'validation_completed',
+            'tool_registry_snapshot',
             'action_required',
             'run_completed',
             'run_failed'

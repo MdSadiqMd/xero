@@ -254,14 +254,14 @@ function statusTone(status: McpServerDto['connection']['status']): StatusTone {
 }
 
 const STATUS_DOT: Record<StatusTone, string> = {
-  good: 'bg-emerald-500',
-  warn: 'bg-amber-500',
+  good: 'bg-success',
+  warn: 'bg-warning',
   bad: 'bg-destructive',
 }
 
 const STATUS_TEXT: Record<StatusTone, string> = {
-  good: 'text-emerald-600 dark:text-emerald-400',
-  warn: 'text-amber-700 dark:text-amber-300',
+  good: 'text-success dark:text-success',
+  warn: 'text-warning dark:text-warning',
   bad: 'text-destructive',
 }
 
@@ -538,7 +538,7 @@ export function McpSection({
                   value={formValues.cwd}
                   disabled={isMutating}
                   onChange={(event) => setFormValues((current) => ({ ...current, cwd: event.target.value }))}
-                  placeholder="/Users/example/projects/xero"
+                  placeholder="Absolute path to server project"
                 />
               </FormField>
               <FormField label="Env mappings (KEY=ENV_VAR)" htmlFor="mcp-form-env" error={formErrors.envText}>
@@ -724,12 +724,12 @@ export function McpSection({
         {importError ? <p className="text-[12px] text-destructive">{importError}</p> : null}
 
         {mcpImportDiagnostics.length > 0 ? (
-          <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2 text-[12px] text-amber-900 dark:text-amber-200">
+          <div className="rounded-md border border-warning/30 bg-warning/[0.06] px-3 py-2 text-[12px] text-warning dark:text-warning">
             <p className="font-medium">Import diagnostics</p>
             <ul className="mt-1.5 space-y-1 pl-1">
               {mcpImportDiagnostics.map((diagnostic) => (
                 <li key={`${diagnostic.index}:${diagnostic.code}`} className="flex gap-1.5">
-                  <span className="text-amber-500/70">·</span>
+                  <span className="text-warning/70">·</span>
                   <span className="min-w-0">
                     {diagnostic.serverId ? <span className="font-mono">{diagnostic.serverId}</span> : null}
                     {diagnostic.serverId ? ' — ' : ''}

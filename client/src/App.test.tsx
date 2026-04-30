@@ -78,6 +78,7 @@ import type {
   McpRegistryDto,
   ProjectSnapshotResponseDto,
   ProjectUpdatedPayloadDto,
+  ProjectUsageSummaryDto,
   ProviderAuthSessionDto,
   ProviderModelCatalogDto,
   RepositoryDiffResponseDto,
@@ -801,6 +802,7 @@ function createAdapter(options?: {
   notificationRoutes?: ListNotificationRoutesResponseDto['routes']
   projectFiles?: ListProjectFilesResponseDto
   pickedRepositoryPath?: string | null
+  usageSummary?: ProjectUsageSummaryDto
 }) {
   let currentSnapshot = options?.snapshot ?? makeSnapshot()
   let currentStatus = options?.status ?? makeStatus()
@@ -826,6 +828,21 @@ function createAdapter(options?: {
   let currentNotificationRoutes = options?.notificationRoutes ?? []
   let currentProjects = options?.projects ?? [makeProjectSummary('project-1', 'Xero')]
   let currentProjectFiles = options?.projectFiles ?? makeProjectFiles()
+  const currentUsageSummary =
+    options?.usageSummary ??
+    ({
+      projectId: 'project-1',
+      totals: {
+        runCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        estimatedCostMicros: 0,
+      },
+      byModel: [],
+    } satisfies ProjectUsageSummaryDto)
   const updateAgentSessions = (agentSessions: ProjectSnapshotResponseDto['agentSessions']) => {
     currentSnapshot = {
       ...currentSnapshot,
@@ -1327,17 +1344,10 @@ function createAdapter(options?: {
     },
     getProjectSnapshot: async () => currentSnapshot,
     getProjectUsageSummary: async (projectId: string) => ({
+      ...currentUsageSummary,
       projectId,
-      totals: {
-        runCount: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        cacheReadTokens: 0,
-        cacheCreationTokens: 0,
-        estimatedCostMicros: 0,
-      },
-      byModel: [],
+      totals: { ...currentUsageSummary.totals },
+      byModel: currentUsageSummary.byModel.map((row) => ({ ...row })),
     }),
     getRepositoryStatus: async () => currentStatus,
     getRepositoryDiff: async (_projectId, scope) => ({ ...currentDiff, scope }),
@@ -1345,6 +1355,12 @@ function createAdapter(options?: {
     gitUnstagePaths: async () => undefined,
     gitDiscardChanges: async () => undefined,
     gitCommit: async () => ({ sha: 'abc1234', summary: 'mock commit', signature: { name: 'Mock', email: 'mock@example.com' } }),
+    gitGenerateCommitMessage: async () => ({
+      message: 'feat: mock generated commit',
+      providerId: 'openai_api',
+      modelId: 'gpt-5.4',
+      diffTruncated: false,
+    }),
     gitFetch: async () => ({ remote: 'origin', refspecs: [] }),
     gitPull: async () => ({ remote: 'origin', branch: 'main', updated: false, summary: 'already up to date', newHeadSha: null }),
     gitPush: async () => ({ remote: 'origin', branch: 'main', updates: [] }),
@@ -2113,6 +2129,59 @@ describe('XeroApp current UI', () => {
     expect(within(statusBar).getByText('2 changes')).toBeVisible()
     expect(within(statusBar).getByText('1234567')).toBeVisible()
     expect(within(statusBar).getByText('fix: use live head commit metadata')).toBeVisible()
+  })
+
+  it('renders project-global footer spend by summing every model breakdown row', async () => {
+    const { adapter } = createAdapter({
+      usageSummary: {
+        projectId: 'project-1',
+        totals: {
+          runCount: 2,
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          estimatedCostMicros: 2,
+        },
+        byModel: [
+          {
+            providerId: 'anthropic',
+            modelId: 'claude-sonnet-4-6',
+            runCount: 1,
+            inputTokens: 600_000,
+            outputTokens: 300_000,
+            totalTokens: 900_000,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            estimatedCostMicros: 1_250_000,
+          },
+          {
+            providerId: 'openai_codex',
+            modelId: 'gpt-5.1',
+            runCount: 1,
+            inputTokens: 100_000,
+            outputTokens: 50_500,
+            totalTokens: 150_500,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            estimatedCostMicros: 250_000,
+          },
+        ],
+      },
+    })
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    const statusBar = screen.getByRole('contentinfo', { name: 'Status bar' })
+    await waitFor(() => {
+      expect(within(statusBar).getByText('1.05M tok')).toBeVisible()
+      expect(within(statusBar).getByText('$1.50')).toBeVisible()
+    })
   })
 
   it('collapses the project rail into a compact icon strip from the titlebar toggle', async () => {

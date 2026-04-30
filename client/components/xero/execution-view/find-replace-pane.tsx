@@ -945,7 +945,7 @@ function InlineBanner({
         'flex items-start gap-1.5 rounded-md border px-2 py-1.5 text-[10.5px] leading-relaxed',
         tone === 'error' && 'border-destructive/30 bg-destructive/10 text-destructive',
         tone === 'warn' &&
-          'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400',
+          'border-warning/30 bg-warning/10 text-warning dark:text-warning',
       )}
     >
       <span className="shrink-0 pt-[2px]">{icon}</span>

@@ -42,6 +42,34 @@ export type AgentUsageUpdatedPayloadDto = z.infer<typeof agentUsageUpdatedPayloa
 
 export const AGENT_USAGE_UPDATED_EVENT = 'agent_usage_updated'
 
+export interface ProjectUsageSpendSummary {
+  totalTokens: number
+  totalCostMicros: number
+}
+
+export function summarizeProjectUsageSpend(
+  summary: ProjectUsageSummaryDto | null | undefined,
+): ProjectUsageSpendSummary | null {
+  if (!summary) {
+    return null
+  }
+
+  if (summary.byModel.length === 0) {
+    return {
+      totalTokens: summary.totals.totalTokens,
+      totalCostMicros: summary.totals.estimatedCostMicros,
+    }
+  }
+
+  return summary.byModel.reduce<ProjectUsageSpendSummary>(
+    (totals, model) => ({
+      totalTokens: totals.totalTokens + model.totalTokens,
+      totalCostMicros: totals.totalCostMicros + model.estimatedCostMicros,
+    }),
+    { totalTokens: 0, totalCostMicros: 0 },
+  )
+}
+
 /** Convert micros (1e-6 USD) to a fractional dollar number for display. */
 export function microsToUsd(micros: number): number {
   return micros / 1_000_000

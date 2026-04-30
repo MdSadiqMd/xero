@@ -34,6 +34,7 @@ import type {
   RuntimeStreamToolItemView,
 } from '@/src/lib/xero-model'
 
+import { AppLogo } from '../app-logo'
 import { Markdown } from './conversation-markdown'
 import { getToolStateBadgeVariant, getToolStateLabel } from './runtime-stream-helpers'
 
@@ -410,8 +411,8 @@ function NoticeRow({ tone, title, message, code }: NoticeRowProps) {
         }
       : tone === 'warning'
         ? {
-            avatar: 'border-amber-500/40 bg-amber-500/15 text-amber-500',
-            card: 'border-amber-500/30 bg-amber-500/5 text-foreground',
+            avatar: 'border-warning/40 bg-warning/15 text-warning',
+            card: 'border-warning/30 bg-warning/5 text-foreground',
             codeText: 'text-muted-foreground',
           }
         : {
@@ -526,7 +527,7 @@ function AgentAvatar() {
       aria-hidden="true"
       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border/70 bg-card/80 shadow-sm"
     >
-      <img src="/icon-logo.svg" alt="" className="h-4 w-4" />
+      <AppLogo className="h-4 w-4" />
     </span>
   )
 }

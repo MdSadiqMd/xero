@@ -1677,6 +1677,12 @@ function createMockAdapter(options?: {
     gitUnstagePaths: async () => undefined,
     gitDiscardChanges: async () => undefined,
     gitCommit: async () => ({ sha: 'abc1234', summary: 'mock commit', signature: { name: 'Mock', email: 'mock@example.com' } }),
+    gitGenerateCommitMessage: async () => ({
+      message: 'feat: mock generated commit',
+      providerId: 'openai_api',
+      modelId: 'gpt-5.4',
+      diffTruncated: false,
+    }),
     gitFetch: async () => ({ remote: 'origin', refspecs: [] }),
     gitPull: async () => ({ remote: 'origin', branch: 'main', updated: false, summary: 'already up to date', newHeadSha: null }),
     gitPush: async () => ({ remote: 'origin', branch: 'main', updates: [] }),

@@ -20,19 +20,60 @@ import { AndroidEmulatorSidebar } from '@/components/xero/android-emulator-sideb
 import { SolanaWorkbenchSidebar } from '@/components/xero/solana-workbench-sidebar'
 import { SettingsDialog, type SettingsSection } from '@/components/xero/settings-dialog'
 import { UsageStatsSidebar } from '@/components/xero/usage-stats-sidebar'
-import { VcsSidebar } from '@/components/xero/vcs-sidebar'
+import { VcsSidebar, type VcsCommitMessageModel } from '@/components/xero/vcs-sidebar'
 import { XeroDesktopAdapter as DefaultXeroDesktopAdapter, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
-import { mapAgentSession } from '@/src/lib/xero-model/runtime'
+import { mapAgentSession, type RuntimeRunControlInputDto } from '@/src/lib/xero-model/runtime'
 import type {
   SessionTranscriptSearchResultSnippetDto,
 } from '@/src/lib/xero-model/session-context'
 import { type RepositoryDiffScope } from '@/src/lib/xero-model/project'
-import { useXeroDesktopState } from '@/src/features/xero/use-xero-desktop-state'
+import { summarizeProjectUsageSpend } from '@/src/lib/xero-model/usage'
+import { useXeroDesktopState, type AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
 import { useGitHubAuth } from '@/src/lib/github-auth'
+import { getCloudProviderDefaultProfileId } from '@/src/lib/xero-model/provider-presets'
 import { cn } from '@/lib/utils'
 
 export interface XeroAppProps {
   adapter?: XeroDesktopAdapter
+}
+
+function getVcsCommitMessageModel(
+  agent: AgentPaneView | null,
+  composerControls: RuntimeRunControlInputDto | null,
+): VcsCommitMessageModel | null {
+  const modelId = composerControls?.modelId?.trim() || agent?.selectedModelId?.trim() || null
+  if (!agent || !modelId) {
+    return null
+  }
+
+  const providerId = agent.selectedModel?.providerId ?? agent.selectedProviderId ?? null
+  const selectedModelOption =
+    agent.providerModelCatalog.models.find(
+      (model) =>
+        model.modelId === modelId &&
+        (!composerControls?.providerProfileId || model.profileId === composerControls.providerProfileId),
+    ) ??
+    agent.providerModelCatalog.models.find(
+      (model) => model.modelId === modelId || model.selectionKey === `${providerId}:${modelId}`,
+    ) ?? agent.selectedModelOption
+  const providerProfileId =
+    composerControls?.providerProfileId ??
+    agent.runtimeRunActiveControls?.providerProfileId ??
+    agent.runtimeRunPendingControls?.providerProfileId ??
+    selectedModelOption?.profileId ??
+    getCloudProviderDefaultProfileId(providerId) ??
+    null
+
+  return {
+    providerProfileId,
+    modelId,
+    thinkingEffort:
+      composerControls?.thinkingEffort ??
+      agent.selectedThinkingEffort ??
+      agent.selectedModelDefaultThinkingEffort ??
+      null,
+    label: selectedModelOption?.label ?? modelId,
+  }
 }
 
 export function XeroApp({ adapter }: XeroAppProps) {
@@ -181,6 +222,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('providers')
   const [pendingAgentSessionId, setPendingAgentSessionId] = useState<string | null>(null)
+  const [agentComposerControls, setAgentComposerControls] =
+    useState<RuntimeRunControlInputDto | null>(null)
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
   const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(false)
   const [gamesOpen, setGamesOpen] = useState(false)
@@ -190,6 +233,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [solanaOpen, setSolanaOpen] = useState(false)
   const [vcsOpen, setVcsOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
+
+  useEffect(() => {
+    setAgentComposerControls(null)
+  }, [activeProjectId])
 
   const openSettings = (section: SettingsSection = 'providers') => {
     setSettingsInitialSection(section)
@@ -333,6 +380,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
 
   const footerRepositoryStatus = repositoryStatus ?? activeProject?.repositoryStatus ?? null
   const footerLastCommit = footerRepositoryStatus?.lastCommit ?? null
+  const footerSpend = summarizeProjectUsageSpend(activeUsageSummary)
   const statusFooter: StatusFooterProps = {
     git: activeProject
       ? {
@@ -352,10 +400,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
             : null,
         }
       : null,
-    spend: activeUsageSummary
+    spend: footerSpend
       ? {
-          totalTokens: activeUsageSummary.totals.totalTokens,
-          totalCostMicros: activeUsageSummary.totals.estimatedCostMicros,
+          totalTokens: footerSpend.totalTokens,
+          totalCostMicros: footerSpend.totalCostMicros,
         }
       : null,
     spendActive: usageOpen,
@@ -579,6 +627,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onCancelAutonomousRun={(runId) => cancelAutonomousRun(runId)}
                 onStartRuntimeRun={(options) => startRuntimeRun(options)}
                 onUpdateRuntimeRunControls={(request) => updateRuntimeRunControls(request)}
+                onComposerControlsChange={setAgentComposerControls}
                 onStartRuntimeSession={(options) => startRuntimeSession(options)}
                 onStopRuntimeRun={(runId) => stopRuntimeRun(runId)}
                 onSubmitManualCallback={(flowId, manualInput) =>
@@ -777,6 +826,15 @@ export function XeroApp({ adapter }: XeroAppProps) {
         }}
         onLoadDiff={(projectId, scope: RepositoryDiffScope) =>
           resolvedAdapter.getRepositoryDiff(projectId, scope)
+        }
+        commitMessageModel={getVcsCommitMessageModel(agentView, agentComposerControls)}
+        onGenerateCommitMessage={(projectId, model) =>
+          resolvedAdapter.gitGenerateCommitMessage({
+            projectId,
+            providerProfileId: model.providerProfileId,
+            modelId: model.modelId,
+            thinkingEffort: model.thinkingEffort,
+          })
         }
         onStage={(projectId, paths) => resolvedAdapter.gitStagePaths(projectId, paths)}
         onUnstage={(projectId, paths) => resolvedAdapter.gitUnstagePaths(projectId, paths)}

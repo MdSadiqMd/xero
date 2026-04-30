@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { PanelHeader, UnderlineTab, UnderlineTabs } from "./solana-panel-shell"
 import type {
   ClusterDriftReport,
   CostSnapshot,
@@ -40,9 +41,9 @@ const ALL_SEVERITIES = "__all__"
 
 const SEVERITY_CLASS: Record<SecretSeverity, string> = {
   critical: "bg-destructive/15 text-destructive border-destructive/40",
-  high: "bg-amber-500/15 text-amber-400 border-amber-500/40",
-  medium: "bg-yellow-500/15 text-yellow-300 border-yellow-500/40",
-  low: "bg-sky-500/15 text-sky-300 border-sky-500/40",
+  high: "bg-warning/15 text-warning border-warning/40",
+  medium: "bg-warning/15 text-warning border-warning/40",
+  low: "bg-info/15 text-info border-info/40",
 }
 
 const SEVERITY_LABEL: Record<SecretSeverity, string> = {
@@ -65,15 +66,15 @@ const DRIFT_COPY: Record<
 > = {
   in_sync: {
     label: "In sync",
-    className: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
+    className: "bg-success/15 text-success border-success/40",
   },
   drift: {
     label: "Drift",
-    className: "bg-amber-500/15 text-amber-300 border-amber-500/40",
+    className: "bg-warning/15 text-warning border-warning/40",
   },
   partially_deployed: {
     label: "Partial",
-    className: "bg-sky-500/15 text-sky-300 border-sky-500/40",
+    className: "bg-info/15 text-info border-info/40",
   },
   inconclusive: {
     label: "Inconclusive",
@@ -153,32 +154,29 @@ export function SolanaSafetyPanel({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-[11px] font-medium text-foreground/80">
-          <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-          Safety
-        </div>
-        {busy ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-        ) : null}
-      </div>
+      <PanelHeader
+        icon={ShieldCheck}
+        title="Safety"
+        description="Pre-flight checks for committed secrets, scope, drift, and cost."
+        busy={busy}
+      />
 
-      <div role="tablist" className="flex gap-1 rounded-md border border-border/60 bg-background/40 p-0.5 text-[11px]">
-        <SafetyTabButton
+      <UnderlineTabs ariaLabel="Safety sections">
+        <UnderlineTab
           active={activeTab === "secrets"}
           icon={ScanSearch}
           label="Secrets"
           count={lastSecretScan?.findings.length ?? null}
           onClick={() => setActiveTab("secrets")}
         />
-        <SafetyTabButton
+        <UnderlineTab
           active={activeTab === "scope"}
           icon={Users}
           label="Scope"
           count={lastScopeCheck?.warnings.length ?? null}
           onClick={() => setActiveTab("scope")}
         />
-        <SafetyTabButton
+        <UnderlineTab
           active={activeTab === "drift"}
           icon={GitCompare}
           label="Drift"
@@ -189,19 +187,19 @@ export function SolanaSafetyPanel({
           }
           onClick={() => setActiveTab("drift")}
         />
-        <SafetyTabButton
+        <UnderlineTab
           active={activeTab === "cost"}
           icon={Coins}
           label="Cost"
           count={lastCost ? lastCost.totals.txCount : null}
           onClick={() => setActiveTab("cost")}
         />
-      </div>
+      </UnderlineTabs>
 
       {activeTab === "secrets" ? (
-        <section className="flex flex-col gap-3 rounded-md border border-border/60 bg-background/30 p-3">
+        <section className="flex flex-col gap-3 rounded-md border border-border/70 bg-background/30 p-3">
           <div className="flex flex-col gap-2">
-            <label className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
+            <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
               Project root
             </label>
             <input
@@ -211,7 +209,7 @@ export function SolanaSafetyPanel({
               className="rounded-md border border-border/60 bg-background px-2 py-1 font-mono text-[11px]"
             />
             <div className="flex items-center gap-2">
-              <label className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
+              <label className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                 Min severity
               </label>
               <Select
@@ -260,7 +258,7 @@ export function SolanaSafetyPanel({
                     "rounded-full border px-2 py-0.5 font-medium",
                     lastSecretScan.blocksDeploy
                       ? "border-destructive/50 bg-destructive/10 text-destructive"
-                      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+                      : "border-success/40 bg-success/10 text-success",
                   )}
                 >
                   {lastSecretScan.blocksDeploy
@@ -305,7 +303,7 @@ export function SolanaSafetyPanel({
       ) : null}
 
       {activeTab === "scope" ? (
-        <section className="flex flex-col gap-3 rounded-md border border-border/60 bg-background/30 p-3">
+        <section className="flex flex-col gap-3 rounded-md border border-border/70 bg-background/30 p-3">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-muted-foreground">
               Scope the workbench's personas for cross-cluster reuse and
@@ -362,7 +360,7 @@ export function SolanaSafetyPanel({
       ) : null}
 
       {activeTab === "drift" ? (
-        <section className="flex flex-col gap-3 rounded-md border border-border/60 bg-background/30 p-3">
+        <section className="flex flex-col gap-3 rounded-md border border-border/70 bg-background/30 p-3">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-muted-foreground">
               Compares {trackedPrograms.length} tracked external programs across
@@ -421,7 +419,7 @@ export function SolanaSafetyPanel({
       ) : null}
 
       {activeTab === "cost" ? (
-        <section className="flex flex-col gap-3 rounded-md border border-border/60 bg-background/30 p-3">
+        <section className="flex flex-col gap-3 rounded-md border border-border/70 bg-background/30 p-3">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-muted-foreground">
               Local cost ledger plus per-provider health.
@@ -466,7 +464,7 @@ export function SolanaSafetyPanel({
               </div>
               {lastCost.local.byCluster.length > 0 ? (
                 <div className="flex flex-col gap-1">
-                  <h4 className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                  <h4 className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                     Per cluster
                   </h4>
                   <ul className="flex flex-col divide-y divide-border/40">
@@ -486,7 +484,7 @@ export function SolanaSafetyPanel({
               ) : null}
               {lastCost.providers.length > 0 ? (
                 <div className="flex flex-col gap-1">
-                  <h4 className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
+                  <h4 className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                     Providers ({lastCost.totals.providersHealthy} healthy / {lastCost.totals.providersDegraded} degraded)
                   </h4>
                   <ul className="flex flex-col divide-y divide-border/40">
@@ -523,48 +521,6 @@ export function SolanaSafetyPanel({
         </section>
       ) : null}
     </div>
-  )
-}
-
-function SafetyTabButton({
-  active,
-  icon: Icon,
-  label,
-  count,
-  onClick,
-}: {
-  active: boolean
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  count: number | null
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={cn(
-        "inline-flex flex-1 items-center justify-center gap-1 rounded px-2 py-1 transition-colors",
-        active
-          ? "bg-primary/10 text-primary"
-          : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <Icon className="h-3 w-3" />
-      {label}
-      {count != null && count > 0 ? (
-        <span
-          className={cn(
-            "rounded px-1 text-[9.5px] tabular-nums",
-            active ? "bg-primary/20 text-primary" : "bg-secondary/60 text-muted-foreground",
-          )}
-        >
-          {count}
-        </span>
-      ) : null}
-    </button>
   )
 }
 
@@ -606,7 +562,7 @@ function SecretFindingRow({ finding }: { finding: SecretFinding }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
+      <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
         {label}
       </span>
       <span className="font-mono tabular-nums text-foreground/90">{value}</span>

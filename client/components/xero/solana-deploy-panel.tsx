@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { PanelHeader } from "./solana-panel-shell"
 import type {
   BuildReport,
   ClusterKind,
@@ -286,6 +287,12 @@ export function SolanaDeployPanel({
 
   return (
     <div className="flex flex-col gap-4 text-[12px]">
+      <PanelHeader
+        icon={Rocket}
+        title="Deploy"
+        description="Build, safety-check, deploy, and roll back program upgrades."
+        busy={busy}
+      />
       <SectionHeader icon={Hammer} label="Build" />
       <Field label="Manifest">
         <input
@@ -404,7 +411,7 @@ export function SolanaDeployPanel({
               aria-label="Keypair path"
               className={inputClass}
               onChange={(e) => setKeypairPath(e.target.value)}
-              placeholder="~/.config/solana/id.json"
+              placeholder="Path to signer keypair JSON"
               spellCheck={false}
               value={keypairPath}
             />
@@ -446,7 +453,7 @@ export function SolanaDeployPanel({
               aria-label="Creator keypair path"
               className={inputClass}
               onChange={(e) => setCreatorKeypairPath(e.target.value)}
-              placeholder="~/.config/solana/creator.json"
+              placeholder="Path to creator keypair JSON"
               spellCheck={false}
               value={creatorKeypairPath}
             />
@@ -476,7 +483,7 @@ export function SolanaDeployPanel({
         </PrimaryButton>
       </div>
       {requiresSquads ? (
-        <p className="text-[11px] text-amber-400">
+        <p className="text-[11px] text-warning">
           Mainnet deploys require a Squads vault authority — the workbench refuses direct keypair deploys to mainnet.
         </p>
       ) : null}
@@ -605,7 +612,7 @@ function SectionHeader({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{label}</span>
       {children}
     </label>
   )
@@ -617,11 +624,11 @@ function Divider() {
 
 function BuildSummary({ report }: { report: BuildReport }) {
   return (
-    <div className="rounded-md border border-border/60 bg-background/30 p-2 text-[11px]">
+    <div className="rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px]">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 font-medium">
           {report.success ? (
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+            <CheckCircle2 className="h-3.5 w-3.5 text-success" />
           ) : (
             <XCircle className="h-3.5 w-3.5 text-destructive" />
           )}
@@ -661,7 +668,7 @@ function BuildSummary({ report }: { report: BuildReport }) {
 function SafetySummary({ report }: { report: UpgradeSafetyReport }) {
   const badge = verdictBadge(report.verdict)
   return (
-    <div className="rounded-md border border-border/60 bg-background/30 p-2 text-[11px]">
+    <div className="rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px]">
       <div className="mb-2 flex items-center gap-1.5">
         {badge.icon}
         <span className={cn("font-semibold", badge.color)}>{badge.label}</span>
@@ -675,7 +682,7 @@ function SafetySummary({ report }: { report: UpgradeSafetyReport }) {
       />
       {report.breakingChanges.length > 0 ? (
         <div className="mt-2">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-destructive">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-destructive">
             Breaking changes
           </div>
           <ul className="mt-1 space-y-1">
@@ -696,10 +703,10 @@ function SafetySummary({ report }: { report: UpgradeSafetyReport }) {
 function DeploySummary({ result }: { result: DeployResult }) {
   if (result.kind === "direct") {
     return (
-      <div className="rounded-md border border-border/60 bg-background/30 p-2 text-[11px]">
+      <div className="rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px]">
         <div className="flex items-center gap-1.5 font-medium">
           {result.outcome.success ? (
-            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+            <CheckCircle2 className="h-3.5 w-3.5 text-success" />
           ) : (
             <XCircle className="h-3.5 w-3.5 text-destructive" />
           )}
@@ -735,9 +742,9 @@ function DeploySummary({ result }: { result: DeployResult }) {
     )
   }
   return (
-    <div className="rounded-md border border-border/60 bg-background/30 p-2 text-[11px]">
+    <div className="rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px]">
       <div className="flex items-center gap-1.5 font-medium">
-        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+        <CheckCircle2 className="h-3.5 w-3.5 text-success" />
         Squads-pending · {result.cluster}
       </div>
       <div className="mt-1 font-mono text-[10.5px] text-muted-foreground">
@@ -750,8 +757,8 @@ function DeploySummary({ result }: { result: DeployResult }) {
 
 function SquadsSummary({ proposal }: { proposal: SquadsProposalDescriptor }) {
   return (
-    <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-[11px]">
-      <div className="mb-1 flex items-center gap-1.5 font-medium text-amber-200">
+    <div className="rounded-md border border-warning/40 bg-warning/5 p-2 text-[11px]">
+      <div className="mb-1 flex items-center gap-1.5 font-medium text-warning">
         <AlertTriangle className="h-3.5 w-3.5" /> Squads proposal — review &amp; approve
       </div>
       <div className="font-mono text-[10.5px] text-muted-foreground">
@@ -780,10 +787,10 @@ function SquadsSummary({ proposal }: { proposal: SquadsProposalDescriptor }) {
 
 function VerifiedSummary({ report }: { report: VerifiedBuildResult }) {
   return (
-    <div className="rounded-md border border-border/60 bg-background/30 p-2 text-[11px]">
+    <div className="rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px]">
       <div className="flex items-center gap-1.5 font-medium">
         {report.success ? (
-          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+          <CheckCircle2 className="h-3.5 w-3.5 text-success" />
         ) : (
           <XCircle className="h-3.5 w-3.5 text-destructive" />
         )}
@@ -824,7 +831,7 @@ function Row({
 }) {
   return (
     <div className="flex items-baseline gap-2">
-      <span className="w-16 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+      <span className="w-16 shrink-0 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
         {label}
       </span>
       <span className={cn("min-w-0 flex-1 text-foreground/85", emphasised && "text-destructive")}>
@@ -858,15 +865,15 @@ function verdictBadge(verdict: UpgradeSafetyVerdict): {
   switch (verdict) {
     case "ok":
       return {
-        icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />,
+        icon: <CheckCircle2 className="h-3.5 w-3.5 text-success" />,
         label: "OK",
-        color: "text-emerald-400",
+        color: "text-success",
       }
     case "warn":
       return {
-        icon: <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />,
+        icon: <AlertTriangle className="h-3.5 w-3.5 text-warning" />,
         label: "WARN",
-        color: "text-amber-400",
+        color: "text-warning",
       }
     case "block":
       return {

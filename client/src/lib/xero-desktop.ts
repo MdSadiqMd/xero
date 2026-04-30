@@ -131,6 +131,8 @@ import {
   writeProjectFileResponseSchema,
   gitCommitRequestSchema,
   gitCommitResponseSchema,
+  gitGenerateCommitMessageRequestSchema,
+  gitGenerateCommitMessageResponseSchema,
   gitFetchResponseSchema,
   gitPathsRequestSchema,
   gitPullResponseSchema,
@@ -140,6 +142,8 @@ import {
   type CreateProjectEntryResponseDto,
   type DeleteProjectEntryResponseDto,
   type GitCommitResponseDto,
+  type GitGenerateCommitMessageRequestDto,
+  type GitGenerateCommitMessageResponseDto,
   type GitFetchResponseDto,
   type GitPullResponseDto,
   type GitPushResponseDto,
@@ -251,6 +255,12 @@ import {
   type UpsertDictationSettingsRequestDto,
 } from '@/src/lib/xero-model/dictation'
 import {
+  browserControlSettingsSchema,
+  upsertBrowserControlSettingsRequestSchema,
+  type BrowserControlSettingsDto,
+  type UpsertBrowserControlSettingsRequestDto,
+} from '@/src/lib/xero-model/browser'
+import {
   compactSessionHistoryRequestSchema,
   compactSessionHistoryResponseSchema,
   agentSessionBranchResponseSchema,
@@ -314,6 +324,7 @@ const COMMANDS = {
   gitUnstagePaths: 'git_unstage_paths',
   gitDiscardChanges: 'git_discard_changes',
   gitCommit: 'git_commit',
+  gitGenerateCommitMessage: 'git_generate_commit_message',
   gitFetch: 'git_fetch',
   gitPull: 'git_pull',
   gitPush: 'git_push',
@@ -405,6 +416,8 @@ const COMMANDS = {
   speechDictationStop: 'speech_dictation_stop',
   speechDictationCancel: 'speech_dictation_cancel',
   subscribeRuntimeStream: 'subscribe_runtime_stream',
+  browserControlSettings: 'browser_control_settings',
+  browserControlUpdateSettings: 'browser_control_update_settings',
   browserShow: 'browser_show',
   browserResize: 'browser_resize',
   browserHide: 'browser_hide',
@@ -597,6 +610,9 @@ export interface XeroDesktopAdapter {
   gitUnstagePaths(projectId: string, paths: string[]): Promise<void>
   gitDiscardChanges(projectId: string, paths: string[]): Promise<void>
   gitCommit(projectId: string, message: string): Promise<GitCommitResponseDto>
+  gitGenerateCommitMessage(
+    request: GitGenerateCommitMessageRequestDto,
+  ): Promise<GitGenerateCommitMessageResponseDto>
   gitFetch(projectId: string, remote?: string | null): Promise<GitFetchResponseDto>
   gitPull(projectId: string, remote?: string | null): Promise<GitPullResponseDto>
   gitPush(projectId: string, remote?: string | null): Promise<GitPushResponseDto>
@@ -754,6 +770,10 @@ export interface XeroDesktopAdapter {
   ): Promise<XeroDictationSession>
   speechDictationStop?(): Promise<void>
   speechDictationCancel?(): Promise<void>
+  browserControlSettings?(): Promise<BrowserControlSettingsDto>
+  browserControlUpdateSettings?(
+    request: UpsertBrowserControlSettingsRequestDto,
+  ): Promise<BrowserControlSettingsDto>
   browserEval(js: string, options?: { timeoutMs?: number }): Promise<unknown>
   browserCurrentUrl(): Promise<string | null>
   browserScreenshot(): Promise<string>
@@ -1296,6 +1316,15 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
   gitCommit(projectId, message) {
     const request = gitCommitRequestSchema.parse({ projectId, message })
     return invokeTyped(COMMANDS.gitCommit, gitCommitResponseSchema, { request })
+  },
+
+  gitGenerateCommitMessage(request) {
+    const parsedRequest = gitGenerateCommitMessageRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.gitGenerateCommitMessage,
+      gitGenerateCommitMessageResponseSchema,
+      { request: parsedRequest },
+    )
   },
 
   gitFetch(projectId, remote) {
@@ -2001,6 +2030,17 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
 
   speechDictationCancel() {
     return invokeRaw(COMMANDS.speechDictationCancel)
+  },
+
+  browserControlSettings() {
+    return invokeTyped(COMMANDS.browserControlSettings, browserControlSettingsSchema)
+  },
+
+  browserControlUpdateSettings(request) {
+    const parsedRequest = upsertBrowserControlSettingsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.browserControlUpdateSettings, browserControlSettingsSchema, {
+      request: parsedRequest,
+    })
   },
 
   async browserEval(js, options) {

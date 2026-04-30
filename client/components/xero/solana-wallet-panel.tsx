@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react"
 import { CheckCircle2, Copy, FolderPlus, Loader2, Wallet } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { PanelHeader } from "./solana-panel-shell"
 import type {
   ClusterKind,
   WalletDescriptor,
@@ -58,8 +59,14 @@ export function SolanaWalletPanel({
 
   return (
     <div className="flex flex-col gap-3">
+      <PanelHeader
+        icon={Wallet}
+        title="Wallet"
+        description="Generate ready-to-use wallet adapter / signer scaffolds."
+        busy={busy}
+      />
       {descriptors.length === 0 ? (
-        <p className="text-[11.5px] text-muted-foreground">
+        <p className="rounded-md border border-dashed border-border/70 bg-background/30 px-3 py-3 text-[11.5px] italic text-muted-foreground">
           Loading wallet scaffold catalogue…
         </p>
       ) : (
@@ -82,7 +89,7 @@ export function SolanaWalletPanel({
                     {desc.label}
                   </span>
                   {desc.requiresApiKey ? (
-                    <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 text-[9.5px] text-amber-300">
+                    <span className="rounded-full border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[9.5px] text-warning">
                       needs key
                     </span>
                   ) : null}
@@ -185,7 +192,7 @@ function ScaffoldReport({ result }: { result: WalletScaffoldResult }) {
   return (
     <div className="rounded border border-border/70 bg-background/40 p-2.5 text-[11px]">
       <div className="flex items-center gap-1.5">
-        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+        <CheckCircle2 className="h-3.5 w-3.5 text-success" />
         <span className="font-medium">
           {result.files.length} files written to{" "}
           <code className="font-mono text-[10.5px]">{result.root}</code>
@@ -195,7 +202,7 @@ function ScaffoldReport({ result }: { result: WalletScaffoldResult }) {
         Cluster: {result.cluster} · RPC: {result.rpcUrl}
       </p>
       {result.apiKeyEnv ? (
-        <p className="mt-1 text-[10.5px] text-amber-400">
+        <p className="mt-1 text-[10.5px] text-warning">
           Populate <code className="font-mono">{result.apiKeyEnv}</code> in{" "}
           <code className="font-mono">.env</code> before running the scaffold.
         </p>
@@ -250,7 +257,7 @@ function Field({
 }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+      <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
         {label}
       </span>
       {children}

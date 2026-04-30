@@ -366,6 +366,7 @@ pub struct CompactSessionHistoryRequestDto {
 pub enum SessionContextContributorKindDto {
     SystemPrompt,
     InstructionFile,
+    SkillContext,
     ApprovedMemory,
     CompactionSummary,
     ConversationTail,
@@ -401,6 +402,14 @@ pub struct SessionContextContributorDto {
     pub contributor_id: String,
     pub kind: SessionContextContributorKindDto,
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_fragment_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_fragment_priority: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_fragment_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_fragment_provenance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1381,6 +1390,10 @@ pub fn approved_memory_context_contributors(
                 included: true,
                 model_visible: true,
                 text: Some(text),
+                prompt_fragment_id: None,
+                prompt_fragment_priority: None,
+                prompt_fragment_hash: None,
+                prompt_fragment_provenance: None,
                 redaction: strongest_redaction(&memory.redaction, &text_redaction),
             }
         })
@@ -1669,7 +1682,8 @@ fn transcript_kind_from_event(kind: &AgentRunEventKind) -> SessionTranscriptItem
         AgentRunEventKind::RunFailed => SessionTranscriptItemKindDto::Failure,
         AgentRunEventKind::CommandOutput
         | AgentRunEventKind::ValidationStarted
-        | AgentRunEventKind::ValidationCompleted => SessionTranscriptItemKindDto::Activity,
+        | AgentRunEventKind::ValidationCompleted
+        | AgentRunEventKind::ToolRegistrySnapshot => SessionTranscriptItemKindDto::Activity,
     }
 }
 
@@ -1705,6 +1719,7 @@ fn transcript_parts_from_event(
         AgentRunEventKind::CommandOutput => Some("Command output".into()),
         AgentRunEventKind::ValidationStarted => Some("Validation started".into()),
         AgentRunEventKind::ValidationCompleted => Some("Validation completed".into()),
+        AgentRunEventKind::ToolRegistrySnapshot => Some("Tool registry".into()),
         AgentRunEventKind::ActionRequired => {
             payload_string(payload, "title").or_else(|| Some("Action required".into()))
         }

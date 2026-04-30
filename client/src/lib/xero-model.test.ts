@@ -3,6 +3,7 @@ import {
   applyRepositoryStatus,
   applyRuntimeSession,
   applyRuntimeStreamIssue,
+  browserControlSettingsSchema,
   composeNotificationRouteTarget,
   createRuntimeStreamFromSubscription,
   decomposeNotificationRouteTarget,
@@ -30,6 +31,7 @@ import {
   syncNotificationAdaptersResponseSchema,
   subscribeRuntimeStreamResponseSchema,
   toolResultSummarySchema,
+  upsertBrowserControlSettingsRequestSchema,
   upsertNotificationRouteCredentialsRequestSchema,
   upsertNotificationRouteCredentialsResponseSchema,
   upsertNotificationRouteRequestSchema,
@@ -2320,6 +2322,30 @@ describe('xero-model', () => {
 
 
   it('rejects malformed runtime payloads at the TypeScript boundary', () => {
+    expect(
+      browserControlSettingsSchema.parse({
+        preference: 'default',
+        updatedAt: null,
+      }),
+    ).toEqual({
+      preference: 'default',
+      updatedAt: null,
+    })
+
+    expect(
+      upsertBrowserControlSettingsRequestSchema.parse({
+        preference: 'native_browser',
+      }),
+    ).toEqual({
+      preference: 'native_browser',
+    })
+
+    expect(() =>
+      browserControlSettingsSchema.parse({
+        preference: 'device_browser',
+      }),
+    ).toThrow(/preference/)
+
     expect(() =>
       runtimeSessionSchema.parse({
         ...makeRuntimeSession(),

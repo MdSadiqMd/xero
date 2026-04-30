@@ -14,10 +14,10 @@ use tempfile::TempDir;
 use xero_desktop_lib::{
     commands::{
         cancel_agent_run, compact_session_history, start_agent_task, start_runtime_run,
-        update_runtime_run_controls, CancelAgentRunRequestDto, CompactSessionHistoryRequestDto,
-        RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto,
-        RuntimeRunControlStateDto, StartAgentTaskRequestDto, StartRuntimeRunRequestDto,
-        UpdateRuntimeRunControlsRequestDto,
+        update_runtime_run_controls, BrowserControlPreferenceDto, CancelAgentRunRequestDto,
+        CompactSessionHistoryRequestDto, RuntimeRunActiveControlSnapshotDto,
+        RuntimeRunApprovalModeDto, RuntimeRunControlInputDto, RuntimeRunControlStateDto,
+        StartAgentTaskRequestDto, StartRuntimeRunRequestDto, UpdateRuntimeRunControlsRequestDto,
     },
     configure_builder_with_state, db,
     git::repository::CanonicalRepository,
@@ -28,7 +28,7 @@ use xero_desktop_lib::{
         AutonomousCommandSessionOperation, AutonomousCommandSessionStartRequest,
         AutonomousCommandSessionStopRequest, AutonomousToolOutput, AutonomousToolRuntime,
         ContinueOwnedAgentRunRequest, OpenAiCompatibleProviderConfig, OwnedAgentRunRequest,
-        ToolRegistry,
+        ToolRegistry, ToolRegistryOptions,
     },
     state::DesktopState,
 };
@@ -413,6 +413,8 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
     let read_only_names = read_only.descriptor_names();
     assert!(read_only_names.contains("read"));
     assert!(read_only_names.contains("tool_access"));
+    assert!(read_only_names.contains("tool_search"));
+    assert!(read_only_names.contains("todo"));
     assert!(read_only_names.contains("git_diff"));
     assert!(!read_only_names.contains("write"));
     assert!(!read_only_names.contains("command"));
@@ -457,6 +459,17 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
     assert!(audit_names.contains("git_diff"));
     assert!(audit_names.contains("command"));
 
+    fs::write(temp.path().join("Anchor.toml"), "[programs.localnet]\n")
+        .expect("seed solana-looking workspace");
+    let broad_solana_workspace = ToolRegistry::for_prompt(
+        temp.path(),
+        "What is left to do in this harness?",
+        &controls,
+    );
+    assert!(!broad_solana_workspace
+        .descriptor_names()
+        .contains("solana_cluster"));
+
     let priority_tools = ToolRegistry::for_prompt(
         temp.path(),
         "Use MCP, subagents, todos, code intelligence, notebooks, and PowerShell.",
@@ -485,6 +498,45 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
         &controls,
     );
     assert!(solana.descriptor_names().contains("solana_cluster"));
+
+    let default_browser = ToolRegistry::for_prompt_with_options(
+        temp.path(),
+        "Open localhost in a browser and inspect the UI.",
+        &controls,
+        ToolRegistryOptions {
+            browser_control_preference: BrowserControlPreferenceDto::Default,
+            ..ToolRegistryOptions::default()
+        },
+    );
+    let default_browser_names = default_browser.descriptor_names();
+    assert!(default_browser_names.contains("browser"));
+    assert!(default_browser_names.contains("macos_automation"));
+
+    let in_app_browser = ToolRegistry::for_prompt_with_options(
+        temp.path(),
+        "Open localhost in a browser and inspect the UI.",
+        &controls,
+        ToolRegistryOptions {
+            browser_control_preference: BrowserControlPreferenceDto::InAppBrowser,
+            ..ToolRegistryOptions::default()
+        },
+    );
+    let in_app_browser_names = in_app_browser.descriptor_names();
+    assert!(in_app_browser_names.contains("browser"));
+    assert!(!in_app_browser_names.contains("macos_automation"));
+
+    let native_browser = ToolRegistry::for_prompt_with_options(
+        temp.path(),
+        "Open localhost in a browser and inspect the UI.",
+        &controls,
+        ToolRegistryOptions {
+            browser_control_preference: BrowserControlPreferenceDto::NativeBrowser,
+            ..ToolRegistryOptions::default()
+        },
+    );
+    let native_browser_names = native_browser.descriptor_names();
+    assert!(!native_browser_names.contains("browser"));
+    assert!(native_browser_names.contains("macos_automation"));
 }
 
 #[test]
@@ -700,6 +752,22 @@ fn owned_agent_loop_dispatches_tools_and_persists_journal() {
     assert!(snapshot
         .run
         .system_prompt
+        .contains("Instruction hierarchy:"));
+    assert!(snapshot
+        .run
+        .system_prompt
+        .contains("Final response contract:"));
+    assert!(snapshot
+        .run
+        .system_prompt
+        .contains("Repository instructions (project-owned, lower priority than Xero policy"));
+    assert!(snapshot
+        .run
+        .system_prompt
+        .contains("--- BEGIN PROJECT INSTRUCTIONS: AGENTS.md ---"));
+    assert!(snapshot
+        .run
+        .system_prompt
         .contains("Keep test work repo-local."));
     assert!(snapshot.run.system_prompt.contains("Approved memory:"));
     assert!(
@@ -725,9 +793,36 @@ fn owned_agent_loop_dispatches_tools_and_persists_journal() {
         .map(|event| event.event_kind.clone())
         .collect::<Vec<_>>();
     assert!(event_kinds.contains(&db::project_store::AgentRunEventKind::ValidationStarted));
+    assert!(event_kinds.contains(&db::project_store::AgentRunEventKind::ToolRegistrySnapshot));
     assert!(event_kinds.contains(&db::project_store::AgentRunEventKind::ToolStarted));
     assert!(event_kinds.contains(&db::project_store::AgentRunEventKind::ToolCompleted));
     assert!(event_kinds.contains(&db::project_store::AgentRunEventKind::RunCompleted));
+    let registry_event = snapshot
+        .events
+        .iter()
+        .find(|event| {
+            event.event_kind == db::project_store::AgentRunEventKind::ToolRegistrySnapshot
+        })
+        .expect("tool registry event");
+    let registry_payload: serde_json::Value =
+        serde_json::from_str(&registry_event.payload_json).expect("registry payload");
+    assert_eq!(registry_payload["kind"], "active_tool_registry");
+    assert!(registry_payload["toolNames"]
+        .as_array()
+        .expect("tool names")
+        .iter()
+        .any(|name| name == "tool_search"));
+    assert!(registry_payload["catalog"]
+        .as_array()
+        .expect("tool catalog metadata")
+        .iter()
+        .any(|entry| entry["toolName"] == "tool_search"
+            && entry["activationGroups"]
+                .as_array()
+                .expect("activation groups")
+                .iter()
+                .any(|group| group == "core")
+            && entry["riskClass"] == "observe"));
 
     assert_eq!(snapshot.tool_calls.len(), 1);
     let tool_call = &snapshot.tool_calls[0];

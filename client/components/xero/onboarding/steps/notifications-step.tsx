@@ -254,9 +254,9 @@ function ChannelRow({
             {enabled ? (
               <Badge
                 variant="secondary"
-                className="gap-1 border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-500 dark:text-emerald-400"
+                className="gap-1 border border-success/30 bg-success/10 px-1.5 py-0 text-[10px] font-medium text-success dark:text-success"
               >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                <span className="h-1.5 w-1.5 rounded-full bg-success dark:bg-success" />
                 Enabled
               </Badge>
             ) : route ? (
@@ -269,7 +269,7 @@ function ChannelRow({
                 variant={readinessStatus === "ready" ? "default" : "outline"}
                 className={cn(
                   "px-1.5 py-0 text-[10px]",
-                  readinessStatus !== "ready" && "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+                  readinessStatus !== "ready" && "border-warning/40 bg-warning/10 text-warning dark:text-warning",
                 )}
               >
                 {readinessLabel}

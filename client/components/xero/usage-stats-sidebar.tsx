@@ -1,13 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import {
-  Bot,
-  Coins,
-  DollarSign,
-  RefreshCw,
-  X,
-} from "lucide-react"
+import { RefreshCw, X } from "lucide-react"
 import { motion } from "motion/react"
 
 import { cn } from "@/lib/utils"
@@ -156,7 +150,7 @@ export function UsageStatsSidebar(props: UsageStatsSidebarProps) {
         animate={{ opacity: open ? 1 : 0 }}
         aria-hidden="true"
         className={cn(
-          "fixed inset-x-0 top-11 bottom-8 z-40 bg-black/30",
+          "fixed inset-0 z-40 bg-black/30",
           open ? "pointer-events-auto" : "pointer-events-none",
         )}
         initial={false}
@@ -168,7 +162,7 @@ export function UsageStatsSidebar(props: UsageStatsSidebarProps) {
         aria-hidden={!open}
         aria-label="Project usage statistics"
         className={cn(
-          "gpu-layer fixed top-11 bottom-8 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl",
+          "gpu-layer fixed inset-y-0 right-0 z-50 flex flex-col overflow-hidden border-l border-border/80 bg-sidebar shadow-2xl",
         )}
         initial={false}
         inert={!open ? true : undefined}
@@ -244,46 +238,48 @@ export function UsageStatsSidebar(props: UsageStatsSidebarProps) {
           ) : totals.runCount === 0 ? (
             <EmptyMessage>No agent runs recorded for this project yet.</EmptyMessage>
           ) : (
-            <div className="px-4 py-4 space-y-5">
-              {/* Totals headline */}
-              <section className="rounded-lg border border-border/70 bg-background/50 p-3">
-                <div className="grid grid-cols-2 gap-3">
+            <div className="px-5 py-5">
+              {/* Totals — flat numbers, no card */}
+              <section>
+                <div className="grid grid-cols-2 gap-6">
                   <Stat
-                    icon={<Coins className="h-3.5 w-3.5" />}
                     label="Total tokens"
                     value={formatTokenCount(totals.totalTokens)}
                     sublabel={`${totals.runCount} run${totals.runCount === 1 ? "" : "s"}`}
                   />
                   <Stat
-                    icon={<DollarSign className="h-3.5 w-3.5" />}
                     label="Estimated cost"
                     value={formatMicrosUsd(totals.estimatedCostMicros)}
-                    sublabel={lastUpdated ? `Updated ${lastUpdated}` : "—"}
+                    sublabel={lastUpdated ? `Updated ${lastUpdated}` : undefined}
                   />
                 </div>
-                <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-1.5 border-t border-border/40 pt-4 text-[11px]">
                   <TokenBucket label="Input" value={totals.inputTokens} />
                   <TokenBucket label="Output" value={totals.outputTokens} />
                   <TokenBucket label="Cache read" value={totals.cacheReadTokens} />
                   <TokenBucket label="Cache write" value={totals.cacheCreationTokens} />
-                </div>
+                </dl>
               </section>
 
-              {/* Per-model breakdown */}
-              <section>
-                <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {/* Per-model breakdown — hairline-divided rows, no per-row cards */}
+              <section className="mt-6 border-t border-border/40 pt-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                     By model
                   </h3>
                   {topModelShare > 0 ? (
                     <span className="text-[11px] text-muted-foreground/80">
-                      Top model: {topModelShare}% of spend
+                      Top {topModelShare}%
                     </span>
                   ) : null}
                 </div>
-                <ul className="space-y-2">
+                <ul className="mt-1 divide-y divide-border/40">
                   {breakdown.map((row) => (
-                    <ModelRow key={`${row.providerId}:${row.modelId}`} row={row} totalCostMicros={totals.estimatedCostMicros} />
+                    <ModelRow
+                      key={`${row.providerId}:${row.modelId}`}
+                      row={row}
+                      totalCostMicros={totals.estimatedCostMicros}
+                    />
                   ))}
                 </ul>
               </section>
@@ -304,20 +300,20 @@ function computeTopModelShare(breakdown: ProjectUsageModelBreakdownDto[]): numbe
 }
 
 function Stat(props: {
-  icon: React.ReactNode
   label: string
   value: string
   sublabel?: string
 }) {
   return (
-    <div className="space-y-0.5">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-        {props.icon}
-        <span>{props.label}</span>
-      </div>
-      <div className="text-lg font-semibold tabular-nums">{props.value}</div>
+    <div>
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {props.label}
+      </p>
+      <p className="mt-1 text-2xl font-semibold tabular-nums leading-none">
+        {props.value}
+      </p>
       {props.sublabel ? (
-        <div className="text-[11px] text-muted-foreground/80">{props.sublabel}</div>
+        <p className="mt-1 text-[11px] text-muted-foreground/80">{props.sublabel}</p>
       ) : null}
     </div>
   )
@@ -325,11 +321,11 @@ function Stat(props: {
 
 function TokenBucket({ label, value }: { label: string; value: number }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span>{label}</span>
-      <span className="font-mono tabular-nums text-foreground/80">
+    <div className="flex items-baseline justify-between gap-2">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="font-mono tabular-nums text-foreground/85">
         {formatTokenCount(value)}
-      </span>
+      </dd>
     </div>
   )
 }
@@ -344,38 +340,43 @@ function ModelRow({
   const sharePercent =
     totalCostMicros > 0 ? Math.round((row.estimatedCostMicros / totalCostMicros) * 100) : 0
   return (
-    <li className="rounded-md border border-border/60 bg-background/40 px-3 py-2">
-      <div className="flex items-start justify-between gap-3">
+    <li className="py-3">
+      <div className="flex items-baseline justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Bot className="h-3 w-3" />
-            <span>{providerLabel(row.providerId)}</span>
-          </div>
-          <div className="truncate font-mono text-[13px] text-foreground/90">{row.modelId}</div>
+          <p className="text-[11px] text-muted-foreground">
+            {providerLabel(row.providerId)}
+          </p>
+          <p className="truncate font-mono text-[13px] leading-tight text-foreground/95">
+            {row.modelId}
+          </p>
         </div>
-        <div className="text-right">
-          <div className="text-sm font-medium tabular-nums">
+        <div className="shrink-0 text-right">
+          <p className="text-sm font-semibold tabular-nums leading-tight">
             {formatMicrosUsd(row.estimatedCostMicros)}
-          </div>
-          <div className="text-[11px] text-muted-foreground">
+          </p>
+          <p className="text-[11px] text-muted-foreground">
             {formatTokenCount(row.totalTokens)} tok · {row.runCount} run
             {row.runCount === 1 ? "" : "s"}
-          </div>
+          </p>
         </div>
       </div>
       {totalCostMicros > 0 ? (
-        <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-foreground/5">
+        <div className="mt-2 h-px w-full overflow-hidden bg-foreground/5">
           <div
-            className="h-full bg-primary/60"
+            className="h-full bg-primary/50"
             style={{ width: `${Math.min(100, Math.max(2, sharePercent))}%` }}
           />
         </div>
       ) : null}
-      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] uppercase tracking-wide text-muted-foreground/80">
+      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] uppercase tracking-wider text-muted-foreground/70">
         <span>in {formatTokenCount(row.inputTokens)}</span>
         <span>out {formatTokenCount(row.outputTokens)}</span>
-        {row.cacheReadTokens > 0 ? <span>cache-r {formatTokenCount(row.cacheReadTokens)}</span> : null}
-        {row.cacheCreationTokens > 0 ? <span>cache-w {formatTokenCount(row.cacheCreationTokens)}</span> : null}
+        {row.cacheReadTokens > 0 ? (
+          <span>cache·r {formatTokenCount(row.cacheReadTokens)}</span>
+        ) : null}
+        {row.cacheCreationTokens > 0 ? (
+          <span>cache·w {formatTokenCount(row.cacheCreationTokens)}</span>
+        ) : null}
       </div>
     </li>
   )

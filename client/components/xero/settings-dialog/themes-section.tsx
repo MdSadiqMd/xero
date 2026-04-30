@@ -205,7 +205,7 @@ function AppearancePill({
         "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.08em] ring-1 ring-inset",
         dark
           ? "bg-indigo-500/10 text-indigo-500 ring-indigo-500/20 dark:text-indigo-300 dark:ring-indigo-400/25"
-          : "bg-amber-500/10 text-amber-600 ring-amber-500/20 dark:text-amber-300 dark:ring-amber-400/25",
+          : "bg-warning/10 text-warning ring-warning/20 dark:text-warning dark:ring-warning/25",
       )}
     >
       <Icon className="h-3 w-3" />

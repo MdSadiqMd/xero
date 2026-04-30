@@ -1,8 +1,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { openUrlMock } = vi.hoisted(() => ({
+const { invokeMock, isTauriMock, openUrlMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  isTauriMock: vi.fn(() => true),
   openUrlMock: vi.fn(),
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: invokeMock,
+  isTauri: isTauriMock,
 }))
 
 vi.mock('@tauri-apps/plugin-opener', () => ({
@@ -553,6 +560,31 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> & Recor
 }
 
 describe('SettingsDialog', () => {
+  beforeEach(() => {
+    invokeMock.mockReset()
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'browser_control_settings') {
+        return Promise.resolve({
+          preference: 'default',
+          updatedAt: null,
+        })
+      }
+      if (command === 'browser_list_cookie_sources') {
+        return Promise.resolve([])
+      }
+      if (command === 'browser_control_update_settings') {
+        return Promise.resolve({
+          preference: 'native_browser',
+          updatedAt: '2026-04-30T12:00:00Z',
+        })
+      }
+      return Promise.resolve(null)
+    })
+    isTauriMock.mockReset()
+    isTauriMock.mockReturnValue(true)
+    openUrlMock.mockReset()
+  })
+
   it('renders doctor reports from the diagnostics section and runs extended checks explicitly', async () => {
     const report = makeDoctorReport()
     const onRunDoctorReport = vi.fn(async () => report)
@@ -613,8 +645,28 @@ describe('SettingsDialog', () => {
     )
   })
 
+  it('saves the agent browser control preference from the browser settings section', async () => {
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'browser',
+        })}
+      />,
+    )
 
+    expect(await screen.findByText('Agent browser control')).toBeVisible()
+    expect(screen.getByRole('radio', { name: 'Default' })).toBeChecked()
 
+    fireEvent.click(screen.getByRole('radio', { name: 'Native browser' }))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('browser_control_update_settings', {
+        request: {
+          preference: 'native_browser',
+        },
+      })
+    })
+  })
 
   it('shows route target validation errors and omits project metadata when creating routes', async () => {
     const onUpsertNotificationRoute = vi.fn(async (_request: NotificationRouteRequest) => ({ route: makeNotificationRoute() }))

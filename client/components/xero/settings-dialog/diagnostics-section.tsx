@@ -75,29 +75,29 @@ const STATUS_LABEL: Record<XeroDiagnosticStatusDto, string> = {
 }
 
 const STATUS_TEXT: Record<XeroDiagnosticStatusDto, string> = {
-  passed: "text-emerald-600 dark:text-emerald-400",
-  warning: "text-amber-600 dark:text-amber-400",
+  passed: "text-success dark:text-success",
+  warning: "text-warning dark:text-warning",
   failed: "text-destructive",
   skipped: "text-muted-foreground",
 }
 
 const STATUS_BG: Record<XeroDiagnosticStatusDto, string> = {
-  passed: "bg-emerald-500/10",
-  warning: "bg-amber-500/10",
+  passed: "bg-success/10",
+  warning: "bg-warning/10",
   failed: "bg-destructive/10",
   skipped: "bg-muted/40",
 }
 
 const STATUS_RING: Record<XeroDiagnosticStatusDto, string> = {
-  passed: "ring-emerald-500/20",
-  warning: "ring-amber-500/25",
+  passed: "ring-success/20",
+  warning: "ring-warning/25",
   failed: "ring-destructive/25",
   skipped: "ring-border/60",
 }
 
 const STATUS_ACCENT: Record<XeroDiagnosticStatusDto, string> = {
-  passed: "before:bg-emerald-500/50 dark:before:bg-emerald-400/50",
-  warning: "before:bg-amber-500/70 dark:before:bg-amber-400/70",
+  passed: "before:bg-success/50 dark:before:bg-success/50",
+  warning: "before:bg-warning/70 dark:before:bg-warning/70",
   failed: "before:bg-destructive/80",
   skipped: "before:bg-border/60",
 }
@@ -386,7 +386,7 @@ function ReportSummary({
             onClick={onCopy}
           >
             {copied ? (
-              <Check className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" />
+              <Check className="h-3.5 w-3.5 text-success dark:text-success" />
             ) : (
               <Clipboard className="h-3.5 w-3.5" />
             )}
@@ -506,8 +506,8 @@ function CountChip({ tone, value }: { tone: XeroDiagnosticStatusDto; value: numb
     >
       <span
         className={cn("size-1.5 rounded-full", {
-          "bg-emerald-500 dark:bg-emerald-400": tone === "passed",
-          "bg-amber-500 dark:bg-amber-400": tone === "warning",
+          "bg-success dark:bg-success": tone === "passed",
+          "bg-warning dark:bg-warning": tone === "warning",
           "bg-destructive": tone === "failed",
           "bg-muted-foreground/60": tone === "skipped",
         })}
@@ -575,7 +575,7 @@ function CheckRow({ check }: { check: XeroDiagnosticCheckDto }) {
                 "mt-2.5 flex items-start gap-2 rounded-md px-2.5 py-1.5 text-[11.5px] leading-[1.5]",
                 check.status === "failed"
                   ? "bg-destructive/8 text-foreground/85 ring-1 ring-inset ring-destructive/20"
-                  : "bg-amber-500/8 text-foreground/85 ring-1 ring-inset ring-amber-500/20",
+                  : "bg-warning/8 text-foreground/85 ring-1 ring-inset ring-warning/20",
               )}
             >
               <ArrowRight
@@ -583,7 +583,7 @@ function CheckRow({ check }: { check: XeroDiagnosticCheckDto }) {
                   "mt-0.5 h-3 w-3 shrink-0",
                   check.status === "failed"
                     ? "text-destructive"
-                    : "text-amber-600 dark:text-amber-400",
+                    : "text-warning dark:text-warning",
                 )}
                 aria-hidden
               />

@@ -9,10 +9,22 @@ use rusqlite_migration::{Migrations, M};
 /// The app is still pre-release, so the global database starts from a fresh
 /// baseline instead of carrying compatibility migrations for removed schemas.
 pub fn migrations() -> &'static Migrations<'static> {
-    static MIGRATIONS: LazyLock<Migrations<'static>> =
-        LazyLock::new(|| Migrations::new(vec![M::up(INITIAL_SCHEMA_SQL)]));
+    static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
+        Migrations::new(vec![
+            M::up(INITIAL_SCHEMA_SQL),
+            M::up(BROWSER_CONTROL_SETTINGS_SQL),
+        ])
+    });
     &MIGRATIONS
 }
+
+const BROWSER_CONTROL_SETTINGS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS browser_control_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+"#;
 
 const INITIAL_SCHEMA_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS provider_credentials (
@@ -84,6 +96,12 @@ const INITIAL_SCHEMA_SQL: &str = r#"
     );
 
     CREATE TABLE IF NOT EXISTS dictation_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS browser_control_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         payload TEXT NOT NULL,
         updated_at TEXT NOT NULL

@@ -462,6 +462,7 @@ fn owned_agent_skill_descriptor_and_tool_search_are_gated_by_skill_support() {
         &controls,
         ToolRegistryOptions {
             skill_tool_enabled: true,
+            ..ToolRegistryOptions::default()
         },
     );
     assert!(enabled.descriptor_names().contains("skill"));
@@ -485,12 +486,18 @@ fn owned_agent_skill_descriptor_and_tool_search_are_gated_by_skill_support() {
         "find-skills",
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )));
+    let bundled_root = root.path().join("bundled-skills");
+    write_skill(&bundled_root, "find-skills", "find-skills", "Find skills.");
     let enabled_runtime = AutonomousToolRuntime::new(root.path())
         .expect("runtime")
         .with_skill_tool(
             "project-1",
             skill_runtime(&root, source),
-            Vec::new(),
+            vec![AutonomousBundledSkillRoot {
+                bundle_id: "xero".into(),
+                version: "2026.04.25".into(),
+                root_path: bundled_root,
+            }],
             Vec::new(),
         );
     let enabled_search = enabled_runtime
@@ -505,6 +512,27 @@ fn owned_agent_skill_descriptor_and_tool_search_are_gated_by_skill_support() {
                 .matches
                 .iter()
                 .any(|item| item.tool_name == "skill" && item.group == "skills"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+    let candidate_search = enabled_runtime
+        .tool_search(AutonomousToolSearchRequest {
+            query: "find skills".into(),
+            limit: None,
+        })
+        .expect("search skill candidates");
+    match candidate_search.output {
+        AutonomousToolOutput::ToolSearch(output) => {
+            let skill_match = output
+                .matches
+                .iter()
+                .find(|item| item.catalog_kind == "skill" && item.source.is_some())
+                .expect("skill catalog projection");
+            assert_eq!(skill_match.tool_name, "skill");
+            assert_eq!(skill_match.trust.as_deref(), Some("trusted"));
+            assert_eq!(skill_match.approval_status.as_deref(), Some("allowed"));
+            assert!(skill_match.tags.contains(&"find_skills".into()));
+            assert!(skill_match.activation_tools.contains(&"skill".into()));
         }
         other => panic!("unexpected output: {other:?}"),
     }

@@ -8,6 +8,7 @@ import {
   phaseStatusSchema,
   safePercent,
 } from './shared'
+import { providerModelThinkingEffortSchema } from './provider-models'
 
 export const projectSummarySchema = z.object({
   id: z.string().min(1),
@@ -177,6 +178,24 @@ export const gitCommitRequestSchema = z
   .object({
     projectId: z.string().trim().min(1),
     message: z.string().min(1),
+  })
+  .strict()
+
+export const gitGenerateCommitMessageRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    providerProfileId: z.string().trim().min(1).nullable().optional(),
+    modelId: z.string().trim().min(1),
+    thinkingEffort: providerModelThinkingEffortSchema.nullable().optional(),
+  })
+  .strict()
+
+export const gitGenerateCommitMessageResponseSchema = z
+  .object({
+    message: z.string().trim().min(1),
+    providerId: z.string().trim().min(1),
+    modelId: z.string().trim().min(1),
+    diffTruncated: z.boolean(),
   })
   .strict()
 
@@ -380,6 +399,8 @@ export type GitCommitRequestDto = z.infer<typeof gitCommitRequestSchema>
 export type GitRemoteRequestDto = z.infer<typeof gitRemoteRequestSchema>
 export type GitSignatureDto = z.infer<typeof gitSignatureSchema>
 export type GitCommitResponseDto = z.infer<typeof gitCommitResponseSchema>
+export type GitGenerateCommitMessageRequestDto = z.infer<typeof gitGenerateCommitMessageRequestSchema>
+export type GitGenerateCommitMessageResponseDto = z.infer<typeof gitGenerateCommitMessageResponseSchema>
 export type GitFetchResponseDto = z.infer<typeof gitFetchResponseSchema>
 export type GitPullResponseDto = z.infer<typeof gitPullResponseSchema>
 export type GitRemoteRefUpdateDto = z.infer<typeof gitRemoteRefUpdateSchema>

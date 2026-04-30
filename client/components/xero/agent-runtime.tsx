@@ -64,6 +64,7 @@ interface AgentRuntimeProps {
     prompt?: string | null
     autoCompact?: RuntimeAutoCompactPreferenceDto | null
   }) => Promise<RuntimeRunView | null>
+  onComposerControlsChange?: (controls: RuntimeRunControlInputDto | null) => void
   onStartRuntimeSession?: (options?: { providerProfileId?: string | null }) => Promise<RuntimeSessionView | null>
   onStopRuntimeRun?: (runId: string) => Promise<RuntimeRunView | null>
   onSubmitManualCallback?: (flowId: string, manualInput: string) => Promise<ProviderAuthSessionView | null>
@@ -185,6 +186,7 @@ export function AgentRuntime({
   onOpenDiagnostics,
   onStartRuntimeRun,
   onUpdateRuntimeRunControls,
+  onComposerControlsChange,
   onStopRuntimeRun,
   onStartRuntimeSession,
   onResolveOperatorAction,
@@ -279,6 +281,7 @@ export function AgentRuntime({
     onStartRuntimeRun,
     onStartRuntimeSession,
     onUpdateRuntimeRunControls: canMutateRuntimeRun ? onUpdateRuntimeRunControls : undefined,
+    onComposerControlsChange,
     onStopRuntimeRun,
     onResolveOperatorAction,
     onResumeOperatorRun,

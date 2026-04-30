@@ -7,6 +7,7 @@ import {
   Coins,
   FileJson,
   Loader2,
+  Network,
   Play,
   RadioTower,
   RefreshCw,
@@ -45,6 +46,7 @@ import { SolanaScenarioPanel } from "./solana-scenario-panel"
 import { SolanaTokenPanel } from "./solana-token-panel"
 import { SolanaTxInspector } from "./solana-tx-inspector"
 import { SolanaWalletPanel } from "./solana-wallet-panel"
+import { PanelHeader } from "./solana-panel-shell"
 import {
   useSolanaWorkbench,
   type ClusterKind,
@@ -63,6 +65,7 @@ const MAX_WIDTH = 900
 const STORAGE_KEY = "xero.solana.workbench.width"
 
 type TabId =
+  | "cluster"
   | "personas"
   | "scenarios"
   | "tx"
@@ -116,7 +119,7 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
 
   const workbench = useSolanaWorkbench({ active: workbenchActive })
   const [selectedKind, setSelectedKind] = useState<ClusterKind>("localnet")
-  const [activeTab, setActiveTab] = useState<TabId>("personas")
+  const [activeTab, setActiveTab] = useState<TabId>("cluster")
 
   useEffect(() => {
     if (!workbench.clusters.length) return
@@ -405,6 +408,21 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
     const rpcUnhealthyCount = workbench.rpcHealth.filter((h) => !h.healthy).length
 
     return {
+      cluster:
+        activityNotification(
+          workbench.isStarting,
+          "Validator starting",
+        ) ??
+        activityNotification(
+          workbench.isStopping,
+          "Validator stopping",
+        ) ??
+        issueNotification(
+          workbench.error ? 1 : 0,
+          "validator error",
+          "validator errors",
+          "danger",
+        ),
       personas: activityNotification(
         workbench.personaBusy,
         "Persona action in progress",
@@ -478,6 +496,12 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
 
   const tabs: TabDescriptor[] = [
     {
+      id: "cluster",
+      icon: Network,
+      label: "Cluster",
+      notification: notifications.cluster,
+    },
+    {
       id: "personas",
       icon: Users,
       label: "Personas",
@@ -550,7 +574,7 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
       notification: notifications.rpc,
     },
   ]
-  const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label ?? "Personas"
+  const activeTabLabel = tabs.find((tab) => tab.id === activeTab)?.label ?? "Cluster"
 
   return (
     <aside
@@ -651,127 +675,139 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
-        <section className="border-b border-border/70 px-3 py-3">
-          <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Cluster
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {workbench.clusters.map((cluster) => (
-              <button
-                key={cluster.kind}
-                type="button"
-                disabled={!cluster.startable && !workbench.status.running}
-                onClick={() => setSelectedKind(cluster.kind)}
-                className={cn(
-                  "rounded-md border px-2 py-1 text-[11px] transition-colors",
-                  selectedKind === cluster.kind
-                    ? "border-primary/50 bg-primary/10 text-primary"
-                    : "border-border/70 bg-background/40 text-foreground/80 hover:border-primary/40 hover:text-foreground",
-                  !cluster.startable && "opacity-60",
-                )}
-              >
-                {cluster.label}
-              </button>
-            ))}
-          </div>
-          {selectedCluster ? (
-            <p className="mt-2 text-[11px] text-muted-foreground">
-              {selectedCluster.startable
-                ? "Local cluster — Xero can spin it up on your machine."
-                : "Remote cluster — read-only from here."}
-            </p>
-          ) : null}
-        </section>
-
-        <section className="border-b border-border/70 px-3 py-3">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              Validator
-            </div>
-            <StatusDot
-              running={workbench.status.running}
-              starting={workbench.isStarting}
-            />
-          </div>
-          <div className="space-y-1.5 text-[11px] text-foreground/85">
-            <KV
-              label="State"
-              value={
-                workbench.isStarting
-                  ? "Starting…"
-                  : workbench.isStopping
-                    ? "Stopping…"
-                    : workbench.status.running
-                      ? "Running"
-                      : "Stopped"
-              }
-            />
-            <KV label="RPC" value={workbench.status.rpcUrl ?? "—"} mono />
-            <KV label="WS" value={workbench.status.wsUrl ?? "—"} mono />
-            {workbench.status.uptimeS != null ? (
-              <KV
-                label="Uptime"
-                value={`${workbench.status.uptimeS}s`}
-                mono
-              />
-            ) : null}
-            {workbench.lastEvent?.message ? (
-              <div className="text-[11px] italic text-muted-foreground">
-                {workbench.lastEvent.message}
-              </div>
-            ) : null}
-          </div>
-          <div className="mt-3 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleStart}
-              disabled={
-                !selectedCluster?.startable ||
-                workbench.isStarting ||
-                workbench.isStopping ||
-                workbench.status.running
-              }
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
-                "hover:bg-primary/25 disabled:opacity-50",
-              )}
-            >
-              {workbench.isStarting ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Play className="h-3 w-3 fill-current" />
-              )}
-              Start
-            </button>
-            <button
-              type="button"
-              onClick={handleStop}
-              disabled={!workbench.status.running || workbench.isStopping}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background/40 px-2.5 py-1 text-[11px] text-foreground/85 transition-colors",
-                "hover:border-destructive/50 hover:text-destructive disabled:opacity-50",
-              )}
-            >
-              {workbench.isStopping ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Square className="h-3 w-3" />
-              )}
-              Stop
-            </button>
-          </div>
-          {workbench.error ? (
-            <p className="mt-2 text-[11px] text-destructive">
-              {workbench.error}
-            </p>
-          ) : null}
-        </section>
-
         <div
           role="tabpanel"
           aria-labelledby={`tab-${activeTab}`}
-          className="px-3 py-3"
+          className={cn(activeTab === "cluster" ? "" : "px-3 py-3")}
         >
+          {activeTab === "cluster" ? (
+            <>
+              <div className="px-3 pt-3">
+                <PanelHeader
+                  icon={Network}
+                  title="Cluster"
+                  description="Pick a cluster and control the local validator."
+                  busy={workbench.isStarting || workbench.isStopping}
+                />
+              </div>
+              <section className="border-b border-border/70 px-3 py-3">
+                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Cluster
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {workbench.clusters.map((cluster) => (
+                    <button
+                      key={cluster.kind}
+                      type="button"
+                      disabled={!cluster.startable && !workbench.status.running}
+                      onClick={() => setSelectedKind(cluster.kind)}
+                      className={cn(
+                        "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                        selectedKind === cluster.kind
+                          ? "border-primary/50 bg-primary/10 text-primary"
+                          : "border-border/70 bg-background/40 text-foreground/80 hover:border-primary/40 hover:text-foreground",
+                        !cluster.startable && "opacity-60",
+                      )}
+                    >
+                      {cluster.label}
+                    </button>
+                  ))}
+                </div>
+                {selectedCluster ? (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    {selectedCluster.startable
+                      ? "Local cluster — Xero can spin it up on your machine."
+                      : "Remote cluster — read-only from here."}
+                  </p>
+                ) : null}
+              </section>
+
+              <section className="px-3 py-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                    Validator
+                  </div>
+                  <StatusDot
+                    running={workbench.status.running}
+                    starting={workbench.isStarting}
+                  />
+                </div>
+                <div className="space-y-1.5 text-[11px] text-foreground/85">
+                  <KV
+                    label="State"
+                    value={
+                      workbench.isStarting
+                        ? "Starting…"
+                        : workbench.isStopping
+                          ? "Stopping…"
+                          : workbench.status.running
+                            ? "Running"
+                            : "Stopped"
+                    }
+                  />
+                  <KV label="RPC" value={workbench.status.rpcUrl ?? "—"} mono />
+                  <KV label="WS" value={workbench.status.wsUrl ?? "—"} mono />
+                  {workbench.status.uptimeS != null ? (
+                    <KV
+                      label="Uptime"
+                      value={`${workbench.status.uptimeS}s`}
+                      mono
+                    />
+                  ) : null}
+                  {workbench.lastEvent?.message ? (
+                    <div className="text-[11px] italic text-muted-foreground">
+                      {workbench.lastEvent.message}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleStart}
+                    disabled={
+                      !selectedCluster?.startable ||
+                      workbench.isStarting ||
+                      workbench.isStopping ||
+                      workbench.status.running
+                    }
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
+                      "hover:bg-primary/25 disabled:opacity-50",
+                    )}
+                  >
+                    {workbench.isStarting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Play className="h-3 w-3 fill-current" />
+                    )}
+                    Start
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStop}
+                    disabled={!workbench.status.running || workbench.isStopping}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background/40 px-2.5 py-1 text-[11px] text-foreground/85 transition-colors",
+                      "hover:border-destructive/50 hover:text-destructive disabled:opacity-50",
+                    )}
+                  >
+                    {workbench.isStopping ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Square className="h-3 w-3" />
+                    )}
+                    Stop
+                  </button>
+                </div>
+                {workbench.error ? (
+                  <p className="mt-2 text-[11px] text-destructive">
+                    {workbench.error}
+                  </p>
+                ) : null}
+              </section>
+            </>
+          ) : null}
+
           {activeTab === "personas" ? (
             <SolanaPersonaPanel
               busy={workbench.personaBusy}
@@ -945,7 +981,8 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
 
           {activeTab === "rpc" ? (
             <RpcEndpoints
-              onRefresh={() => void workbench.refreshRpcHealth()}
+              active={activeTab === "rpc"}
+              onRefresh={() => workbench.refreshRpcHealth()}
               rpcHealth={workbench.rpcHealth}
             />
           ) : null}
@@ -1011,7 +1048,7 @@ function TabButton({
             tab.notification.tone === "activity" &&
               "bg-primary text-primary-foreground",
             tab.notification.tone === "attention" &&
-              "bg-amber-400 text-amber-950",
+              "bg-warning text-warning",
             tab.notification.tone === "danger" &&
               "bg-destructive text-destructive-foreground",
           )}
@@ -1095,57 +1132,141 @@ function KV({
 function RpcEndpoints({
   rpcHealth,
   onRefresh,
+  active,
 }: {
   rpcHealth: ReturnType<typeof useSolanaWorkbench>["rpcHealth"]
-  onRefresh: () => void
+  onRefresh: () => Promise<void>
+  active: boolean
 }) {
+  const [probing, setProbing] = useState(false)
+  const hasProbedRef = useRef(false)
+
+  const runProbe = useCallback(async () => {
+    if (probing) return
+    setProbing(true)
+    try {
+      await onRefresh()
+    } finally {
+      setProbing(false)
+    }
+  }, [onRefresh, probing])
+
+  useEffect(() => {
+    if (!active || hasProbedRef.current) return
+    hasProbedRef.current = true
+    void runProbe()
+  }, [active, runProbe])
+
+  const grouped = useMemo(() => {
+    const map = new Map<ClusterKind, typeof rpcHealth>()
+    for (const entry of rpcHealth) {
+      const list = map.get(entry.cluster) ?? []
+      list.push(entry)
+      map.set(entry.cluster, list)
+    }
+    return Array.from(map.entries())
+  }, [rpcHealth])
+
+  const totals = useMemo(() => {
+    const healthy = rpcHealth.filter((h) => h.healthy).length
+    return { healthy, total: rpcHealth.length }
+  }, [rpcHealth])
+
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-end">
-        <button
-          type="button"
-          aria-label="Refresh RPC health"
-          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-          onClick={onRefresh}
-        >
-          <RefreshCw className="h-3 w-3" />
-          Probe
-        </button>
-      </div>
+    <div className="flex flex-col gap-3">
+      <PanelHeader
+        icon={Server}
+        title="RPC endpoints"
+        description="Latency and health probes for the bundled free-tier RPC pool."
+        busy={probing}
+        right={
+          <button
+            type="button"
+            aria-label="Probe RPC health"
+            disabled={probing}
+            onClick={() => void runProbe()}
+            className="inline-flex h-7 items-center gap-1 rounded-md border border-border/70 bg-background/40 px-2 text-[11px] text-foreground/85 transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
+          >
+            <RefreshCw className={cn("h-3 w-3", probing && "animate-spin")} />
+            {probing ? "Probing" : "Probe"}
+          </button>
+        }
+      />
+
       {rpcHealth.length === 0 ? (
-        <p className="text-[11.5px] text-muted-foreground">
-          Probe to check the free-tier endpoint pool.
-        </p>
+        <div className="rounded-md border border-dashed border-border/70 bg-background/30 px-3 py-3 text-[11.5px] leading-relaxed text-muted-foreground">
+          {probing ? (
+            <span className="inline-flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Probing free-tier RPC endpoints…
+            </span>
+          ) : (
+            <>
+              <span className="italic">No probe results yet.</span>{" "}
+              <span>
+                Probe to measure latency and health for the bundled RPC pool across
+                each cluster.
+              </span>
+            </>
+          )}
+        </div>
       ) : (
-        <ul className="flex flex-col divide-y divide-border/40">
-          {rpcHealth.map((health) => (
-            <li
-              key={`${health.cluster}-${health.id}`}
-              className="flex items-center justify-between gap-2 px-1 py-2"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[12px] font-medium text-foreground">
-                  {health.label ?? health.id}
-                </div>
-                <div className="truncate font-mono text-[10.5px] text-muted-foreground">
-                  {health.cluster} · {health.url}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
-                {health.healthy ? (
-                  <CircleCheckBig className="h-3.5 w-3.5 text-emerald-400" />
-                ) : (
-                  <CircleSlash className="h-3.5 w-3.5 text-destructive" />
-                )}
-                {health.latencyMs != null ? (
-                  <span className="font-mono tabular-nums text-muted-foreground">
-                    {health.latencyMs}ms
+        <>
+          <div className="flex items-center justify-between rounded-md border border-border/70 bg-background/40 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+            <span>
+              <span className="font-mono tabular-nums text-foreground/85">
+                {totals.healthy}
+              </span>
+              {" / "}
+              <span className="font-mono tabular-nums">{totals.total}</span>{" "}
+              healthy
+            </span>
+            <span className="text-[10.5px] text-muted-foreground/80">
+              {grouped.length} cluster{grouped.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="flex flex-col gap-3">
+            {grouped.map(([cluster, list]) => (
+              <section key={cluster} className="flex flex-col gap-1">
+                <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  <span>{cluster}</span>
+                  <span className="font-mono tabular-nums text-muted-foreground/70">
+                    {list.filter((e) => e.healthy).length}/{list.length}
                   </span>
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ul>
+                </div>
+                <ul className="flex flex-col divide-y divide-border/40 rounded-md border border-border/70 bg-background/40">
+                  {list.map((health) => (
+                    <li
+                      key={`${health.cluster}-${health.id}`}
+                      className="flex items-center justify-between gap-2 px-2.5 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[11.5px] font-medium text-foreground">
+                          {health.label ?? health.id}
+                        </div>
+                        <div className="truncate font-mono text-[10.5px] text-muted-foreground">
+                          {health.url}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
+                        {health.healthy ? (
+                          <CircleCheckBig className="h-3.5 w-3.5 text-success" />
+                        ) : (
+                          <CircleSlash className="h-3.5 w-3.5 text-destructive" />
+                        )}
+                        {health.latencyMs != null ? (
+                          <span className="font-mono tabular-nums text-muted-foreground">
+                            {health.latencyMs}ms
+                          </span>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
@@ -1162,11 +1283,11 @@ function StatusDot({
     <span className="relative flex h-2 w-2 items-center justify-center">
       {running ? (
         <>
-          <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400/50" />
-          <span className="relative h-2 w-2 rounded-full bg-emerald-400" />
+          <span className="absolute inset-0 animate-ping rounded-full bg-success/50" />
+          <span className="relative h-2 w-2 rounded-full bg-success" />
         </>
       ) : starting ? (
-        <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+        <span className="h-2 w-2 animate-pulse rounded-full bg-warning" />
       ) : (
         <span className="h-2 w-2 rounded-full bg-muted-foreground/50" />
       )}

@@ -25,6 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { PanelHeader, UnderlineTab, UnderlineTabs } from "./solana-panel-shell"
 import type {
   AnalyzerKind,
   AuditEventPayload,
@@ -61,9 +62,9 @@ const SEVERITY_LABEL: Record<FindingSeverity, string> = {
 
 const SEVERITY_CLASS: Record<FindingSeverity, string> = {
   critical: "bg-destructive/15 text-destructive border-destructive/40",
-  high: "bg-amber-500/15 text-amber-400 border-amber-500/40",
-  medium: "bg-yellow-500/15 text-yellow-300 border-yellow-500/40",
-  low: "bg-sky-500/15 text-sky-300 border-sky-500/40",
+  high: "bg-warning/15 text-warning border-warning/40",
+  medium: "bg-warning/15 text-warning border-warning/40",
+  low: "bg-info/15 text-info border-info/40",
   informational: "bg-muted/40 text-muted-foreground border-border/60",
 }
 
@@ -176,42 +177,45 @@ export function SolanaAuditPanel({
 
   return (
     <div className="flex flex-col gap-3">
-      <div
-        role="tablist"
-        aria-label="Audit sections"
-        className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/60 scrollbar-thin"
-      >
-        <AuditTabButton
+      <PanelHeader
+        icon={ShieldCheck}
+        title="Audit"
+        description="Lints, analyzers, fuzzing, coverage, and exploit replay."
+        busy={busy}
+      />
+
+      <UnderlineTabs ariaLabel="Audit sections">
+        <UnderlineTab
           active={activeTab === "lints"}
           onClick={() => setActiveTab("lints")}
           icon={FileSearch}
           label="Lints"
         />
-        <AuditTabButton
+        <UnderlineTab
           active={activeTab === "external"}
           onClick={() => setActiveTab("external")}
           icon={ShieldCheck}
           label="Analyzer"
         />
-        <AuditTabButton
+        <UnderlineTab
           active={activeTab === "fuzz"}
           onClick={() => setActiveTab("fuzz")}
           icon={Bug}
           label="Fuzz"
         />
-        <AuditTabButton
+        <UnderlineTab
           active={activeTab === "coverage"}
           onClick={() => setActiveTab("coverage")}
           icon={FlaskConical}
           label="Coverage"
         />
-        <AuditTabButton
+        <UnderlineTab
           active={activeTab === "replay"}
           onClick={() => setActiveTab("replay")}
           icon={Target}
           label="Replay"
         />
-      </div>
+      </UnderlineTabs>
 
       {findings.length > 0 ? (
         <section className="rounded-md border border-border/60 bg-background/40 p-2">
@@ -295,7 +299,7 @@ export function SolanaAuditPanel({
       ) : null}
 
       {events.length > 0 ? (
-        <section className="rounded-md border border-border/50 bg-background/30 px-2 py-2">
+        <section className="rounded-md border border-border/70 bg-background/30 px-2.5 py-2">
           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Audit feed
           </div>
@@ -320,33 +324,6 @@ export function SolanaAuditPanel({
   )
 }
 
-interface AuditTabButtonProps {
-  active: boolean
-  onClick: () => void
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-}
-
-function AuditTabButton({ active, onClick, icon: Icon, label }: AuditTabButtonProps) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={cn(
-        "relative inline-flex shrink-0 items-center gap-1 px-2 py-1.5 text-[11px] transition-colors",
-        active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      <Icon className="h-3.5 w-3.5" />
-      <span>{label}</span>
-      {active ? (
-        <span className="absolute inset-x-1 -bottom-px h-px bg-primary" />
-      ) : null}
-    </button>
-  )
-}
 
 function FindingRow({ finding }: { finding: Finding }) {
   const Icon = SEVERITY_ICON[finding.severity]
@@ -356,9 +333,9 @@ function FindingRow({ finding }: { finding: Finding }) {
         className={cn(
           "mt-0.5 h-3.5 w-3.5 shrink-0",
           finding.severity === "critical" && "text-destructive",
-          finding.severity === "high" && "text-amber-400",
-          finding.severity === "medium" && "text-yellow-300",
-          finding.severity === "low" && "text-sky-300",
+          finding.severity === "high" && "text-warning",
+          finding.severity === "medium" && "text-warning",
+          finding.severity === "low" && "text-info",
           finding.severity === "informational" && "text-muted-foreground",
         )}
       />
@@ -432,7 +409,7 @@ function LintsTab({
       <input
         value={projectRoot}
         onChange={(e) => setProjectRoot(e.target.value)}
-        placeholder="/Users/you/programs/my-anchor"
+        placeholder="Path to Anchor or Cargo project"
         className="rounded-md border border-border/70 bg-background/50 px-2 py-1 font-mono text-[11.5px] focus:outline-none focus:ring-1 focus:ring-primary/50"
       />
       <button
@@ -517,7 +494,7 @@ function ExternalTab({
       <input
         value={projectRoot}
         onChange={(e) => setProjectRoot(e.target.value)}
-        placeholder="/Users/you/programs/my-anchor"
+        placeholder="Path to Anchor or Cargo project"
         className="rounded-md border border-border/70 bg-background/50 px-2 py-1 font-mono text-[11.5px]"
       />
       <button
@@ -843,7 +820,7 @@ function ReplayTab({
             </p>
           ) : null}
           {!clusterRunning && !dryRun ? (
-            <p className="text-[11px] text-amber-400">
+            <p className="text-[11px] text-warning">
               Cluster is not running. Start a local or fork validator before executing a live
               replay.
             </p>

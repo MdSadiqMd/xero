@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
+  FileJson,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -20,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { PanelHeader } from "./solana-panel-shell"
 import type {
   ClusterKind,
   CodamaGenerationReport,
@@ -212,6 +214,13 @@ export function SolanaIdlPanel({
 
   return (
     <div className="flex flex-col gap-4">
+      <PanelHeader
+        icon={FileJson}
+        title="IDL"
+        description="Load, drift-check, codegen, and publish program IDLs."
+        busy={idlBusy}
+      />
+
       <div className="flex flex-col gap-1.5">
         <input
           type="text"
@@ -257,8 +266,8 @@ export function SolanaIdlPanel({
         />
       </div>
 
-      <div className="border-t border-border/50 pt-3">
-        <div className="mb-2 text-[11.5px] font-medium text-foreground">
+      <div className="border-t border-border/70 pt-3">
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
           Codama codegen
         </div>
         <div className="flex flex-col gap-1.5">
@@ -293,7 +302,7 @@ export function SolanaIdlPanel({
             type="button"
             onClick={handleCodama}
             disabled={idlBusy}
-            className="mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+            className="mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
           >
             {idlBusy ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -305,8 +314,8 @@ export function SolanaIdlPanel({
         </div>
       </div>
 
-      <div className="border-t border-border/50 pt-3">
-        <div className="mb-2 text-[11.5px] font-medium text-foreground">
+      <div className="border-t border-border/70 pt-3">
+        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
           Publish IDL
         </div>
         <div className="flex flex-col gap-1.5">
@@ -356,7 +365,7 @@ export function SolanaIdlPanel({
             type="button"
             onClick={handlePublish}
             disabled={idlBusy}
-            className="mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+            className="mt-0.5 inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/25 disabled:opacity-50"
           >
             {idlBusy ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -373,7 +382,7 @@ export function SolanaIdlPanel({
       ) : null}
 
       {lastIdlEvent ? (
-        <div className="mt-2 rounded-md border border-border/50 bg-background/30 p-2 text-[11px] text-foreground/85">
+        <div className="mt-2 rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px] text-foreground/85">
           <div className="flex items-center justify-between">
             <span className="font-mono">{lastIdlEvent.phase}</span>
             <span className="text-muted-foreground">
@@ -474,7 +483,7 @@ function IdlActionButton({
 
 function DriftSummary({ report }: { report: DriftReport }) {
   return (
-    <div className="mt-2 rounded-md border border-border/50 bg-background/30 p-2 text-[11px]">
+    <div className="mt-2 rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px]">
       <div className="flex items-center justify-between">
         <span className="font-semibold text-foreground">Drift</span>
         <span className="text-muted-foreground">
@@ -494,7 +503,7 @@ function DriftSummary({ report }: { report: DriftReport }) {
                 className={cn(
                   "truncate",
                   change.severity === "breaking" && "text-destructive",
-                  change.severity === "risky" && "text-amber-400",
+                  change.severity === "risky" && "text-warning",
                 )}
               >
                 {change.severity[0].toUpperCase()} · {change.path}
@@ -509,13 +518,13 @@ function DriftSummary({ report }: { report: DriftReport }) {
 
 function CodamaSummary({ report }: { report: CodamaGenerationReport }) {
   return (
-    <div className="mt-2 rounded-md border border-border/50 bg-background/30 p-2 text-[11px]">
+    <div className="mt-2 rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px]">
       <div className="flex items-center justify-between">
         <span className="font-semibold text-foreground">Codama</span>
         <span className="text-muted-foreground">
           {report.elapsedMs}ms ·{" "}
           {report.allSucceeded ? (
-            <span className="inline-flex items-center gap-0.5 text-emerald-400">
+            <span className="inline-flex items-center gap-0.5 text-success">
               <CheckCircle2 className="h-3 w-3" /> ok
             </span>
           ) : (
@@ -542,13 +551,13 @@ function CodamaSummary({ report }: { report: CodamaGenerationReport }) {
 
 function PublishSummary({ report }: { report: IdlPublishReport }) {
   return (
-    <div className="mt-2 rounded-md border border-border/50 bg-background/30 p-2 text-[11px]">
+    <div className="mt-2 rounded-md border border-border/70 bg-background/30 p-2.5 text-[11px]">
       <div className="flex items-center justify-between">
         <span className="font-semibold text-foreground">Publish</span>
         <span
           className={cn(
             "inline-flex items-center gap-0.5",
-            report.success ? "text-emerald-400" : "text-destructive",
+            report.success ? "text-success" : "text-destructive",
           )}
         >
           {report.success ? (

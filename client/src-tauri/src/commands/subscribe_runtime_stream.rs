@@ -346,6 +346,24 @@ fn owned_agent_event_runtime_item(
             item.detail = Some(format!("Validation {outcome}: {label}."));
             item.text = item.detail.clone();
         }
+        AgentRunEventKind::ToolRegistrySnapshot => {
+            item.kind = RuntimeStreamItemKind::Activity;
+            item.code = Some("owned_agent_tool_registry_snapshot".into());
+            item.title = Some("Tool registry".into());
+            let count = payload
+                .get("toolNames")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            let turn = payload
+                .get("turnIndex")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default();
+            item.detail = Some(format!(
+                "Provider turn {turn} has {count} active tool descriptor(s)."
+            ));
+            item.text = item.detail.clone();
+        }
         AgentRunEventKind::ActionRequired => {
             item.kind = RuntimeStreamItemKind::ActionRequired;
             item.action_id = payload_string(&payload, "actionId")

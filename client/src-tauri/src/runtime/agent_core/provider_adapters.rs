@@ -1184,12 +1184,16 @@ struct OpenAiUsage {
     total_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: Option<OpenAiUsagePromptDetails>,
+    #[serde(default)]
+    cost: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpenAiUsagePromptDetails {
     #[serde(default)]
     cached_tokens: u64,
+    #[serde(default)]
+    cache_write_tokens: u64,
 }
 
 fn parse_openai_chat_sse(
@@ -1225,18 +1229,14 @@ fn parse_openai_chat_sse(
             )
         })?;
         if let Some(next_usage) = chunk.usage {
-            let cache_read_tokens = next_usage
-                .prompt_tokens_details
-                .as_ref()
-                .map(|details| details.cached_tokens)
-                .unwrap_or_default();
-            let mapped = ProviderUsage {
-                input_tokens: next_usage.prompt_tokens,
-                output_tokens: next_usage.completion_tokens,
-                total_tokens: next_usage.total_tokens,
-                cache_read_tokens,
-                cache_creation_tokens: 0,
-            };
+            let mapped = openai_provider_usage(
+                next_usage.prompt_tokens,
+                next_usage.completion_tokens,
+                next_usage.total_tokens,
+                openai_usage_cache_read_tokens(&next_usage),
+                openai_usage_cache_creation_tokens(&next_usage),
+                openai_reported_cost_micros(provider_id, &next_usage),
+            );
             emit(ProviderStreamEvent::Usage(mapped.clone()))?;
             usage = Some(mapped);
         }
@@ -1448,15 +1448,80 @@ fn openai_responses_usage(value: &JsonValue) -> ProviderUsage {
         .and_then(|details| details.get("cached_tokens"))
         .and_then(JsonValue::as_u64)
         .unwrap_or_default();
-    ProviderUsage {
+    let total_tokens = value
+        .get("total_tokens")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or_default();
+    openai_provider_usage(
         input_tokens,
         output_tokens,
-        total_tokens: value
-            .get("total_tokens")
-            .and_then(JsonValue::as_u64)
-            .unwrap_or_else(|| input_tokens.saturating_add(output_tokens)),
+        total_tokens,
         cache_read_tokens,
-        cache_creation_tokens: 0,
+        0,
+        None,
+    )
+}
+
+fn openai_provider_usage(
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+    cache_read_tokens: u64,
+    cache_creation_tokens: u64,
+    reported_cost_micros: Option<u64>,
+) -> ProviderUsage {
+    let billable_input_tokens = input_tokens
+        .saturating_sub(cache_read_tokens)
+        .saturating_sub(cache_creation_tokens);
+    ProviderUsage {
+        input_tokens: billable_input_tokens,
+        output_tokens,
+        total_tokens: if total_tokens > 0 {
+            total_tokens
+        } else {
+            billable_input_tokens
+                .saturating_add(output_tokens)
+                .saturating_add(cache_read_tokens)
+                .saturating_add(cache_creation_tokens)
+        },
+        cache_read_tokens,
+        cache_creation_tokens,
+        reported_cost_micros,
+    }
+}
+
+fn openai_usage_cache_read_tokens(usage: &OpenAiUsage) -> u64 {
+    usage
+        .prompt_tokens_details
+        .as_ref()
+        .map(|details| details.cached_tokens)
+        .unwrap_or_default()
+}
+
+fn openai_usage_cache_creation_tokens(usage: &OpenAiUsage) -> u64 {
+    usage
+        .prompt_tokens_details
+        .as_ref()
+        .map(|details| details.cache_write_tokens)
+        .unwrap_or_default()
+}
+
+fn openai_reported_cost_micros(provider_id: &str, usage: &OpenAiUsage) -> Option<u64> {
+    if provider_id != OPENROUTER_PROVIDER_ID {
+        return None;
+    }
+    usage.cost.and_then(usd_cost_to_micros)
+}
+
+fn usd_cost_to_micros(cost: f64) -> Option<u64> {
+    if !cost.is_finite() || cost < 0.0 {
+        return None;
+    }
+    let micros = (cost * 1_000_000.0).round();
+    if micros > u64::MAX as f64 {
+        None
+    } else {
+        Some(micros as u64)
     }
 }
 
@@ -1698,6 +1763,7 @@ fn parse_anthropic_json_response(
                 .saturating_add(cache_creation_tokens),
             cache_read_tokens,
             cache_creation_tokens,
+            reported_cost_micros: None,
         }
     });
     if let Some(usage) = usage.as_ref() {
@@ -2146,6 +2212,60 @@ mod tests {
                 .expect("gemini body");
         assert_eq!(gemini["stream"], true);
         assert!(gemini.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn openai_usage_maps_cached_input_to_cache_read_bucket() {
+        let usage = openai_provider_usage(1_000, 200, 1_200, 300, 0, None);
+
+        assert_eq!(usage.input_tokens, 700);
+        assert_eq!(usage.output_tokens, 200);
+        assert_eq!(usage.cache_read_tokens, 300);
+        assert_eq!(usage.total_tokens, 1_200);
+        assert_eq!(usage.reported_cost_micros, None);
+
+        let response_usage = openai_responses_usage(&json!({
+            "input_tokens": 1_000,
+            "output_tokens": 200,
+            "input_tokens_details": { "cached_tokens": 300 }
+        }));
+        assert_eq!(response_usage.input_tokens, 700);
+        assert_eq!(response_usage.cache_read_tokens, 300);
+        assert_eq!(response_usage.total_tokens, 1_200);
+    }
+
+    #[test]
+    fn openrouter_usage_carries_reported_cost_and_cache_write_tokens() {
+        let usage: OpenAiUsage = serde_json::from_value(json!({
+            "prompt_tokens": 1_000,
+            "completion_tokens": 200,
+            "total_tokens": 1_200,
+            "cost": 0.123456,
+            "prompt_tokens_details": {
+                "cached_tokens": 300,
+                "cache_write_tokens": 100
+            }
+        }))
+        .expect("openrouter usage");
+
+        let mapped = openai_provider_usage(
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+            openai_usage_cache_read_tokens(&usage),
+            openai_usage_cache_creation_tokens(&usage),
+            openai_reported_cost_micros(OPENROUTER_PROVIDER_ID, &usage),
+        );
+
+        assert_eq!(mapped.input_tokens, 600);
+        assert_eq!(mapped.cache_read_tokens, 300);
+        assert_eq!(mapped.cache_creation_tokens, 100);
+        assert_eq!(mapped.total_tokens, 1_200);
+        assert_eq!(mapped.reported_cost_micros, Some(123_456));
+        assert_eq!(
+            openai_reported_cost_micros(OPENAI_API_PROVIDER_ID, &usage),
+            None
+        );
     }
 
     #[test]

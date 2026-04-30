@@ -255,13 +255,13 @@ function StatusPill({ tone, label }: { tone: "success"; label: string }) {
     <span
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.08em]",
-        tone === "success" && "bg-emerald-500/10 text-emerald-500 dark:text-emerald-400",
+        tone === "success" && "bg-success/10 text-success dark:text-success",
       )}
     >
       <span
         className={cn(
           "size-1.5 rounded-full",
-          tone === "success" && "bg-emerald-500 dark:bg-emerald-400",
+          tone === "success" && "bg-success dark:bg-success",
         )}
         aria-hidden
       />

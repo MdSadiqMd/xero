@@ -61,6 +61,7 @@ interface UseAgentRuntimeControllerOptions {
     prompt?: string | null
     autoCompact?: RuntimeAutoCompactPreferenceDto | null
   }) => Promise<RuntimeRunView | null>
+  onComposerControlsChange?: (controls: RuntimeRunControlInputDto | null) => void
   onStopRuntimeRun?: (runId: string) => Promise<RuntimeRunView | null>
   onResolveOperatorAction?: (
     actionId: string,
@@ -123,6 +124,7 @@ export function useAgentRuntimeController({
   onStartRuntimeRun,
   onStartRuntimeSession,
   onUpdateRuntimeRunControls,
+  onComposerControlsChange,
   onStopRuntimeRun,
   onResolveOperatorAction,
   onResumeOperatorRun,
@@ -201,6 +203,10 @@ export function useAgentRuntimeController({
     promptInputDisabled: isPromptDisabled,
     promptInputRef,
   })
+
+  useEffect(() => {
+    onComposerControlsChange?.(selectedControlInput)
+  }, [onComposerControlsChange, selectedControlInput])
 
   useEffect(() => {
     draftPromptRef.current = draftPrompt

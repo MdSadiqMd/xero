@@ -146,11 +146,11 @@ function trustTone(trust: PluginRegistryEntryDto['trust']): Tone {
 
 const TONE_CLASS: Record<Tone, string> = {
   good:
-    'border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-400/[0.08] dark:text-emerald-200',
+    'border-success/30 bg-success/[0.08] text-success dark:border-success/40 dark:bg-success/[0.08] dark:text-success',
   info:
-    'border-sky-500/30 bg-sky-500/[0.08] text-sky-700 dark:border-sky-400/40 dark:bg-sky-400/[0.08] dark:text-sky-200',
+    'border-info/30 bg-info/[0.08] text-info dark:border-info/40 dark:bg-info/[0.08] dark:text-info',
   warn:
-    'border-amber-500/30 bg-amber-500/[0.08] text-amber-800 dark:border-amber-400/40 dark:bg-amber-400/[0.08] dark:text-amber-200',
+    'border-warning/30 bg-warning/[0.08] text-warning dark:border-warning/40 dark:bg-warning/[0.08] dark:text-warning',
   bad: 'border-destructive/40 bg-destructive/[0.08] text-destructive',
   neutral: 'border-border bg-secondary/60 text-foreground/70',
 }

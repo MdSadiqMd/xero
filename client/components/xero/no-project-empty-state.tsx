@@ -1,5 +1,6 @@
 import { FolderPlus, Loader2, Lock } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AppLogo } from "./app-logo"
 
 interface NoProjectEmptyStateProps {
   isDesktopRuntime: boolean
@@ -10,14 +11,10 @@ interface NoProjectEmptyStateProps {
 export function NoProjectEmptyState({ isDesktopRuntime, isImporting, onImport }: NoProjectEmptyStateProps) {
   return (
     <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-background">
-      {/* Subtle single-glow background */}
+      {/* Subtle single-glow background — uses primary so it picks up the active theme. */}
       <div
         aria-hidden
-        className="pointer-events-none absolute left-1/2 top-1/2 h-[420px] w-[680px] -translate-x-1/2 -translate-y-[55%] rounded-full opacity-[0.06] blur-[120px]"
-        style={{
-          background:
-            "radial-gradient(closest-side, #d4a574 0%, rgba(212,165,116,0.4) 45%, transparent 75%)",
-        }}
+        className="pointer-events-none absolute left-1/2 top-1/2 h-[420px] w-[680px] -translate-x-1/2 -translate-y-[55%] rounded-full bg-primary/[0.06] blur-[120px]"
       />
 
       <div className="relative flex w-full max-w-sm flex-col items-center px-8 text-center">
@@ -68,7 +65,7 @@ function BrandGlyph() {
   return (
     <div className="relative">
       <div className="absolute inset-0 -z-10 rounded-3xl bg-primary/10 blur-2xl" />
-      <img src="/icon-logo.svg" alt="" className="h-12 w-12" />
+      <AppLogo className="h-12 w-12" />
     </div>
   )
 }

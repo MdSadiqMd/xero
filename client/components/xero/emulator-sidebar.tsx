@@ -741,7 +741,7 @@ function InputErrorToast({
       aria-live="polite"
       className={cn(
         "pointer-events-auto absolute bottom-3 left-3 right-3 flex items-start gap-2",
-        "rounded-md border border-red-500/40 bg-red-500/15 px-2.5 py-1.5 text-[11px] text-red-100",
+        "rounded-md border border-destructive/40 bg-destructive/15 px-2.5 py-1.5 text-[11px] text-destructive",
         "shadow-md backdrop-blur-sm",
       )}
       role="status"
@@ -749,7 +749,7 @@ function InputErrorToast({
       <span className="min-w-0 flex-1 break-words leading-snug">{message}</span>
       <button
         aria-label="Dismiss"
-        className="shrink-0 rounded-sm p-0.5 text-red-100/80 hover:bg-red-500/20 hover:text-red-50"
+        className="shrink-0 rounded-sm p-0.5 text-destructive/80 hover:bg-destructive/20 hover:text-destructive"
         onClick={onDismiss}
         type="button"
       >

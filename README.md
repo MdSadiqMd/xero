@@ -235,7 +235,7 @@ Major groups:
 - **Runtime:** auth/session, start/stop runtime runs, stream subscription, operator action resolution
 - **MCP:** list/upsert/remove/import MCP servers, refresh connection status
 - **Notifications:** route management, credentials, dispatch records, reply submission
-- **Browser:** tabbed in-app browser automation (navigate/click/type/query/cookies/storage/screenshot)
+- **Browser:** tabbed in-app browser automation (navigate/click/type/query/cookies/storage/screenshot/diagnostics/state), plus configurable native browser fallback for owned agents
 - **Emulator:** SDK status, device lifecycle/input, screenshots, UI tree/find/tap/swipe/type, app lifecycle helpers
 - **Solana:** cluster lifecycle, snapshots, personas, scenario runs, tx build/sim/send/explain, ALT/IDL/PDA/program deploy flows
 
@@ -305,7 +305,7 @@ Solana stores also use OS data dirs under `xero/solana/...` for personas/snapsho
 
 ## Browser + Cookie Import Notes
 
-The in-app browser supports tabbed automation and storage/cookie operations.
+The in-app browser supports tabbed automation, storage/cookie operations, screenshots, console/network diagnostics, accessibility snapshots, and state save/restore. Owned agents default to the in-app browser first and can fall back to native device-browser control when the browser-control preference allows it.
 
 Cookie import helper supports detection/import from common browsers, including:
 

@@ -23,7 +23,7 @@
           // Keep this list in sync with any light theme ids in
           // `client/src/features/theme/theme-definitions.ts`. Mismatch only
           // causes a one-frame appearance flicker on cold start, not a bug.
-          var LIGHT_THEMES = ['daylight']
+          var LIGHT_THEMES = ['daylight', 'solarized-light']
           var stored = window.localStorage.getItem('xero:theme')
           var themeId = stored || 'dusk'
           var appearance = LIGHT_THEMES.indexOf(themeId) >= 0 ? 'light' : 'dark'

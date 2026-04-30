@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { FileCode2, FolderCog, Loader2, Play, Wrench } from "lucide-react"
+import { Database, FileCode2, FolderCog, Loader2, Play, Wrench } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   Select,
@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { PanelHeader } from "./solana-panel-shell"
 import type {
   ClusterKind,
   IndexerKind,
@@ -113,8 +114,17 @@ export function SolanaIndexerPanel({
 
   return (
     <div className="flex flex-col gap-4">
-      <section className="space-y-1.5">
-        <div className="text-[11.5px] font-medium text-foreground">Scaffold</div>
+      <PanelHeader
+        icon={Database}
+        title="Indexer"
+        description="Scaffold an indexer from an IDL or replay history locally."
+        busy={busy}
+      />
+
+      <section className="flex flex-col gap-1.5">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Scaffold
+        </div>
         <Select
           onValueChange={(value) => setKind(value as IndexerKind)}
           value={kind}
@@ -162,30 +172,35 @@ export function SolanaIndexerPanel({
             value={rpcUrl}
           />
         </div>
-        <label className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-          <input
-            checked={overwrite}
-            onChange={(event) => setOverwrite(event.target.checked)}
-            type="checkbox"
-          />
-          overwrite existing files
-        </label>
-        <button
-          type="button"
-          onClick={handleScaffold}
-          disabled={busy}
-          className={cn(
-            "inline-flex h-8 items-center gap-1 rounded-md border border-primary/50 bg-primary/10 px-2.5 text-[11px] font-medium text-primary",
-            "hover:bg-primary/20 disabled:opacity-50",
-          )}
-        >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderCog className="h-3.5 w-3.5" />}
-          Generate scaffold
-        </button>
+        <div className="mt-0.5 flex items-center justify-between gap-2">
+          <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              checked={overwrite}
+              onChange={(event) => setOverwrite(event.target.checked)}
+              type="checkbox"
+              className="h-3 w-3 accent-primary"
+            />
+            overwrite existing files
+          </label>
+          <button
+            type="button"
+            onClick={handleScaffold}
+            disabled={busy}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-3 text-[12px] font-medium text-primary transition-colors",
+              "hover:bg-primary/25 disabled:opacity-50",
+            )}
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderCog className="h-3.5 w-3.5" />}
+            Generate
+          </button>
+        </div>
       </section>
 
-      <section className="space-y-1.5">
-        <div className="text-[11.5px] font-medium text-foreground">Local runner</div>
+      <section className="flex flex-col gap-1.5">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Local runner
+        </div>
         <input
           aria-label="Program IDs"
           className="h-8 rounded-md border border-border/60 bg-background px-2.5 text-[12px] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/60"
@@ -215,7 +230,7 @@ export function SolanaIndexerPanel({
           onClick={handleRun}
           disabled={busy}
           className={cn(
-            "inline-flex h-8 items-center gap-1 rounded-md border border-border/70 bg-background px-2.5 text-[11px] text-foreground/85",
+            "inline-flex h-8 items-center gap-1.5 rounded-md border border-border/70 bg-background/40 px-3 text-[12px] text-foreground/85 transition-colors",
             "hover:border-primary/40 hover:text-foreground disabled:opacity-50",
           )}
         >
@@ -227,8 +242,8 @@ export function SolanaIndexerPanel({
       {status ? <p className="text-[11px] text-muted-foreground">{status}</p> : null}
 
       {lastScaffold ? (
-        <section className="space-y-1.5 border-t border-border/50 pt-3">
-          <div className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+        <section className="space-y-1.5 border-t border-border/70 pt-3">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             <Wrench className="h-3 w-3" />
             Last scaffold
           </div>
@@ -238,7 +253,7 @@ export function SolanaIndexerPanel({
             {lastScaffold.files.map((file) => (
               <li
                 key={file.path}
-                className="truncate rounded border border-border/40 bg-background/40 px-2 py-1 font-mono text-[10px] text-foreground/75"
+                className="truncate rounded border border-border/70 bg-background/40 px-2 py-1 font-mono text-[10px] text-foreground/75"
               >
                 {file.path}
               </li>
@@ -248,8 +263,8 @@ export function SolanaIndexerPanel({
       ) : null}
 
       {lastRun ? (
-        <section className="space-y-1.5 border-t border-border/50 pt-3">
-          <div className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground">
+        <section className="space-y-1.5 border-t border-border/70 pt-3">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             <FileCode2 className="h-3 w-3" />
             Last run
           </div>
@@ -260,7 +275,7 @@ export function SolanaIndexerPanel({
             {lastRun.eventsByProgram.map((count) => (
               <li
                 key={count.programId}
-                className="flex items-center justify-between rounded border border-border/40 bg-background/40 px-2 py-1 text-[10.5px]"
+                className="flex items-center justify-between rounded border border-border/70 bg-background/40 px-2 py-1 text-[10.5px]"
               >
                 <span className="truncate font-mono text-muted-foreground">{count.programId}</span>
                 <span className="tabular-nums text-foreground/80">

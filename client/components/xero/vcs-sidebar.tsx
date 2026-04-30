@@ -12,10 +12,13 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Sparkles,
   X,
 } from "lucide-react"
 import { motion } from "motion/react"
 import type {
+  GitGenerateCommitMessageRequestDto,
+  GitGenerateCommitMessageResponseDto,
   GitCommitResponseDto,
   GitFetchResponseDto,
   GitPullResponseDto,
@@ -28,12 +31,21 @@ import { getLangFromPath, tokenizeCode, type TokenizedLine } from "@/lib/shiki"
 import { useTheme } from "@/src/features/theme/theme-provider"
 import { cn } from "@/lib/utils"
 import { useSidebarMotion } from "@/lib/sidebar-motion"
+import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 const MIN_WIDTH = 600
 const DEFAULT_WIDTH_RATIO = 0.7
 const FILE_LIST_WIDTH = 300
 
 type ChangeKind = RepositoryStatusEntryView["staged"]
+
+export type VcsCommitMessageModel = Omit<
+  GitGenerateCommitMessageRequestDto,
+  "projectId"
+> & {
+  label?: string | null
+}
 
 export interface VcsSidebarProps {
   open: boolean
@@ -46,6 +58,11 @@ export interface VcsSidebarProps {
     projectId: string,
     scope: "staged" | "unstaged" | "worktree",
   ) => Promise<RepositoryDiffResponseDto>
+  commitMessageModel?: VcsCommitMessageModel | null
+  onGenerateCommitMessage?: (
+    projectId: string,
+    model: VcsCommitMessageModel,
+  ) => Promise<GitGenerateCommitMessageResponseDto>
   onStage: (projectId: string, paths: string[]) => Promise<void>
   onUnstage: (projectId: string, paths: string[]) => Promise<void>
   onDiscard: (projectId: string, paths: string[]) => Promise<void>
@@ -69,6 +86,7 @@ type ActionKind =
   | "unstage-all"
   | "discard"
   | "commit"
+  | "generate-commit-message"
   | "fetch"
   | "pull"
   | "push"
@@ -225,6 +243,8 @@ function VcsSidebarBody({
   onClose,
   onRefreshStatus,
   onLoadDiff,
+  commitMessageModel,
+  onGenerateCommitMessage,
   onStage,
   onUnstage,
   onDiscard,
@@ -380,6 +400,25 @@ function VcsSidebarBody({
       },
     )
   }
+  const handleGenerateCommitMessage = () => {
+    if (!projectId || !commitMessageModel || !onGenerateCommitMessage) return
+    if (stagedFiles.length === 0) {
+      setActionError("Stage changes before generating a commit message.")
+      return
+    }
+    void runAction(
+      "generate-commit-message",
+      () => onGenerateCommitMessage(projectId, commitMessageModel),
+    ).then((result) => {
+      if (!result) return
+      setCommitMessage(result.message)
+      setActionMessage(
+        result.diffTruncated
+          ? "Commit message generated from truncated staged diff."
+          : "Commit message generated.",
+      )
+    })
+  }
   const handleFetch = () => {
     if (!projectId) return
     void runAction("fetch", () => onFetch(projectId), "Fetched from remote.")
@@ -402,6 +441,16 @@ function VcsSidebarBody({
 
   const isBusy = actionKind !== null
   const shouldRenderDiffPane = allEntries.length > 0
+  const canGenerateCommitMessage = Boolean(
+    projectId &&
+      onGenerateCommitMessage &&
+      commitMessageModel?.modelId &&
+      stagedFiles.length > 0 &&
+      !isBusy,
+  )
+  const generateCommitMessageLabel = commitMessageModel?.label
+    ? `Generate commit message with ${commitMessageModel.label}`
+    : "Generate commit message"
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -416,21 +465,12 @@ function VcsSidebarBody({
           </span>
           {status ? (
             <span className="ml-1 flex items-center gap-1 font-mono text-[10px] tabular-nums">
-              <span className="text-emerald-400">+{status.additions}</span>
-              <span className="text-rose-400">−{status.deletions}</span>
+              <span className="text-success">+{status.additions}</span>
+              <span className="text-destructive">−{status.deletions}</span>
             </span>
           ) : null}
         </div>
         <div className="flex items-center gap-0.5">
-          <button
-            aria-label="Refresh status"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground disabled:opacity-50"
-            disabled={isBusy}
-            onClick={() => void onRefreshStatus()}
-            type="button"
-          >
-            <RefreshCw className="h-3 w-3" />
-          </button>
           {onClose ? (
             <button
               aria-label="Close source control"
@@ -450,7 +490,7 @@ function VcsSidebarBody({
           {actionError}
         </div>
       ) : actionMessage ? (
-        <div className="border-b border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-[11px] text-emerald-300">
+        <div className="border-b border-success/20 bg-success/10 px-3 py-1.5 text-[11px] text-success">
           {actionMessage}
         </div>
       ) : null}
@@ -545,27 +585,48 @@ function VcsSidebarBody({
               <span className="text-[10.5px] text-muted-foreground">
                 {stagedFiles.length} staged · {unstagedFiles.length} unstaged
               </span>
-              <button
-                className={cn(
-                  "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
-                  "bg-primary text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60",
-                )}
-                disabled={
-                  isBusy || !projectId || stagedFiles.length === 0 || commitMessage.trim().length === 0
-                }
-                onClick={handleCommit}
-                type="button"
-              >
-                {actionKind === "commit" ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <GitCommit className="h-3 w-3" />
-                )}
-                Commit
-                <kbd className="ml-0.5 hidden rounded border border-primary-foreground/20 bg-primary-foreground/10 px-1 py-px font-mono text-[9px] sm:inline-flex">
-                  ⌘⏎
-                </kbd>
-              </button>
+              <div className="ml-auto flex items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      aria-label={generateCommitMessageLabel}
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      disabled={!canGenerateCommitMessage}
+                      onClick={handleGenerateCommitMessage}
+                      size="icon-sm"
+                      title={generateCommitMessageLabel}
+                      type="button"
+                      variant="ghost"
+                    >
+                      {actionKind === "generate-commit-message" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{generateCommitMessageLabel}</TooltipContent>
+                </Tooltip>
+                <Button
+                  className="h-7 gap-1.5 px-2.5 text-[11.5px]"
+                  disabled={
+                    isBusy || !projectId || stagedFiles.length === 0 || commitMessage.trim().length === 0
+                  }
+                  onClick={handleCommit}
+                  size="sm"
+                  type="button"
+                >
+                  {actionKind === "commit" ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <GitCommit className="h-3 w-3" />
+                  )}
+                  Commit
+                  <kbd className="ml-0.5 hidden rounded border border-primary-foreground/20 bg-primary-foreground/10 px-1 py-px font-mono text-[9px] sm:inline-flex">
+                    ⌘⏎
+                  </kbd>
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -852,22 +913,22 @@ function ChangeBadge({ entry, kind, untracked }: { entry: FileEntry; kind: Chang
 
   if (untracked && !entry.staged) {
     letter = "U"
-    color = "text-emerald-400"
+    color = "text-success"
   } else if (kind === "added") {
     letter = "A"
-    color = "text-emerald-400"
+    color = "text-success"
   } else if (kind === "modified") {
     letter = "M"
-    color = "text-amber-400"
+    color = "text-warning"
   } else if (kind === "deleted") {
     letter = "D"
     color = "text-destructive"
   } else if (kind === "renamed") {
     letter = "R"
-    color = "text-sky-400"
+    color = "text-info"
   } else if (kind === "copied") {
     letter = "C"
-    color = "text-sky-400"
+    color = "text-info"
   } else if (kind === "type_change") {
     letter = "T"
     color = "text-purple-400"
@@ -1011,8 +1072,8 @@ function DiffView({ patch, path }: { patch: string; path: string }) {
 function DiffLineRow({ line, tokens }: { line: DiffLine; tokens: TokenizedLine | null }) {
   if (line.kind === "hunk") {
     return (
-      <div className="flex items-stretch border-y border-sky-500/20 bg-sky-500/10 text-[11px] text-sky-300">
-        <span className="w-12 shrink-0 select-none border-r border-sky-500/20" />
+      <div className="flex items-stretch border-y border-info/20 bg-info/10 text-[11px] text-info">
+        <span className="w-12 shrink-0 select-none border-r border-info/20" />
         <span className="px-3 py-0.5">{line.text}</span>
       </div>
     )
@@ -1032,21 +1093,21 @@ function DiffLineRow({ line, tokens }: { line: DiffLine; tokens: TokenizedLine |
   const lineNo = line.kind === "remove" ? line.oldNo : line.newNo
   const rowTone =
     line.kind === "add"
-      ? "bg-green-950/70"
+      ? "bg-success/70"
       : line.kind === "remove"
-        ? "bg-red-950/70"
+        ? "bg-destructive/70"
         : ""
   const gutterTone =
     line.kind === "add"
-      ? "border-r border-green-800/70 text-green-300"
+      ? "border-r border-success/70 text-success"
       : line.kind === "remove"
-        ? "border-r border-red-800/70 text-red-300"
+        ? "border-r border-destructive/70 text-destructive"
         : "text-muted-foreground/40 border-r border-border/40"
   const prefixClass =
     line.kind === "add"
-      ? "text-green-300"
+      ? "text-success"
       : line.kind === "remove"
-        ? "text-red-300"
+        ? "text-destructive"
         : "text-muted-foreground/30"
 
   return (

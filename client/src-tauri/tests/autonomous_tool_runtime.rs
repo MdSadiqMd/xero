@@ -268,7 +268,7 @@ fn spawn_mcp_http_server(sse_result: bool) -> String {
     let address = listener.local_addr().expect("test mcp http server addr");
 
     thread::spawn(move || {
-        for _ in 0..3 {
+        for _ in 0..12 {
             let (mut stream, _) = listener.accept().expect("accept test mcp request");
             let body = read_http_request_body(&mut stream);
             let value: serde_json::Value =
@@ -297,7 +297,14 @@ fn spawn_mcp_http_server(sse_result: bool) -> String {
                     "tools": [
                         {
                             "name": if sse_result { "sse_tool" } else { "http_tool" },
-                            "description": "test tool"
+                            "description": "test tool",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "message": { "type": "string" }
+                                },
+                                "required": ["message"]
+                            }
                         }
                     ]
                 }),
@@ -382,6 +389,21 @@ fn tool_runtime_tool_access_lists_and_grants_requested_groups() {
                 .available_groups
                 .iter()
                 .any(|group| group.name == "macos" && group.tools == vec!["macos_automation"]));
+            assert!(output.available_groups.iter().any(|group| {
+                group.name == "web_search_only"
+                    && group.tools == vec!["web_search"]
+                    && group.risk_class == "network"
+            }));
+            assert!(output.available_groups.iter().any(|group| {
+                group.name == "browser_observe" && group.tools == vec!["browser"]
+            }));
+            assert!(output.available_groups.iter().any(|group| {
+                group.name == "command_readonly" && group.tools == vec!["command"]
+            }));
+            assert!(output
+                .available_groups
+                .iter()
+                .any(|group| { group.name == "mcp_list" && group.tools == vec!["mcp"] }));
         }
         other => panic!("unexpected output: {other:?}"),
     }
@@ -390,8 +412,14 @@ fn tool_runtime_tool_access_lists_and_grants_requested_groups() {
         .execute(AutonomousToolRequest::ToolAccess(
             AutonomousToolAccessRequest {
                 action: AutonomousToolAccessAction::Request,
-                groups: vec!["emulator".into(), "process_manager".into(), "macos".into()],
-                tools: vec!["command".into(), "missing_tool".into()],
+                groups: vec![
+                    "emulator".into(),
+                    "process_manager".into(),
+                    "macos".into(),
+                    "web_search_only".into(),
+                    "command_session".into(),
+                ],
+                tools: vec!["command".into(), "solana_alt".into(), "missing_tool".into()],
                 reason: Some("Need to drive app use and run setup.".into()),
             },
         ))
@@ -402,7 +430,12 @@ fn tool_runtime_tool_access_lists_and_grants_requested_groups() {
             assert!(output.granted_tools.contains(&"emulator".into()));
             assert!(output.granted_tools.contains(&"process_manager".into()));
             assert!(output.granted_tools.contains(&"macos_automation".into()));
+            assert!(output.granted_tools.contains(&"web_search".into()));
+            assert!(output
+                .granted_tools
+                .contains(&"command_session_start".into()));
             assert!(output.granted_tools.contains(&"command".into()));
+            assert!(output.granted_tools.contains(&"solana_alt".into()));
             assert!(output.denied_tools.contains(&"missing_tool".into()));
         }
         other => panic!("unexpected output: {other:?}"),
@@ -764,10 +797,17 @@ fn tool_runtime_executes_priority_one_agent_surface_tools() {
         .expect("tool search for file hash");
     match hash_search.output {
         AutonomousToolOutput::ToolSearch(output) => {
-            assert!(output
+            let hash_match = output
                 .matches
                 .iter()
-                .any(|item| item.tool_name == "file_hash"));
+                .find(|item| item.tool_name == "file_hash")
+                .expect("file hash match");
+            assert_eq!(hash_match.risk_class, "observe");
+            assert!(hash_match.schema_fields.contains(&"path".into()));
+            assert!(hash_match.activation_tools.contains(&"file_hash".into()));
+            assert!(hash_match.activation_groups.contains(&"core".into()));
+            assert!(hash_match.runtime_available);
+            assert!(output.searched_catalog_size >= output.matches.len());
         }
         other => panic!("unexpected hash tool search output: {other:?}"),
     }
@@ -785,6 +825,39 @@ fn tool_runtime_executes_priority_one_agent_surface_tools() {
                 .any(|item| item.tool_name == "lsp" && item.group == "intelligence"));
         }
         other => panic!("unexpected lsp tool search output: {other:?}"),
+    }
+    let command_search = runtime
+        .tool_search(AutonomousToolSearchRequest {
+            query: "run tests".into(),
+            limit: Some(1),
+        })
+        .expect("tool search for command intent");
+    match command_search.output {
+        AutonomousToolOutput::ToolSearch(output) => {
+            assert_eq!(
+                output.matches.first().map(|item| item.tool_name.as_str()),
+                Some("command")
+            );
+            assert!(output.matches[0]
+                .activation_groups
+                .contains(&"command_readonly".into()));
+        }
+        other => panic!("unexpected command tool search output: {other:?}"),
+    }
+    let obscure_solana_search = runtime
+        .tool_search(AutonomousToolSearchRequest {
+            query: "address lookup table".into(),
+            limit: Some(1),
+        })
+        .expect("tool search for obscure solana capability");
+    match obscure_solana_search.output {
+        AutonomousToolOutput::ToolSearch(output) => {
+            let first = output.matches.first().expect("solana alt match");
+            assert_eq!(first.tool_name, "solana_alt");
+            assert!(first.tags.contains(&"address_lookup_table".into()));
+            assert!(first.activation_groups.contains(&"solana".into()));
+        }
+        other => panic!("unexpected obscure solana tool search output: {other:?}"),
     }
     let solana_search = runtime
         .tool_search(AutonomousToolSearchRequest {
@@ -1180,6 +1253,81 @@ while True:
     }
     env::remove_var("XERO_TEST_MCP_LEAK_SECRET");
     env::remove_var("XERO_TEST_MCP_ALLOWED_SECRET");
+}
+
+#[test]
+fn tool_search_projects_mcp_tools_as_exact_dynamic_capabilities() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let http_url = spawn_mcp_http_server(false);
+    let mcp_registry_path = root.path().join("mcp-registry.json");
+    persist_mcp_registry(
+        &mcp_registry_path,
+        &McpRegistry {
+            version: 1,
+            servers: vec![McpServerRecord {
+                id: "http-mcp".into(),
+                name: "HTTP MCP".into(),
+                transport: McpTransport::Http { url: http_url },
+                env: Vec::new(),
+                cwd: None,
+                connection: McpConnectionState {
+                    status: McpConnectionStatus::Connected,
+                    diagnostic: None,
+                    last_checked_at: Some("2026-04-25T00:00:00Z".into()),
+                    last_healthy_at: Some("2026-04-25T00:00:00Z".into()),
+                },
+                updated_at: "2026-04-25T00:00:00Z".into(),
+            }],
+            updated_at: "2026-04-25T00:00:00Z".into(),
+        },
+    )
+    .expect("persist mcp registry");
+
+    let runtime = AutonomousToolRuntime::new(root.path())
+        .expect("runtime")
+        .with_mcp_registry_path(mcp_registry_path);
+    let search = runtime
+        .tool_search(AutonomousToolSearchRequest {
+            query: "http_tool".into(),
+            limit: None,
+        })
+        .expect("search mcp tools");
+    let dynamic_tool = match search.output {
+        AutonomousToolOutput::ToolSearch(output) => {
+            let item = output
+                .matches
+                .iter()
+                .find(|item| {
+                    item.catalog_kind == "mcp_tool" && item.source.as_deref() == Some("http-mcp")
+                })
+                .expect("dynamic mcp tool search result");
+            assert!(item.tool_name.starts_with("mcp__http_mcp__http_tool__"));
+            assert_eq!(item.group, "mcp");
+            assert_eq!(item.trust.as_deref(), Some("connected_mcp_server"));
+            assert_eq!(item.approval_status.as_deref(), Some("allowed"));
+            assert_eq!(item.risk_class, "external_capability_invoke");
+            assert!(item.schema_fields.contains(&"message".into()));
+            assert_eq!(item.activation_tools, vec![item.tool_name.clone()]);
+            item.tool_name.clone()
+        }
+        other => panic!("unexpected tool search output: {other:?}"),
+    };
+
+    let access = runtime
+        .tool_access(AutonomousToolAccessRequest {
+            action: AutonomousToolAccessAction::Request,
+            groups: Vec::new(),
+            tools: vec![dynamic_tool.clone()],
+            reason: Some("activate exact MCP tool".into()),
+        })
+        .expect("request exact mcp tool");
+    match access.output {
+        AutonomousToolOutput::ToolAccess(output) => {
+            assert_eq!(output.granted_tools, vec![dynamic_tool]);
+            assert!(output.denied_tools.is_empty());
+        }
+        other => panic!("unexpected tool access output: {other:?}"),
+    }
 }
 
 #[test]

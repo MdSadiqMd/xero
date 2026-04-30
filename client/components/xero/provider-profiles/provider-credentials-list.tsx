@@ -425,7 +425,7 @@ export function ProviderCredentialsList({
             {status ? (
               <span className="hidden items-center gap-1.5 truncate text-[12px] text-muted-foreground sm:flex">
                 <span
-                  className="size-1.5 shrink-0 rounded-full bg-emerald-500 dark:bg-emerald-400"
+                  className="size-1.5 shrink-0 rounded-full bg-success dark:bg-success"
                   aria-hidden
                 />
                 <span className="text-foreground/80">{status.label}</span>

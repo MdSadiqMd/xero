@@ -27,6 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { AndroidLogoIcon, AppleLogoIcon, SolanaLogoIcon } from "./brand-icons"
+import { AppLogo } from "./app-logo"
 import type { View } from "./data"
 import { StatusFooter, type StatusFooterProps } from "./status-footer"
 
@@ -252,7 +253,7 @@ export function XeroShell({
 
   const Logo = (
     <div className="flex items-center gap-2">
-      <img src="/icon-logo.svg" alt="" className="h-3 w-3" />
+      <AppLogo className="h-3 w-3" />
       <span className="text-[13px] font-semibold tracking-[-0.01em] text-foreground/90">Xero</span>
     </div>
   )
@@ -425,7 +426,7 @@ export function XeroShell({
               aria-label="Install Xcode"
               className={cn(
                 toolItemClassName,
-                "text-amber-300/90 focus:bg-amber-500/15 focus:text-amber-200",
+                "text-warning/90 focus:bg-warning/15 focus:text-warning",
               )}
               onSelect={handleInstallXcode}
               title="iOS Simulator needs Xcode. Click to install."
@@ -506,13 +507,13 @@ export function XeroShell({
           aria-hidden="true"
           className="flex items-center gap-1 font-mono text-[10.5px] font-semibold leading-none tabular-nums"
         >
-          <span className="text-emerald-400">+{formatVcsCount(vcsAdditions)}</span>
-          <span className="text-rose-400">−{formatVcsCount(vcsDeletions)}</span>
+          <span className="text-success">+{formatVcsCount(vcsAdditions)}</span>
+          <span className="text-destructive">−{formatVcsCount(vcsDeletions)}</span>
         </span>
       ) : vcsChangeCount > 0 ? (
         <span
           aria-hidden="true"
-          className="rounded-full bg-amber-500/90 px-1 py-px font-mono text-[9px] font-semibold leading-none tabular-nums text-black"
+          className="rounded-full bg-warning/90 px-1 py-px font-mono text-[9px] font-semibold leading-none tabular-nums text-black"
         >
           {vcsChangeCount > 99 ? "99+" : vcsChangeCount}
         </span>

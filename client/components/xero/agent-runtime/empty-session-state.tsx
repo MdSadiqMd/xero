@@ -1,6 +1,7 @@
 import { GitBranch, Lightbulb, Search, Sparkles } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { AppLogo } from '../app-logo'
 
 interface EmptySessionStateProps {
   projectLabel: string
@@ -106,7 +107,7 @@ function BrandGlyph() {
     <div className="relative">
       <div className="absolute inset-0 -z-10 rounded-3xl bg-primary/10 blur-2xl" />
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-card/60">
-        <img src="/icon-logo.svg" alt="" className="h-7 w-7" />
+        <AppLogo className="h-7 w-7" />
       </div>
     </div>
   )

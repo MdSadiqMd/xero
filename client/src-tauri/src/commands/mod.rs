@@ -14,6 +14,7 @@ pub mod get_repository_status;
 pub mod get_runtime_run;
 pub mod get_runtime_session;
 pub mod get_runtime_settings;
+pub mod git_commit_message;
 pub mod git_operations;
 pub mod import_mcp_servers;
 pub mod import_repository;
@@ -62,15 +63,17 @@ pub use agent_task::{
     start_agent_task, subscribe_agent_stream,
 };
 pub use browser::{
-    browser_back, browser_click, browser_cookies_get, browser_cookies_set, browser_current_url,
-    browser_eval, browser_forward, browser_hide, browser_history_state, browser_internal_event,
-    browser_internal_reply, browser_navigate, browser_press_key, browser_query, browser_read_text,
-    browser_reload, browser_resize, browser_screenshot, browser_scroll, browser_show, browser_stop,
+    browser_back, browser_click, browser_control_settings, browser_control_update_settings,
+    browser_cookies_get, browser_cookies_set, browser_current_url, browser_eval, browser_forward,
+    browser_hide, browser_history_state, browser_internal_event, browser_internal_reply,
+    browser_navigate, browser_press_key, browser_query, browser_read_text, browser_reload,
+    browser_resize, browser_screenshot, browser_scroll, browser_show, browser_stop,
     browser_storage_clear, browser_storage_read, browser_storage_write, browser_tab_close,
     browser_tab_focus, browser_tab_list, browser_type, browser_wait_for_load,
-    browser_wait_for_selector, BrowserState, BrowserTabMetadata, BROWSER_CONSOLE_EVENT,
-    BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT, BROWSER_LOAD_STATE_EVENT, BROWSER_TAB_PREFIX,
-    BROWSER_TAB_UPDATED_EVENT, BROWSER_URL_CHANGED_EVENT,
+    browser_wait_for_selector, BrowserControlPreferenceDto, BrowserControlSettingsDto,
+    BrowserState, BrowserTabMetadata, UpsertBrowserControlSettingsRequestDto,
+    BROWSER_CONSOLE_EVENT, BROWSER_DIALOG_EVENT, BROWSER_DOWNLOAD_EVENT, BROWSER_LOAD_STATE_EVENT,
+    BROWSER_TAB_PREFIX, BROWSER_TAB_UPDATED_EVENT, BROWSER_URL_CHANGED_EVENT,
 };
 pub use cancel_autonomous_run::cancel_autonomous_run;
 pub use complete_oauth_callback::complete_oauth_callback;
@@ -92,6 +95,7 @@ pub use get_repository_diff::get_repository_diff;
 pub use get_repository_status::get_repository_status;
 pub use get_runtime_run::get_runtime_run;
 pub use get_runtime_session::get_runtime_session;
+pub use git_commit_message::git_generate_commit_message;
 pub use git_operations::{
     git_commit, git_discard_changes, git_fetch, git_pull, git_push, git_stage_paths,
     git_unstage_paths,

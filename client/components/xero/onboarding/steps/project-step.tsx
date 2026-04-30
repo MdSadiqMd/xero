@@ -64,7 +64,7 @@ export function ProjectStep({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <p className="truncate text-[13px] font-medium text-foreground">{project!.name}</p>
-                  <span className="inline-flex items-center gap-0.5 rounded-sm border border-emerald-500/30 bg-emerald-500/10 px-1 py-0 text-[9.5px] font-medium text-emerald-500 dark:text-emerald-400">
+                  <span className="inline-flex items-center gap-0.5 rounded-sm border border-success/30 bg-success/10 px-1 py-0 text-[9.5px] font-medium text-success dark:text-success">
                     <Check className="h-2.5 w-2.5" strokeWidth={3} />
                     Imported
                   </span>

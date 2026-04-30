@@ -43,11 +43,14 @@ pub struct AgentToolDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolRegistry {
     descriptors: Vec<AgentToolDescriptor>,
+    dynamic_routes: BTreeMap<String, AutonomousDynamicToolRoute>,
+    options: ToolRegistryOptions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ToolRegistryOptions {
     pub skill_tool_enabled: bool,
+    pub browser_control_preference: BrowserControlPreferenceDto,
 }
 
 impl ToolRegistry {
@@ -63,6 +66,8 @@ impl ToolRegistry {
                     options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL
                 })
                 .collect(),
+            dynamic_routes: BTreeMap::new(),
+            options,
         }
     }
 
@@ -80,7 +85,7 @@ impl ToolRegistry {
         controls: &RuntimeRunControlStateDto,
         options: ToolRegistryOptions,
     ) -> Self {
-        let mut names = select_tool_names_for_prompt(repo_root, prompt, controls);
+        let mut names = select_tool_names_for_prompt(repo_root, prompt, controls, &options);
         if !options.skill_tool_enabled {
             names.remove(AUTONOMOUS_TOOL_SKILL);
         }
@@ -102,11 +107,38 @@ impl ToolRegistry {
                     && (options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL)
             })
             .collect();
-        Self { descriptors }
+        Self {
+            descriptors,
+            dynamic_routes: BTreeMap::new(),
+            options,
+        }
+    }
+
+    pub(crate) fn from_descriptors_with_dynamic_routes(
+        descriptors: Vec<AgentToolDescriptor>,
+        dynamic_routes: BTreeMap<String, AutonomousDynamicToolRoute>,
+        options: ToolRegistryOptions,
+    ) -> Self {
+        let mut descriptors = descriptors
+            .into_iter()
+            .filter(|descriptor| {
+                options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL
+            })
+            .collect::<Vec<_>>();
+        descriptors.sort_by(|left, right| left.name.cmp(&right.name));
+        Self {
+            descriptors,
+            dynamic_routes,
+            options,
+        }
     }
 
     pub fn descriptors(&self) -> &[AgentToolDescriptor] {
         &self.descriptors
+    }
+
+    pub(crate) fn dynamic_routes(&self) -> &BTreeMap<String, AutonomousDynamicToolRoute> {
+        &self.dynamic_routes
     }
 
     pub fn into_descriptors(self) -> Vec<AgentToolDescriptor> {
@@ -135,7 +167,66 @@ impl ToolRegistry {
         for tool_name in tool_names {
             names.insert(tool_name.as_ref().to_owned());
         }
-        *self = Self::for_tool_names(names);
+        let dynamic_descriptors = self
+            .descriptors
+            .iter()
+            .filter(|descriptor| self.dynamic_routes.contains_key(&descriptor.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let dynamic_routes = self.dynamic_routes.clone();
+        let mut next = Self::for_tool_names_with_options(names, self.options);
+        next.descriptors.extend(dynamic_descriptors);
+        next.descriptors
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        next.dynamic_routes = dynamic_routes;
+        *self = next;
+    }
+
+    pub(crate) fn expand_with_tool_names_from_runtime<I, S>(
+        &mut self,
+        tool_names: I,
+        tool_runtime: &AutonomousToolRuntime,
+    ) -> CommandResult<()>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut descriptors_by_name = self
+            .descriptors
+            .iter()
+            .cloned()
+            .map(|descriptor| (descriptor.name.clone(), descriptor))
+            .collect::<BTreeMap<_, _>>();
+        let mut dynamic_routes = self.dynamic_routes.clone();
+        let builtin_descriptors = builtin_tool_descriptors()
+            .into_iter()
+            .map(|descriptor| (descriptor.name.clone(), descriptor))
+            .collect::<BTreeMap<_, _>>();
+
+        for tool_name in tool_names {
+            let tool_name = tool_name.as_ref();
+            if let Some(descriptor) = builtin_descriptors.get(tool_name) {
+                if self.options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL {
+                    descriptors_by_name.insert(descriptor.name.clone(), descriptor.clone());
+                }
+                continue;
+            }
+            if let Some(dynamic) = tool_runtime.dynamic_tool_descriptor(tool_name)? {
+                descriptors_by_name.insert(
+                    dynamic.name.clone(),
+                    AgentToolDescriptor {
+                        name: dynamic.name.clone(),
+                        description: dynamic.description,
+                        input_schema: dynamic.input_schema,
+                    },
+                );
+                dynamic_routes.insert(dynamic.name, dynamic.route);
+            }
+        }
+
+        self.descriptors = descriptors_by_name.into_values().collect();
+        self.dynamic_routes = dynamic_routes;
+        Ok(())
     }
 
     pub fn decode_call(&self, tool_call: &AgentToolCall) -> CommandResult<AutonomousToolRequest> {
@@ -147,6 +238,22 @@ impl ToolRegistry {
                     tool_call.tool_name
                 ),
             ));
+        }
+
+        if let Some(route) = self.dynamic_routes.get(&tool_call.tool_name) {
+            return match route {
+                AutonomousDynamicToolRoute::McpTool {
+                    server_id,
+                    tool_name,
+                } => Ok(AutonomousToolRequest::Mcp(AutonomousMcpRequest {
+                    action: AutonomousMcpAction::InvokeTool,
+                    server_id: Some(server_id.clone()),
+                    name: Some(tool_name.clone()),
+                    uri: None,
+                    arguments: Some(tool_call.input.clone()),
+                    timeout_ms: None,
+                })),
+            };
         }
 
         let request_value = json!({
@@ -341,6 +448,8 @@ pub struct ProviderUsage {
     pub cache_read_tokens: u64,
     #[serde(default)]
     pub cache_creation_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_cost_micros: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -529,6 +638,7 @@ impl ProviderAdapter for FakeProviderAdapter {
                     .saturating_add(estimate_tokens(&sanitized)),
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
+                reported_cost_micros: None,
             }),
         })
     }
@@ -649,4 +759,53 @@ fn text_after_marker<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
     line.get(start..)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_registry_decodes_dynamic_mcp_tool_routes() {
+        let tool_name = "mcp__workspace__playwright_click__0123456789".to_string();
+        let registry = ToolRegistry::from_descriptors_with_dynamic_routes(
+            vec![AgentToolDescriptor {
+                name: tool_name.clone(),
+                description: "MCP tool `playwright_click` from server `workspace`.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "selector": { "type": "string" }
+                    },
+                    "required": ["selector"]
+                }),
+            }],
+            BTreeMap::from([(
+                tool_name.clone(),
+                AutonomousDynamicToolRoute::McpTool {
+                    server_id: "workspace".into(),
+                    tool_name: "playwright_click".into(),
+                },
+            )]),
+            ToolRegistryOptions::default(),
+        );
+
+        let request = registry
+            .decode_call(&AgentToolCall {
+                tool_call_id: "call-1".into(),
+                tool_name,
+                input: json!({ "selector": "#submit" }),
+            })
+            .expect("decode dynamic tool call");
+
+        match request {
+            AutonomousToolRequest::Mcp(request) => {
+                assert_eq!(request.action, AutonomousMcpAction::InvokeTool);
+                assert_eq!(request.server_id.as_deref(), Some("workspace"));
+                assert_eq!(request.name.as_deref(), Some("playwright_click"));
+                assert_eq!(request.arguments, Some(json!({ "selector": "#submit" })));
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
 }

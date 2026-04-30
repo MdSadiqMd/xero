@@ -42,10 +42,10 @@ export function SolanaMissingToolchain({
   return (
     <div
       aria-live="polite"
-      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed"
+      className="flex shrink-0 flex-col gap-2 border-b border-border/60 bg-warning/10 px-3 py-2 text-[11px] leading-relaxed"
       role="region"
     >
-      <div className="font-medium text-amber-200">{panel.title}</div>
+      <div className="font-medium text-warning">{panel.title}</div>
       <div className="text-muted-foreground">{panel.detail}</div>
       <div className="flex flex-wrap items-center gap-1.5">
         {(status.installableComponents ?? []).map((component) => (
@@ -53,8 +53,8 @@ export function SolanaMissingToolchain({
             className={cn(
               "h-5 border-border/70 bg-background/50 px-1.5 text-[10px]",
               component.installed
-                ? "text-emerald-300"
-                : "text-amber-200",
+                ? "text-success"
+                : "text-warning",
             )}
             key={component.component}
             variant="outline"

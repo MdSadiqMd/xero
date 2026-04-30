@@ -859,12 +859,31 @@ pub(super) fn apply_sanitized_command_environment(command: &mut Command) {
         }
     }
     if env::var_os("PATH").is_none() {
-        command.env(
-            "PATH",
-            "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin",
-        );
+        command.env("PATH", default_sanitized_path());
     }
     command.env("XERO_AGENT_SANITIZED_ENV", "1");
+}
+
+fn default_sanitized_path() -> &'static str {
+    #[cfg(windows)]
+    {
+        r"C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0"
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin"
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        ""
+    }
 }
 
 fn prune_command_session_chunks(chunks: &mut Vec<AutonomousCommandSessionChunk>) {

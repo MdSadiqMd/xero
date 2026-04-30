@@ -14,29 +14,37 @@ use reqwest::{
     header::{ACCEPT, CONTENT_TYPE},
 };
 use serde_json::{json, Value as JsonValue};
+use sha2::{Digest, Sha256};
 
 use super::{
+    deferred_tool_catalog,
     process::apply_sanitized_command_environment,
     repo_scope::{normalize_relative_path, path_to_forward_slash, WalkErrorCodes, WalkState},
-    AutonomousCodeDiagnostic, AutonomousCodeIntelAction, AutonomousCodeIntelOutput,
-    AutonomousCodeIntelRequest, AutonomousCodeSymbol, AutonomousCommandRequest,
+    tool_catalog_activation_groups, AutonomousCodeDiagnostic, AutonomousCodeIntelAction,
+    AutonomousCodeIntelOutput, AutonomousCodeIntelRequest, AutonomousCodeSymbol,
+    AutonomousCommandRequest, AutonomousDynamicToolDescriptor, AutonomousDynamicToolRoute,
     AutonomousLspAction, AutonomousLspInstallCommand, AutonomousLspInstallSuggestion,
     AutonomousLspOutput, AutonomousLspRequest, AutonomousLspServerStatus, AutonomousMcpAction,
     AutonomousMcpOutput, AutonomousMcpRequest, AutonomousMcpServerSummary,
     AutonomousNotebookEditOutput, AutonomousNotebookEditRequest, AutonomousPowerShellRequest,
     AutonomousSubagentOutput, AutonomousSubagentRequest, AutonomousSubagentTask,
     AutonomousTodoAction, AutonomousTodoItem, AutonomousTodoOutput, AutonomousTodoRequest,
-    AutonomousTodoStatus, AutonomousToolOutput, AutonomousToolResult, AutonomousToolRuntime,
-    AutonomousToolSearchMatch, AutonomousToolSearchOutput, AutonomousToolSearchRequest,
-    AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_LSP, AUTONOMOUS_TOOL_MCP,
-    AUTONOMOUS_TOOL_NOTEBOOK_EDIT, AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_SKILL,
-    AUTONOMOUS_TOOL_SUBAGENT, AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_SEARCH,
+    AutonomousTodoStatus, AutonomousToolCatalogEntry, AutonomousToolOutput, AutonomousToolResult,
+    AutonomousToolRuntime, AutonomousToolSearchMatch, AutonomousToolSearchOutput,
+    AutonomousToolSearchRequest, AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX, AUTONOMOUS_TOOL_CODE_INTEL,
+    AUTONOMOUS_TOOL_LSP, AUTONOMOUS_TOOL_MCP, AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
+    AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_SKILL, AUTONOMOUS_TOOL_SUBAGENT,
+    AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_SEARCH,
 };
 
 use crate::{
     auth::now_timestamp,
     commands::{validate_non_empty, CommandError, CommandResult},
     mcp::{load_mcp_registry_from_path, McpConnectionStatus, McpServerRecord, McpTransport},
+    runtime::autonomous_skill_runtime::{
+        sanitize_skill_tool_model_text, XeroSkillSourceKind, XeroSkillToolAccessStatus,
+        XeroSkillToolInput, XeroSkillTrustState,
+    },
 };
 
 const DEFAULT_PRIORITY_TOOL_LIMIT: usize = 25;
@@ -56,21 +64,67 @@ impl AutonomousToolRuntime {
         validate_non_empty(&request.query, "query")?;
         let limit = bounded_limit(request.limit, DEFAULT_PRIORITY_TOOL_LIMIT)?;
         let query = request.query.trim().to_ascii_lowercase();
+        let query_terms = normalized_search_terms(&query);
         let mut matches = Vec::new();
 
-        for (tool_name, group, description) in priority_tool_catalog(self.skill_tool_enabled()) {
-            let haystack = format!("{tool_name} {group} {description}").to_ascii_lowercase();
-            if haystack.contains(&query) {
-                matches.push(AutonomousToolSearchMatch {
-                    tool_name: (*tool_name).into(),
-                    group: (*group).into(),
-                    description: (*description).into(),
-                });
+        let catalog = deferred_tool_catalog(self.skill_tool_enabled());
+        let mut searched_catalog_size = catalog.len();
+        for entry in catalog {
+            let runtime_available = self.tool_available_by_runtime(entry.tool_name);
+            let score = tool_search_score(&query, &query_terms, &entry);
+            if score > 0 {
+                let activation_groups = tool_catalog_activation_groups(entry.tool_name);
+                matches.push((
+                    score,
+                    AutonomousToolSearchMatch {
+                        tool_name: entry.tool_name.into(),
+                        group: entry.group.into(),
+                        catalog_kind: "builtin".into(),
+                        description: entry.description.into(),
+                        score,
+                        activation_groups,
+                        activation_tools: vec![entry.tool_name.into()],
+                        tags: entry.tags.iter().map(|tag| (*tag).to_owned()).collect(),
+                        schema_fields: entry
+                            .schema_fields
+                            .iter()
+                            .map(|field| (*field).to_owned())
+                            .collect(),
+                        examples: entry
+                            .examples
+                            .iter()
+                            .map(|example| (*example).to_owned())
+                            .collect(),
+                        risk_class: entry.risk_class.into(),
+                        runtime_available,
+                        source: None,
+                        trust: None,
+                        approval_status: None,
+                    },
+                ));
             }
         }
 
+        let mcp_matches = self.mcp_tool_search_matches(&query, &query_terms)?;
+        searched_catalog_size = searched_catalog_size.saturating_add(mcp_matches.len());
+        matches.extend(mcp_matches);
+        let skill_matches = self.skill_tool_search_matches(&query, &query_terms, limit)?;
+        searched_catalog_size = searched_catalog_size.saturating_add(skill_matches.len());
+        matches.extend(skill_matches);
+
+        matches.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.group.cmp(&right.1.group))
+                .then_with(|| left.1.tool_name.cmp(&right.1.tool_name))
+        });
         let truncated = matches.len() > limit;
         matches.truncate(limit);
+        let matches = matches
+            .into_iter()
+            .map(|(_, tool_match)| tool_match)
+            .collect::<Vec<_>>();
         let summary = if truncated {
             format!(
                 "Found {} tool match(es) for `{}` (truncated).",
@@ -93,6 +147,7 @@ impl AutonomousToolRuntime {
                 query: request.query.trim().into(),
                 matches,
                 truncated,
+                searched_catalog_size,
             }),
         })
     }
@@ -723,6 +778,198 @@ impl AutonomousToolRuntime {
             }
         }
     }
+
+    fn mcp_tool_search_matches(
+        &self,
+        query: &str,
+        query_terms: &[String],
+    ) -> CommandResult<Vec<(u32, AutonomousToolSearchMatch)>> {
+        let capabilities = self.discover_mcp_catalog_capabilities()?;
+        let mut matches = Vec::new();
+        for capability in capabilities {
+            let name_for_search = capability.search_name();
+            let schema_fields = capability.schema_fields();
+            let tags = capability.tags();
+            let examples = capability.examples();
+            let score = tool_search_score_fields(ToolSearchScoreFields {
+                query,
+                query_terms,
+                name: &name_for_search,
+                group: "mcp",
+                description: &capability.description,
+                tags: &tags,
+                schema_fields: &schema_fields,
+                examples: &examples,
+                activation_groups: &["mcp_invoke".into()],
+                risk_class: capability.risk_class(),
+            });
+            if score == 0 {
+                continue;
+            }
+
+            let activation_tool = match capability.kind {
+                McpCatalogCapabilityKind::Tool => capability.dynamic_tool_name(),
+                McpCatalogCapabilityKind::Resource | McpCatalogCapabilityKind::Prompt => {
+                    AUTONOMOUS_TOOL_MCP.into()
+                }
+            };
+            let tool_name = match capability.kind {
+                McpCatalogCapabilityKind::Tool => activation_tool.clone(),
+                McpCatalogCapabilityKind::Resource | McpCatalogCapabilityKind::Prompt => {
+                    AUTONOMOUS_TOOL_MCP.into()
+                }
+            };
+            matches.push((
+                score,
+                AutonomousToolSearchMatch {
+                    tool_name,
+                    group: "mcp".into(),
+                    catalog_kind: capability.kind.catalog_kind().into(),
+                    description: capability.model_description(),
+                    score,
+                    activation_groups: vec!["mcp_invoke".into()],
+                    activation_tools: vec![activation_tool],
+                    tags,
+                    schema_fields,
+                    examples,
+                    risk_class: capability.risk_class().into(),
+                    runtime_available: true,
+                    source: Some(capability.server_id),
+                    trust: Some("connected_mcp_server".into()),
+                    approval_status: Some("allowed".into()),
+                },
+            ));
+        }
+        Ok(matches)
+    }
+
+    fn skill_tool_search_matches(
+        &self,
+        query: &str,
+        query_terms: &[String],
+        limit: usize,
+    ) -> CommandResult<Vec<(u32, AutonomousToolSearchMatch)>> {
+        if !self.skill_tool_enabled() {
+            return Ok(Vec::new());
+        }
+
+        let result = match self.skill(XeroSkillToolInput::List {
+            query: Some(query.into()),
+            include_unavailable: true,
+            limit: Some(limit.max(10).min(MAX_PRIORITY_TOOL_LIMIT)),
+        }) {
+            Ok(result) => result,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let AutonomousToolOutput::Skill(output) = result.output else {
+            return Ok(Vec::new());
+        };
+
+        let mut matches = Vec::new();
+        for candidate in output.candidates {
+            if !candidate.access.model_visible {
+                continue;
+            }
+            let source_kind = skill_source_kind_label(candidate.source_kind);
+            let trust = skill_trust_label(candidate.trust);
+            let approval_status = skill_access_status_label(candidate.access.status);
+            let description = format!(
+                "Skill `{}` from {source_kind}: {}",
+                candidate.skill_id, candidate.description
+            );
+            let tags = vec![
+                "skill".into(),
+                "skills".into(),
+                candidate.skill_id.replace('-', "_"),
+                source_kind.into(),
+                trust.into(),
+            ];
+            let schema_fields = vec![
+                "operation".into(),
+                "query".into(),
+                "sourceId".into(),
+                "approvalGrantId".into(),
+                "includeSupportingAssets".into(),
+            ];
+            let examples = vec![
+                format!(
+                    "Resolve or invoke skill `{}` with sourceId `{}`.",
+                    candidate.skill_id, candidate.source_id
+                ),
+                "Invoke trusted skills as bounded prompt context before implementation.".into(),
+            ];
+            let score = tool_search_score_fields(ToolSearchScoreFields {
+                query,
+                query_terms,
+                name: &candidate.skill_id,
+                group: "skills",
+                description: &description,
+                tags: &tags,
+                schema_fields: &schema_fields,
+                examples: &examples,
+                activation_groups: &["skills".into()],
+                risk_class: "skill_runtime",
+            });
+            if score == 0 {
+                continue;
+            }
+            matches.push((
+                score,
+                AutonomousToolSearchMatch {
+                    tool_name: AUTONOMOUS_TOOL_SKILL.into(),
+                    group: "skills".into(),
+                    catalog_kind: "skill".into(),
+                    description,
+                    score,
+                    activation_groups: vec!["skills".into()],
+                    activation_tools: vec![AUTONOMOUS_TOOL_SKILL.into()],
+                    tags,
+                    schema_fields,
+                    examples,
+                    risk_class: "skill_runtime".into(),
+                    runtime_available: candidate.access.status != XeroSkillToolAccessStatus::Denied,
+                    source: Some(candidate.source_id),
+                    trust: Some(trust.into()),
+                    approval_status: Some(approval_status.into()),
+                },
+            ));
+        }
+        Ok(matches)
+    }
+
+    pub fn dynamic_tool_descriptor(
+        &self,
+        tool_name: &str,
+    ) -> CommandResult<Option<AutonomousDynamicToolDescriptor>> {
+        if !tool_name.starts_with(AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX) {
+            return Ok(None);
+        }
+        for capability in self.discover_mcp_catalog_capabilities()? {
+            if capability.kind != McpCatalogCapabilityKind::Tool
+                || capability.dynamic_tool_name() != tool_name
+            {
+                continue;
+            }
+            return Ok(Some(capability.dynamic_descriptor()));
+        }
+        Ok(None)
+    }
+
+    fn discover_mcp_catalog_capabilities(&self) -> CommandResult<Vec<McpCatalogCapability>> {
+        let Some(registry_path) = self.mcp_registry_path.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let registry = load_mcp_registry_from_path(registry_path)?;
+        let mut capabilities = Vec::new();
+        for server in registry
+            .servers
+            .iter()
+            .filter(|server| server.connection.status == McpConnectionStatus::Connected)
+        {
+            capabilities.extend(list_mcp_catalog_capabilities(server));
+        }
+        Ok(capabilities)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -731,6 +978,164 @@ struct CodeIntelScan {
     diagnostics: Vec<AutonomousCodeDiagnostic>,
     scanned_files: usize,
     truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpCatalogCapabilityKind {
+    Tool,
+    Resource,
+    Prompt,
+}
+
+#[derive(Debug, Clone)]
+struct McpCatalogCapability {
+    server_id: String,
+    server_name: String,
+    kind: McpCatalogCapabilityKind,
+    name: String,
+    uri: Option<String>,
+    description: String,
+    input_schema: Option<JsonValue>,
+    prompt_arguments: Vec<String>,
+}
+
+impl McpCatalogCapabilityKind {
+    fn catalog_kind(self) -> &'static str {
+        match self {
+            Self::Tool => "mcp_tool",
+            Self::Resource => "mcp_resource",
+            Self::Prompt => "mcp_prompt",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Tool => "tool",
+            Self::Resource => "resource",
+            Self::Prompt => "prompt",
+        }
+    }
+}
+
+impl McpCatalogCapability {
+    fn search_name(&self) -> String {
+        match self.kind {
+            McpCatalogCapabilityKind::Tool | McpCatalogCapabilityKind::Prompt => self.name.clone(),
+            McpCatalogCapabilityKind::Resource => self
+                .uri
+                .as_ref()
+                .filter(|uri| !uri.trim().is_empty())
+                .cloned()
+                .unwrap_or_else(|| self.name.clone()),
+        }
+    }
+
+    fn dynamic_tool_name(&self) -> String {
+        mcp_dynamic_tool_name(&self.server_id, &self.name)
+    }
+
+    fn risk_class(&self) -> &'static str {
+        match self.kind {
+            McpCatalogCapabilityKind::Tool => "external_capability_invoke",
+            McpCatalogCapabilityKind::Resource | McpCatalogCapabilityKind::Prompt => {
+                "external_capability_observe"
+            }
+        }
+    }
+
+    fn tags(&self) -> Vec<String> {
+        let mut tags = vec![
+            "mcp".into(),
+            "model_context_protocol".into(),
+            self.kind.label().into(),
+            self.server_id.replace('-', "_"),
+            self.server_name
+                .replace([' ', '-'], "_")
+                .to_ascii_lowercase(),
+        ];
+        if let Some(uri) = &self.uri {
+            tags.push(uri.replace([':', '/', '.', '-'], "_").to_ascii_lowercase());
+        }
+        tags
+    }
+
+    fn schema_fields(&self) -> Vec<String> {
+        match self.kind {
+            McpCatalogCapabilityKind::Tool => self
+                .input_schema
+                .as_ref()
+                .and_then(|schema| schema.get("properties"))
+                .and_then(JsonValue::as_object)
+                .map(|properties| properties.keys().cloned().collect())
+                .unwrap_or_default(),
+            McpCatalogCapabilityKind::Resource => vec!["serverId".into(), "uri".into()],
+            McpCatalogCapabilityKind::Prompt => {
+                let mut fields = vec!["serverId".into(), "name".into(), "arguments".into()];
+                fields.extend(self.prompt_arguments.clone());
+                fields.sort();
+                fields.dedup();
+                fields
+            }
+        }
+    }
+
+    fn examples(&self) -> Vec<String> {
+        match self.kind {
+            McpCatalogCapabilityKind::Tool => vec![format!(
+                "Activate `{}` then call it directly with the MCP tool arguments.",
+                self.dynamic_tool_name()
+            )],
+            McpCatalogCapabilityKind::Resource => vec![format!(
+                "Use `mcp` read_resource on server `{}` for URI `{}`.",
+                self.server_id,
+                self.uri.as_deref().unwrap_or(self.name.as_str())
+            )],
+            McpCatalogCapabilityKind::Prompt => vec![format!(
+                "Use `mcp` get_prompt on server `{}` for prompt `{}`.",
+                self.server_id, self.name
+            )],
+        }
+    }
+
+    fn model_description(&self) -> String {
+        let (description, _redacted) = sanitize_skill_tool_model_text(&self.description);
+        let display_description = if description.trim().is_empty() {
+            "No MCP description provided.".into()
+        } else {
+            description
+        };
+        match self.kind {
+            McpCatalogCapabilityKind::Tool => format!(
+                "MCP tool `{}` from server `{}` (`{}`): {display_description}",
+                self.name, self.server_name, self.server_id
+            ),
+            McpCatalogCapabilityKind::Resource => format!(
+                "MCP resource `{}` from server `{}` (`{}`): {display_description}",
+                self.uri.as_deref().unwrap_or(self.name.as_str()),
+                self.server_name,
+                self.server_id
+            ),
+            McpCatalogCapabilityKind::Prompt => format!(
+                "MCP prompt `{}` from server `{}` (`{}`): {display_description}",
+                self.name, self.server_name, self.server_id
+            ),
+        }
+    }
+
+    fn dynamic_descriptor(&self) -> AutonomousDynamicToolDescriptor {
+        AutonomousDynamicToolDescriptor {
+            name: self.dynamic_tool_name(),
+            description: self.model_description(),
+            input_schema: mcp_provider_input_schema(self.input_schema.as_ref()),
+            route: AutonomousDynamicToolRoute::McpTool {
+                server_id: self.server_id.clone(),
+                tool_name: self.name.clone(),
+            },
+            server_id: self.server_id.clone(),
+            capability_name: self.name.clone(),
+            risk_class: self.risk_class().into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1024,235 +1429,349 @@ fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
-fn priority_tool_catalog(
-    skill_tool_enabled: bool,
-) -> Vec<(&'static str, &'static str, &'static str)> {
-    let mut catalog = vec![
-        ("read", "core", "Read repo-scoped UTF-8 files."),
-        ("search", "core", "Search text in repo-scoped files."),
-        ("find", "core", "Find repo-scoped files by glob."),
-        ("git_status", "core", "Inspect repository status."),
-        ("git_diff", "core", "Inspect repository diffs."),
-        ("tool_access", "core", "Request deferred tool groups."),
-        ("list", "core", "List repo-scoped files and directories."),
-        ("file_hash", "core", "Hash repo-scoped files with SHA-256."),
-        ("write", "mutation", "Write repo-scoped UTF-8 files."),
-        ("edit", "mutation", "Apply expected-text line edits."),
-        ("patch", "mutation", "Patch exact file text."),
-        (
-            "delete",
-            "mutation",
-            "Delete repo-scoped files or directories.",
-        ),
-        ("rename", "mutation", "Rename repo-scoped paths."),
-        ("mkdir", "mutation", "Create repo-scoped directories."),
-        ("command", "command", "Run a repo-scoped command."),
-        (
-            "command_session_start",
-            "command",
-            "Start a long-running repo-scoped command session.",
-        ),
-        (
-            "command_session_read",
-            "command",
-            "Read command session output.",
-        ),
-        (
-            "command_session_stop",
-            "command",
-            "Stop a long-running command session.",
-        ),
-        (
-            "process_manager",
-            "process_manager",
-            "Start, interact with, inspect, read output from, and kill Xero-owned long-running processes.",
-        ),
-        (
-            "macos_automation",
-            "macos",
-            "Check macOS permissions, inspect apps/windows, and run approval-gated desktop automation.",
-        ),
-        (
-            "web_search",
-            "web",
-            "Search the web through configured backend.",
-        ),
-        ("web_fetch", "web", "Fetch HTTP or HTTPS text content."),
-        (
-            "browser",
-            "web",
-            "Drive the in-app browser and inspect browser diagnostics.",
-        ),
-        ("emulator", "emulator", "Drive mobile emulator automation."),
-        (
-            "solana_cluster",
-            "solana",
-            "Inspect and control local or forked Solana clusters.",
-        ),
-        (
-            "solana_logs",
-            "solana",
-            "Read Solana validator, program, and transaction logs.",
-        ),
-        (
-            "solana_tx",
-            "solana",
-            "Inspect Solana transaction signatures, statuses, and metadata.",
-        ),
-        (
-            "solana_simulate",
-            "solana",
-            "Simulate Solana transactions before sending them.",
-        ),
-        (
-            "solana_explain",
-            "solana",
-            "Explain Solana transactions, errors, and account changes.",
-        ),
-        (
-            "solana_alt",
-            "solana",
-            "Inspect Solana address lookup table data.",
-        ),
-        (
-            "solana_idl",
-            "solana",
-            "Inspect Anchor IDLs and generated Solana interface metadata.",
-        ),
-        (
-            "solana_codama",
-            "solana",
-            "Run Codama schema and client-generation helpers.",
-        ),
-        (
-            "solana_pda",
-            "solana",
-            "Derive and inspect Solana program-derived addresses.",
-        ),
-        (
-            "solana_program",
-            "solana",
-            "Inspect Solana program metadata and build state.",
-        ),
-        (
-            "solana_deploy",
-            "solana",
-            "Run Solana deploy planning and guarded deploy actions.",
-        ),
-        (
-            "solana_upgrade_check",
-            "solana",
-            "Check Solana upgrade authority and deployment safety.",
-        ),
-        (
-            "solana_squads",
-            "solana",
-            "Inspect Squads multisig proposals and governance state.",
-        ),
-        (
-            "solana_verified_build",
-            "solana",
-            "Run verified-build checks for Solana programs.",
-        ),
-        (
-            "solana_audit_static",
-            "solana",
-            "Run static audit checks for Solana programs.",
-        ),
-        (
-            "solana_audit_external",
-            "solana",
-            "Run external-reference audit checks for Solana programs.",
-        ),
-        (
-            "solana_audit_fuzz",
-            "solana",
-            "Run fuzzing-oriented audit checks for Solana programs.",
-        ),
-        (
-            "solana_audit_coverage",
-            "solana",
-            "Inspect Solana audit and test coverage evidence.",
-        ),
-        (
-            "solana_replay",
-            "solana",
-            "Replay Solana transactions or ledger events.",
-        ),
-        (
-            "solana_indexer",
-            "solana",
-            "Inspect and manage Solana indexer state.",
-        ),
-        (
-            "solana_secrets",
-            "solana",
-            "Inspect Solana secret references without exposing raw values.",
-        ),
-        (
-            "solana_cluster_drift",
-            "solana",
-            "Detect drift between expected and live Solana cluster state.",
-        ),
-        (
-            "solana_cost",
-            "solana",
-            "Estimate Solana transaction, account, and runtime costs.",
-        ),
-        (
-            "solana_docs",
-            "solana",
-            "Search and retrieve Solana documentation guidance.",
-        ),
-        (
-            "mcp",
-            "mcp",
-            "List and invoke connected MCP tools, resources, and prompts over stdio, HTTP, or SSE.",
-        ),
-        (
-            "subagent",
-            "agent_ops",
-            "Spawn built-in model-routed subagent tasks.",
-        ),
-        (
-            "todo",
-            "agent_ops",
-            "Maintain model-visible planning todos.",
-        ),
-        (
-            "tool_search",
-            "agent_ops",
-            "Search deferred tool capabilities.",
-        ),
-        (
-            "notebook_edit",
-            "notebook",
-            "Edit Jupyter notebook cell source.",
-        ),
-        (
-            "code_intel",
-            "intelligence",
-            "Find symbols and JSON diagnostics.",
-        ),
-        (
-            "lsp",
-            "intelligence",
-            "List language servers and resolve symbols or diagnostics through LSP with native fallback.",
-        ),
-        (
-            "powershell",
-            "powershell",
-            "Run PowerShell through command policy.",
-        ),
-    ];
-    if skill_tool_enabled {
-        catalog.push((
-            AUTONOMOUS_TOOL_SKILL,
-            "skills",
-            "Discover, resolve, install, invoke, reload, or create Xero skills.",
-        ));
+fn normalized_search_terms(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+        .filter_map(|term| {
+            let term = term.trim();
+            (!term.is_empty()).then(|| term.to_owned())
+        })
+        .collect()
+}
+
+struct ToolSearchScoreFields<'a> {
+    query: &'a str,
+    query_terms: &'a [String],
+    name: &'a str,
+    group: &'a str,
+    description: &'a str,
+    tags: &'a [String],
+    schema_fields: &'a [String],
+    examples: &'a [String],
+    activation_groups: &'a [String],
+    risk_class: &'a str,
+}
+
+fn tool_search_score(
+    query: &str,
+    query_terms: &[String],
+    entry: &AutonomousToolCatalogEntry,
+) -> u32 {
+    let tags = entry
+        .tags
+        .iter()
+        .map(|tag| (*tag).to_owned())
+        .collect::<Vec<_>>();
+    let schema_fields = entry
+        .schema_fields
+        .iter()
+        .map(|field| (*field).to_owned())
+        .collect::<Vec<_>>();
+    let examples = entry
+        .examples
+        .iter()
+        .map(|example| (*example).to_owned())
+        .collect::<Vec<_>>();
+    let activation_groups = tool_catalog_activation_groups(entry.tool_name);
+    tool_search_score_fields(ToolSearchScoreFields {
+        query,
+        query_terms,
+        name: entry.tool_name,
+        group: entry.group,
+        description: entry.description,
+        tags: &tags,
+        schema_fields: &schema_fields,
+        examples: &examples,
+        activation_groups: &activation_groups,
+        risk_class: entry.risk_class,
+    })
+}
+
+fn tool_search_score_fields(fields: ToolSearchScoreFields<'_>) -> u32 {
+    let query = fields.query;
+    let query_terms = fields.query_terms;
+    let name = fields.name.to_ascii_lowercase();
+    let normalized_name = name.replace('_', " ");
+    let group = fields.group.to_ascii_lowercase();
+    let description = fields.description.to_ascii_lowercase();
+    let tags = fields.tags.join(" ").to_ascii_lowercase();
+    let schema_fields = fields.schema_fields.join(" ").to_ascii_lowercase();
+    let examples = fields.examples.join(" ").to_ascii_lowercase();
+    let activation_groups = fields.activation_groups.join(" ").to_ascii_lowercase();
+    let haystack = format!(
+        "{name} {normalized_name} {group} {description} {tags} {schema_fields} {examples} {activation_groups} {}",
+        fields.risk_class
+    );
+    let mut score = 0_u32;
+
+    if name == query || normalized_name == query {
+        score += 120;
+    } else if name.contains(query) || normalized_name.contains(query) {
+        score += 60;
+    } else if group == query {
+        score += 50;
+    } else if haystack.contains(query) {
+        score += 25;
     }
-    catalog
+
+    for term in query_terms {
+        if name == term.as_str() || normalized_name == term.as_str() {
+            score += 40;
+        } else if name.contains(term) || normalized_name.contains(term) {
+            score += 24;
+        }
+        if group == term.as_str() {
+            score += 18;
+        } else if group.contains(term) {
+            score += 10;
+        }
+        if tags.contains(term) {
+            score += 14;
+        }
+        if schema_fields.contains(term) {
+            score += 12;
+        }
+        if activation_groups.contains(term) {
+            score += 12;
+        }
+        if examples.contains(term) {
+            score += 8;
+        }
+        if description.contains(term) {
+            score += 8;
+        }
+    }
+
+    if fields.name == "command"
+        && query_terms.iter().any(|term| {
+            matches!(
+                term.as_str(),
+                "run" | "test" | "tests" | "build" | "lint" | "compile" | "verify"
+            )
+        })
+    {
+        score += 50;
+    }
+    if fields.name.starts_with("command_session")
+        && !query_terms.iter().any(|term| {
+            matches!(
+                term.as_str(),
+                "session" | "watch" | "server" | "dev" | "long" | "background"
+            )
+        })
+    {
+        score = score.saturating_sub(35);
+    }
+
+    score
+}
+
+fn list_mcp_catalog_capabilities(server: &McpServerRecord) -> Vec<McpCatalogCapability> {
+    let timeout = DEFAULT_MCP_TIMEOUT_MS.min(MAX_MCP_TIMEOUT_MS);
+    let mut capabilities = Vec::new();
+    if let Ok(result) = invoke_mcp_server(server, "tools/list", json!({}), timeout) {
+        capabilities.extend(mcp_tool_capabilities(server, &result));
+    }
+    if let Ok(result) = invoke_mcp_server(server, "resources/list", json!({}), timeout) {
+        capabilities.extend(mcp_resource_capabilities(server, &result));
+    }
+    if let Ok(result) = invoke_mcp_server(server, "prompts/list", json!({}), timeout) {
+        capabilities.extend(mcp_prompt_capabilities(server, &result));
+    }
+    capabilities
+}
+
+fn mcp_tool_capabilities(
+    server: &McpServerRecord,
+    result: &JsonValue,
+) -> Vec<McpCatalogCapability> {
+    result
+        .get("tools")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| {
+            let name = mcp_string_field(tool, "name")?;
+            Some(McpCatalogCapability {
+                server_id: server.id.clone(),
+                server_name: server.name.clone(),
+                kind: McpCatalogCapabilityKind::Tool,
+                name,
+                uri: None,
+                description: mcp_string_field(tool, "description").unwrap_or_default(),
+                input_schema: tool
+                    .get("inputSchema")
+                    .or_else(|| tool.get("input_schema"))
+                    .cloned(),
+                prompt_arguments: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+fn mcp_resource_capabilities(
+    server: &McpServerRecord,
+    result: &JsonValue,
+) -> Vec<McpCatalogCapability> {
+    result
+        .get("resources")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|resource| {
+            let uri = mcp_string_field(resource, "uri")?;
+            let name = mcp_string_field(resource, "name").unwrap_or_else(|| uri.clone());
+            Some(McpCatalogCapability {
+                server_id: server.id.clone(),
+                server_name: server.name.clone(),
+                kind: McpCatalogCapabilityKind::Resource,
+                name,
+                uri: Some(uri),
+                description: mcp_string_field(resource, "description").unwrap_or_default(),
+                input_schema: None,
+                prompt_arguments: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+fn mcp_prompt_capabilities(
+    server: &McpServerRecord,
+    result: &JsonValue,
+) -> Vec<McpCatalogCapability> {
+    result
+        .get("prompts")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|prompt| {
+            let name = mcp_string_field(prompt, "name")?;
+            Some(McpCatalogCapability {
+                server_id: server.id.clone(),
+                server_name: server.name.clone(),
+                kind: McpCatalogCapabilityKind::Prompt,
+                name,
+                uri: None,
+                description: mcp_string_field(prompt, "description").unwrap_or_default(),
+                input_schema: None,
+                prompt_arguments: mcp_prompt_argument_names(prompt),
+            })
+        })
+        .collect()
+}
+
+fn mcp_string_field(value: &JsonValue, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn mcp_prompt_argument_names(prompt: &JsonValue) -> Vec<String> {
+    let mut names = prompt
+        .get("arguments")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|argument| mcp_string_field(argument, "name"))
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn mcp_dynamic_tool_name(server_id: &str, tool_name: &str) -> String {
+    let server_slug = provider_safe_slug(server_id, 14, "server");
+    let tool_slug = provider_safe_slug(tool_name, 28, "tool");
+    format!(
+        "{AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX}{server_slug}__{tool_slug}__{}",
+        short_capability_hash(server_id, tool_name)
+    )
+}
+
+fn provider_safe_slug(value: &str, max_len: usize, fallback: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_underscore = false;
+    for ch in value.chars() {
+        let next = if ch.is_ascii_alphanumeric() {
+            previous_underscore = false;
+            ch.to_ascii_lowercase()
+        } else if !previous_underscore {
+            previous_underscore = true;
+            '_'
+        } else {
+            continue;
+        };
+        slug.push(next);
+        if slug.len() >= max_len {
+            break;
+        }
+    }
+    let slug = slug.trim_matches('_').to_string();
+    if slug.is_empty() {
+        fallback.into()
+    } else {
+        slug
+    }
+}
+
+fn short_capability_hash(server_id: &str, tool_name: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(server_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(tool_name.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    hash.chars().take(10).collect()
+}
+
+fn mcp_provider_input_schema(schema: Option<&JsonValue>) -> JsonValue {
+    let Some(JsonValue::Object(object)) = schema else {
+        return json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {}
+        });
+    };
+    let mut normalized = object.clone();
+    normalized
+        .entry("type")
+        .or_insert_with(|| JsonValue::String("object".into()));
+    normalized
+        .entry("properties")
+        .or_insert_with(|| JsonValue::Object(serde_json::Map::new()));
+    JsonValue::Object(normalized)
+}
+
+fn skill_source_kind_label(kind: XeroSkillSourceKind) -> &'static str {
+    match kind {
+        XeroSkillSourceKind::Bundled => "bundled",
+        XeroSkillSourceKind::Local => "local",
+        XeroSkillSourceKind::Project => "project",
+        XeroSkillSourceKind::Github => "github",
+        XeroSkillSourceKind::Dynamic => "dynamic",
+        XeroSkillSourceKind::Mcp => "mcp",
+        XeroSkillSourceKind::Plugin => "plugin",
+    }
+}
+
+fn skill_trust_label(trust: XeroSkillTrustState) -> &'static str {
+    match trust {
+        XeroSkillTrustState::Trusted => "trusted",
+        XeroSkillTrustState::UserApproved => "user_approved",
+        XeroSkillTrustState::ApprovalRequired => "approval_required",
+        XeroSkillTrustState::Untrusted => "untrusted",
+        XeroSkillTrustState::Blocked => "blocked",
+    }
+}
+
+fn skill_access_status_label(status: XeroSkillToolAccessStatus) -> &'static str {
+    match status {
+        XeroSkillToolAccessStatus::Allowed => "allowed",
+        XeroSkillToolAccessStatus::ApprovalRequired => "approval_required",
+        XeroSkillToolAccessStatus::Denied => "denied",
+    }
 }
 
 fn bounded_limit(value: Option<usize>, default: usize) -> CommandResult<usize> {

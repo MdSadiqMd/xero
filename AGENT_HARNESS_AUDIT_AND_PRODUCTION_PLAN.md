@@ -12,6 +12,60 @@ The current harness is not yet production-grade. The largest weaknesses are prom
 
 The right direction is not to add more ad hoc prompt text. Xero needs a versioned prompt compiler, a progressive tool catalog, a stricter run state machine, a richer approval/sandbox model, first-class planning and verification loops, and an eval suite that catches regressions in tool use, safety, and task completion.
 
+## Implementation Status
+
+Status date: April 30, 2026.
+
+Overall status: Milestones 1 and 2 are complete. About 30% of the full production plan is now implemented; roughly 70% remains. The work completed so far establishes the prompt compiler and progressive registry foundation, but the state machine, policy engine, context graph, native MCP/skill projection, async subagents, eval suite, and product inspector surfaces are still open.
+
+Completed in the April 30, 2026 pass:
+
+- Added a versioned `PromptCompiler` path with prompt fragments, fragment priorities, hashes, token estimates, and provenance for base policy, active tools, root/nested repository instructions, owned process state, and approved memory.
+- Added explicit instruction hierarchy and lower-priority trust boundaries around repository instructions and approved memory.
+- Added deterministic root and nested `AGENTS.md` support with project-owned boundaries and path-based precedence.
+- Added model-facing plan, verification, and final-response contracts to the owned-agent system prompt.
+- Made the session Context panel consume prompt compiler fragments directly, including fragment IDs, priorities, hashes, and provenance.
+- Added `tool_search` and `todo` to the always-on core tool set.
+- Reworked `tool_search` from simple substring filtering into ranked lexical search across tool name, normalized name, group, and description.
+- Persisted an active `tool_registry_snapshot` event for each provider turn, including active tool names and descriptors.
+- Added backend/frontend contract support for the new `tool_registry_snapshot` event.
+- Added focused and golden tests for prompt boundaries, full prompt output, nested instruction ordering, process-state fragments, core tool availability, registry snapshots, ranked tool search, context projection, and frontend event parsing.
+
+Completed in the Milestone 2 pass:
+
+- Added a first-class deferred tool catalog with tool name, primary group, activation groups, tags, schema fields, examples, risk class, and runtime availability metadata.
+- Expanded `tool_search` results into ranked candidate descriptors with activation tools/groups, risk, tags, schema fields, examples, and searched-catalog size.
+- Added fine-grained activation bundles including `web_search_only`, `web_fetch`, `browser_observe`, `browser_control`, `command_readonly`, `command_mutating`, `command_session`, `mcp_list`, and `mcp_invoke`.
+- Kept the always-on minimal tool surface to `read`, `search`, `find`, `git_status`, `git_diff`, `tool_access`, `list`, `file_hash`, `todo`, and `tool_search`.
+- Stopped auto-exposing Solana schemas just because a workspace looks like a Solana repo; Solana tools now require explicit task intent or discovery/activation.
+- Made `tool_access` list the richer fine-grained groups and allow exact obscure-tool activation, such as `solana_alt`, after discovery.
+- Persisted catalog metadata alongside every `tool_registry_snapshot` event and made registry replay prefer the latest durable snapshot while still incorporating new user prompt/tool-access requests.
+- Preserved registry options during expansion so skill-tool gating and browser preference survive `tool_access` turns.
+
+Milestone 1 is complete:
+
+- Prompt construction is deterministic and testable.
+- Context visualization and provider replay use the same prompt compiler.
+- Project-owned text is bounded as lower-priority context and cannot silently override Xero safety policy.
+- Every prompt fragment is explainable in the Context panel through fragment metadata.
+
+Milestone 2 is complete:
+
+- A broad task does not receive unrelated Solana/browser/emulator schemas unless prompted or explicitly activated.
+- Obscure capabilities can be discovered through ranked `tool_search` metadata and activated through `tool_access`.
+- Active tool sets are durable, explainable, and replayable through enriched `tool_registry_snapshot` events.
+
+Still left:
+
+- Native MCP and skill projection into model-native tool descriptors.
+- A formal agent state machine with plan and verification gates.
+- Central safety policy engine and scoped approval grants.
+- Canonical multi-file patch tooling and broader tool runtime hardening.
+- Token-budget-aware context graph and code map.
+- Async subagents with ownership boundaries.
+- Harness eval suite and nightly reporting.
+- Product surfaces for prompt/context/tool registry inspection, verification summaries, approvals, and rollback.
+
 ## How The Agent Works Today
 
 ### Runtime Shape
@@ -451,12 +505,14 @@ This order keeps the harness usable while reducing the riskiest architectural de
 
 Start with a narrow but high-leverage slice:
 
-1. Add `PromptCompiler` with fragments for base policy, repo instructions, approved memory, active tools, and process summary.
-2. Make context visualization consume the same fragments.
-3. Add `tool_search` to the always-on core tools.
-4. Persist the active tool registry for each provider turn.
-5. Add snapshot tests for the current prompt output so behavior changes are explicit.
-6. Fix the Xero/Xero identity mismatch.
-7. Add an explicit lower-priority boundary around repository instructions.
+| Item | Status | Notes |
+| --- | --- | --- |
+| Add `PromptCompiler` with fragments for base policy, repo instructions, approved memory, active tools, and process summary. | Complete | Implemented fragments for base policy, root/nested repo instructions, approved memory, active tools, and owned process state. |
+| Make context visualization consume the same fragments. | Complete | Session-context snapshots now consume compiler fragments directly and expose fragment IDs, priorities, hashes, and provenance. |
+| Add `tool_search` to the always-on core tools. | Complete | `tool_search` and `todo` are now in the core tool set. |
+| Persist the active tool registry for each provider turn. | Complete | Provider turns now emit durable `tool_registry_snapshot` events with active tool names and descriptors. |
+| Add snapshot tests for the current prompt output so behavior changes are explicit. | Complete | Added a golden full-prompt snapshot plus focused Rust coverage for nested instructions, process-state fragments, and context projection. |
+| Fix the Xero/Xero identity mismatch. | Complete | Prompt identity now consistently uses Xero in the touched owned-agent prompt path. |
+| Add an explicit lower-priority boundary around repository instructions. | Complete | Repository instructions are wrapped in a project-owned, lower-priority boundary with begin/end delimiters. |
 
 This slice does not need to redesign every tool. It gives Xero a stable foundation for the rest of the harness.

@@ -124,6 +124,10 @@ describe('session context contract', () => {
     const instruction = makeContributor('instruction:AGENTS.md', 2, {
       kind: 'instruction_file',
       text: 'Use tests rather than temporary UI.',
+      promptFragmentId: 'project.instructions.AGENTS.md',
+      promptFragmentPriority: 300,
+      promptFragmentHash: 'a'.repeat(64),
+      promptFragmentProvenance: 'project:AGENTS.md',
     })
     const policy: SessionContextPolicyDecisionDto = sessionContextPolicyDecisionSchema.parse({
       contractVersion: XERO_SESSION_CONTEXT_CONTRACT_VERSION,
@@ -156,6 +160,7 @@ describe('session context contract', () => {
 
     expect(snapshot.budget.pressure).toBe('high')
     expect(snapshot.budget.estimationSource).toBe('estimated')
+    expect(snapshot.contributors[1].promptFragmentId).toBe('project.instructions.AGENTS.md')
     expect(() =>
       sessionContextSnapshotSchema.parse({
         ...snapshot,

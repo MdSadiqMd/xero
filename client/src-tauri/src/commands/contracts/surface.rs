@@ -29,6 +29,7 @@ pub const GET_AUTONOMOUS_RUN_COMMAND: &str = "get_autonomous_run";
 pub const GET_PROJECT_SNAPSHOT_COMMAND: &str = "get_project_snapshot";
 pub const GET_REPOSITORY_STATUS_COMMAND: &str = "get_repository_status";
 pub const GET_REPOSITORY_DIFF_COMMAND: &str = "get_repository_diff";
+pub const GIT_GENERATE_COMMIT_MESSAGE_COMMAND: &str = "git_generate_commit_message";
 pub const LIST_PROJECT_FILES_COMMAND: &str = "list_project_files";
 pub const READ_PROJECT_FILE_COMMAND: &str = "read_project_file";
 pub const WRITE_PROJECT_FILE_COMMAND: &str = "write_project_file";
@@ -405,6 +406,26 @@ pub struct GitPathsRequestDto {
 pub struct GitCommitRequestDto {
     pub project_id: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitGenerateCommitMessageRequestDto {
+    pub project_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_profile_id: Option<String>,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_effort: Option<super::runtime::ProviderModelThinkingEffortDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitGenerateCommitMessageResponseDto {
+    pub message: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub diff_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -24,16 +24,20 @@ pub(crate) fn drive_provider_loop(
     for turn_index in 0..MAX_PROVIDER_TURNS {
         cancellation.check_cancelled()?;
         touch_agent_run_heartbeat(repo_root, project_id, run_id)?;
-        let turn_system_prompt = assemble_system_prompt_for_session(
+        let owned_process_summary = tool_runtime.owned_process_lifecycle_summary()?;
+        let skill_contexts = skill_contexts_from_provider_messages(&messages)?;
+        let turn_prompt_compilation = compile_system_prompt_for_session(
             repo_root,
             Some(project_id),
             Some(agent_session_id),
+            tool_runtime.browser_control_preference(),
             tool_registry.descriptors(),
+            owned_process_summary.as_deref(),
+            skill_contexts,
         )?;
-        let turn_system_prompt =
-            append_owned_process_lifecycle_summary(turn_system_prompt, tool_runtime)?;
+        record_tool_registry_snapshot(repo_root, project_id, run_id, turn_index, &tool_registry)?;
         let turn = ProviderTurnRequest {
-            system_prompt: turn_system_prompt,
+            system_prompt: turn_prompt_compilation.prompt,
             messages: messages.clone(),
             tools: tool_registry.descriptors().to_vec(),
             turn_index,
@@ -74,7 +78,21 @@ pub(crate) fn drive_provider_loop(
                 tool_calls,
                 usage,
             } => {
+                let received_usage = usage
+                    .as_ref()
+                    .map(provider_usage_has_tokens)
+                    .unwrap_or(false);
                 merge_provider_usage(&mut usage_total, usage);
+                if received_usage {
+                    persist_provider_usage(
+                        repo_root,
+                        project_id,
+                        run_id,
+                        provider.provider_id(),
+                        provider.model_id(),
+                        &usage_total,
+                    )?;
+                }
                 if tool_calls.is_empty() {
                     return Err(CommandError::system_fault(
                         "agent_provider_turn_invalid",
@@ -146,7 +164,8 @@ pub(crate) fn drive_provider_loop(
                     });
                     touch_agent_run_heartbeat(repo_root, project_id, run_id)?;
                     if let Some(granted_tools) = granted_tools_from_tool_access_result(&result) {
-                        tool_registry.expand_with_tool_names(granted_tools);
+                        tool_registry
+                            .expand_with_tool_names_from_runtime(granted_tools, tool_runtime)?;
                     }
                 }
             }
@@ -161,16 +180,86 @@ pub(crate) fn drive_provider_loop(
     ))
 }
 
-fn append_owned_process_lifecycle_summary(
-    system_prompt: String,
-    tool_runtime: &AutonomousToolRuntime,
-) -> CommandResult<String> {
-    let Some(summary) = tool_runtime.owned_process_lifecycle_summary()? else {
-        return Ok(system_prompt);
-    };
-    Ok(format!(
-        "{system_prompt}\n\nXero-owned process state for this turn (read-only digest; call `process_manager` for fresh output or control):\n{summary}"
-    ))
+fn record_tool_registry_snapshot(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+    turn_index: usize,
+    registry: &ToolRegistry,
+) -> CommandResult<()> {
+    let descriptors = registry.descriptors();
+    let tool_names = descriptors
+        .iter()
+        .map(|descriptor| descriptor.name.as_str())
+        .collect::<Vec<_>>();
+    let catalog = descriptors
+        .iter()
+        .filter_map(|descriptor| {
+            tool_catalog_metadata_for_tool(&descriptor.name, true).or_else(|| {
+                registry
+                    .dynamic_routes()
+                    .get(&descriptor.name)
+                    .map(|route| dynamic_tool_catalog_metadata(descriptor, route))
+            })
+        })
+        .collect::<Vec<_>>();
+    let dynamic_routes = registry
+        .dynamic_routes()
+        .iter()
+        .map(|(tool_name, route)| {
+            json!({
+                "toolName": tool_name,
+                "route": route,
+            })
+        })
+        .collect::<Vec<_>>();
+    append_event(
+        repo_root,
+        project_id,
+        run_id,
+        AgentRunEventKind::ToolRegistrySnapshot,
+        json!({
+            "kind": "active_tool_registry",
+            "promptVersion": SYSTEM_PROMPT_VERSION,
+            "turnIndex": turn_index,
+            "toolNames": tool_names,
+            "catalog": catalog,
+            "dynamicRoutes": dynamic_routes,
+            "descriptors": descriptors,
+        }),
+    )?;
+    Ok(())
+}
+
+fn dynamic_tool_catalog_metadata(
+    descriptor: &AgentToolDescriptor,
+    route: &AutonomousDynamicToolRoute,
+) -> JsonValue {
+    match route {
+        AutonomousDynamicToolRoute::McpTool {
+            server_id,
+            tool_name,
+        } => json!({
+            "toolName": descriptor.name.as_str(),
+            "group": "mcp",
+            "catalogKind": "mcp_tool",
+            "activationGroups": ["mcp_invoke"],
+            "activationTools": [descriptor.name.as_str()],
+            "tags": ["mcp", "model_context_protocol", "tool", server_id, tool_name],
+            "schemaFields": descriptor
+                .input_schema
+                .get("properties")
+                .and_then(JsonValue::as_object)
+                .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default(),
+            "examples": [format!("Call `{}` after exact MCP activation.", descriptor.name)],
+            "riskClass": "external_capability_invoke",
+            "runtimeAvailable": true,
+            "source": server_id,
+            "trust": "connected_mcp_server",
+            "approvalStatus": "allowed",
+        }),
+    }
 }
 
 fn record_plan_mode_action_required(
@@ -449,6 +538,8 @@ pub(crate) fn tool_registry_for_snapshot(
     snapshot: &AgentRunSnapshotRecord,
     controls: &RuntimeRunControlStateDto,
     skill_tool_enabled: bool,
+    browser_control_preference: BrowserControlPreferenceDto,
+    tool_runtime: Option<&AutonomousToolRuntime>,
 ) -> CommandResult<ToolRegistry> {
     let prompt_context = snapshot
         .messages
@@ -468,14 +559,121 @@ pub(crate) fn tool_registry_for_snapshot(
         prompt_context.as_str()
     };
 
-    let mut registry = ToolRegistry::for_prompt_with_options(
+    let prompt_registry = ToolRegistry::for_prompt_with_options(
         repo_root,
         prompt_context,
         controls,
-        ToolRegistryOptions { skill_tool_enabled },
+        ToolRegistryOptions {
+            skill_tool_enabled,
+            browser_control_preference,
+        },
     );
-    registry.expand_with_tool_names(granted_tools_from_snapshot(snapshot)?);
+    let options = ToolRegistryOptions {
+        skill_tool_enabled,
+        browser_control_preference,
+    };
+    let latest_registry = latest_tool_registry_snapshot(snapshot)?;
+    let mut registry = if let Some(latest_registry) = latest_registry {
+        ToolRegistry::from_descriptors_with_dynamic_routes(
+            latest_registry.descriptors,
+            latest_registry.dynamic_routes,
+            options,
+        )
+    } else {
+        ToolRegistry::for_tool_names_with_options(prompt_registry.descriptor_names(), options)
+    };
+    registry.expand_with_tool_names(prompt_registry.descriptor_names());
+    let granted_tools = granted_tools_from_snapshot(snapshot)?;
+    if let Some(tool_runtime) = tool_runtime {
+        registry.expand_with_tool_names_from_runtime(granted_tools, tool_runtime)?;
+    } else {
+        registry.expand_with_tool_names(granted_tools);
+    }
     Ok(registry)
+}
+
+#[derive(Debug, Clone)]
+struct PersistedToolRegistrySnapshot {
+    descriptors: Vec<AgentToolDescriptor>,
+    dynamic_routes: BTreeMap<String, AutonomousDynamicToolRoute>,
+}
+
+fn latest_tool_registry_snapshot(
+    snapshot: &AgentRunSnapshotRecord,
+) -> CommandResult<Option<PersistedToolRegistrySnapshot>> {
+    snapshot
+        .events
+        .iter()
+        .rev()
+        .filter(|event| event.event_kind == AgentRunEventKind::ToolRegistrySnapshot)
+        .find_map(|event| {
+            let payload = serde_json::from_str::<JsonValue>(&event.payload_json).ok()?;
+            if payload.get("kind").and_then(JsonValue::as_str) != Some("active_tool_registry") {
+                return None;
+            }
+            Some(payload)
+        })
+        .map(parse_tool_registry_snapshot_payload)
+        .transpose()
+}
+
+fn parse_tool_registry_snapshot_payload(
+    payload: JsonValue,
+) -> CommandResult<PersistedToolRegistrySnapshot> {
+    let descriptors = payload
+        .get("descriptors")
+        .cloned()
+        .map(serde_json::from_value::<Vec<AgentToolDescriptor>>)
+        .transpose()
+        .map_err(|error| {
+            CommandError::system_fault(
+                "agent_tool_registry_snapshot_decode_failed",
+                format!("Xero could not decode persisted tool descriptors: {error}"),
+            )
+        })?
+        .unwrap_or_else(|| {
+            payload
+                .get("toolNames")
+                .and_then(JsonValue::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(JsonValue::as_str)
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .filter_map(|tool_name| {
+                    ToolRegistry::for_tool_names(BTreeSet::from([tool_name.clone()]))
+                        .descriptor(&tool_name)
+                        .cloned()
+                })
+                .collect()
+        });
+    let mut dynamic_routes = BTreeMap::new();
+    for route in payload
+        .get("dynamicRoutes")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(tool_name) = route.get("toolName").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let Some(route_value) = route.get("route").cloned() else {
+            continue;
+        };
+        let route =
+            serde_json::from_value::<AutonomousDynamicToolRoute>(route_value).map_err(|error| {
+                CommandError::system_fault(
+                    "agent_tool_registry_snapshot_decode_failed",
+                    format!("Xero could not decode persisted dynamic tool route: {error}"),
+                )
+            })?;
+        dynamic_routes.insert(tool_name.to_owned(), route);
+    }
+    Ok(PersistedToolRegistrySnapshot {
+        descriptors,
+        dynamic_routes,
+    })
 }
 
 fn granted_tools_from_snapshot(
@@ -519,6 +717,43 @@ fn granted_tools_from_tool_access_result(result: &AgentToolResult) -> Option<Vec
     }
 }
 
+pub(crate) fn skill_contexts_from_provider_messages(
+    messages: &[ProviderMessage],
+) -> CommandResult<Vec<XeroSkillToolContextPayload>> {
+    let mut contexts = Vec::new();
+    for message in messages {
+        let ProviderMessage::Tool { content, .. } = message else {
+            continue;
+        };
+        let result = serde_json::from_str::<AgentToolResult>(content).map_err(|error| {
+            CommandError::system_fault(
+                "agent_skill_context_tool_result_decode_failed",
+                format!(
+                    "Xero could not decode persisted tool result while collecting skill prompt context: {error}"
+                ),
+            )
+        })?;
+        if !result.ok {
+            continue;
+        }
+        let result =
+            serde_json::from_value::<AutonomousToolResult>(result.output).map_err(|error| {
+                CommandError::system_fault(
+                    "agent_skill_context_output_decode_failed",
+                    format!(
+                        "Xero could not decode owned-agent tool output while collecting skill prompt context: {error}"
+                    ),
+                )
+            })?;
+        if let AutonomousToolOutput::Skill(output) = result.output {
+            if let Some(context) = output.context {
+                contexts.push(context);
+            }
+        }
+    }
+    Ok(contexts)
+}
+
 fn superseded_tool_message_ids(messages: &[AgentMessageRecord]) -> CommandResult<BTreeSet<i64>> {
     let mut latest_by_tool_call_id = BTreeMap::new();
     let mut superseded = BTreeSet::new();
@@ -554,6 +789,23 @@ fn merge_provider_usage(total: &mut ProviderUsage, usage: Option<ProviderUsage>)
     total.cache_creation_tokens = total
         .cache_creation_tokens
         .saturating_add(usage.cache_creation_tokens);
+    total.reported_cost_micros = match (total.reported_cost_micros, usage.reported_cost_micros) {
+        (Some(total_cost), Some(next_cost)) => Some(total_cost.saturating_add(next_cost)),
+        (Some(total_cost), None) => Some(total_cost),
+        (None, Some(next_cost)) => Some(next_cost),
+        (None, None) => None,
+    };
+}
+
+fn provider_usage_has_tokens(usage: &ProviderUsage) -> bool {
+    usage.input_tokens > 0
+        || usage.output_tokens > 0
+        || usage.total_tokens > 0
+        || usage.cache_read_tokens > 0
+        || usage.cache_creation_tokens > 0
+        || usage
+            .reported_cost_micros
+            .is_some_and(|reported_cost| reported_cost > 0)
 }
 
 fn persist_provider_usage(
@@ -564,16 +816,18 @@ fn persist_provider_usage(
     model_id: &str,
     usage: &ProviderUsage,
 ) -> CommandResult<()> {
-    let estimated_cost_micros = crate::runtime::pricing::estimate_cost_micros(
-        provider_id,
-        model_id,
-        crate::runtime::pricing::UsageForPricing {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_read_tokens: usage.cache_read_tokens,
-            cache_creation_tokens: usage.cache_creation_tokens,
-        },
-    );
+    let estimated_cost_micros = usage.reported_cost_micros.unwrap_or_else(|| {
+        crate::runtime::pricing::estimate_cost_micros(
+            provider_id,
+            model_id,
+            crate::runtime::pricing::UsageForPricing {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_tokens: usage.cache_read_tokens,
+                cache_creation_tokens: usage.cache_creation_tokens,
+            },
+        )
+    });
     project_store::upsert_agent_usage(
         repo_root,
         &project_store::AgentUsageRecord {
@@ -592,4 +846,39 @@ fn persist_provider_usage(
     )?;
     crate::runtime::usage_events::emit_agent_usage_updated(project_id, run_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_provider_usage_sums_reported_costs() {
+        let mut total = ProviderUsage::default();
+
+        merge_provider_usage(
+            &mut total,
+            Some(ProviderUsage {
+                input_tokens: 10,
+                total_tokens: 10,
+                reported_cost_micros: Some(25),
+                ..ProviderUsage::default()
+            }),
+        );
+        merge_provider_usage(
+            &mut total,
+            Some(ProviderUsage {
+                output_tokens: 5,
+                total_tokens: 5,
+                reported_cost_micros: Some(75),
+                ..ProviderUsage::default()
+            }),
+        );
+
+        assert_eq!(total.input_tokens, 10);
+        assert_eq!(total.output_tokens, 5);
+        assert_eq!(total.total_tokens, 15);
+        assert_eq!(total.reported_cost_micros, Some(100));
+        assert!(provider_usage_has_tokens(&total));
+    }
 }
