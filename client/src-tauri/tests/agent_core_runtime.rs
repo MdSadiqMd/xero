@@ -572,6 +572,7 @@ fn owned_agent_file_tools_cover_patch_hash_mkdir_rename_and_delete() {
             "tool:write generated/new.txt hello",
             "tool:rename generated/new.txt generated/renamed.txt",
             "tool:delete generated/renamed.txt",
+            "tool:command_echo verified-file-tools",
         ]
         .join("\n"),
         controls: None,
@@ -599,6 +600,7 @@ fn owned_agent_file_tools_cover_patch_hash_mkdir_rename_and_delete() {
         .map(|tool_call| tool_call.tool_name.as_str())
         .collect::<Vec<_>>();
     assert!(tool_names.contains(&"patch"));
+    assert!(tool_names.contains(&"command"));
     assert!(tool_names.contains(&"file_hash"));
     assert!(tool_names.contains(&"mkdir"));
     assert!(tool_names.contains(&"rename"));
@@ -1331,7 +1333,7 @@ fn owned_agent_auto_compact_provider_failure_does_not_mutate_history() {
 }
 
 #[test]
-fn owned_agent_plan_mode_pauses_before_first_tool_call() {
+fn owned_agent_plan_mode_allows_read_only_tool_call() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
     let (project_id, repo_root) = seed_project(&root, &app);
@@ -1358,30 +1360,17 @@ fn owned_agent_plan_mode_pauses_before_first_tool_call() {
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
-    .expect("plan-mode pause returns failed snapshot");
+    .expect("plan-mode read-only run should succeed");
 
     assert_eq!(
         snapshot.run.status,
-        db::project_store::AgentRunStatus::Failed
+        db::project_store::AgentRunStatus::Completed
     );
-    assert_eq!(
-        snapshot
-            .run
-            .last_error
-            .as_ref()
-            .map(|error| error.code.as_str()),
-        Some("agent_plan_mode_requires_approval")
-    );
-    assert!(snapshot.tool_calls.is_empty());
-    assert!(snapshot.action_requests.iter().any(|action| {
-        action.action_type == "plan_mode" && action.action_id == "plan-mode-before-tools"
+    assert!(snapshot.tool_calls.iter().any(|tool_call| {
+        tool_call.tool_name == "read"
+            && tool_call.state == db::project_store::AgentToolCallState::Succeeded
     }));
-    assert!(snapshot.events.iter().any(|event| {
-        event.event_kind == db::project_store::AgentRunEventKind::ActionRequired
-            && event
-                .payload_json
-                .contains("agent_plan_mode_requires_approval")
-    }));
+    assert!(snapshot.action_requests.is_empty());
 }
 
 #[test]
@@ -1523,7 +1512,7 @@ fn owned_agent_refuses_unobserved_existing_file_writes() {
 
     assert_eq!(
         snapshot.run.status,
-        db::project_store::AgentRunStatus::Failed
+        db::project_store::AgentRunStatus::Paused
     );
     assert_eq!(snapshot.file_changes.len(), 0);
     assert!(snapshot.tool_calls.iter().any(|tool_call| {
@@ -1566,7 +1555,7 @@ fn owned_agent_resume_replays_answered_file_safety_tool_call() {
         provider_config: AgentProviderConfig::Fake,
     })
     .expect("owned agent run should persist failed safety decision");
-    assert_eq!(failed.run.status, db::project_store::AgentRunStatus::Failed);
+    assert_eq!(failed.run.status, db::project_store::AgentRunStatus::Paused);
     assert_eq!(
         fs::read_to_string(repo_root.join("src").join("tracked.txt"))
             .expect("tracked file before approval"),
@@ -1649,7 +1638,7 @@ fn owned_agent_refuses_stale_file_writes_after_observation_changes() {
 
     assert_eq!(
         snapshot.run.status,
-        db::project_store::AgentRunStatus::Failed
+        db::project_store::AgentRunStatus::Paused
     );
     assert!(snapshot.tool_calls.iter().any(|tool_call| {
         tool_call.tool_name == "command"

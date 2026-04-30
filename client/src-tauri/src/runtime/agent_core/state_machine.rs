@@ -105,7 +105,17 @@ pub(crate) fn classify_agent_task(
 ) -> AgentTaskClassification {
     let mut score = 0_u8;
     let mut reason_codes = Vec::new();
-    let lowered = prompt.to_ascii_lowercase();
+    let task_text = prompt
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("tool:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let task_text = if task_text.trim().is_empty() {
+        prompt
+    } else {
+        task_text.as_str()
+    };
+    let lowered = task_text.to_ascii_lowercase();
 
     if controls.active.plan_mode_required {
         score = score.saturating_add(4);
@@ -168,7 +178,7 @@ pub(crate) fn classify_agent_task(
         score = score.saturating_add(2);
         reason_codes.push("high_risk_or_multi_file".into());
     }
-    if prompt.chars().count() > 180 {
+    if task_text.chars().count() > 180 {
         score = score.saturating_add(1);
         reason_codes.push("long_prompt".into());
     }

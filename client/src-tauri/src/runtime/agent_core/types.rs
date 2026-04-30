@@ -555,6 +555,32 @@ impl ProviderAdapter for FakeProviderAdapter {
             SYSTEM_PROMPT_VERSION
         )))?;
 
+        if latest_user_message_contains(&request.messages, "Xero verification gate")
+            && request
+                .tools
+                .iter()
+                .any(|descriptor| descriptor.name == AUTONOMOUS_TOOL_COMMAND)
+            && !request.messages.iter().any(|message| {
+                matches!(
+                    message,
+                    ProviderMessage::Tool { tool_name, .. }
+                        if tool_name == AUTONOMOUS_TOOL_COMMAND
+                )
+            })
+        {
+            let message = "Xero fake provider is recording verification evidence.".to_string();
+            emit(ProviderStreamEvent::MessageDelta(message.clone()))?;
+            return Ok(ProviderTurnOutcome::ToolCalls {
+                message,
+                tool_calls: vec![AgentToolCall {
+                    tool_call_id: format!("fake-tool-call-verify-{}", request.turn_index),
+                    tool_name: AUTONOMOUS_TOOL_COMMAND.into(),
+                    input: json!({ "argv": ["echo", "xero-verification-ok"] }),
+                }],
+                usage: Some(ProviderUsage::default()),
+            });
+        }
+
         if request
             .messages
             .iter()
@@ -735,6 +761,17 @@ impl ProviderAdapter for FakeProviderAdapter {
             usage: Some(ProviderUsage::default()),
         })
     }
+}
+
+fn latest_user_message_contains(messages: &[ProviderMessage], needle: &str) -> bool {
+    messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            ProviderMessage::User { content } => Some(content.contains(needle)),
+            ProviderMessage::Assistant { .. } | ProviderMessage::Tool { .. } => None,
+        })
+        .unwrap_or(false)
 }
 
 fn fake_memory_candidate(

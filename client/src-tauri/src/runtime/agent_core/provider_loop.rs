@@ -106,6 +106,12 @@ pub(crate) fn drive_provider_loop(
                         messages.push(ProviderMessage::User {
                             content: gate_prompt,
                         });
+                        tool_registry.expand_with_tool_names([
+                            AUTONOMOUS_TOOL_COMMAND,
+                            AUTONOMOUS_TOOL_COMMAND_SESSION_START,
+                            AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+                            AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
+                        ]);
                         continue;
                     }
                     return Err(record_verification_action_required(

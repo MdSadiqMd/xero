@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+mod evals;
 mod events;
 mod provider_adapters;
 mod supervisor;
@@ -17,6 +18,11 @@ mod tool_descriptors;
 mod tool_dispatch;
 mod types;
 
+pub use evals::{
+    run_agent_harness_eval_suite, AgentHarnessEvalCaseResult, AgentHarnessEvalCoverage,
+    AgentHarnessEvalMetrics, AgentHarnessEvalReport, AgentHarnessEvalThresholds,
+    HarnessEvalFixtureKind,
+};
 pub use events::{publish_agent_event, subscribe_agent_events, AgentEventSubscription};
 pub use provider_adapters::{
     create_provider_adapter, AgentProviderConfig, AnthropicProviderConfig, BedrockProviderConfig,
@@ -77,21 +83,20 @@ use crate::{
         redaction::{find_prohibited_persistence_content, redact_command_argv_for_persistence},
         AutonomousDynamicToolRoute, AutonomousMacosAutomationAction,
         AutonomousMacosAutomationOutput, AutonomousMcpAction, AutonomousMcpRequest,
-        AutonomousProcessManagerAction, AutonomousSubagentExecutor, AutonomousSubagentRole,
-        AutonomousSubagentTask, AutonomousSubagentWriteScope, AutonomousTodoStatus,
-        AutonomousToolOutput, AutonomousToolRequest, AutonomousToolResult, AutonomousToolRuntime,
-        XeroSkillToolContextPayload, AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_COMMAND,
-        AUTONOMOUS_TOOL_COMMAND_SESSION_READ, AUTONOMOUS_TOOL_COMMAND_SESSION_START,
-        AUTONOMOUS_TOOL_COMMAND_SESSION_STOP, AUTONOMOUS_TOOL_DELETE, AUTONOMOUS_TOOL_EDIT,
-        AUTONOMOUS_TOOL_FIND, AUTONOMOUS_TOOL_GIT_DIFF, AUTONOMOUS_TOOL_GIT_STATUS,
-        AUTONOMOUS_TOOL_HASH, AUTONOMOUS_TOOL_LIST, AUTONOMOUS_TOOL_LSP,
-        AUTONOMOUS_TOOL_MACOS_AUTOMATION, AUTONOMOUS_TOOL_MCP, AUTONOMOUS_TOOL_MKDIR,
-        AUTONOMOUS_TOOL_NOTEBOOK_EDIT, AUTONOMOUS_TOOL_PATCH, AUTONOMOUS_TOOL_POWERSHELL,
-        AUTONOMOUS_TOOL_PROCESS_MANAGER, AUTONOMOUS_TOOL_READ, AUTONOMOUS_TOOL_RENAME,
-        AUTONOMOUS_TOOL_SEARCH, AUTONOMOUS_TOOL_SKILL, AUTONOMOUS_TOOL_SUBAGENT,
-        AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_ACCESS, AUTONOMOUS_TOOL_TOOL_SEARCH,
-        AUTONOMOUS_TOOL_WEB_FETCH, AUTONOMOUS_TOOL_WEB_SEARCH, AUTONOMOUS_TOOL_WRITE,
-        OPENAI_CODEX_PROVIDER_ID,
+        AutonomousProcessManagerAction, AutonomousSubagentExecutor, AutonomousSubagentTask,
+        AutonomousTodoStatus, AutonomousToolOutput, AutonomousToolRequest, AutonomousToolResult,
+        AutonomousToolRuntime, XeroSkillToolContextPayload, AUTONOMOUS_TOOL_CODE_INTEL,
+        AUTONOMOUS_TOOL_COMMAND, AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+        AUTONOMOUS_TOOL_COMMAND_SESSION_START, AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
+        AUTONOMOUS_TOOL_DELETE, AUTONOMOUS_TOOL_EDIT, AUTONOMOUS_TOOL_FIND,
+        AUTONOMOUS_TOOL_GIT_DIFF, AUTONOMOUS_TOOL_GIT_STATUS, AUTONOMOUS_TOOL_HASH,
+        AUTONOMOUS_TOOL_LIST, AUTONOMOUS_TOOL_LSP, AUTONOMOUS_TOOL_MACOS_AUTOMATION,
+        AUTONOMOUS_TOOL_MCP, AUTONOMOUS_TOOL_MKDIR, AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
+        AUTONOMOUS_TOOL_PATCH, AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_PROCESS_MANAGER,
+        AUTONOMOUS_TOOL_READ, AUTONOMOUS_TOOL_RENAME, AUTONOMOUS_TOOL_SEARCH,
+        AUTONOMOUS_TOOL_SKILL, AUTONOMOUS_TOOL_SUBAGENT, AUTONOMOUS_TOOL_TODO,
+        AUTONOMOUS_TOOL_TOOL_ACCESS, AUTONOMOUS_TOOL_TOOL_SEARCH, AUTONOMOUS_TOOL_WEB_FETCH,
+        AUTONOMOUS_TOOL_WEB_SEARCH, AUTONOMOUS_TOOL_WRITE, OPENAI_CODEX_PROVIDER_ID,
     },
 };
 
