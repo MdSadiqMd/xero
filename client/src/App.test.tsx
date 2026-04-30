@@ -2030,7 +2030,7 @@ describe('XeroApp current UI', () => {
   })
 
   it('goes straight from notifications to confirmation when no environment permission is needed', async () => {
-    const { adapter } = createAdapter({
+    const { adapter, getEnvironmentDiscoveryStatus, startEnvironmentDiscovery } = createAdapter({
       projects: [],
       runtimeSession: makeRuntimeSession('project-1', {
         phase: 'idle',
@@ -2055,6 +2055,8 @@ describe('XeroApp current UI', () => {
 
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
     expect(screen.queryByRole('heading', { name: 'Review environment access' })).not.toBeInTheDocument()
+    expect(getEnvironmentDiscoveryStatus).toHaveBeenCalledTimes(1)
+    expect(startEnvironmentDiscovery).not.toHaveBeenCalled()
   })
 
 
