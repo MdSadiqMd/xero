@@ -225,13 +225,13 @@ impl ToolRegistry {
         for tool_name in tool_names {
             let tool_name = tool_name.as_ref();
             if let Some(descriptor) = builtin_descriptors.get(tool_name) {
-                if self.options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL {
-                    if tool_allowed_for_runtime_agent(
+                if (self.options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL)
+                    && tool_allowed_for_runtime_agent(
                         self.options.runtime_agent_id,
                         &descriptor.name,
-                    ) {
-                        descriptors_by_name.insert(descriptor.name.clone(), descriptor.clone());
-                    }
+                    )
+                {
+                    descriptors_by_name.insert(descriptor.name.clone(), descriptor.clone());
                 }
                 continue;
             }
@@ -892,7 +892,10 @@ mod tests {
                     tool_name: "playwright_click".into(),
                 },
             )]),
-            ToolRegistryOptions::default(),
+            ToolRegistryOptions {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
+                ..ToolRegistryOptions::default()
+            },
         );
 
         let request = registry

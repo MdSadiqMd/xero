@@ -1243,6 +1243,7 @@ describe('xero-model', () => {
         },
         controls: {
           active: {
+            runtimeAgentId: 'engineer',
             modelId: 'azure-openai/gpt-4.1-mini',
             thinkingEffort: 'medium',
             approvalMode: 'suggest',

@@ -173,9 +173,20 @@ fn yolo_controls() -> RuntimeRunControlStateDto {
     }
 }
 
+fn yolo_controls_input() -> RuntimeRunControlInputDto {
+    RuntimeRunControlInputDto {
+        runtime_agent_id: RuntimeAgentIdDto::Engineer,
+        provider_profile_id: None,
+        model_id: "test-model".into(),
+        thinking_effort: None,
+        approval_mode: RuntimeRunApprovalModeDto::Yolo,
+        plan_mode_required: false,
+    }
+}
+
 fn suggest_controls_input() -> RuntimeRunControlInputDto {
     RuntimeRunControlInputDto {
-        runtime_agent_id: RuntimeAgentIdDto::Ask,
+        runtime_agent_id: RuntimeAgentIdDto::Engineer,
         provider_profile_id: None,
         model_id: "test-model".into(),
         thinking_effort: None,
@@ -208,6 +219,24 @@ fn wait_for_agent_run_status(
                 );
             }
         }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_agent_run_inactive(state: &DesktopState, run_id: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let active = state
+            .agent_run_supervisor()
+            .is_active(run_id)
+            .expect("check owned-agent supervisor activity");
+        if !active {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "owned agent run {run_id} remained active after reaching a terminal status"
+        );
         thread::sleep(Duration::from_millis(25));
     }
 }
@@ -594,7 +623,7 @@ fn owned_agent_file_tools_cover_patch_hash_mkdir_rename_and_delete() {
             "tool:command_echo verified-file-tools",
         ]
         .join("\n"),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
@@ -669,7 +698,7 @@ fn owned_agent_priority_one_tools_dispatch_and_persist_journal() {
             "tool:mcp_list",
         ]
         .join("\n"),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
@@ -920,7 +949,7 @@ fn owned_agent_heartbeat_touch_updates_running_run_liveness() {
 }
 
 #[test]
-fn owned_agent_continuation_rejects_over_budget_prompt_without_mutating_history() {
+fn owned_agent_continuation_blocks_context_handoff_without_mutating_messages() {
     let root = tempfile::tempdir().expect("temp dir");
     let app = build_mock_app(create_state(&root));
     let (project_id, repo_root) = seed_project(&root, &app);
@@ -950,8 +979,23 @@ fn owned_agent_continuation_rejects_over_budget_prompt_without_mutating_history(
         provider_config: provider_config.clone(),
     })
     .expect("create owned agent run");
+    db::project_store::upsert_agent_context_policy_settings(
+        &repo_root,
+        &db::project_store::NewAgentContextPolicySettingsRecord {
+            project_id: project_id.clone(),
+            scope: db::project_store::AgentContextPolicySettingsScope::Project,
+            agent_session_id: None,
+            auto_compact_enabled: false,
+            auto_handoff_enabled: false,
+            compact_threshold_percent: 75,
+            handoff_threshold_percent: 90,
+            raw_tail_message_count: 8,
+            updated_at: "2026-04-26T00:00:00Z".into(),
+        },
+    )
+    .expect("disable automatic context handoff for prompt mutation guard");
     let before = db::project_store::load_agent_run(&repo_root, &project_id, run_id)
-        .expect("load run before over-budget continuation");
+        .expect("load run before blocked continuation");
     let before_message_count = before.messages.len();
 
     let continue_tool_runtime = AutonomousToolRuntime::for_project(
@@ -972,17 +1016,21 @@ fn owned_agent_continuation_rejects_over_budget_prompt_without_mutating_history(
         answer_pending_actions: false,
         auto_compact: None,
     })
-    .expect_err("over-budget continuation should be rejected before mutation");
+    .expect_err("blocked context handoff should reject before prompt mutation");
 
-    assert_eq!(error.code, "agent_context_budget_exceeded");
+    assert_eq!(error.code, "agent_context_handoff_blocked");
     let after = db::project_store::load_agent_run(&repo_root, &project_id, run_id)
-        .expect("load run after over-budget continuation");
+        .expect("load run after blocked continuation");
     assert_eq!(after.messages.len(), before_message_count);
     assert!(!after
         .messages
         .iter()
         .any(|message| message.content == huge_prompt));
     assert_eq!(after.run.status, before.run.status);
+    let handoffs =
+        db::project_store::list_agent_handoff_lineage_for_source(&repo_root, &project_id, run_id)
+            .expect("list handoff lineage after blocked continuation");
+    assert!(handoffs.is_empty());
 }
 
 #[test]
@@ -1412,7 +1460,7 @@ fn owned_agent_write_tools_persist_file_change_hashes() {
         agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "owned-run-write-1".into(),
         prompt: "Please update the tracked file.\ntool:read src/tracked.txt\ntool:write src/tracked.txt gamma\n".into(),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
@@ -1483,7 +1531,7 @@ fn owned_agent_omits_sensitive_file_content_from_rollback_checkpoints() {
         agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "owned-run-sensitive-rollback-1".into(),
         prompt: "Please update the env file.\ntool:read .env\ntool:write .env REDACTED=1\n".into(),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
@@ -1525,7 +1573,7 @@ fn owned_agent_refuses_unobserved_existing_file_writes() {
         agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "owned-run-unobserved-write-1".into(),
         prompt: "Please update the tracked file.\ntool:write src/tracked.txt gamma\n".into(),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
@@ -1571,7 +1619,7 @@ fn owned_agent_resume_replays_answered_file_safety_tool_call() {
         agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "owned-run-approved-replay-1".into(),
         prompt: "Please update the tracked file.\ntool:write src/tracked.txt gamma\n".into(),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
@@ -1594,7 +1642,7 @@ fn owned_agent_resume_replays_answered_file_safety_tool_call() {
         project_id: project_id.clone(),
         run_id: "owned-run-approved-replay-1".into(),
         prompt: "Approved. Continue.".into(),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime: approved_tool_runtime,
         provider_config: AgentProviderConfig::Fake,
         answer_pending_actions: true,
@@ -1651,7 +1699,7 @@ fn owned_agent_refuses_stale_file_writes_after_observation_changes() {
         agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "owned-run-stale-write-1".into(),
         prompt: "Please update safely.\ntool:read src/tracked.txt\ntool:command_sh printf outside > src/tracked.txt\ntool:write src/tracked.txt gamma\n".into(),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
@@ -1781,7 +1829,7 @@ fn owned_agent_command_tools_emit_command_output_events() {
         agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "owned-run-command-1".into(),
         prompt: "Please prove command output streaming.\ntool:command_echo hello-xero".into(),
-        controls: None,
+        controls: Some(yolo_controls_input()),
         tool_runtime,
         provider_config: AgentProviderConfig::Fake,
     })
@@ -2202,8 +2250,12 @@ fn start_runtime_run_defaults_to_owned_agent_runtime() {
     assert_eq!(runtime_run.transport.kind, "internal");
     assert_eq!(runtime_run.transport.endpoint, "xero://owned-agent");
     assert_eq!(
+        runtime_run.controls.active.runtime_agent_id,
+        RuntimeAgentIdDto::Ask
+    );
+    assert_eq!(
         runtime_run.controls.active.approval_mode,
-        RuntimeRunApprovalModeDto::Yolo
+        RuntimeRunApprovalModeDto::Suggest
     );
 }
 
@@ -2284,6 +2336,7 @@ fn update_runtime_run_controls_prompt_drives_owned_agent_continuation() {
         tool_call.tool_name == "read"
             && tool_call.state == db::project_store::AgentToolCallState::Succeeded
     }));
+    wait_for_agent_run_inactive(app.state::<DesktopState>().inner(), &runtime_run.run_id);
 
     update_runtime_run_controls(
         app.handle().clone(),
@@ -2324,7 +2377,7 @@ fn start_agent_task_returns_running_before_background_driver_finishes() {
             project_id: project_id.clone(),
             agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
             prompt: "Run a slow command.\ntool:command_sh sleep 2".into(),
-            controls: None,
+            controls: Some(yolo_controls_input()),
         },
     )
     .expect("start agent task should return initial running snapshot");

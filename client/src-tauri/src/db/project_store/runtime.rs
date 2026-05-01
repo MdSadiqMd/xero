@@ -1802,6 +1802,10 @@ pub fn build_runtime_run_control_state_with_plan_mode(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Runtime-run control snapshots are persisted from a wire contract with these discrete fields."
+)]
 pub fn build_runtime_run_control_state_with_profile(
     runtime_agent_id: RuntimeAgentIdDto,
     provider_profile_id: Option<&str>,
@@ -1826,7 +1830,7 @@ pub fn build_runtime_run_control_state_with_profile(
     let plan_mode_required = plan_mode_required && runtime_agent_id.allows_plan_gate();
 
     let active = RuntimeRunActiveControlSnapshotRecord {
-        runtime_agent_id: runtime_agent_id.clone(),
+        runtime_agent_id,
         provider_profile_id: provider_profile_id.clone(),
         model_id: model_id.to_owned(),
         thinking_effort,

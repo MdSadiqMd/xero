@@ -1138,6 +1138,10 @@ fn list_pending_agent_embedding_backfill_jobs(
         .collect()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Backfill status updates mirror the persisted job columns to keep call sites explicit."
+)]
 fn update_backfill_job_status(
     repo_root: &Path,
     project_id: &str,

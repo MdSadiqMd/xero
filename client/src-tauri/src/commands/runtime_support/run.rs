@@ -697,7 +697,7 @@ fn resolve_owned_runtime_run_control_state(
         .unwrap_or_else(|| active_profile.model_id.clone());
     let thinking_effort = requested_controls.and_then(|controls| controls.thinking_effort.clone());
     let runtime_agent_id = requested_controls
-        .map(|controls| controls.runtime_agent_id.clone())
+        .map(|controls| controls.runtime_agent_id)
         .unwrap_or_else(default_runtime_agent_id);
     let approval_mode = requested_controls
         .map(|controls| controls.approval_mode.clone())
@@ -779,7 +779,7 @@ fn runtime_control_input_from_active(
     active: &RuntimeRunActiveControlSnapshotRecord,
 ) -> RuntimeRunControlInputDto {
     RuntimeRunControlInputDto {
-        runtime_agent_id: active.runtime_agent_id.clone(),
+        runtime_agent_id: active.runtime_agent_id,
         provider_profile_id: active.provider_profile_id.clone(),
         model_id: active.model_id.clone(),
         thinking_effort: active.thinking_effort.clone(),
@@ -816,7 +816,7 @@ pub(crate) fn update_owned_runtime_run_controls(
     let active = &snapshot.controls.active;
     if let Some(requested_agent_id) = controls
         .as_ref()
-        .map(|controls| controls.runtime_agent_id.clone())
+        .map(|controls| controls.runtime_agent_id)
         .filter(|agent_id| agent_id != &active.runtime_agent_id)
     {
         return Err(CommandError::user_fixable(
@@ -850,7 +850,7 @@ pub(crate) fn update_owned_runtime_run_controls(
         .map(|controls| controls.approval_mode.clone())
         .or_else(|| base_pending.map(|pending| pending.approval_mode.clone()))
         .unwrap_or_else(|| active.approval_mode.clone());
-    let runtime_agent_id = active.runtime_agent_id.clone();
+    let runtime_agent_id = active.runtime_agent_id;
     let plan_mode_required = controls
         .as_ref()
         .map(|controls| controls.plan_mode_required)
@@ -924,7 +924,7 @@ pub(crate) fn apply_owned_runtime_run_pending_controls(
 
     let run_controls = RuntimeRunControlStateRecord {
         active: RuntimeRunActiveControlSnapshotRecord {
-            runtime_agent_id: pending.runtime_agent_id.clone(),
+            runtime_agent_id: pending.runtime_agent_id,
             provider_profile_id: pending.provider_profile_id.clone(),
             model_id: pending.model_id.clone(),
             thinking_effort: pending.thinking_effort.clone(),
@@ -1129,7 +1129,7 @@ fn reject_runtime_run_provider_profile_switch(
     requested_controls: Option<&RuntimeRunControlInputDto>,
 ) -> CommandResult<()> {
     if let Some(requested_agent_id) = requested_controls
-        .map(|controls| controls.runtime_agent_id.clone())
+        .map(|controls| controls.runtime_agent_id)
         .filter(|agent_id| agent_id != &snapshot.controls.active.runtime_agent_id)
     {
         return Err(CommandError::user_fixable(
@@ -1193,7 +1193,7 @@ fn runtime_run_control_state_dto(
 ) -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
-            runtime_agent_id: controls.active.runtime_agent_id.clone(),
+            runtime_agent_id: controls.active.runtime_agent_id,
             provider_profile_id: controls.active.provider_profile_id.clone(),
             model_id: controls.active.model_id.clone(),
             thinking_effort: controls.active.thinking_effort.clone(),
@@ -1206,7 +1206,7 @@ fn runtime_run_control_state_dto(
             .pending
             .as_ref()
             .map(|pending| RuntimeRunPendingControlSnapshotDto {
-                runtime_agent_id: pending.runtime_agent_id.clone(),
+                runtime_agent_id: pending.runtime_agent_id,
                 provider_profile_id: pending.provider_profile_id.clone(),
                 model_id: pending.model_id.clone(),
                 thinking_effort: pending.thinking_effort.clone(),

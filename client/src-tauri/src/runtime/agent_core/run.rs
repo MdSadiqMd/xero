@@ -61,7 +61,7 @@ pub fn create_owned_agent_run(
     project_store::insert_agent_run(
         &request.repo_root,
         &NewAgentRunRecord {
-            runtime_agent_id: controls.active.runtime_agent_id.clone(),
+            runtime_agent_id: controls.active.runtime_agent_id,
             project_id: request.project_id.clone(),
             agent_session_id: request.agent_session_id.clone(),
             run_id: request.run_id.clone(),
@@ -1537,9 +1537,7 @@ fn handoff_todo_items(
                     items
                         .iter()
                         .filter(|item| {
-                            item.get("status")
-                                .and_then(JsonValue::as_str)
-                                .map_or(true, |status| status != "completed")
+                            item.get("status").and_then(JsonValue::as_str) != Some("completed")
                         })
                         .take(20)
                         .map(|item| {
@@ -2207,7 +2205,7 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
             run_id: child_run_id.clone(),
             prompt,
             controls: Some(RuntimeRunControlInputDto {
-                runtime_agent_id: self.controls.active.runtime_agent_id.clone(),
+                runtime_agent_id: self.controls.active.runtime_agent_id,
                 provider_profile_id: self.controls.active.provider_profile_id.clone(),
                 model_id,
                 thinking_effort: self.controls.active.thinking_effort.clone(),

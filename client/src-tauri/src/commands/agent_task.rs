@@ -525,6 +525,18 @@ mod tests {
         let repo_root = root.path();
         let project_id = "project-1";
         let run_id = "run-1";
+        let root_path = repo_root.to_string_lossy().into_owned();
+        let registry_path = root.path().join("app-data").join("xero.db");
+        crate::db::configure_project_database_paths(&registry_path);
+        crate::registry::replace_projects(
+            &registry_path,
+            vec![crate::registry::RegistryProjectRecord {
+                project_id: project_id.into(),
+                repository_id: "repo-1".into(),
+                root_path: root_path.clone(),
+            }],
+        )
+        .expect("seed registry");
         let database_path = crate::db::database_path_for_repo(repo_root);
         std::fs::create_dir_all(database_path.parent().expect("database parent"))
             .expect("create xero state dir");
@@ -540,7 +552,6 @@ mod tests {
                 [project_id],
             )
             .expect("insert project");
-        let root_path = repo_root.to_string_lossy().into_owned();
         connection
             .execute(
                 "INSERT INTO repositories (id, project_id, root_path, display_name) VALUES ('repo-1', ?1, ?2, 'repo')",

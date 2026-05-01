@@ -491,6 +491,7 @@ fn owned_agent_skill_descriptor_and_tool_search_are_gated_by_skill_support() {
     write_skill(&bundled_root, "find-skills", "find-skills", "Find skills.");
     let enabled_runtime = AutonomousToolRuntime::new(root.path())
         .expect("runtime")
+        .with_runtime_run_controls(controls.clone())
         .with_skill_tool(
             "project-1",
             skill_runtime(&root, source),

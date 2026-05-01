@@ -182,6 +182,10 @@ pub(crate) fn assemble_system_prompt_for_session(
     Ok(compilation.prompt)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Prompt compilation combines orthogonal runtime context, tool policy, and skill payload inputs at the boundary."
+)]
 pub(crate) fn compile_system_prompt_for_session(
     repo_root: &Path,
     project_id: Option<&str>,
@@ -2473,7 +2477,7 @@ pub(crate) fn runtime_controls_from_request(
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
             runtime_agent_id: controls
-                .map(|controls| controls.runtime_agent_id.clone())
+                .map(|controls| controls.runtime_agent_id)
                 .unwrap_or_else(default_runtime_agent_id),
             provider_profile_id: controls.and_then(|controls| controls.provider_profile_id.clone()),
             model_id: controls
