@@ -679,6 +679,81 @@ describe('AgentRuntime current UI', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('mounts the reviewed memory workflow for the selected agent session', async () => {
+    const candidateMemory = {
+      contractVersion: 1,
+      memoryId: 'memory-candidate-1',
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      scope: 'session' as const,
+      kind: 'decision' as const,
+      text: 'Decision: use Lance-backed reviewed memory for durable context.',
+      reviewState: 'candidate' as const,
+      enabled: false,
+      confidence: 91,
+      sourceRunId: 'run-1',
+      sourceItemIds: ['message:1'],
+      createdAt: '2026-05-01T12:00:00Z',
+      updatedAt: '2026-05-01T12:00:00Z',
+      diagnostic: null,
+      redaction: { redactionClass: 'public' as const, redacted: false, reason: null },
+    }
+    const onListSessionMemories = vi.fn(async () => ({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      memories: [candidateMemory],
+    }))
+    const onUpdateSessionMemory = vi.fn(async () => ({
+      ...candidateMemory,
+      reviewState: 'approved' as const,
+      enabled: true,
+      updatedAt: '2026-05-01T12:01:00Z',
+    }))
+
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          project: makeProject({
+            selectedAgentSession: {
+              projectId: 'project-1',
+              agentSessionId: 'agent-session-main',
+              title: 'Main chat',
+              summary: null,
+              status: 'active',
+              statusLabel: 'Active',
+              selected: true,
+              createdAt: '2026-05-01T11:00:00Z',
+              updatedAt: '2026-05-01T11:00:00Z',
+              archivedAt: null,
+              lastRunId: 'run-1',
+              lastRuntimeKind: null,
+              lastProviderId: null,
+              lineage: null,
+              isActive: true,
+              isArchived: false,
+            },
+          }),
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          runtimeRun: makeRuntimeRun({ status: 'completed', isActive: false, isTerminal: true }),
+        })}
+        onListSessionMemories={onListSessionMemories}
+        onUpdateSessionMemory={onUpdateSessionMemory}
+      />,
+    )
+
+    expect(await screen.findByText(candidateMemory.text)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+    await waitFor(() => {
+      expect(onUpdateSessionMemory).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        memoryId: 'memory-candidate-1',
+        reviewState: 'approved',
+        enabled: true,
+      })
+    })
+  })
+
   it('surfaces failed run diagnostics and starts a replacement run from the composer', async () => {
     const onStartRuntimeRun = vi.fn(async () => makeRuntimeRun({ runId: 'run-2' }))
 

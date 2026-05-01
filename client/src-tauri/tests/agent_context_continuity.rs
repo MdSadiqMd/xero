@@ -752,6 +752,167 @@ fn phase3_provider_turn_manifests_include_memory_and_project_records_for_all_age
 }
 
 #[test]
+fn phase5_auto_capture_records_and_reviewed_memory_candidates() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (project_id, repo_root) = seed_project(&root);
+
+    let tool_runtime = AutonomousToolRuntime::new(&repo_root).expect("tool runtime");
+    let snapshot = run_owned_agent_task(OwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
+        run_id: "phase5-capture-run".into(),
+        prompt: "Decision: Phase 5 automatically captures durable decisions.\nProject fact: Phase 5 creates disabled memory candidates that wait for review."
+            .into(),
+        controls: Some(controls_for_agent(RuntimeAgentIdDto::Ask)),
+        tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+    })
+    .expect("run phase5 capture task");
+    assert_eq!(
+        snapshot.run.status,
+        project_store::AgentRunStatus::Completed
+    );
+
+    let records =
+        project_store::list_project_records(&repo_root, &project_id).expect("list project records");
+    assert!(records.iter().any(|record| {
+        record.schema_name.as_deref() == Some("xero.project_record.final_answer.v1")
+            && record.run_id == "phase5-capture-run"
+    }));
+    assert!(records.iter().any(|record| {
+        record.schema_name.as_deref() == Some("xero.project_record.decision_capture.v1")
+            && record
+                .text
+                .contains("Phase 5 automatically captures durable decisions")
+    }));
+    assert!(records.iter().any(|record| {
+        record.schema_name.as_deref() == Some("xero.project_record.verification_capture.v1")
+            && record.run_id == "phase5-capture-run"
+    }));
+
+    let memories = project_store::list_agent_memories(
+        &repo_root,
+        &project_id,
+        project_store::AgentMemoryListFilter {
+            agent_session_id: Some(project_store::DEFAULT_AGENT_SESSION_ID),
+            include_disabled: true,
+            include_rejected: false,
+        },
+    )
+    .expect("list auto memory candidates");
+    let candidate = memories
+        .iter()
+        .find(|memory| {
+            memory
+                .text
+                .contains("Phase 5 creates disabled memory candidates")
+        })
+        .expect("phase5 memory candidate");
+    assert_eq!(
+        candidate.review_state,
+        project_store::AgentMemoryReviewState::Candidate
+    );
+    assert!(!candidate.enabled);
+
+    let approved = project_store::update_agent_memory(
+        &repo_root,
+        &project_store::AgentMemoryUpdateRecord {
+            project_id: project_id.clone(),
+            memory_id: candidate.memory_id.clone(),
+            review_state: Some(project_store::AgentMemoryReviewState::Approved),
+            enabled: Some(true),
+            diagnostic: None,
+        },
+    )
+    .expect("approve candidate");
+    assert_eq!(
+        approved.review_state,
+        project_store::AgentMemoryReviewState::Approved
+    );
+    assert!(approved.enabled);
+
+    for runtime_agent_id in [
+        RuntimeAgentIdDto::Ask,
+        RuntimeAgentIdDto::Engineer,
+        RuntimeAgentIdDto::Debug,
+    ] {
+        let run_id = format!("phase5-approved-{}", runtime_agent_id.as_str());
+        let tool_runtime = AutonomousToolRuntime::new(&repo_root).expect("tool runtime");
+        let created = create_owned_agent_run(&OwnedAgentRunRequest {
+            repo_root: repo_root.clone(),
+            project_id: project_id.clone(),
+            agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id,
+            prompt: "Use the approved phase 5 memory.".into(),
+            controls: Some(controls_for_agent(runtime_agent_id)),
+            tool_runtime,
+            provider_config: AgentProviderConfig::Fake,
+        })
+        .expect("create run with approved memory");
+        assert!(
+            created
+                .run
+                .system_prompt
+                .contains("Phase 5 creates disabled memory candidates"),
+            "approved memory should be injected for {:?}",
+            runtime_agent_id
+        );
+    }
+
+    let tool_runtime = AutonomousToolRuntime::new(&repo_root).expect("tool runtime");
+    run_owned_agent_task(OwnedAgentRunRequest {
+        repo_root: repo_root.clone(),
+        project_id: project_id.clone(),
+        agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
+        run_id: "phase5-blocked-memory-run".into(),
+        prompt: "Project fact: api_key=sk-phase5-secret must not become memory.".into(),
+        controls: Some(controls_for_agent(RuntimeAgentIdDto::Ask)),
+        tool_runtime,
+        provider_config: AgentProviderConfig::Fake,
+    })
+    .expect("run blocked memory task");
+
+    let memories_after = project_store::list_agent_memories(
+        &repo_root,
+        &project_id,
+        project_store::AgentMemoryListFilter {
+            agent_session_id: Some(project_store::DEFAULT_AGENT_SESSION_ID),
+            include_disabled: true,
+            include_rejected: true,
+        },
+    )
+    .expect("list memories after blocked candidate");
+    assert!(!memories_after
+        .iter()
+        .any(|memory| memory.text.contains("sk-phase5-secret")
+            || memory.text.contains("sk-fake-memory-secret")));
+
+    let records_after =
+        project_store::list_project_records(&repo_root, &project_id).expect("list records after");
+    assert!(!records_after.iter().any(|record| record
+        .content_json
+        .as_ref()
+        .and_then(|content| serde_json::to_string(content).ok())
+        .is_some_and(|content| content.contains("sk-phase5-secret")
+            || content.contains("sk-fake-memory-secret"))));
+    assert!(records_after.iter().any(|record| {
+        record.schema_name.as_deref() == Some("xero.memory_extraction.diagnostics.v1")
+            && record
+                .content_json
+                .as_ref()
+                .and_then(|content| content.get("diagnostics"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|diagnostics| {
+                    diagnostics.iter().any(|diagnostic| {
+                        diagnostic.get("code").and_then(serde_json::Value::as_str)
+                            == Some("session_memory_candidate_secret")
+                    })
+                })
+    }));
+}
+
+#[test]
 fn phase4_handoff_orchestrator_hands_off_long_runs_to_same_type_targets() {
     let root = tempfile::tempdir().expect("temp dir");
     let (project_id, repo_root) = seed_project(&root);

@@ -216,6 +216,12 @@ pub fn drive_owned_agent_run(
                 &now_timestamp(),
             )?;
             capture_project_record_for_run(&request.repo_root, &snapshot)?;
+            capture_memory_candidates_for_run(
+                &request.repo_root,
+                &snapshot,
+                provider.as_ref(),
+                "completion",
+            )?;
             Ok(snapshot)
         }
         Err(error) => finish_owned_agent_drive_error(
@@ -223,6 +229,7 @@ pub fn drive_owned_agent_run(
             &request.project_id,
             &request.run_id,
             error,
+            provider.as_ref(),
             &cancellation,
         ),
     }
@@ -683,6 +690,7 @@ fn prepare_handoff_continuation(
         source_snapshot,
         &lineage.handoff_id,
         &target_snapshot.run.run_id,
+        provider,
     )?;
     if lineage.status != project_store::AgentHandoffLineageStatus::Completed {
         project_store::update_agent_handoff_lineage(
@@ -1405,6 +1413,7 @@ fn mark_source_run_handed_off(
     source_snapshot: &AgentRunSnapshotRecord,
     handoff_id: &str,
     target_run_id: &str,
+    provider: &dyn ProviderAdapter,
 ) -> CommandResult<AgentRunSnapshotRecord> {
     if source_snapshot.run.status == AgentRunStatus::HandedOff {
         return project_store::load_agent_run(
@@ -1450,6 +1459,10 @@ fn mark_source_run_handed_off(
         None,
         &now_timestamp(),
     )
+    .and_then(|snapshot| {
+        capture_memory_candidates_for_run(repo_root, &snapshot, provider, "handoff")?;
+        Ok(snapshot)
+    })
 }
 
 fn render_handoff_seed_message(bundle: &JsonValue) -> CommandResult<String> {
@@ -1723,6 +1736,12 @@ pub fn drive_owned_agent_continuation(
                 &now_timestamp(),
             )?;
             capture_project_record_for_run(&request.repo_root, &snapshot)?;
+            capture_memory_candidates_for_run(
+                &request.repo_root,
+                &snapshot,
+                provider.as_ref(),
+                "completion",
+            )?;
             Ok(snapshot)
         }
         Err(error) => finish_owned_agent_drive_error(
@@ -1730,6 +1749,7 @@ pub fn drive_owned_agent_continuation(
             &request.project_id,
             &request.run_id,
             error,
+            provider.as_ref(),
             &cancellation,
         ),
     }
@@ -1974,6 +1994,7 @@ fn finish_owned_agent_drive_error(
     project_id: &str,
     run_id: &str,
     error: CommandError,
+    provider: &dyn ProviderAdapter,
     cancellation: &AgentRunCancellationToken,
 ) -> CommandResult<AgentRunSnapshotRecord> {
     if cancellation.is_cancelled() || error.code == AGENT_RUN_CANCELLED_CODE {
@@ -2021,6 +2042,7 @@ fn finish_owned_agent_drive_error(
             &now_timestamp(),
         )?;
         capture_project_record_for_run(repo_root, &snapshot)?;
+        capture_memory_candidates_for_run(repo_root, &snapshot, provider, "pause")?;
         return Ok(snapshot);
     }
 
@@ -2062,6 +2084,7 @@ fn finish_owned_agent_drive_error(
         &now_timestamp(),
     )?;
     capture_project_record_for_run(repo_root, &snapshot)?;
+    capture_memory_candidates_for_run(repo_root, &snapshot, provider, "failure")?;
     Ok(snapshot)
 }
 

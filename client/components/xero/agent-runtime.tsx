@@ -9,6 +9,7 @@ import type {
   AgentProviderModelView,
 } from '@/src/features/xero/use-xero-desktop-state'
 import type {
+  AgentSessionView,
   RuntimeRunView,
   RuntimeAutoCompactPreferenceDto,
   ProviderAuthSessionView,
@@ -19,6 +20,15 @@ import type {
   RuntimeStreamViewItem,
   UpsertNotificationRouteRequestDto,
 } from '@/src/lib/xero-model'
+import type {
+  DeleteSessionMemoryRequestDto,
+  ExtractSessionMemoryCandidatesRequestDto,
+  ExtractSessionMemoryCandidatesResponseDto,
+  ListSessionMemoriesRequestDto,
+  ListSessionMemoriesResponseDto,
+  SessionMemoryRecordDto,
+  UpdateSessionMemoryRequestDto,
+} from '@/src/lib/xero-model/session-context'
 import {
   getRuntimeAgentLabel,
   getRuntimeRunThinkingEffortLabel,
@@ -41,6 +51,7 @@ import {
 import { ComposerDock } from './agent-runtime/composer-dock'
 import { ConversationSection, type ConversationTurn } from './agent-runtime/conversation-section'
 import { EmptySessionState } from './agent-runtime/empty-session-state'
+import { MemoryReviewSection } from './agent-runtime/memory-review-section'
 import {
   getStreamRunId,
   getToolSummaryContext,
@@ -83,6 +94,15 @@ interface AgentRuntimeProps {
   onUpsertNotificationRoute?: (
     request: Omit<UpsertNotificationRouteRequestDto, 'projectId'>,
   ) => Promise<unknown>
+  onListSessionMemories?: (
+    request: ListSessionMemoriesRequestDto,
+  ) => Promise<ListSessionMemoriesResponseDto>
+  onExtractSessionMemoryCandidates?: (
+    request: ExtractSessionMemoryCandidatesRequestDto,
+  ) => Promise<ExtractSessionMemoryCandidatesResponseDto>
+  onUpdateSessionMemory?: (request: UpdateSessionMemoryRequestDto) => Promise<SessionMemoryRecordDto>
+  onDeleteSessionMemory?: (request: DeleteSessionMemoryRequestDto) => Promise<void>
+  onContextRefresh?: () => Promise<void>
   desktopAdapter?: SpeechDictationAdapter
   /** GitHub avatar URL for the signed-in account, when available. */
   accountAvatarUrl?: string | null
@@ -196,6 +216,11 @@ export function AgentRuntime({
   onStartRuntimeSession,
   onResolveOperatorAction,
   onResumeOperatorRun,
+  onListSessionMemories,
+  onExtractSessionMemoryCandidates,
+  onUpdateSessionMemory,
+  onDeleteSessionMemory,
+  onContextRefresh,
   desktopAdapter,
   accountAvatarUrl = null,
   accountLogin = null,
@@ -379,6 +404,7 @@ export function AgentRuntime({
   const projectLabel =
     agent.project.repository?.displayName ?? agent.project.name ?? 'this project'
   const sessionLabel = agent.project.selectedAgentSession?.title?.trim() || 'New Chat'
+  const selectedAgentSession = (agent.project.selectedAgentSession ?? null) as AgentSessionView | null
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -454,6 +480,16 @@ export function AgentRuntime({
                   onResumeLiveActionRequired={controller.handleResumeLiveActionRequired}
                 />
               ) : null}
+              <MemoryReviewSection
+                projectId={agent.project.id}
+                selectedSession={selectedAgentSession}
+                runId={renderableRuntimeRun?.runId ?? null}
+                onListSessionMemories={onListSessionMemories}
+                onExtractSessionMemoryCandidates={onExtractSessionMemoryCandidates}
+                onUpdateSessionMemory={onUpdateSessionMemory}
+                onDeleteSessionMemory={onDeleteSessionMemory}
+                onContextRefresh={onContextRefresh}
+              />
             </div>
           )}
         </div>
