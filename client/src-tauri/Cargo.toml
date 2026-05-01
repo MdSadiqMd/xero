@@ -54,6 +54,11 @@ emulator-live = ["dep:openh264", "ios-grpc"]
 # and accessibility-tree/log RPCs; builds without this feature fall back to
 # a simctl-screenshot poll + AppleScript HID where possible.
 ios-grpc = ["dep:tonic", "dep:tonic-build", "dep:protoc-bin-vendored", "dep:prost", "dep:tokio-stream"]
+# Enables compilation of the Swift ios-helper binary (xero-ios-helper) in
+# build.rs. The helper uses ScreenCaptureKit for 30 FPS frame capture and
+# IndigoHID for reliable input injection. Runtime detection works regardless
+# of this feature — if the binary exists on disk, the session will use it.
+ios-helper = []
 
 [dependencies]
 arc-swap = "1"

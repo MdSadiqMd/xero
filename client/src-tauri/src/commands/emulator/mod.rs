@@ -282,6 +282,50 @@ pub fn emulator_ios_open_accessibility_settings() -> CommandResult<()> {
     }
 }
 
+/// macOS only — trigger the system Screen Recording permission prompt.
+/// Required by ScreenCaptureKit for the Swift helper's frame capture.
+/// Returns the current permission state after the call.
+#[tauri::command]
+pub fn emulator_ios_request_screen_recording_permission<R: Runtime>(
+    app: AppHandle<R>,
+) -> CommandResult<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let granted = ios::cg_input::request_screen_recording_permission();
+        let _ = app.emit(EMULATOR_SDK_STATUS_CHANGED_EVENT, ());
+        Ok(granted)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(false)
+    }
+}
+
+/// Open the Privacy & Security → Screen Recording pane in System Settings
+/// so the user can enable Xero. macOS-only; on other hosts this is a no-op.
+#[tauri::command]
+pub fn emulator_ios_open_screen_recording_settings() -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .status()
+            .map_err(|e| {
+                CommandError::system_fault(
+                    "ios_open_screen_recording_failed",
+                    format!("could not launch System Settings: {e}"),
+                )
+            })?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub fn emulator_list_devices<R: Runtime>(
     app: AppHandle<R>,

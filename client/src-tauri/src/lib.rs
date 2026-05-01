@@ -311,6 +311,8 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::emulator::emulator_sdk_status,
             commands::emulator::emulator_ios_request_ax_permission,
             commands::emulator::emulator_ios_open_accessibility_settings,
+            commands::emulator::emulator_ios_request_screen_recording_permission,
+            commands::emulator::emulator_ios_open_screen_recording_settings,
             commands::emulator::android::provision::emulator_android_provision,
             commands::emulator::android::provision::emulator_android_provision_status,
             commands::emulator::emulator_list_devices,

@@ -25,6 +25,8 @@ use crate::commands::emulator::{EmulatorInputRequest, InputKind, Orientation};
 use crate::commands::CommandError;
 
 use super::cg_input;
+use super::helper;
+use super::helper_client::HelperClient;
 use super::idb_client::{IdbClient, VideoStreamHandle};
 use super::idb_companion::{self, Companion};
 use super::input::{self, HidEvent, TouchPhase};
@@ -60,6 +62,11 @@ pub struct IosSession {
     device_name: String,
     width: u32,
     height: u32,
+    /// Present when the Swift helper (`xero-ios-helper`) was found and
+    /// spawned. Preferred over idb_companion for both frame capture
+    /// (ScreenCaptureKit) and HID input (IndigoHID).
+    helper: Option<helper::Helper>,
+    helper_client: Option<Arc<HelperClient>>,
     /// Present only when `idb_companion` was found on disk and spawned
     /// successfully. Preferred for HID input and required for automation
     /// commands that need idb data (UI dump, log stream).
@@ -135,12 +142,18 @@ impl IosSession {
     }
 
     fn send_touch(&self, phase: TouchPhase, nx: f32, ny: f32) -> Result<(), CommandError> {
-        // Taps route through `cg_input::send_touch`, which on current
-        // macOS actually dispatches via AppleScript's AX `click at` (see
-        // the doc on that function — CGEventPostToPid is silently dropped
-        // on macOS 26, and the bundled idb_companion's CoreSim HID
-        // bridge is broken for Xcode 26). idb is kept as a last resort
-        // for the day a working companion ships.
+        // Prefer Swift helper (IndigoHID) — supports Moved/Ended phases
+        // unlike the CG/AppleScript path which is click-only.
+        if let Some(hc) = self.helper_client.as_ref() {
+            let (x, y) = input::denormalize(nx, ny, self.width.max(1), self.height.max(1));
+            if let Ok(()) = hc.send_touch(phase, x, y) {
+                return Ok(());
+            }
+            // Fall through to CG/idb on helper failure.
+        }
+
+        // CG path: on macOS 26 dispatches via AppleScript's AX `click at`.
+        // Only fires on TouchDown (Moved/Ended are no-ops).
         let cg_result = cg_input::send_touch(&self.device_name, phase, nx, ny);
         if cg_result.is_ok() || !should_try_idb_after_cg(cg_result.as_ref().unwrap_err()) {
             return cg_result;
@@ -162,6 +175,17 @@ impl IosSession {
         to_y: f32,
         duration_ms: u32,
     ) -> Result<(), CommandError> {
+        // Prefer Swift helper (IndigoHID) for reliable swipe.
+        if let Some(hc) = self.helper_client.as_ref() {
+            let width = self.width.max(1);
+            let height = self.height.max(1);
+            let (fx, fy) = input::denormalize(from_x, from_y, width, height);
+            let (tx, ty) = input::denormalize(to_x, to_y, width, height);
+            if let Ok(()) = hc.send_swipe(fx, fy, tx, ty, duration_ms) {
+                return Ok(());
+            }
+        }
+
         let cg_result =
             cg_input::send_swipe(&self.device_name, from_x, from_y, to_x, to_y, duration_ms);
         if cg_result.is_ok() || !should_try_idb_after_cg(cg_result.as_ref().unwrap_err()) {
@@ -190,6 +214,20 @@ impl IosSession {
         event: HidEvent,
         fallback: impl FnOnce(&str) -> Result<(), CommandError>,
     ) -> Result<(), CommandError> {
+        // Prefer Swift helper for button/text events.
+        if let Some(hc) = self.helper_client.as_ref() {
+            let helper_result = match &event {
+                HidEvent::Button { button } => hc.send_button(*button),
+                HidEvent::Text { text } => hc.send_text(text),
+                HidEvent::Home => hc.send_button(input::HardwareButton::Home),
+                _ => Err(CommandError::system_fault("unsupported_helper_event", "event type not supported by helper")),
+            };
+            if helper_result.is_ok() {
+                return helper_result;
+            }
+            // Fall through to idb/CG on helper failure.
+        }
+
         if let Some(client) = self.client.as_ref() {
             let result = client.send_hid(event);
             if result.is_ok() || !should_try_cg_fallback(result.as_ref().unwrap_err()) {
@@ -275,6 +313,15 @@ impl IosSession {
         if let Some(handle) = self.fallback_thread.take() {
             let _ = handle.join();
         }
+        // Shut down Swift helper before idb_companion.
+        if let Some(ref hc) = self.helper_client {
+            let _ = hc.stop_capture();
+        }
+        self.helper_client = None;
+        if let Some(mut h) = self.helper.take() {
+            let _ = h.guard.shutdown(Duration::from_millis(500));
+            let _ = std::fs::remove_file(&h.socket_path);
+        }
         if let Some(mut companion) = self.companion.take() {
             let _ = companion.guard.shutdown(Duration::from_millis(500));
         }
@@ -354,6 +401,43 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         Some("attaching input pipeline".to_string()),
     );
 
+    // --- Try Swift helper (ScreenCaptureKit + IndigoHID) ---
+    // The helper is preferred over idb_companion: it gives us 30 FPS
+    // frames via ScreenCaptureKit and reliable touch/swipe via Indigo.
+    let (ios_helper, ios_helper_client) = match helper::resolve_helper_binary(&app) {
+        Some(binary) => {
+            match helper::HelperLaunch::new(binary, device_id.clone())
+                .and_then(|launch| helper::spawn(launch, COMPANION_TIMEOUT))
+            {
+                Ok(h) => {
+                    match super::helper_client::HelperClient::connect(
+                        &h.socket_path,
+                        Duration::from_secs(5),
+                    ) {
+                        Ok(c) => {
+                            emit_status(
+                                &app,
+                                StatusPhase::Connecting,
+                                &device_id,
+                                Some("Swift helper connected (ScreenCaptureKit + IndigoHID)".into()),
+                            );
+                            (Some(h), Some(Arc::new(c)))
+                        }
+                        Err(e) => {
+                            eprintln!("xero: helper UDS connect failed: {e}");
+                            (None, None)
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("xero: helper spawn failed: {e}");
+                    (None, None)
+                }
+            }
+        }
+        None => (None, None),
+    };
+
     // `idb_companion` is best-effort: when it starts, HID input uses idb's
     // real simulator surface; when it does not, the session can still render
     // via screenshots and attempt Core Graphics input.
@@ -389,6 +473,7 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let (width, height, video_handle, fallback_thread) = start_frame_pump(
         &app,
+        ios_helper_client.as_ref(),
         client.as_ref(),
         &frame_bus,
         &device_id,
@@ -407,6 +492,8 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         device_name,
         width,
         height,
+        helper: ios_helper,
+        helper_client: ios_helper_client,
         client,
         video: video_handle,
         shutdown_flag,
@@ -418,11 +505,47 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
 
 fn start_frame_pump<R: Runtime + 'static>(
     app: &AppHandle<R>,
-    client: Option<&Arc<IdbClient>>,
+    helper_client: Option<&Arc<HelperClient>>,
+    idb_client: Option<&Arc<IdbClient>>,
     bus: &Arc<FrameBus>,
     device_id: &str,
     shutdown: Arc<AtomicBool>,
 ) -> Result<FramePumpStart, CommandError> {
+    // If the Swift helper is connected, pump frames from its channel.
+    // This replaces both the H.264 decode path and the screenshot fallback
+    // with ScreenCaptureKit-captured JPEG frames at ~30 FPS.
+    if let Some(hc) = helper_client {
+        let (w, h) = hc.start_capture(30).map_err(|e| {
+            CommandError::system_fault(
+                "ios_helper_capture_start_failed",
+                format!("failed to start ScreenCaptureKit capture: {e}"),
+            )
+        })?;
+        let frame_rx = hc.take_frame_rx().ok_or_else(|| {
+            CommandError::system_fault(
+                "ios_helper_frame_rx_taken",
+                "frame receiver already taken by another pump".to_string(),
+            )
+        })?;
+        let bus2 = Arc::clone(bus);
+        let app2 = app.clone();
+        let flag = Arc::clone(&shutdown);
+        let thread = thread::spawn(move || {
+            while !flag.load(Ordering::Relaxed) {
+                match frame_rx.recv_timeout(Duration::from_secs(2)) {
+                    Ok(frame) => {
+                        publish_and_emit(&app2, &bus2, frame.width, frame.height, frame.jpeg);
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(_) => break, // Channel closed.
+                }
+            }
+        });
+        return Ok((w, h, None, Some(thread)));
+    }
+
+    // Fallback: H.264 stream via idb_companion or screenshot polling.
+    let client = idb_client;
     let app_clone = app.clone();
     let bus_clone = Arc::clone(bus);
     let device_for_stream = device_id.to_string();
