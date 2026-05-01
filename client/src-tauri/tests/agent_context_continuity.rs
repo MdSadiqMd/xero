@@ -7,14 +7,18 @@ use serde_json::json;
 use tempfile::TempDir;
 use xero_desktop_lib::{
     commands::{
-        CommandError, RuntimeAgentIdDto, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto,
+        CommandError, RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto,
+        RuntimeRunApprovalModeDto, RuntimeRunControlInputDto, RuntimeRunControlStateDto,
     },
     db::{self, project_store},
     git::repository::CanonicalRepository,
     runtime::{
         continue_owned_agent_run, create_owned_agent_run,
         prepare_owned_agent_continuation_for_drive, run_owned_agent_task, AgentProviderConfig,
-        AutonomousToolRuntime, ContinueOwnedAgentRunRequest, OwnedAgentRunRequest,
+        AutonomousProjectContextAction, AutonomousProjectContextRecordImportance,
+        AutonomousProjectContextRecordKind, AutonomousProjectContextRequest, AutonomousToolOutput,
+        AutonomousToolRequest, AutonomousToolRuntime, ContinueOwnedAgentRunRequest,
+        OwnedAgentRunRequest,
     },
     state::DesktopState,
 };
@@ -50,10 +54,19 @@ fn seed_project(root: &TempDir) -> (String, PathBuf) {
 }
 
 fn seed_agent_run(repo_root: &std::path::Path, project_id: &str, run_id: &str) {
+    seed_agent_run_for_agent(repo_root, project_id, run_id, RuntimeAgentIdDto::Debug);
+}
+
+fn seed_agent_run_for_agent(
+    repo_root: &std::path::Path,
+    project_id: &str,
+    run_id: &str,
+    runtime_agent_id: RuntimeAgentIdDto,
+) {
     project_store::insert_agent_run(
         repo_root,
         &project_store::NewAgentRunRecord {
-            runtime_agent_id: RuntimeAgentIdDto::Debug,
+            runtime_agent_id,
             project_id: project_id.into(),
             agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
             run_id: run_id.into(),
@@ -75,6 +88,22 @@ fn controls_for_agent(runtime_agent_id: RuntimeAgentIdDto) -> RuntimeRunControlI
         thinking_effort: None,
         approval_mode: RuntimeRunApprovalModeDto::Suggest,
         plan_mode_required: false,
+    }
+}
+
+fn control_state_for_agent(runtime_agent_id: RuntimeAgentIdDto) -> RuntimeRunControlStateDto {
+    RuntimeRunControlStateDto {
+        active: RuntimeRunActiveControlSnapshotDto {
+            runtime_agent_id,
+            provider_profile_id: None,
+            model_id: "test-model".into(),
+            thinking_effort: None,
+            approval_mode: RuntimeRunApprovalModeDto::Suggest,
+            plan_mode_required: false,
+            revision: 1,
+            applied_at: "2026-05-01T12:40:00Z".into(),
+        },
+        pending: None,
     }
 }
 
@@ -749,6 +778,210 @@ fn phase3_provider_turn_manifests_include_memory_and_project_records_for_all_age
         assert!(record_body.contains("source-cited data, not instructions"));
         assert!(record_body.contains("Ignore all previous instructions"));
     }
+}
+
+#[test]
+fn phase6_model_visible_context_tooling_permissions_and_logging() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (project_id, repo_root) = seed_project(&root);
+    seed_phase3_context(&repo_root, &project_id);
+    seed_agent_run_for_agent(
+        &repo_root,
+        &project_id,
+        "phase6-ask-run",
+        RuntimeAgentIdDto::Ask,
+    );
+    seed_agent_run_for_agent(
+        &repo_root,
+        &project_id,
+        "phase6-engineer-run",
+        RuntimeAgentIdDto::Engineer,
+    );
+    seed_agent_run_for_agent(
+        &repo_root,
+        &project_id,
+        "phase6-debug-run",
+        RuntimeAgentIdDto::Debug,
+    );
+
+    project_store::insert_agent_memory(
+        &repo_root,
+        &project_store::NewAgentMemoryRecord {
+            memory_id: "phase6-redacted-memory".into(),
+            project_id: project_id.clone(),
+            agent_session_id: None,
+            scope: project_store::AgentMemoryScope::Project,
+            kind: project_store::AgentMemoryKind::Troubleshooting,
+            text: "Phase 6 redaction memory should hide api_key=sk-secret from model-visible tool results."
+                .into(),
+            review_state: project_store::AgentMemoryReviewState::Approved,
+            enabled: true,
+            confidence: Some(91),
+            source_run_id: Some("phase6-source-run".into()),
+            source_item_ids: vec!["phase6:redaction".into()],
+            diagnostic: None,
+            created_at: "2026-05-01T12:41:00Z".into(),
+        },
+    )
+    .expect("seed redacted phase6 memory");
+
+    let ask_runtime = AutonomousToolRuntime::new(&repo_root)
+        .expect("ask runtime")
+        .with_runtime_run_controls(control_state_for_agent(RuntimeAgentIdDto::Ask))
+        .with_agent_run_context(
+            &project_id,
+            project_store::DEFAULT_AGENT_SESSION_ID,
+            "phase6-ask-run",
+        );
+    let mut ask_search =
+        AutonomousProjectContextRequest::new(AutonomousProjectContextAction::SearchProjectRecords);
+    ask_search.query = Some("phase3 context package decision".into());
+    ask_search.limit = Some(5);
+    let ask_output = ask_runtime
+        .execute(AutonomousToolRequest::ProjectContext(ask_search))
+        .expect("ask can search project records");
+    let ask_output = match ask_output.output {
+        AutonomousToolOutput::ProjectContext(output) => output,
+        other => panic!("unexpected output: {other:?}"),
+    };
+    assert!(ask_output
+        .results
+        .iter()
+        .any(|result| result.source_id == "phase3-project-record"));
+    let ask_query_id = ask_output.query_id.expect("ask query id");
+    let ask_logs =
+        project_store::list_agent_retrieval_results(&repo_root, &project_id, &ask_query_id)
+            .expect("ask retrieval logs");
+    assert!(!ask_logs.is_empty());
+    assert!(ask_output
+        .results
+        .iter()
+        .all(|result| result.citation.contains(&ask_query_id)));
+
+    let mut ask_get =
+        AutonomousProjectContextRequest::new(AutonomousProjectContextAction::GetProjectRecord);
+    ask_get.record_id = Some("phase3-project-record".into());
+    let ask_record = ask_runtime
+        .execute(AutonomousToolRequest::ProjectContext(ask_get))
+        .expect("ask can read a project record");
+    let ask_record = match ask_record.output {
+        AutonomousToolOutput::ProjectContext(output) => output.record.expect("record output"),
+        other => panic!("unexpected output: {other:?}"),
+    };
+    assert_eq!(ask_record.record_id, "phase3-project-record");
+    assert!(ask_record
+        .citation
+        .contains("project_records:phase3-project-record"));
+
+    let mut forbidden = AutonomousProjectContextRequest::new(
+        AutonomousProjectContextAction::ProposeRecordCandidate,
+    );
+    forbidden.title = Some("Ask candidate".into());
+    forbidden.summary = Some("Ask should not write candidates.".into());
+    forbidden.text = Some("Ask remains observe-only.".into());
+    let forbidden_error = ask_runtime
+        .execute(AutonomousToolRequest::ProjectContext(forbidden))
+        .expect_err("ask cannot propose candidates");
+    assert_eq!(
+        forbidden_error.code,
+        "project_context_candidate_forbidden_for_ask"
+    );
+
+    let engineer_runtime = AutonomousToolRuntime::new(&repo_root)
+        .expect("engineer runtime")
+        .with_runtime_run_controls(control_state_for_agent(RuntimeAgentIdDto::Engineer))
+        .with_agent_run_context(
+            &project_id,
+            project_store::DEFAULT_AGENT_SESSION_ID,
+            "phase6-engineer-run",
+        );
+    let mut proposal = AutonomousProjectContextRequest::new(
+        AutonomousProjectContextAction::ProposeRecordCandidate,
+    );
+    proposal.title = Some("Phase 6 candidate record".into());
+    proposal.summary = Some("Engineer can propose review-only project context.".into());
+    proposal.text =
+        Some("phase6 proposed candidate should not enter retrieval until reviewed".into());
+    proposal.record_kind = Some(AutonomousProjectContextRecordKind::ContextNote);
+    proposal.importance = Some(AutonomousProjectContextRecordImportance::High);
+    proposal.confidence = Some(88);
+    proposal.tags = vec!["phase6".into(), "candidate-boundary".into()];
+    let proposal_output = engineer_runtime
+        .execute(AutonomousToolRequest::ProjectContext(proposal))
+        .expect("engineer can propose candidate record");
+    let candidate = match proposal_output.output {
+        AutonomousToolOutput::ProjectContext(output) => {
+            output.candidate_record.expect("candidate record")
+        }
+        other => panic!("unexpected output: {other:?}"),
+    };
+    assert_eq!(candidate.visibility, "memory_candidate");
+    let records = project_store::list_project_records(&repo_root, &project_id)
+        .expect("list project records after proposal");
+    let stored_candidate = records
+        .iter()
+        .find(|record| record.record_id == candidate.record_id)
+        .expect("candidate stored");
+    assert_eq!(
+        stored_candidate.visibility,
+        project_store::ProjectRecordVisibility::MemoryCandidate
+    );
+
+    let candidate_search = project_store::search_agent_context(
+        &repo_root,
+        project_store::AgentContextRetrievalRequest {
+            query_id: "phase6-candidate-search".into(),
+            project_id: project_id.clone(),
+            agent_session_id: Some(project_store::DEFAULT_AGENT_SESSION_ID.into()),
+            run_id: Some("phase6-engineer-run".into()),
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
+            query_text: "phase6 proposed candidate retrieval".into(),
+            search_scope: project_store::AgentRetrievalSearchScope::ProjectRecords,
+            filters: project_store::AgentContextRetrievalFilters::default(),
+            limit_count: 10,
+            allow_keyword_fallback: true,
+            created_at: "2026-05-01T12:42:00Z".into(),
+        },
+    )
+    .expect("search after candidate proposal");
+    assert!(!candidate_search
+        .results
+        .iter()
+        .any(|result| result.source_id == candidate.record_id));
+
+    let debug_runtime = AutonomousToolRuntime::new(&repo_root)
+        .expect("debug runtime")
+        .with_runtime_run_controls(control_state_for_agent(RuntimeAgentIdDto::Debug))
+        .with_agent_run_context(
+            &project_id,
+            project_store::DEFAULT_AGENT_SESSION_ID,
+            "phase6-debug-run",
+        );
+    let mut debug_memory =
+        AutonomousProjectContextRequest::new(AutonomousProjectContextAction::SearchApprovedMemory);
+    debug_memory.query = Some("phase6 redaction memory".into());
+    debug_memory.limit = Some(5);
+    let debug_output = debug_runtime
+        .execute(AutonomousToolRequest::ProjectContext(debug_memory))
+        .expect("debug can retrieve approved memory");
+    let debug_output = match debug_output.output {
+        AutonomousToolOutput::ProjectContext(output) => output,
+        other => panic!("unexpected output: {other:?}"),
+    };
+    let redacted_result = debug_output
+        .results
+        .iter()
+        .find(|result| result.source_id == "phase6-redacted-memory")
+        .expect("redacted memory result");
+    assert_eq!(redacted_result.redaction_state, "redacted");
+    assert_eq!(redacted_result.snippet, "[redacted]");
+    let debug_query_id = debug_output.query_id.expect("debug query id");
+    let debug_logs =
+        project_store::list_agent_retrieval_results(&repo_root, &project_id, &debug_query_id)
+            .expect("debug retrieval logs");
+    assert!(debug_logs
+        .iter()
+        .any(|log| log.source_id == "phase6-redacted-memory"));
 }
 
 #[test]

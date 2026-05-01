@@ -146,6 +146,11 @@ pub fn drive_owned_agent_run(
     let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
+        .with_agent_run_context(
+            &request.project_id,
+            &snapshot.run.agent_session_id,
+            &request.run_id,
+        )
         .with_cancellation_token(cancellation.clone());
     let tool_registry = tool_registry_for_snapshot(
         &request.repo_root,
@@ -335,7 +340,12 @@ pub fn prepare_owned_agent_continuation_for_drive(
         let replay_tool_runtime = request
             .tool_runtime
             .clone()
-            .with_runtime_run_controls(runtime_controls_from_request(request.controls.as_ref()));
+            .with_runtime_run_controls(runtime_controls_from_request(request.controls.as_ref()))
+            .with_agent_run_context(
+                &request.project_id,
+                &before.run.agent_session_id,
+                &request.run_id,
+            );
         replay_answered_tool_action_requests(
             &request.repo_root,
             &request.project_id,
@@ -1684,6 +1694,11 @@ pub fn drive_owned_agent_continuation(
     let base_tool_runtime = request
         .tool_runtime
         .with_runtime_run_controls(controls.clone())
+        .with_agent_run_context(
+            &request.project_id,
+            &snapshot.run.agent_session_id,
+            &request.run_id,
+        )
         .with_cancellation_token(cancellation.clone());
     let tool_registry = tool_registry_for_snapshot(
         &request.repo_root,

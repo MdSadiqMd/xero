@@ -8,6 +8,7 @@ mod policy;
 mod priority_tools;
 mod process;
 mod process_manager;
+mod project_context;
 mod repo_scope;
 mod skills;
 pub mod solana;
@@ -56,6 +57,13 @@ pub use emulator::{
 pub use environment_context::{
     AutonomousEnvironmentContextAction, AutonomousEnvironmentContextOutput,
     AutonomousEnvironmentContextRequest,
+};
+pub use project_context::{
+    AutonomousProjectContextAction, AutonomousProjectContextMemory,
+    AutonomousProjectContextMemoryKind, AutonomousProjectContextOutput,
+    AutonomousProjectContextRecord, AutonomousProjectContextRecordImportance,
+    AutonomousProjectContextRecordKind, AutonomousProjectContextRequest,
+    AutonomousProjectContextResult,
 };
 pub use repo_scope::{resolve_imported_repo_root, resolve_imported_repo_root_from_registry};
 pub use solana::{
@@ -113,6 +121,7 @@ pub const AUTONOMOUS_TOOL_LSP: &str = "lsp";
 pub const AUTONOMOUS_TOOL_POWERSHELL: &str = "powershell";
 pub const AUTONOMOUS_TOOL_TOOL_SEARCH: &str = "tool_search";
 pub const AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT: &str = "environment_context";
+pub const AUTONOMOUS_TOOL_PROJECT_CONTEXT: &str = "project_context";
 pub const AUTONOMOUS_TOOL_SKILL: &str = "skill";
 pub const AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX: &str = "mcp__";
 
@@ -135,6 +144,7 @@ const TOOL_ACCESS_CORE_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_GIT_DIFF,
     AUTONOMOUS_TOOL_TOOL_ACCESS,
     AUTONOMOUS_TOOL_TOOL_SEARCH,
+    AUTONOMOUS_TOOL_PROJECT_CONTEXT,
     AUTONOMOUS_TOOL_TODO,
     AUTONOMOUS_TOOL_LIST,
     AUTONOMOUS_TOOL_HASH,
@@ -498,6 +508,7 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
         | AUTONOMOUS_TOOL_CODE_INTEL
         | AUTONOMOUS_TOOL_LSP
         | AUTONOMOUS_TOOL_TOOL_SEARCH
+        | AUTONOMOUS_TOOL_PROJECT_CONTEXT
         | AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT => AutonomousToolEffectClass::Observe,
         AUTONOMOUS_TOOL_TOOL_ACCESS | AUTONOMOUS_TOOL_TODO => {
             AutonomousToolEffectClass::RuntimeState
@@ -621,6 +632,31 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
             &["git", "diff", "changes", "review"],
             &["scope"],
             &["Review unstaged changes before final summary."],
+            "observe",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT,
+            "core",
+            "Search and read source-cited, redacted durable project context, approved memory, handoffs, and current context manifests; Engineer and Debug may propose review-only candidate records.",
+            &["context", "memory", "records", "handoff", "retrieval", "citations"],
+            &[
+                "action",
+                "query",
+                "recordId",
+                "memoryId",
+                "recordKinds",
+                "memoryKinds",
+                "tags",
+                "relatedPaths",
+                "limit",
+                "title",
+                "summary",
+                "text",
+            ],
+            &[
+                "Search project records before acting.",
+                "Read an approved memory or propose a candidate record for review.",
+            ],
             "observe",
         ),
         catalog_entry(
@@ -1183,6 +1219,7 @@ pub struct AutonomousToolRuntime {
     pub(super) limits: AutonomousToolRuntimeLimits,
     pub(super) web_runtime: AutonomousWebRuntime,
     pub(super) command_controls: Option<RuntimeRunControlStateDto>,
+    pub(super) agent_run_context: Option<AutonomousAgentRunContext>,
     pub(super) browser_control_preference: BrowserControlPreferenceDto,
     pub(super) browser_executor: Option<Arc<dyn BrowserExecutor>>,
     pub(super) emulator_executor: Option<Arc<dyn EmulatorExecutor>>,
@@ -1206,6 +1243,7 @@ impl std::fmt::Debug for AutonomousToolRuntime {
             .field("repo_root", &self.repo_root)
             .field("limits", &self.limits)
             .field("command_controls", &self.command_controls)
+            .field("agent_run_context", &self.agent_run_context)
             .field(
                 "browser_control_preference",
                 &self.browser_control_preference,
@@ -1216,6 +1254,13 @@ impl std::fmt::Debug for AutonomousToolRuntime {
             .field("skill_tool_enabled", &self.skill_tool.is_some())
             .finish_non_exhaustive()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomousAgentRunContext {
+    pub project_id: String,
+    pub agent_session_id: String,
+    pub run_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1285,6 +1330,7 @@ impl AutonomousToolRuntime {
             limits,
             web_runtime: AutonomousWebRuntime::new(web_config),
             command_controls: None,
+            agent_run_context: None,
             browser_control_preference: BrowserControlPreferenceDto::Default,
             browser_executor: None,
             emulator_executor: None,
@@ -1423,6 +1469,24 @@ impl AutonomousToolRuntime {
     pub fn with_runtime_run_controls(mut self, controls: RuntimeRunControlStateDto) -> Self {
         self.command_controls = Some(controls);
         self
+    }
+
+    pub fn with_agent_run_context(
+        mut self,
+        project_id: impl Into<String>,
+        agent_session_id: impl Into<String>,
+        run_id: impl Into<String>,
+    ) -> Self {
+        self.agent_run_context = Some(AutonomousAgentRunContext {
+            project_id: project_id.into(),
+            agent_session_id: agent_session_id.into(),
+            run_id: run_id.into(),
+        });
+        self
+    }
+
+    pub fn agent_run_context(&self) -> Option<&AutonomousAgentRunContext> {
+        self.agent_run_context.as_ref()
     }
 
     pub fn runtime_run_controls(&self) -> Option<&RuntimeRunControlStateDto> {
@@ -1581,6 +1645,7 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::PowerShell(request) => self.powershell(request),
             AutonomousToolRequest::ToolSearch(request) => self.tool_search(request),
             AutonomousToolRequest::EnvironmentContext(request) => self.environment_context(request),
+            AutonomousToolRequest::ProjectContext(request) => self.project_context(request),
             AutonomousToolRequest::Skill(request) => self.skill(request),
             AutonomousToolRequest::Browser(request) => self.browser(request),
             AutonomousToolRequest::Emulator(request) => self.emulator(request),
@@ -1875,7 +1940,7 @@ impl AutonomousToolRuntime {
             .collect()
     }
 
-    fn active_runtime_agent_id(&self) -> RuntimeAgentIdDto {
+    pub(super) fn active_runtime_agent_id(&self) -> RuntimeAgentIdDto {
         self.command_controls
             .as_ref()
             .map(|controls| controls.active.runtime_agent_id)
@@ -1971,6 +2036,7 @@ pub enum AutonomousToolRequest {
     PowerShell(AutonomousPowerShellRequest),
     ToolSearch(AutonomousToolSearchRequest),
     EnvironmentContext(AutonomousEnvironmentContextRequest),
+    ProjectContext(AutonomousProjectContextRequest),
     Skill(XeroSkillToolInput),
     Browser(AutonomousBrowserRequest),
     Emulator(AutonomousEmulatorRequest),
@@ -2669,6 +2735,7 @@ pub enum AutonomousToolOutput {
     Lsp(AutonomousLspOutput),
     ToolSearch(AutonomousToolSearchOutput),
     EnvironmentContext(AutonomousEnvironmentContextOutput),
+    ProjectContext(AutonomousProjectContextOutput),
     Skill(AutonomousSkillToolOutput),
     Browser(AutonomousBrowserOutput),
     Emulator(AutonomousEmulatorOutput),

@@ -570,6 +570,7 @@ fn project_record_candidate(
 ) -> Result<Option<SearchCandidate>, CommandError> {
     if row.redaction_state
         == project_record_redaction_state_value(&ProjectRecordRedactionState::Blocked)
+        || row.visibility == "memory_candidate"
         || (request.search_scope == AgentRetrievalSearchScope::Handoffs
             && row.record_kind != project_record_kind_sql_value(&ProjectRecordKind::AgentHandoff))
         || (!request.filters.record_kinds.is_empty()

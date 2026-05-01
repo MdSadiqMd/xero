@@ -658,6 +658,7 @@ fn is_execution_tool(tool_name: &str) -> bool {
             | AUTONOMOUS_TOOL_HASH
             | AUTONOMOUS_TOOL_TOOL_ACCESS
             | AUTONOMOUS_TOOL_TOOL_SEARCH
+            | AUTONOMOUS_TOOL_PROJECT_CONTEXT
             | AUTONOMOUS_TOOL_TODO
             | AUTONOMOUS_TOOL_WEB_SEARCH
             | AUTONOMOUS_TOOL_WEB_FETCH

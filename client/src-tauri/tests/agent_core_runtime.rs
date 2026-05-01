@@ -245,7 +245,10 @@ fn append_auto_compact_fixture_messages(
 
 #[test]
 fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
-    let registry = ToolRegistry::builtin();
+    let registry = ToolRegistry::builtin_with_options(ToolRegistryOptions {
+        runtime_agent_id: RuntimeAgentIdDto::Engineer,
+        ..ToolRegistryOptions::default()
+    });
     let descriptor_names = registry
         .descriptors()
         .iter()
@@ -258,6 +261,7 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
         "git_status",
         "git_diff",
         "tool_access",
+        "project_context",
         "edit",
         "write",
         "patch",
@@ -338,6 +342,18 @@ fn owned_agent_tool_registry_exposes_provider_ready_schemas() {
             .expect("tool access groups description")
             .contains("process_manager")
     );
+    let project_context = registry
+        .descriptor("project_context")
+        .expect("project context descriptor");
+    assert_eq!(project_context.input_schema["required"], json!(["action"]));
+    assert!(project_context.input_schema["properties"]["action"]["enum"]
+        .as_array()
+        .expect("project context action enum")
+        .contains(&json!("search_project_records")));
+    assert!(project_context.input_schema["properties"]["action"]["enum"]
+        .as_array()
+        .expect("project context action enum")
+        .contains(&json!("propose_record_candidate")));
 
     let process_manager = registry
         .descriptor("process_manager")
@@ -422,6 +438,7 @@ fn owned_agent_tool_registry_selects_contextual_toolsets() {
     let read_only_names = read_only.descriptor_names();
     assert!(read_only_names.contains("read"));
     assert!(read_only_names.contains("tool_access"));
+    assert!(read_only_names.contains("project_context"));
     assert!(read_only_names.contains("tool_search"));
     assert!(read_only_names.contains("todo"));
     assert!(read_only_names.contains("git_diff"));

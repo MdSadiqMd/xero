@@ -279,13 +279,13 @@ fn tool_policy_fragment(
         browser_control_prompt_section(browser_control_preference, tools);
     match runtime_agent_id {
         RuntimeAgentIdDto::Ask => format!(
-            "Available observe-only tools: {tool_names}\n\nUse tools only to inspect project information needed to answer. `tool_search` and `tool_access` are filtered to Ask-safe observe-only capabilities; do not ask for mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
+            "Available observe-only tools: {tool_names}\n\nUse tools only to inspect project information needed to answer. Use `project_context` only with search/read actions; Ask cannot propose records. `tool_search` and `tool_access` are filtered to Ask-safe observe-only capabilities; do not ask for mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::Engineer => format!(
-            "Available tools: {tool_names}\n\nIf a relevant capability is not currently available, first call `tool_search` to find the smallest matching capability, then call `tool_access` to activate the smallest needed group or exact tool before proceeding. Use `todo` for meaningful multi-step planning state. If the `lsp` tool reports an `installSuggestion`, ask the user before running any candidate install command; use the command tool only after consent and normal operator approval.{browser_control_guidance}"
+            "Available tools: {tool_names}\n\nUse `project_context` to retrieve durable context before acting when prior decisions, constraints, handoffs, or reviewed memory may matter. If a relevant capability is not currently available, first call `tool_search` to find the smallest matching capability, then call `tool_access` to activate the smallest needed group or exact tool before proceeding. Use `todo` for meaningful multi-step planning state. If the `lsp` tool reports an `installSuggestion`, ask the user before running any candidate install command; use the command tool only after consent and normal operator approval.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::Debug => format!(
-            "Available tools: {tool_names}\n\nIf a relevant diagnostic, inspection, verification, or editing capability is not currently available, first call `tool_search` to find the smallest matching capability, then call `tool_access` to activate the smallest needed group or exact tool before proceeding. Use `todo` for debugging hypotheses and verification checkpoints. Prefer read-only experiments before mutation, and keep every command tied to a concrete hypothesis or verification need. If the `lsp` tool reports an `installSuggestion`, ask the user before running any candidate install command; use the command tool only after consent and normal operator approval.{browser_control_guidance}"
+            "Available tools: {tool_names}\n\nUse `project_context` to retrieve prior debugging records, constraints, handoffs, and reviewed troubleshooting memory before investigating related symptoms. If a relevant diagnostic, inspection, verification, or editing capability is not currently available, first call `tool_search` to find the smallest matching capability, then call `tool_access` to activate the smallest needed group or exact tool before proceeding. Use `todo` for debugging hypotheses and verification checkpoints. Prefer read-only experiments before mutation, and keep every command tied to a concrete hypothesis or verification need. If the `lsp` tool reports an `installSuggestion`, ask the user before running any candidate install command; use the command tool only after consent and normal operator approval.{browser_control_guidance}"
         ),
     }
 }
@@ -1101,6 +1101,9 @@ fn explicit_tool_names_from_prompt(prompt: &str) -> BTreeSet<String> {
             line if line.starts_with("tool:environment_context ") => {
                 names.insert(AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT.into());
             }
+            line if line.starts_with("tool:project_context_") => {
+                names.insert(AUTONOMOUS_TOOL_PROJECT_CONTEXT.into());
+            }
             line if line.starts_with("tool:skill_") => {
                 names.insert(AUTONOMOUS_TOOL_SKILL.into());
             }
@@ -1724,6 +1727,131 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                             "type": "array",
                             "description": "Capability IDs to inspect when action=capability, such as tauri_desktop_build or protobuf_build_ready.",
                             "items": { "type": "string" }
+                        }),
+                    ),
+                ],
+            ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT,
+            "Search and read source-cited, redacted durable project records, approved memory, handoffs, and context manifests. Ask may only use read-only actions; Engineer and Debug may also propose review-only candidate records.",
+            object_schema(
+                &["action"],
+                &[
+                    (
+                        "action",
+                        enum_schema(
+                            "Project context action.",
+                            &[
+                                "search_project_records",
+                                "search_approved_memory",
+                                "get_project_record",
+                                "get_memory",
+                                "list_recent_handoffs",
+                                "list_active_decisions_constraints",
+                                "list_open_questions_blockers",
+                                "explain_current_context_package",
+                                "propose_record_candidate",
+                            ],
+                        ),
+                    ),
+                    ("query", string_schema("Search query for retrieval actions.")),
+                    ("recordId", string_schema("Project record id for get_project_record.")),
+                    ("memoryId", string_schema("Memory id for get_memory.")),
+                    (
+                        "recordKinds",
+                        json!({
+                            "type": "array",
+                            "description": "Optional project record kind filters.",
+                            "items": {
+                                "type": "string",
+                                "enum": ["agent_handoff", "project_fact", "decision", "constraint", "plan", "finding", "verification", "question", "artifact", "context_note", "diagnostic"]
+                            }
+                        }),
+                    ),
+                    (
+                        "memoryKinds",
+                        json!({
+                            "type": "array",
+                            "description": "Optional approved memory kind filters.",
+                            "items": {
+                                "type": "string",
+                                "enum": ["project_fact", "user_preference", "decision", "session_summary", "troubleshooting"]
+                            }
+                        }),
+                    ),
+                    (
+                        "tags",
+                        json!({
+                            "type": "array",
+                            "description": "Optional exact tag filters or candidate tags.",
+                            "items": { "type": "string" }
+                        }),
+                    ),
+                    (
+                        "relatedPaths",
+                        json!({
+                            "type": "array",
+                            "description": "Optional related path filters or candidate related paths.",
+                            "items": { "type": "string" }
+                        }),
+                    ),
+                    ("createdAfter", string_schema("Optional ISO timestamp lower bound.")),
+                    (
+                        "minImportance",
+                        enum_schema(
+                            "Optional minimum project record importance.",
+                            &["low", "normal", "high", "critical"],
+                        ),
+                    ),
+                    ("limit", integer_schema("Maximum results to return, capped by runtime.")),
+                    ("title", string_schema("Candidate record title for propose_record_candidate.")),
+                    ("summary", string_schema("Candidate record summary for propose_record_candidate.")),
+                    ("text", string_schema("Candidate record text for propose_record_candidate.")),
+                    (
+                        "recordKind",
+                        enum_schema(
+                            "Candidate record kind.",
+                            &[
+                                "agent_handoff",
+                                "project_fact",
+                                "decision",
+                                "constraint",
+                                "plan",
+                                "finding",
+                                "verification",
+                                "question",
+                                "artifact",
+                                "context_note",
+                                "diagnostic",
+                            ],
+                        ),
+                    ),
+                    (
+                        "importance",
+                        enum_schema(
+                            "Candidate record importance.",
+                            &["low", "normal", "high", "critical"],
+                        ),
+                    ),
+                    (
+                        "confidence",
+                        integer_schema("Candidate confidence from 0 to 100."),
+                    ),
+                    (
+                        "sourceItemIds",
+                        json!({
+                            "type": "array",
+                            "description": "Optional source ids for candidate provenance.",
+                            "items": { "type": "string" }
+                        }),
+                    ),
+                    (
+                        "contentJson",
+                        json!({
+                            "type": "object",
+                            "description": "Optional candidate structured content. Secret-like fields are redacted.",
+                            "additionalProperties": true
                         }),
                     ),
                 ],
@@ -2380,6 +2508,59 @@ pub(crate) fn parse_fake_tool_directives(prompt: &str) -> Vec<AgentToolCall> {
             });
             continue;
         }
+        if let Some(query) = line.strip_prefix("tool:project_context_search ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-project-context-{}", calls.len() + 1),
+                tool_name: "project_context".into(),
+                input: json!({
+                    "action": "search_project_records",
+                    "query": query.trim(),
+                    "limit": 6
+                }),
+            });
+            continue;
+        }
+        if let Some(query) = line.strip_prefix("tool:project_context_memory ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-project-context-{}", calls.len() + 1),
+                tool_name: "project_context".into(),
+                input: json!({
+                    "action": "search_approved_memory",
+                    "query": query.trim(),
+                    "limit": 6
+                }),
+            });
+            continue;
+        }
+        if let Some(record_id) = line.strip_prefix("tool:project_context_get_record ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-project-context-{}", calls.len() + 1),
+                tool_name: "project_context".into(),
+                input: json!({
+                    "action": "get_project_record",
+                    "recordId": record_id.trim()
+                }),
+            });
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("tool:project_context_propose ") {
+            let mut parts = rest.trim().splitn(3, '|').map(str::trim);
+            let title = parts.next().unwrap_or_default();
+            let summary = parts.next().unwrap_or(title);
+            let text = parts.next().unwrap_or(summary);
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-project-context-{}", calls.len() + 1),
+                tool_name: "project_context".into(),
+                input: json!({
+                    "action": "propose_record_candidate",
+                    "title": title,
+                    "summary": summary,
+                    "text": text,
+                    "recordKind": "context_note"
+                }),
+            });
+            continue;
+        }
         if let Some(query) = line.strip_prefix("tool:skill_list ") {
             calls.push(AgentToolCall {
                 tool_call_id: format!("tool-call-skill-list-{}", calls.len() + 1),
@@ -2850,6 +3031,7 @@ mod tests {
             AUTONOMOUS_TOOL_GIT_DIFF,
             AUTONOMOUS_TOOL_TOOL_ACCESS,
             AUTONOMOUS_TOOL_TOOL_SEARCH,
+            AUTONOMOUS_TOOL_PROJECT_CONTEXT,
             AUTONOMOUS_TOOL_LIST,
             AUTONOMOUS_TOOL_HASH,
         ] {
