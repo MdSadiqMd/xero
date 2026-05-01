@@ -9,7 +9,10 @@ import {
 } from '@/src/lib/xero-model/provider-models'
 import { type RepositoryStatusView } from '@/src/lib/xero-model/project'
 import {
+  DEFAULT_RUNTIME_AGENT_ID,
   DEFAULT_RUNTIME_RUN_APPROVAL_MODE,
+  getRuntimeAgentLabel,
+  type RuntimeAgentIdDto,
   type RuntimeRunActiveControlSnapshotView,
   type RuntimeRunApprovalModeDto,
   type RuntimeRunPendingControlSnapshotView,
@@ -85,6 +88,7 @@ interface SelectedProviderProjection {
 interface AgentRunControlProjection {
   source: 'runtime_run' | 'fallback'
   selectedProviderProfileId: string | null
+  selectedRuntimeAgentId: RuntimeAgentIdDto
   selectedModelId: string | null
   selectedThinkingEffort: ProviderModelThinkingEffortDto | null
   selectedApprovalMode: RuntimeRunApprovalModeDto
@@ -184,6 +188,9 @@ function getAgentRunControlProjection(runtimeRun: RuntimeRunView | null): AgentR
   return {
     source: useRuntimeRunTruth ? 'runtime_run' : 'fallback',
     selectedProviderProfileId: useRuntimeRunTruth ? selectedControls?.providerProfileId ?? null : null,
+    selectedRuntimeAgentId: useRuntimeRunTruth
+      ? selectedControls?.runtimeAgentId ?? DEFAULT_RUNTIME_AGENT_ID
+      : DEFAULT_RUNTIME_AGENT_ID,
     selectedModelId: useRuntimeRunTruth ? selectedControls?.modelId ?? null : null,
     selectedThinkingEffort: useRuntimeRunTruth ? selectedControls?.thinkingEffort ?? null : null,
     selectedApprovalMode: useRuntimeRunTruth
@@ -677,6 +684,7 @@ export function buildAgentView({
       ? controlProjection.selectedThinkingEffort
       : providerModelCatalogProjection.selectedModelDefaultThinkingEffort
   const selectedApprovalMode = controlProjection.selectedApprovalMode
+  const selectedRuntimeAgentId = controlProjection.selectedRuntimeAgentId
 
   return {
     trustSnapshot,
@@ -695,6 +703,8 @@ export function buildAgentView({
       selectedProviderLabel: selectedProvider.providerLabel,
       selectedProviderSource: selectedProvider.source,
       controlTruthSource: controlProjection.source,
+      selectedRuntimeAgentId,
+      selectedRuntimeAgentLabel: getRuntimeAgentLabel(selectedRuntimeAgentId),
       selectedModelId,
       selectedModelSelectionKey: providerModelCatalogProjection.selectedModelOption?.selectionKey ?? null,
       selectedThinkingEffort,

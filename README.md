@@ -27,6 +27,7 @@ It combines:
 │  ├─ src-tauri/           # Rust backend, commands, state, tests
 │  └─ package.json
 ├─ landing/                # Separate Next.js marketing site
+├─ STANDALONE_AGENTS_ASK_PLAN.md # Plan for Ask agent + future standalone agents
 ├─ EMULATOR_SIDEBAR_PLAN.md
 ├─ SOLANA_WORKBENCH_PLAN.md
 └─ package.json            # Root convenience scripts

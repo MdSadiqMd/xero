@@ -214,7 +214,7 @@ pub fn list_agent_sessions(
             FROM agent_sessions
             WHERE project_id = ?1
               AND (?2 = 1 OR status = 'active')
-            ORDER BY selected DESC, updated_at DESC, created_at DESC, agent_session_id ASC
+            ORDER BY updated_at DESC, created_at DESC, agent_session_id ASC
             "#,
         )
         .map_err(|error| {
@@ -346,7 +346,11 @@ pub fn update_agent_session(
         clear_selected_agent_session(&transaction, &database_path, &payload.project_id)?;
     }
 
-    let now = now_timestamp();
+    let updated_at = if payload.title.is_some() || payload.summary.is_some() {
+        now_timestamp()
+    } else {
+        existing.updated_at.clone()
+    };
     transaction
         .execute(
             r#"
@@ -367,7 +371,7 @@ pub fn update_agent_session(
                 payload
                     .selected
                     .map(|selected| if selected { 1 } else { 0 }),
-                now.as_str(),
+                updated_at.as_str(),
             ],
         )
         .map_err(|error| {
@@ -988,4 +992,181 @@ fn missing_agent_session_error(project_id: &str, agent_session_id: &str) -> Comm
             "Xero could not find active agent session `{agent_session_id}` for project `{project_id}`."
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::{fs, path::PathBuf};
+
+    use crate::{
+        db::import_project, git::repository::CanonicalRepository, state::ImportFailpoints,
+    };
+    use rusqlite::{params, Connection};
+
+    struct TestProject {
+        _repo_dir: tempfile::TempDir,
+        project_id: String,
+        repo_root: PathBuf,
+        database_path: PathBuf,
+    }
+
+    impl Drop for TestProject {
+        fn drop(&mut self) {
+            if let Some(project_dir) = self.database_path.parent() {
+                let _ = fs::remove_dir_all(project_dir);
+            }
+        }
+    }
+
+    fn import_test_project() -> TestProject {
+        let repo_dir = tempfile::tempdir().expect("temp repo");
+        let repo_root = repo_dir.path().to_path_buf();
+        let project_id = format!("project-{}", generate_agent_session_id());
+        let root_path_string = repo_root.to_string_lossy().into_owned();
+        let repository = CanonicalRepository {
+            project_id: project_id.clone(),
+            repository_id: format!("repo-{project_id}"),
+            root_path: repo_root.clone(),
+            root_path_string,
+            common_git_dir: repo_root.join(".git"),
+            display_name: "Session Order Test".into(),
+            branch_name: Some("main".into()),
+            head_sha: None,
+            branch: None,
+            last_commit: None,
+            status_entries: Vec::new(),
+            has_staged_changes: false,
+            has_unstaged_changes: false,
+            has_untracked_changes: false,
+            additions: 0,
+            deletions: 0,
+        };
+        let imported =
+            import_project(&repository, &ImportFailpoints::default()).expect("import test project");
+
+        TestProject {
+            _repo_dir: repo_dir,
+            project_id,
+            repo_root,
+            database_path: imported.database_path,
+        }
+    }
+
+    fn set_session_time(
+        database_path: &Path,
+        project_id: &str,
+        agent_session_id: &str,
+        timestamp: &str,
+    ) {
+        let connection = Connection::open(database_path).expect("open project database");
+        connection
+            .execute(
+                r#"
+                UPDATE agent_sessions
+                SET created_at = ?3,
+                    updated_at = ?3
+                WHERE project_id = ?1
+                  AND agent_session_id = ?2
+                "#,
+                params![project_id, agent_session_id, timestamp],
+            )
+            .expect("set session timestamp");
+    }
+
+    fn session_ids(sessions: &[AgentSessionRecord]) -> Vec<String> {
+        sessions
+            .iter()
+            .map(|session| session.agent_session_id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn selecting_session_preserves_recency_order_and_timestamp() {
+        let project = import_test_project();
+        let middle = create_agent_session(
+            &project.repo_root,
+            &AgentSessionCreateRecord {
+                project_id: project.project_id.clone(),
+                title: "Middle".into(),
+                summary: String::new(),
+                selected: false,
+            },
+        )
+        .expect("create middle session");
+        let top = create_agent_session(
+            &project.repo_root,
+            &AgentSessionCreateRecord {
+                project_id: project.project_id.clone(),
+                title: "Top".into(),
+                summary: String::new(),
+                selected: false,
+            },
+        )
+        .expect("create top session");
+
+        set_session_time(
+            &project.database_path,
+            &project.project_id,
+            DEFAULT_AGENT_SESSION_ID,
+            "2026-04-15T20:00:00Z",
+        );
+        set_session_time(
+            &project.database_path,
+            &project.project_id,
+            &middle.agent_session_id,
+            "2026-04-15T20:01:00Z",
+        );
+        set_session_time(
+            &project.database_path,
+            &project.project_id,
+            &top.agent_session_id,
+            "2026-04-15T20:02:00Z",
+        );
+
+        let expected_order = vec![
+            top.agent_session_id.clone(),
+            middle.agent_session_id.clone(),
+            DEFAULT_AGENT_SESSION_ID.into(),
+        ];
+        let before = list_agent_sessions(&project.repo_root, &project.project_id, false)
+            .expect("list sessions before selection");
+        assert_eq!(session_ids(&before), expected_order);
+
+        let middle_before = get_agent_session(
+            &project.repo_root,
+            &project.project_id,
+            &middle.agent_session_id,
+        )
+        .expect("read middle session")
+        .expect("middle session exists");
+
+        let selected_middle = update_agent_session(
+            &project.repo_root,
+            &AgentSessionUpdateRecord {
+                project_id: project.project_id.clone(),
+                agent_session_id: middle.agent_session_id.clone(),
+                title: None,
+                summary: None,
+                selected: Some(true),
+            },
+        )
+        .expect("select middle session");
+
+        assert!(selected_middle.selected);
+        assert_eq!(selected_middle.updated_at, middle_before.updated_at);
+
+        let after = list_agent_sessions(&project.repo_root, &project.project_id, false)
+            .expect("list sessions after selection");
+        assert_eq!(session_ids(&after), expected_order);
+        assert_eq!(
+            after
+                .iter()
+                .filter(|session| session.selected)
+                .map(|session| session.agent_session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![middle.agent_session_id.as_str()],
+        );
+    }
 }

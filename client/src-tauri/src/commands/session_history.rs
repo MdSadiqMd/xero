@@ -1505,7 +1505,10 @@ fn compile_prompt_context_for_snapshot(
     latest_snapshot: Option<&AgentRunSnapshotRecord>,
     pending_prompt: Option<&str>,
 ) -> CommandResult<(PromptCompilation, Vec<AgentToolDescriptor>)> {
-    let controls = runtime_controls_from_request(None);
+    let mut controls = runtime_controls_from_request(None);
+    if let Some(snapshot) = latest_snapshot {
+        controls.active.runtime_agent_id = snapshot.run.runtime_agent_id;
+    }
     let descriptors = if let Some(snapshot) = latest_snapshot {
         tool_registry_for_snapshot(
             repo_root,
@@ -1524,6 +1527,7 @@ fn compile_prompt_context_for_snapshot(
             ToolRegistryOptions {
                 skill_tool_enabled: true,
                 browser_control_preference: BrowserControlPreferenceDto::Default,
+                runtime_agent_id: controls.active.runtime_agent_id,
             },
         )
         .into_descriptors()
@@ -1538,6 +1542,7 @@ fn compile_prompt_context_for_snapshot(
         repo_root,
         Some(project_id),
         Some(agent_session_id),
+        controls.active.runtime_agent_id,
         BrowserControlPreferenceDto::Default,
         descriptors.as_slice(),
         None,

@@ -178,6 +178,8 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
     controls: {
       active: {
         providerProfileId: null,
+        runtimeAgentId: 'ask',
+        runtimeAgentLabel: 'Ask',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
@@ -191,6 +193,8 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
       selected: {
         source: 'active',
         providerProfileId: null,
+        runtimeAgentId: 'ask',
+        runtimeAgentLabel: 'Ask',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
@@ -463,6 +467,7 @@ function makeAgent(project = makeProject(), overrides: Partial<AgentPaneView> = 
   const selectedControls = runtimeRunControls?.selected ?? null
   const providerModelCatalog = overrides.providerModelCatalog ?? makeProviderModelCatalog()
   const selectedModelOption = overrides.selectedModelOption ?? providerModelCatalog.models[0] ?? null
+  const selectedRuntimeAgentId = overrides.selectedRuntimeAgentId ?? selectedControls?.runtimeAgentId ?? 'ask'
 
   return {
     project,
@@ -480,6 +485,9 @@ function makeAgent(project = makeProject(), overrides: Partial<AgentPaneView> = 
     selectedProviderSource: overrides.selectedProviderSource ?? 'credential_default',
     controlTruthSource:
       overrides.controlTruthSource ?? (selectedControls && !runtimeRun?.isTerminal ? 'runtime_run' : 'fallback'),
+    selectedRuntimeAgentId,
+    selectedRuntimeAgentLabel:
+      overrides.selectedRuntimeAgentLabel ?? (selectedRuntimeAgentId === 'engineer' ? 'Engineer' : 'Ask'),
     selectedModelId: overrides.selectedModelId ?? selectedControls?.modelId ?? selectedModelOption?.modelId ?? null,
     selectedThinkingEffort:
       overrides.selectedThinkingEffort ??

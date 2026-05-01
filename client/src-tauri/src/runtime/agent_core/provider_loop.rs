@@ -34,6 +34,7 @@ pub(crate) fn drive_provider_loop(
             repo_root,
             Some(project_id),
             Some(agent_session_id),
+            controls.active.runtime_agent_id,
             tool_runtime.browser_control_preference(),
             tool_registry.descriptors(),
             owned_process_summary.as_deref(),
@@ -59,7 +60,19 @@ pub(crate) fn drive_provider_loop(
             ProviderTurnOutcome::Complete { message, usage } => {
                 merge_provider_usage(&mut usage_total, usage);
                 let snapshot = project_store::load_agent_run(repo_root, project_id, run_id)?;
-                let gate = evaluate_completion_gate(&snapshot, &message);
+                let gate = if controls.active.runtime_agent_id.allows_verification_gate() {
+                    evaluate_completion_gate(&snapshot, &message)
+                } else {
+                    VerificationGateDecision {
+                        status: VerificationGateStatus::NotRequired,
+                        message: format!(
+                            "{} agent does not use command-based verification gates.",
+                            controls.active.runtime_agent_id.label()
+                        ),
+                        evidence: None,
+                        latest_file_change_event_id: None,
+                    }
+                };
                 record_state_transition(
                     repo_root,
                     project_id,
@@ -111,12 +124,14 @@ pub(crate) fn drive_provider_loop(
                         messages.push(ProviderMessage::User {
                             content: gate_prompt,
                         });
-                        tool_registry.expand_with_tool_names([
-                            AUTONOMOUS_TOOL_COMMAND,
-                            AUTONOMOUS_TOOL_COMMAND_SESSION_START,
-                            AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
-                            AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
-                        ]);
+                        if controls.active.runtime_agent_id.allows_verification_gate() {
+                            tool_registry.expand_with_tool_names([
+                                AUTONOMOUS_TOOL_COMMAND,
+                                AUTONOMOUS_TOOL_COMMAND_SESSION_START,
+                                AUTONOMOUS_TOOL_COMMAND_SESSION_READ,
+                                AUTONOMOUS_TOOL_COMMAND_SESSION_STOP,
+                            ]);
+                        }
                         continue;
                     }
                     return Err(record_verification_action_required(
@@ -353,6 +368,8 @@ fn record_tool_registry_snapshot(
             "kind": "active_tool_registry",
             "promptVersion": SYSTEM_PROMPT_VERSION,
             "turnIndex": turn_index,
+            "runtimeAgentId": registry.runtime_agent_id().as_str(),
+            "runtimeAgentLabel": registry.runtime_agent_id().label(),
             "toolNames": tool_names,
             "catalog": catalog,
             "dynamicRoutes": dynamic_routes,
@@ -385,6 +402,8 @@ fn dynamic_tool_catalog_metadata(
                 .unwrap_or_default(),
             "examples": [format!("Call `{}` after exact MCP activation.", descriptor.name)],
             "riskClass": "external_capability_invoke",
+            "effectClass": "external_service",
+            "allowedRuntimeAgents": [RuntimeAgentIdDto::Engineer.as_str()],
             "runtimeAvailable": true,
             "source": server_id,
             "trust": "connected_mcp_server",
@@ -703,11 +722,13 @@ pub(crate) fn tool_registry_for_snapshot(
         ToolRegistryOptions {
             skill_tool_enabled,
             browser_control_preference,
+            runtime_agent_id: controls.active.runtime_agent_id,
         },
     );
     let options = ToolRegistryOptions {
         skill_tool_enabled,
         browser_control_preference,
+        runtime_agent_id: controls.active.runtime_agent_id,
     };
     let latest_registry = latest_tool_registry_snapshot(snapshot)?;
     let mut registry = if let Some(latest_registry) = latest_registry {

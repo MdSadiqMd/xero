@@ -22,6 +22,7 @@ function makeRuntimeRunDto(overrides: Record<string, unknown> = {}) {
     },
     controls: {
       active: {
+        runtimeAgentId: 'engineer',
         modelId: 'openai/gpt-4.1-mini',
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
@@ -30,6 +31,7 @@ function makeRuntimeRunDto(overrides: Record<string, unknown> = {}) {
         appliedAt: '2026-04-15T20:00:00Z',
       },
       pending: {
+        runtimeAgentId: 'engineer',
         modelId: 'anthropic/claude-3.5-haiku',
         thinkingEffort: 'low',
         approvalMode: 'auto_edit',
@@ -59,6 +61,7 @@ describe('runtime run control schemas', () => {
     const view = mapRuntimeRun(parsed)
 
     expect(view.controls.active).toMatchObject({
+      runtimeAgentId: 'engineer',
       modelId: 'openai/gpt-4.1-mini',
       thinkingEffort: 'medium',
       approvalMode: 'suggest',
@@ -66,6 +69,7 @@ describe('runtime run control schemas', () => {
       revision: 1,
     })
     expect(view.controls.pending).toMatchObject({
+      runtimeAgentId: 'engineer',
       modelId: 'anthropic/claude-3.5-haiku',
       thinkingEffort: 'low',
       approvalMode: 'auto_edit',
@@ -76,6 +80,7 @@ describe('runtime run control schemas', () => {
     })
     expect(view.controls.selected).toMatchObject({
       source: 'pending',
+      runtimeAgentId: 'engineer',
       modelId: 'anthropic/claude-3.5-haiku',
       thinkingEffort: 'low',
       approvalMode: 'auto_edit',
@@ -99,8 +104,8 @@ describe('runtime run control schemas', () => {
     expect(parsed.error.issues.some((issue) => issue.path.join('.') === 'controls')).toBe(true)
   })
 
-  it('rejects malformed pending prompt timestamps and unsupported approval modes', () => {
-    const parsed = runtimeRunSchema.safeParse({
+  it('requires runtimeAgentId on durable controls and control updates', () => {
+    const missingSnapshotAgent = runtimeRunSchema.safeParse({
       ...makeRuntimeRunDto(),
       controls: {
         active: {
@@ -111,7 +116,44 @@ describe('runtime run control schemas', () => {
           revision: 1,
           appliedAt: '2026-04-15T20:00:00Z',
         },
+      },
+    })
+    const missingUpdateAgent = updateRuntimeRunControlsRequestSchema.safeParse({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      runId: 'run-project-1',
+      controls: {
+        modelId: 'openai/gpt-4.1-mini',
+        approvalMode: 'suggest',
+      },
+    })
+
+    expect(missingSnapshotAgent.success).toBe(false)
+    expect(missingUpdateAgent.success).toBe(false)
+    if (missingSnapshotAgent.success || missingUpdateAgent.success) {
+      throw new Error('Expected runtime controls without runtimeAgentId to be rejected.')
+    }
+    expect(
+      missingSnapshotAgent.error.issues.some((issue) => issue.path.join('.') === 'controls.active.runtimeAgentId'),
+    ).toBe(true)
+    expect(missingUpdateAgent.error.issues.some((issue) => issue.path.join('.') === 'controls.runtimeAgentId')).toBe(true)
+  })
+
+  it('rejects malformed pending prompt timestamps and unsupported approval modes', () => {
+    const parsed = runtimeRunSchema.safeParse({
+      ...makeRuntimeRunDto(),
+      controls: {
+        active: {
+          runtimeAgentId: 'engineer',
+          modelId: 'openai/gpt-4.1-mini',
+          thinkingEffort: 'medium',
+          approvalMode: 'suggest',
+          planModeRequired: true,
+          revision: 1,
+          appliedAt: '2026-04-15T20:00:00Z',
+        },
         pending: {
+          runtimeAgentId: 'engineer',
           modelId: 'anthropic/claude-3.5-haiku',
           thinkingEffort: 'low',
           approvalMode: 'ship_it',
@@ -141,6 +183,7 @@ describe('runtime run control schemas', () => {
       projectId: 'project-1',
       agentSessionId: 'agent-session-main',
       initialControls: {
+        runtimeAgentId: 'engineer',
         modelId: 'openai/gpt-4.1-mini',
         thinkingEffort: 'high',
         approvalMode: 'yolo',
@@ -154,6 +197,7 @@ describe('runtime run control schemas', () => {
       projectId: 'project-1',
       agentSessionId: 'agent-session-main',
       initialControls: {
+        runtimeAgentId: 'engineer',
         modelId: 'openai/gpt-4.1-mini',
         thinkingEffort: 'high',
         approvalMode: 'yolo',
@@ -199,6 +243,7 @@ describe('runtime run control schemas', () => {
       projectId: 'project-1',
       agentSessionId: 'agent-session-main',
       initialControls: {
+        runtimeAgentId: 'ask',
         modelId: 'openai/gpt-4.1-mini',
         approvalMode: 'suggest',
       },
@@ -208,6 +253,7 @@ describe('runtime run control schemas', () => {
       makeRuntimeRunDto({
         controls: {
           active: {
+            runtimeAgentId: 'ask',
             modelId: 'openai/gpt-4.1-mini',
             thinkingEffort: 'medium',
             approvalMode: 'suggest',
@@ -223,6 +269,7 @@ describe('runtime run control schemas', () => {
       agentSessionId: 'agent-session-main',
       runId: 'run-project-1',
       controls: {
+        runtimeAgentId: 'ask',
         modelId: 'openai/gpt-4.1-mini',
         approvalMode: 'suggest',
         planModeRequired: 'true',

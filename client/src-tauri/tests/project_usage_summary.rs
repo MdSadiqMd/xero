@@ -95,6 +95,7 @@ fn seed_run(repo_root: &Path, run_id: &str, provider_id: &str, model_id: &str, s
     project_store::insert_agent_run(
         repo_root,
         &project_store::NewAgentRunRecord {
+            runtime_agent_id: xero_desktop_lib::commands::RuntimeAgentIdDto::Engineer,
             project_id: PROJECT_ID.into(),
             agent_session_id: SESSION_ID.into(),
             run_id: run_id.into(),

@@ -11,8 +11,8 @@ use tauri::Manager;
 use tempfile::TempDir;
 use xero_desktop_lib::{
     commands::{
-        RepositoryDiffScope, RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
-        RuntimeRunControlStateDto, RuntimeRunPendingControlSnapshotDto,
+        RepositoryDiffScope, RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto,
+        RuntimeRunApprovalModeDto, RuntimeRunControlStateDto, RuntimeRunPendingControlSnapshotDto,
     },
     configure_builder_with_state, db,
     git::{diff::MAX_PATCH_BYTES, repository::CanonicalRepository},
@@ -170,6 +170,7 @@ fn runtime_control_state(
 ) -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             provider_profile_id: None,
             model_id: "model-1".into(),
             thinking_effort: None,
@@ -179,6 +180,7 @@ fn runtime_control_state(
             applied_at: "2026-04-22T00:00:00Z".into(),
         },
         pending: pending.map(|approval_mode| RuntimeRunPendingControlSnapshotDto {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             provider_profile_id: None,
             model_id: "model-1".into(),
             thinking_effort: None,
@@ -438,6 +440,78 @@ fn tool_runtime_tool_access_lists_and_grants_requested_groups() {
             assert!(output.granted_tools.contains(&"command".into()));
             assert!(output.granted_tools.contains(&"solana_alt".into()));
             assert!(output.denied_tools.contains(&"missing_tool".into()));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+}
+
+#[test]
+fn ask_tool_access_filters_and_denies_non_observe_tools() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let mut controls = runtime_control_state(RuntimeRunApprovalModeDto::Suggest, None);
+    controls.active.runtime_agent_id = RuntimeAgentIdDto::Ask;
+    let runtime = AutonomousToolRuntime::new(root.path())
+        .expect("runtime")
+        .with_runtime_run_controls(controls);
+
+    let list = runtime
+        .execute(AutonomousToolRequest::ToolAccess(
+            AutonomousToolAccessRequest {
+                action: AutonomousToolAccessAction::List,
+                groups: Vec::new(),
+                tools: Vec::new(),
+                reason: None,
+            },
+        ))
+        .expect("list ask tool access groups");
+    match list.output {
+        AutonomousToolOutput::ToolAccess(output) => {
+            assert!(output.available_groups.iter().any(|group| {
+                group.name == "core" && group.tools.contains(&"read".to_string())
+            }));
+            assert!(!output
+                .available_groups
+                .iter()
+                .any(|group| group.name == "command"));
+            assert!(!output
+                .available_groups
+                .iter()
+                .any(|group| group.name == "mutation"));
+            assert!(!output
+                .available_groups
+                .iter()
+                .any(|group| group.name == "browser_control"));
+            assert!(!output
+                .available_groups
+                .iter()
+                .any(|group| group.name == "agent_ops"));
+        }
+        other => panic!("unexpected output: {other:?}"),
+    }
+
+    let request = runtime
+        .execute(AutonomousToolRequest::ToolAccess(
+            AutonomousToolAccessRequest {
+                action: AutonomousToolAccessAction::Request,
+                groups: vec![
+                    "command".into(),
+                    "mutation".into(),
+                    "browser_control".into(),
+                ],
+                tools: vec!["read".into(), "command".into(), "subagent".into()],
+                reason: Some("Try to escape Ask observe-only mode.".into()),
+            },
+        ))
+        .expect("request ask tool access");
+    match request.output {
+        AutonomousToolOutput::ToolAccess(output) => {
+            assert!(output.granted_tools.contains(&"read".into()));
+            assert!(!output.granted_tools.contains(&"command".into()));
+            assert!(!output.granted_tools.contains(&"subagent".into()));
+            assert!(output.denied_tools.contains(&"command".into()));
+            assert!(output.denied_tools.contains(&"mutation".into()));
+            assert!(output.denied_tools.contains(&"browser_control".into()));
+            assert!(output.denied_tools.contains(&"subagent".into()));
         }
         other => panic!("unexpected output: {other:?}"),
     }

@@ -8,6 +8,7 @@ import type {
 import type { AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
 import type {
   ProviderModelThinkingEffortDto,
+  RuntimeAgentIdDto,
   RuntimeRunApprovalModeDto,
   RuntimeRunControlInputDto,
   RuntimeRunView,
@@ -171,6 +172,7 @@ export function resolveComposerThinkingSelection(
 }
 
 export function getComposerControlInput(options: {
+  runtimeAgentId: RuntimeAgentIdDto
   models: AgentPaneView['providerModelCatalog']['models']
   selectionKey: string | null | undefined
   thinkingEffort: ProviderModelThinkingEffortDto | null | undefined
@@ -182,10 +184,11 @@ export function getComposerControlInput(options: {
   }
 
   return {
+    runtimeAgentId: options.runtimeAgentId,
     providerProfileId: model.profileId,
     modelId: model.modelId,
     thinkingEffort: resolveComposerThinkingSelection(model, options.thinkingEffort),
-    approvalMode: options.approvalMode,
+    approvalMode: options.runtimeAgentId === 'ask' ? 'suggest' : options.approvalMode,
     planModeRequired: false,
   }
 }

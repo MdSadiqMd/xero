@@ -89,9 +89,64 @@ pub enum RuntimeRunApprovalModeDto {
     Yolo,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeAgentIdDto {
+    Ask,
+    Engineer,
+}
+
+impl RuntimeAgentIdDto {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Engineer => "engineer",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Ask => "Ask",
+            Self::Engineer => "Engineer",
+        }
+    }
+
+    pub fn allows_plan_gate(&self) -> bool {
+        matches!(self, Self::Engineer)
+    }
+
+    pub fn allows_verification_gate(&self) -> bool {
+        matches!(self, Self::Engineer)
+    }
+}
+
+pub fn default_runtime_agent_id() -> RuntimeAgentIdDto {
+    RuntimeAgentIdDto::Ask
+}
+
+pub fn default_runtime_agent_approval_mode(
+    agent_id: &RuntimeAgentIdDto,
+) -> RuntimeRunApprovalModeDto {
+    match agent_id {
+        RuntimeAgentIdDto::Ask => RuntimeRunApprovalModeDto::Suggest,
+        RuntimeAgentIdDto::Engineer => RuntimeRunApprovalModeDto::Suggest,
+    }
+}
+
+pub fn runtime_agent_allows_approval_mode(
+    agent_id: &RuntimeAgentIdDto,
+    approval_mode: &RuntimeRunApprovalModeDto,
+) -> bool {
+    match agent_id {
+        RuntimeAgentIdDto::Ask => matches!(approval_mode, RuntimeRunApprovalModeDto::Suggest),
+        RuntimeAgentIdDto::Engineer => true,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunControlInputDto {
+    pub runtime_agent_id: RuntimeAgentIdDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profile_id: Option<String>,
     pub model_id: String,
@@ -105,6 +160,7 @@ pub struct RuntimeRunControlInputDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunActiveControlSnapshotDto {
+    pub runtime_agent_id: RuntimeAgentIdDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profile_id: Option<String>,
     pub model_id: String,
@@ -120,6 +176,7 @@ pub struct RuntimeRunActiveControlSnapshotDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunPendingControlSnapshotDto {
+    pub runtime_agent_id: RuntimeAgentIdDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profile_id: Option<String>,
     pub model_id: String,

@@ -26,12 +26,14 @@ pub fn create_owned_agent_run(
         ToolRegistryOptions {
             skill_tool_enabled: request.tool_runtime.skill_tool_enabled(),
             browser_control_preference: request.tool_runtime.browser_control_preference(),
+            runtime_agent_id: controls.active.runtime_agent_id,
         },
     );
     let system_prompt = assemble_system_prompt_for_session(
         &request.repo_root,
         Some(&request.project_id),
         Some(&request.agent_session_id),
+        controls.active.runtime_agent_id,
         request.tool_runtime.browser_control_preference(),
         tool_registry.descriptors(),
     )?;
@@ -41,6 +43,7 @@ pub fn create_owned_agent_run(
     project_store::insert_agent_run(
         &request.repo_root,
         &NewAgentRunRecord {
+            runtime_agent_id: controls.active.runtime_agent_id.clone(),
             project_id: request.project_id.clone(),
             agent_session_id: request.agent_session_id.clone(),
             run_id: request.run_id.clone(),
@@ -187,14 +190,16 @@ pub fn drive_owned_agent_run(
                     "stopReason": AgentRunStopReason::Complete.as_str(),
                 }),
             )?;
-            project_store::update_agent_run_status(
+            let snapshot = project_store::update_agent_run_status(
                 &request.repo_root,
                 &request.project_id,
                 &request.run_id,
                 AgentRunStatus::Completed,
                 None,
                 &now_timestamp(),
-            )
+            )?;
+            capture_project_record_for_run(&request.repo_root, &snapshot)?;
+            Ok(snapshot)
         }
         Err(error) => finish_owned_agent_drive_error(
             &request.repo_root,
@@ -286,6 +291,9 @@ pub fn prepare_owned_agent_continuation(
         let tool_registry = ToolRegistry::builtin_with_options(ToolRegistryOptions {
             skill_tool_enabled: request.tool_runtime.skill_tool_enabled(),
             browser_control_preference: request.tool_runtime.browser_control_preference(),
+            runtime_agent_id: runtime_controls_from_request(request.controls.as_ref())
+                .active
+                .runtime_agent_id,
         });
         let replay_tool_runtime = request
             .tool_runtime
@@ -449,6 +457,7 @@ fn estimate_continuation_context_tokens(
         &request.repo_root,
         Some(&snapshot.run.project_id),
         Some(&snapshot.run.agent_session_id),
+        controls.active.runtime_agent_id,
         request.tool_runtime.browser_control_preference(),
         tool_registry.descriptors(),
     )?;
@@ -565,14 +574,16 @@ pub fn drive_owned_agent_continuation(
                     "stopReason": AgentRunStopReason::Complete.as_str(),
                 }),
             )?;
-            project_store::update_agent_run_status(
+            let snapshot = project_store::update_agent_run_status(
                 &request.repo_root,
                 &request.project_id,
                 &request.run_id,
                 AgentRunStatus::Completed,
                 None,
                 &now_timestamp(),
-            )
+            )?;
+            capture_project_record_for_run(&request.repo_root, &snapshot)?;
+            Ok(snapshot)
         }
         Err(error) => finish_owned_agent_drive_error(
             &request.repo_root,
@@ -861,14 +872,16 @@ fn finish_owned_agent_drive_error(
                 "stopReason": stop_reason.as_str(),
             }),
         )?;
-        return project_store::update_agent_run_status(
+        let snapshot = project_store::update_agent_run_status(
             repo_root,
             project_id,
             run_id,
             AgentRunStatus::Paused,
             Some(diagnostic),
             &now_timestamp(),
-        );
+        )?;
+        capture_project_record_for_run(repo_root, &snapshot)?;
+        return Ok(snapshot);
     }
 
     let diagnostic = project_store::AgentRunDiagnosticRecord {
@@ -900,14 +913,16 @@ fn finish_owned_agent_drive_error(
             "stopReason": stop_reason.as_str(),
         }),
     )?;
-    project_store::update_agent_run_status(
+    let snapshot = project_store::update_agent_run_status(
         repo_root,
         project_id,
         run_id,
         AgentRunStatus::Failed,
         Some(diagnostic),
         &now_timestamp(),
-    )
+    )?;
+    capture_project_record_for_run(repo_root, &snapshot)?;
+    Ok(snapshot)
 }
 
 fn mark_owned_agent_run_cancelled(
@@ -1012,6 +1027,7 @@ impl AutonomousSubagentExecutor for OwnedAgentSubagentExecutor {
             run_id: child_run_id.clone(),
             prompt,
             controls: Some(RuntimeRunControlInputDto {
+                runtime_agent_id: self.controls.active.runtime_agent_id.clone(),
                 provider_profile_id: self.controls.active.provider_profile_id.clone(),
                 model_id,
                 thinking_effort: self.controls.active.thinking_effort.clone(),

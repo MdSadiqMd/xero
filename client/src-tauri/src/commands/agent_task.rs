@@ -551,6 +551,7 @@ mod tests {
         project_store::insert_agent_run(
             repo_root,
             &NewAgentRunRecord {
+                runtime_agent_id: crate::commands::RuntimeAgentIdDto::Engineer,
                 project_id: project_id.into(),
                 agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
                 run_id: run_id.into(),

@@ -18,7 +18,7 @@ use xero_desktop_lib::{
         start_autonomous_run::start_autonomous_run, start_runtime_session::start_runtime_session,
         AutonomousRunRecoveryStateDto, AutonomousRunStateDto, AutonomousRunStatusDto,
         CancelAutonomousRunRequestDto, GetAutonomousRunRequestDto, GetRuntimeRunRequestDto,
-        ProjectIdRequestDto, RepositoryDiffScope, RuntimeAuthPhase,
+        ProjectIdRequestDto, RepositoryDiffScope, RuntimeAgentIdDto, RuntimeAuthPhase,
         RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
         RuntimeRunDto, RuntimeRunStatusDto, RuntimeRunTransportLivenessDto,
         StartAutonomousRunRequestDto, StartRuntimeSessionRequestDto,
@@ -80,6 +80,7 @@ fn runtime_with_approval(
     .expect("build autonomous tool runtime for imported repo")
     .with_runtime_run_controls(RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             provider_profile_id: None,
             model_id: "model-1".into(),
             thinking_effort: None,

@@ -7,7 +7,9 @@ use std::{
 
 use crate::{
     auth::now_timestamp,
-    commands::{CommandError, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto},
+    commands::{
+        CommandError, RuntimeAgentIdDto, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto,
+    },
     db::project_store::{
         RuntimeRunActiveControlSnapshotRecord, RuntimeRunControlStateRecord,
         RuntimeRunSnapshotRecord,
@@ -257,6 +259,7 @@ pub fn run_supervisor_sidecar_from_env() -> Result<(), CommandError> {
 fn default_runtime_run_controls() -> RuntimeRunControlStateRecord {
     RuntimeRunControlStateRecord {
         active: RuntimeRunActiveControlSnapshotRecord {
+            runtime_agent_id: RuntimeAgentIdDto::Ask,
             provider_profile_id: None,
             model_id: OPENAI_CODEX_PROVIDER_ID.into(),
             thinking_effort: None,

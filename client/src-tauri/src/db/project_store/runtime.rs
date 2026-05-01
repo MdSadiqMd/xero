@@ -6,7 +6,9 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::{
     commands::{
-        CommandError, OperatorApprovalDto, ProviderModelThinkingEffortDto, RuntimeAuthPhase,
+        default_runtime_agent_approval_mode, default_runtime_agent_id,
+        runtime_agent_allows_approval_mode, CommandError, OperatorApprovalDto,
+        ProviderModelThinkingEffortDto, RuntimeAgentIdDto, RuntimeAuthPhase,
         RuntimeRunApprovalModeDto,
     },
     db::database_path_for_repo,
@@ -79,6 +81,7 @@ pub struct RuntimeRunDiagnosticRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunActiveControlSnapshotRecord {
+    pub runtime_agent_id: RuntimeAgentIdDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profile_id: Option<String>,
     pub model_id: String,
@@ -94,6 +97,7 @@ pub struct RuntimeRunActiveControlSnapshotRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeRunPendingControlSnapshotRecord {
+    pub runtime_agent_id: RuntimeAgentIdDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_profile_id: Option<String>,
     pub model_id: String,
@@ -1655,6 +1659,16 @@ fn validate_runtime_run_active_control_snapshot(
         "control_state.active.applied_at",
         "runtime_run_request_invalid",
     )?;
+    if !runtime_agent_allows_approval_mode(&active.runtime_agent_id, &active.approval_mode) {
+        return Err(CommandError::system_fault(
+            "runtime_run_request_invalid",
+            format!(
+                "Xero requires approval mode `{}` to be allowed for runtime agent `{}`.",
+                runtime_run_approval_mode_sql_value(&active.approval_mode),
+                active.runtime_agent_id.as_str()
+            ),
+        ));
+    }
     validate_runtime_run_control_timestamp(&active.applied_at, "control_state.active.applied_at")?;
     if active.revision == 0 {
         return Err(CommandError::system_fault(
@@ -1686,6 +1700,16 @@ fn validate_runtime_run_pending_control_snapshot(
         "control_state.pending.queued_at",
         "runtime_run_request_invalid",
     )?;
+    if !runtime_agent_allows_approval_mode(&pending.runtime_agent_id, &pending.approval_mode) {
+        return Err(CommandError::system_fault(
+            "runtime_run_request_invalid",
+            format!(
+                "Xero requires approval mode `{}` to be allowed for runtime agent `{}`.",
+                runtime_run_approval_mode_sql_value(&pending.approval_mode),
+                pending.runtime_agent_id.as_str()
+            ),
+        ));
+    }
     validate_runtime_run_control_timestamp(&pending.queued_at, "control_state.pending.queued_at")?;
     if pending.revision <= active_revision {
         return Err(CommandError::system_fault(
@@ -1747,6 +1771,7 @@ pub fn build_runtime_run_control_state(
     initial_prompt: Option<&str>,
 ) -> Result<RuntimeRunControlStateRecord, CommandError> {
     build_runtime_run_control_state_with_plan_mode(
+        default_runtime_agent_id(),
         model_id,
         thinking_effort,
         approval_mode,
@@ -1757,6 +1782,7 @@ pub fn build_runtime_run_control_state(
 }
 
 pub fn build_runtime_run_control_state_with_plan_mode(
+    runtime_agent_id: RuntimeAgentIdDto,
     model_id: &str,
     thinking_effort: Option<ProviderModelThinkingEffortDto>,
     approval_mode: RuntimeRunApprovalModeDto,
@@ -1765,6 +1791,7 @@ pub fn build_runtime_run_control_state_with_plan_mode(
     initial_prompt: Option<&str>,
 ) -> Result<RuntimeRunControlStateRecord, CommandError> {
     build_runtime_run_control_state_with_profile(
+        runtime_agent_id,
         None,
         model_id,
         thinking_effort,
@@ -1776,10 +1803,11 @@ pub fn build_runtime_run_control_state_with_plan_mode(
 }
 
 pub fn build_runtime_run_control_state_with_profile(
+    runtime_agent_id: RuntimeAgentIdDto,
     provider_profile_id: Option<&str>,
     model_id: &str,
     thinking_effort: Option<ProviderModelThinkingEffortDto>,
-    approval_mode: RuntimeRunApprovalModeDto,
+    mut approval_mode: RuntimeRunApprovalModeDto,
     plan_mode_required: bool,
     timestamp: &str,
     initial_prompt: Option<&str>,
@@ -1792,8 +1820,13 @@ pub fn build_runtime_run_control_state_with_profile(
     if model_id.is_empty() {
         return Err(CommandError::invalid_request("initialControls.modelId"));
     }
+    if !runtime_agent_allows_approval_mode(&runtime_agent_id, &approval_mode) {
+        approval_mode = default_runtime_agent_approval_mode(&runtime_agent_id);
+    }
+    let plan_mode_required = plan_mode_required && runtime_agent_id.allows_plan_gate();
 
     let active = RuntimeRunActiveControlSnapshotRecord {
+        runtime_agent_id: runtime_agent_id.clone(),
         provider_profile_id: provider_profile_id.clone(),
         model_id: model_id.to_owned(),
         thinking_effort,
@@ -1804,6 +1837,7 @@ pub fn build_runtime_run_control_state_with_profile(
     };
     let pending = match initial_prompt {
         Some(prompt) if !prompt.trim().is_empty() => Some(RuntimeRunPendingControlSnapshotRecord {
+            runtime_agent_id,
             provider_profile_id,
             model_id: active.model_id.clone(),
             thinking_effort: active.thinking_effort.clone(),
@@ -1976,6 +2010,14 @@ fn runtime_run_status_sql_value(value: &RuntimeRunStatus) -> &'static str {
         RuntimeRunStatus::Stale => "stale",
         RuntimeRunStatus::Stopped => "stopped",
         RuntimeRunStatus::Failed => "failed",
+    }
+}
+
+fn runtime_run_approval_mode_sql_value(value: &RuntimeRunApprovalModeDto) -> &'static str {
+    match value {
+        RuntimeRunApprovalModeDto::Suggest => "suggest",
+        RuntimeRunApprovalModeDto::AutoEdit => "auto_edit",
+        RuntimeRunApprovalModeDto::Yolo => "yolo",
     }
 }
 

@@ -39,7 +39,7 @@ use crate::{
     commands::{
         browser::load_browser_control_settings, BranchSummaryDto, BrowserControlPreferenceDto,
         CommandError, CommandResult, RepositoryDiffScope, RepositoryStatusEntryDto,
-        RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
+        RuntimeAgentIdDto, RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
     },
     runtime::AgentRunCancellationToken,
     state::DesktopState,
@@ -437,9 +437,140 @@ pub fn tool_catalog_metadata_for_tool(
                 "schemaFields": entry.schema_fields,
                 "examples": entry.examples,
                 "riskClass": entry.risk_class,
+                "effectClass": tool_effect_class(entry.tool_name).as_str(),
+                "allowedRuntimeAgents": allowed_runtime_agent_labels(entry.tool_name),
                 "runtimeAvailable": true,
             })
         })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutonomousToolEffectClass {
+    Observe,
+    RuntimeState,
+    Write,
+    DestructiveWrite,
+    Command,
+    ProcessControl,
+    BrowserControl,
+    DeviceControl,
+    ExternalService,
+    SkillRuntime,
+    AgentDelegation,
+    Unknown,
+}
+
+impl AutonomousToolEffectClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "observe",
+            Self::RuntimeState => "runtime_state",
+            Self::Write => "write",
+            Self::DestructiveWrite => "destructive_write",
+            Self::Command => "command",
+            Self::ProcessControl => "process_control",
+            Self::BrowserControl => "browser_control",
+            Self::DeviceControl => "device_control",
+            Self::ExternalService => "external_service",
+            Self::SkillRuntime => "skill_runtime",
+            Self::AgentDelegation => "agent_delegation",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub const fn is_ask_observe_only(self) -> bool {
+        matches!(self, Self::Observe)
+    }
+}
+
+pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
+    if tool_name.starts_with(AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX) {
+        return AutonomousToolEffectClass::ExternalService;
+    }
+    match tool_name {
+        AUTONOMOUS_TOOL_READ
+        | AUTONOMOUS_TOOL_SEARCH
+        | AUTONOMOUS_TOOL_FIND
+        | AUTONOMOUS_TOOL_GIT_STATUS
+        | AUTONOMOUS_TOOL_GIT_DIFF
+        | AUTONOMOUS_TOOL_LIST
+        | AUTONOMOUS_TOOL_HASH
+        | AUTONOMOUS_TOOL_CODE_INTEL
+        | AUTONOMOUS_TOOL_LSP
+        | AUTONOMOUS_TOOL_TOOL_SEARCH
+        | AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT => AutonomousToolEffectClass::Observe,
+        AUTONOMOUS_TOOL_TOOL_ACCESS | AUTONOMOUS_TOOL_TODO => {
+            AutonomousToolEffectClass::RuntimeState
+        }
+        AUTONOMOUS_TOOL_WRITE
+        | AUTONOMOUS_TOOL_EDIT
+        | AUTONOMOUS_TOOL_PATCH
+        | AUTONOMOUS_TOOL_RENAME
+        | AUTONOMOUS_TOOL_MKDIR
+        | AUTONOMOUS_TOOL_NOTEBOOK_EDIT => AutonomousToolEffectClass::Write,
+        AUTONOMOUS_TOOL_DELETE => AutonomousToolEffectClass::DestructiveWrite,
+        AUTONOMOUS_TOOL_COMMAND
+        | AUTONOMOUS_TOOL_COMMAND_SESSION_START
+        | AUTONOMOUS_TOOL_COMMAND_SESSION_READ
+        | AUTONOMOUS_TOOL_COMMAND_SESSION_STOP
+        | AUTONOMOUS_TOOL_POWERSHELL => AutonomousToolEffectClass::Command,
+        AUTONOMOUS_TOOL_PROCESS_MANAGER | AUTONOMOUS_TOOL_MACOS_AUTOMATION => {
+            AutonomousToolEffectClass::ProcessControl
+        }
+        AUTONOMOUS_TOOL_WEB_SEARCH | AUTONOMOUS_TOOL_WEB_FETCH | AUTONOMOUS_TOOL_MCP => {
+            AutonomousToolEffectClass::ExternalService
+        }
+        AUTONOMOUS_TOOL_BROWSER => AutonomousToolEffectClass::BrowserControl,
+        AUTONOMOUS_TOOL_EMULATOR => AutonomousToolEffectClass::DeviceControl,
+        AUTONOMOUS_TOOL_SUBAGENT => AutonomousToolEffectClass::AgentDelegation,
+        AUTONOMOUS_TOOL_SKILL => AutonomousToolEffectClass::SkillRuntime,
+        AUTONOMOUS_TOOL_SOLANA_LOGS
+        | AUTONOMOUS_TOOL_SOLANA_TX
+        | AUTONOMOUS_TOOL_SOLANA_EXPLAIN
+        | AUTONOMOUS_TOOL_SOLANA_ALT
+        | AUTONOMOUS_TOOL_SOLANA_IDL
+        | AUTONOMOUS_TOOL_SOLANA_PDA
+        | AUTONOMOUS_TOOL_SOLANA_PROGRAM
+        | AUTONOMOUS_TOOL_SOLANA_UPGRADE_CHECK
+        | AUTONOMOUS_TOOL_SOLANA_SQUADS
+        | AUTONOMOUS_TOOL_SOLANA_AUDIT_COVERAGE
+        | AUTONOMOUS_TOOL_SOLANA_SECRETS
+        | AUTONOMOUS_TOOL_SOLANA_CLUSTER_DRIFT
+        | AUTONOMOUS_TOOL_SOLANA_COST
+        | AUTONOMOUS_TOOL_SOLANA_DOCS
+        | AUTONOMOUS_TOOL_SOLANA_CLUSTER
+        | AUTONOMOUS_TOOL_SOLANA_SIMULATE
+        | AUTONOMOUS_TOOL_SOLANA_REPLAY
+        | AUTONOMOUS_TOOL_SOLANA_INDEXER
+        | AUTONOMOUS_TOOL_SOLANA_CODAMA
+        | AUTONOMOUS_TOOL_SOLANA_DEPLOY
+        | AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD
+        | AUTONOMOUS_TOOL_SOLANA_AUDIT_STATIC
+        | AUTONOMOUS_TOOL_SOLANA_AUDIT_EXTERNAL
+        | AUTONOMOUS_TOOL_SOLANA_AUDIT_FUZZ => AutonomousToolEffectClass::ExternalService,
+        _ => AutonomousToolEffectClass::Unknown,
+    }
+}
+
+pub fn tool_allowed_for_runtime_agent(agent_id: RuntimeAgentIdDto, tool_name: &str) -> bool {
+    match agent_id {
+        RuntimeAgentIdDto::Engineer => true,
+        RuntimeAgentIdDto::Ask => {
+            matches!(tool_name, AUTONOMOUS_TOOL_TOOL_ACCESS)
+                || tool_effect_class(tool_name).is_ask_observe_only()
+        }
+    }
+}
+
+fn allowed_runtime_agent_labels(tool_name: &str) -> Vec<&'static str> {
+    let mut agents = Vec::new();
+    if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Ask, tool_name) {
+        agents.push(RuntimeAgentIdDto::Ask.as_str());
+    }
+    if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Engineer, tool_name) {
+        agents.push(RuntimeAgentIdDto::Engineer.as_str());
+    }
+    agents
 }
 
 pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCatalogEntry> {
@@ -1663,12 +1794,15 @@ impl AutonomousToolRuntime {
             AutonomousToolAccessAction::Request => {
                 let mut requested = std::collections::BTreeSet::new();
                 let mut denied = std::collections::BTreeSet::new();
+                let runtime_agent_id = self.active_runtime_agent_id();
 
                 for group in request.groups {
                     match tool_access_group_tools(&group) {
                         Some(tools) => {
                             for tool in tools {
-                                if self.tool_available_by_runtime(tool) {
+                                if self.tool_available_by_runtime(tool)
+                                    && tool_allowed_for_runtime_agent(runtime_agent_id, tool)
+                                {
                                     requested.insert((*tool).to_owned());
                                 } else {
                                     denied.insert(group.clone());
@@ -1684,8 +1818,10 @@ impl AutonomousToolRuntime {
                 let known_tools = tool_access_all_known_tools();
                 for tool in request.tools {
                     let runtime_tool_available = known_tools.contains(tool.as_str())
-                        && self.tool_available_by_runtime(tool.as_str());
-                    let dynamic_tool_available = self.dynamic_tool_descriptor(&tool)?.is_some();
+                        && self.tool_available_by_runtime(tool.as_str())
+                        && tool_allowed_for_runtime_agent(runtime_agent_id, tool.as_str());
+                    let dynamic_tool_available = runtime_agent_id == RuntimeAgentIdDto::Engineer
+                        && self.dynamic_tool_descriptor(&tool)?.is_some();
                     if runtime_tool_available || dynamic_tool_available {
                         requested.insert(tool);
                     } else {
@@ -1712,16 +1848,35 @@ impl AutonomousToolRuntime {
     }
 
     fn available_tool_access_groups(&self) -> Vec<AutonomousToolAccessGroup> {
+        let runtime_agent_id = self.active_runtime_agent_id();
         tool_access_group_descriptors()
             .into_iter()
-            .filter(|group| {
-                group.name != "skills"
-                    || group
+            .filter_map(|mut group| {
+                group.tools.retain(|tool| {
+                    self.tool_available_by_runtime(tool)
+                        && tool_allowed_for_runtime_agent(runtime_agent_id, tool)
+                });
+                if group.tools.is_empty() {
+                    return None;
+                }
+                if group.name == "skills"
+                    && !group
                         .tools
                         .iter()
                         .any(|tool| self.tool_available_by_runtime(tool))
+                {
+                    return None;
+                }
+                Some(group)
             })
             .collect()
+    }
+
+    fn active_runtime_agent_id(&self) -> RuntimeAgentIdDto {
+        self.command_controls
+            .as_ref()
+            .map(|controls| controls.active.runtime_agent_id)
+            .unwrap_or(RuntimeAgentIdDto::Ask)
     }
 
     fn tool_available_by_runtime(&self, tool: &str) -> bool {

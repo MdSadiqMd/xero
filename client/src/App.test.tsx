@@ -705,6 +705,7 @@ function makeRuntimeRun(projectId = 'project-1', overrides: Partial<RuntimeRunDt
     controls: {
       active: {
         providerProfileId: 'openai_codex-default',
+        runtimeAgentId: 'ask',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
@@ -940,6 +941,7 @@ function createAdapter(options?: {
   }): RuntimeRunDto['controls'] => {
     const providerProfileId = options.nextControls?.providerProfileId ?? options.base.providerProfileId ?? null
     const modelId = options.nextControls?.modelId ?? options.base.modelId
+    const runtimeAgentId = options.nextControls?.runtimeAgentId ?? options.base.runtimeAgentId
     const thinkingEffort = options.nextControls?.thinkingEffort ?? options.base.thinkingEffort
     const approvalMode = options.nextControls?.approvalMode ?? options.base.approvalMode
     const planModeRequired = options.nextControls?.planModeRequired ?? options.base.planModeRequired
@@ -947,6 +949,7 @@ function createAdapter(options?: {
     return {
       active: {
         providerProfileId,
+        runtimeAgentId,
         modelId,
         thinkingEffort,
         approvalMode,
@@ -958,6 +961,7 @@ function createAdapter(options?: {
         options.queuedAt || options.queuedPrompt != null
           ? {
               providerProfileId,
+              runtimeAgentId,
               modelId,
               thinkingEffort,
               approvalMode,
@@ -1008,6 +1012,7 @@ function createAdapter(options?: {
             base: makeRuntimeRun('project-1').controls.active,
             nextControls: {
               providerProfileId: request?.controls?.providerProfileId ?? activeProfile.profileId,
+              runtimeAgentId: request?.controls?.runtimeAgentId ?? 'ask',
               modelId: request?.controls?.modelId ?? activeProfile.modelId,
               thinkingEffort: request?.controls?.thinkingEffort ?? 'medium',
               approvalMode: request?.controls?.approvalMode ?? 'suggest',
@@ -1032,6 +1037,7 @@ function createAdapter(options?: {
       base: makeRuntimeRun('project-1').controls.active,
       nextControls: {
         providerProfileId: options?.initialControls?.providerProfileId ?? activeProfile.profileId,
+        runtimeAgentId: options?.initialControls?.runtimeAgentId ?? 'ask',
         modelId: options?.initialControls?.modelId ?? activeProfile.modelId,
         thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
         approvalMode: options?.initialControls?.approvalMode ?? 'suggest',

@@ -103,6 +103,14 @@ pub(crate) fn classify_agent_task(
     prompt: &str,
     controls: &RuntimeRunControlStateDto,
 ) -> AgentTaskClassification {
+    if !controls.active.runtime_agent_id.allows_plan_gate() {
+        return AgentTaskClassification {
+            requires_plan: false,
+            score: 0,
+            reason_codes: vec!["agent_plan_gate_disabled".into()],
+        };
+    }
+
     let mut score = 0_u8;
     let mut reason_codes = Vec::new();
     let task_text = prompt
@@ -256,6 +264,10 @@ pub(crate) fn evaluate_tool_batch_gate(
     classification: &AgentTaskClassification,
     tool_calls: &[AgentToolCall],
 ) -> ToolBatchGate {
+    if !controls.active.runtime_agent_id.allows_plan_gate() {
+        return ToolBatchGate::Allow;
+    }
+
     if !tool_calls
         .iter()
         .any(|tool_call| is_execution_tool(&tool_call.tool_name))
@@ -591,6 +603,9 @@ pub(crate) fn stop_reason_for_error(error: &CommandError) -> AgentRunStopReason 
     if error.code == "agent_context_budget_exceeded" {
         return AgentRunStopReason::ContextOverBudget;
     }
+    if error.code == "agent_tool_boundary_violation" {
+        return AgentRunStopReason::Blocked;
+    }
     if error.class == CommandErrorClass::PolicyDenied {
         return AgentRunStopReason::WaitingForApproval;
     }
@@ -734,6 +749,7 @@ mod tests {
     fn controls(plan_mode_required: bool) -> RuntimeRunControlStateDto {
         RuntimeRunControlStateDto {
             active: RuntimeRunActiveControlSnapshotDto {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
                 provider_profile_id: None,
                 model_id: "fake".into(),
                 thinking_effort: None,
@@ -749,6 +765,7 @@ mod tests {
     fn empty_snapshot() -> AgentRunSnapshotRecord {
         AgentRunSnapshotRecord {
             run: project_store::AgentRunRecord {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
                 project_id: "project-1".into(),
                 agent_session_id: "session-1".into(),
                 run_id: "run-1".into(),
@@ -806,6 +823,29 @@ mod tests {
         );
 
         assert!(matches!(gate, ToolBatchGate::RequirePlan { .. }));
+    }
+
+    #[test]
+    fn ask_agent_does_not_require_engineering_plan_gate() {
+        let snapshot = empty_snapshot();
+        let mut ask_controls = controls(true);
+        ask_controls.active.runtime_agent_id = RuntimeAgentIdDto::Ask;
+        ask_controls.active.approval_mode = RuntimeRunApprovalModeDto::Suggest;
+        let classification =
+            classify_agent_task("Implement the runtime state machine", &ask_controls);
+        let gate = evaluate_tool_batch_gate(
+            &snapshot,
+            &ask_controls,
+            &classification,
+            &[AgentToolCall {
+                tool_call_id: "call-1".into(),
+                tool_name: AUTONOMOUS_TOOL_READ.into(),
+                input: json!({ "path": "src/lib.rs" }),
+            }],
+        );
+
+        assert!(!classification.requires_plan);
+        assert!(matches!(gate, ToolBatchGate::Allow));
     }
 
     #[test]

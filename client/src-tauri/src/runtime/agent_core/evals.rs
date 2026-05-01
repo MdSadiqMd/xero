@@ -640,6 +640,7 @@ fn threshold_failures(
 fn eval_controls() -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             provider_profile_id: None,
             model_id: "eval-model".into(),
             thinking_effort: None,
@@ -655,6 +656,7 @@ fn eval_controls() -> RuntimeRunControlStateDto {
 fn empty_eval_snapshot() -> AgentRunSnapshotRecord {
     AgentRunSnapshotRecord {
         run: project_store::AgentRunRecord {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             project_id: "eval-project".into(),
             agent_session_id: "eval-session".into(),
             run_id: "eval-run".into(),

@@ -5,8 +5,8 @@ use crate::{
     commands::{
         runtime_support::resolve_owned_agent_provider_config, validate_non_empty, CommandError,
         CommandResult, GitGenerateCommitMessageRequestDto, GitGenerateCommitMessageResponseDto,
-        RepositoryDiffScope, RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
-        RuntimeRunControlInputDto, RuntimeRunControlStateDto,
+        RepositoryDiffScope, RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto,
+        RuntimeRunApprovalModeDto, RuntimeRunControlInputDto, RuntimeRunControlStateDto,
     },
     git::diff,
     runtime::{
@@ -41,6 +41,7 @@ pub fn git_generate_commit_message<R: Runtime>(
     }
 
     let controls = RuntimeRunControlInputDto {
+        runtime_agent_id: RuntimeAgentIdDto::Engineer,
         provider_profile_id: normalize_optional_text(request.provider_profile_id),
         model_id: request.model_id.trim().to_owned(),
         thinking_effort: request.thinking_effort.clone(),
@@ -63,6 +64,7 @@ pub fn git_generate_commit_message<R: Runtime>(
         turn_index: 0,
         controls: RuntimeRunControlStateDto {
             active: RuntimeRunActiveControlSnapshotDto {
+                runtime_agent_id: RuntimeAgentIdDto::Engineer,
                 provider_profile_id: controls.provider_profile_id.clone(),
                 model_id: provider_model_id.clone(),
                 thinking_effort: controls.thinking_effort.clone(),

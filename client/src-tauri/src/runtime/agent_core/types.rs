@@ -47,10 +47,21 @@ pub struct ToolRegistry {
     options: ToolRegistryOptions,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolRegistryOptions {
     pub skill_tool_enabled: bool,
     pub browser_control_preference: BrowserControlPreferenceDto,
+    pub runtime_agent_id: RuntimeAgentIdDto,
+}
+
+impl Default for ToolRegistryOptions {
+    fn default() -> Self {
+        Self {
+            skill_tool_enabled: false,
+            browser_control_preference: BrowserControlPreferenceDto::Default,
+            runtime_agent_id: RuntimeAgentIdDto::Ask,
+        }
+    }
 }
 
 impl ToolRegistry {
@@ -64,6 +75,9 @@ impl ToolRegistry {
                 .into_iter()
                 .filter(|descriptor| {
                     options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL
+                })
+                .filter(|descriptor| {
+                    tool_allowed_for_runtime_agent(options.runtime_agent_id, &descriptor.name)
                 })
                 .collect(),
             dynamic_routes: BTreeMap::new(),
@@ -83,8 +97,9 @@ impl ToolRegistry {
         repo_root: &Path,
         prompt: &str,
         controls: &RuntimeRunControlStateDto,
-        options: ToolRegistryOptions,
+        mut options: ToolRegistryOptions,
     ) -> Self {
+        options.runtime_agent_id = controls.active.runtime_agent_id;
         let mut names = select_tool_names_for_prompt(repo_root, prompt, controls, &options);
         if !options.skill_tool_enabled {
             names.remove(AUTONOMOUS_TOOL_SKILL);
@@ -105,6 +120,7 @@ impl ToolRegistry {
             .filter(|descriptor| {
                 tool_names.contains(descriptor.name.as_str())
                     && (options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL)
+                    && tool_allowed_for_runtime_agent(options.runtime_agent_id, &descriptor.name)
             })
             .collect();
         Self {
@@ -123,6 +139,9 @@ impl ToolRegistry {
             .into_iter()
             .filter(|descriptor| {
                 options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL
+            })
+            .filter(|descriptor| {
+                tool_allowed_for_runtime_agent(options.runtime_agent_id, &descriptor.name)
             })
             .collect::<Vec<_>>();
         descriptors.sort_by(|left, right| left.name.cmp(&right.name));
@@ -207,20 +226,27 @@ impl ToolRegistry {
             let tool_name = tool_name.as_ref();
             if let Some(descriptor) = builtin_descriptors.get(tool_name) {
                 if self.options.skill_tool_enabled || descriptor.name != AUTONOMOUS_TOOL_SKILL {
-                    descriptors_by_name.insert(descriptor.name.clone(), descriptor.clone());
+                    if tool_allowed_for_runtime_agent(
+                        self.options.runtime_agent_id,
+                        &descriptor.name,
+                    ) {
+                        descriptors_by_name.insert(descriptor.name.clone(), descriptor.clone());
+                    }
                 }
                 continue;
             }
-            if let Some(dynamic) = tool_runtime.dynamic_tool_descriptor(tool_name)? {
-                descriptors_by_name.insert(
-                    dynamic.name.clone(),
-                    AgentToolDescriptor {
-                        name: dynamic.name.clone(),
-                        description: dynamic.description,
-                        input_schema: dynamic.input_schema,
-                    },
-                );
-                dynamic_routes.insert(dynamic.name, dynamic.route);
+            if self.options.runtime_agent_id == RuntimeAgentIdDto::Engineer {
+                if let Some(dynamic) = tool_runtime.dynamic_tool_descriptor(tool_name)? {
+                    descriptors_by_name.insert(
+                        dynamic.name.clone(),
+                        AgentToolDescriptor {
+                            name: dynamic.name.clone(),
+                            description: dynamic.description,
+                            input_schema: dynamic.input_schema,
+                        },
+                    );
+                    dynamic_routes.insert(dynamic.name, dynamic.route);
+                }
             }
         }
 
@@ -231,12 +257,34 @@ impl ToolRegistry {
 
     pub fn decode_call(&self, tool_call: &AgentToolCall) -> CommandResult<AutonomousToolRequest> {
         if self.descriptor(&tool_call.tool_name).is_none() {
+            let known_tool = tool_access_all_known_tools().contains(tool_call.tool_name.as_str())
+                || tool_call
+                    .tool_name
+                    .starts_with(AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX);
+            if known_tool
+                && !tool_allowed_for_runtime_agent(
+                    self.options.runtime_agent_id,
+                    &tool_call.tool_name,
+                )
+            {
+                return Err(agent_tool_boundary_violation(
+                    self.options.runtime_agent_id,
+                    &tool_call.tool_name,
+                ));
+            }
             return Err(CommandError::user_fixable(
                 "agent_tool_call_unknown",
                 format!(
                     "The owned-agent model requested unregistered tool `{}`.",
                     tool_call.tool_name
                 ),
+            ));
+        }
+
+        if !tool_allowed_for_runtime_agent(self.options.runtime_agent_id, &tool_call.tool_name) {
+            return Err(agent_tool_boundary_violation(
+                self.options.runtime_agent_id,
+                &tool_call.tool_name,
             ));
         }
 
@@ -274,6 +322,23 @@ impl ToolRegistry {
     pub fn validate_call(&self, tool_call: &AgentToolCall) -> CommandResult<()> {
         self.decode_call(tool_call).map(|_| ())
     }
+
+    pub(crate) fn runtime_agent_id(&self) -> RuntimeAgentIdDto {
+        self.options.runtime_agent_id
+    }
+}
+
+fn agent_tool_boundary_violation(
+    runtime_agent_id: RuntimeAgentIdDto,
+    tool_name: &str,
+) -> CommandError {
+    CommandError::user_fixable(
+        "agent_tool_boundary_violation",
+        format!(
+            "The {} agent cannot use tool `{tool_name}` because it is outside that agent's authority.",
+            runtime_agent_id.label()
+        ),
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -337,6 +402,7 @@ pub trait ProviderAdapter {
             turn_index: 0,
                 controls: RuntimeRunControlStateDto {
                     active: RuntimeRunActiveControlSnapshotDto {
+                        runtime_agent_id: RuntimeAgentIdDto::Engineer,
                         provider_profile_id: None,
                         model_id: request.model_id.clone(),
                     thinking_effort: None,
@@ -387,6 +453,7 @@ pub trait ProviderAdapter {
             turn_index: 0,
                 controls: RuntimeRunControlStateDto {
                     active: RuntimeRunActiveControlSnapshotDto {
+                        runtime_agent_id: RuntimeAgentIdDto::Engineer,
                         provider_profile_id: None,
                         model_id: request.model_id.clone(),
                     thinking_effort: None,
@@ -844,5 +911,34 @@ mod tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+
+    #[test]
+    fn ask_registry_filters_and_denies_forbidden_tools_at_decode() {
+        let registry = ToolRegistry::for_tool_names_with_options(
+            BTreeSet::from([
+                AUTONOMOUS_TOOL_READ.to_string(),
+                AUTONOMOUS_TOOL_COMMAND.to_string(),
+                AUTONOMOUS_TOOL_SUBAGENT.to_string(),
+            ]),
+            ToolRegistryOptions {
+                runtime_agent_id: RuntimeAgentIdDto::Ask,
+                ..ToolRegistryOptions::default()
+            },
+        );
+
+        assert!(registry.descriptor(AUTONOMOUS_TOOL_READ).is_some());
+        assert!(registry.descriptor(AUTONOMOUS_TOOL_COMMAND).is_none());
+        assert!(registry.descriptor(AUTONOMOUS_TOOL_SUBAGENT).is_none());
+
+        let error = registry
+            .decode_call(&AgentToolCall {
+                tool_call_id: "call-command".into(),
+                tool_name: AUTONOMOUS_TOOL_COMMAND.into(),
+                input: json!({"argv": ["echo", "hello"]}),
+            })
+            .expect_err("Ask must reject command calls even if the provider emits one");
+
+        assert_eq!(error.code, "agent_tool_boundary_violation");
     }
 }

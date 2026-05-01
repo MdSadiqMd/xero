@@ -20,26 +20,27 @@ use super::{
     deferred_tool_catalog,
     process::apply_sanitized_command_environment,
     repo_scope::{normalize_relative_path, path_to_forward_slash, WalkErrorCodes, WalkState},
-    tool_catalog_activation_groups, AutonomousCodeDiagnostic, AutonomousCodeIntelAction,
-    AutonomousCodeIntelOutput, AutonomousCodeIntelRequest, AutonomousCodeSymbol,
-    AutonomousCommandRequest, AutonomousDynamicToolDescriptor, AutonomousDynamicToolRoute,
-    AutonomousLspAction, AutonomousLspInstallCommand, AutonomousLspInstallSuggestion,
-    AutonomousLspOutput, AutonomousLspRequest, AutonomousLspServerStatus, AutonomousMcpAction,
-    AutonomousMcpOutput, AutonomousMcpRequest, AutonomousMcpServerSummary,
-    AutonomousNotebookEditOutput, AutonomousNotebookEditRequest, AutonomousPowerShellRequest,
-    AutonomousSubagentAction, AutonomousSubagentOutput, AutonomousSubagentRequest,
-    AutonomousSubagentRole, AutonomousSubagentTask, AutonomousTodoAction, AutonomousTodoItem,
-    AutonomousTodoOutput, AutonomousTodoRequest, AutonomousTodoStatus, AutonomousToolCatalogEntry,
-    AutonomousToolOutput, AutonomousToolResult, AutonomousToolRuntime, AutonomousToolSearchMatch,
-    AutonomousToolSearchOutput, AutonomousToolSearchRequest, AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX,
-    AUTONOMOUS_TOOL_CODE_INTEL, AUTONOMOUS_TOOL_LSP, AUTONOMOUS_TOOL_MCP,
-    AUTONOMOUS_TOOL_NOTEBOOK_EDIT, AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_SKILL,
-    AUTONOMOUS_TOOL_SUBAGENT, AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_SEARCH,
+    tool_allowed_for_runtime_agent, tool_catalog_activation_groups, AutonomousCodeDiagnostic,
+    AutonomousCodeIntelAction, AutonomousCodeIntelOutput, AutonomousCodeIntelRequest,
+    AutonomousCodeSymbol, AutonomousCommandRequest, AutonomousDynamicToolDescriptor,
+    AutonomousDynamicToolRoute, AutonomousLspAction, AutonomousLspInstallCommand,
+    AutonomousLspInstallSuggestion, AutonomousLspOutput, AutonomousLspRequest,
+    AutonomousLspServerStatus, AutonomousMcpAction, AutonomousMcpOutput, AutonomousMcpRequest,
+    AutonomousMcpServerSummary, AutonomousNotebookEditOutput, AutonomousNotebookEditRequest,
+    AutonomousPowerShellRequest, AutonomousSubagentAction, AutonomousSubagentOutput,
+    AutonomousSubagentRequest, AutonomousSubagentRole, AutonomousSubagentTask,
+    AutonomousTodoAction, AutonomousTodoItem, AutonomousTodoOutput, AutonomousTodoRequest,
+    AutonomousTodoStatus, AutonomousToolCatalogEntry, AutonomousToolOutput, AutonomousToolResult,
+    AutonomousToolRuntime, AutonomousToolSearchMatch, AutonomousToolSearchOutput,
+    AutonomousToolSearchRequest, AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX, AUTONOMOUS_TOOL_CODE_INTEL,
+    AUTONOMOUS_TOOL_LSP, AUTONOMOUS_TOOL_MCP, AUTONOMOUS_TOOL_NOTEBOOK_EDIT,
+    AUTONOMOUS_TOOL_POWERSHELL, AUTONOMOUS_TOOL_SKILL, AUTONOMOUS_TOOL_SUBAGENT,
+    AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOOL_SEARCH,
 };
 
 use crate::{
     auth::now_timestamp,
-    commands::{validate_non_empty, CommandError, CommandResult},
+    commands::{validate_non_empty, CommandError, CommandResult, RuntimeAgentIdDto},
     mcp::{load_mcp_registry_from_path, McpConnectionStatus, McpServerRecord, McpTransport},
     runtime::autonomous_skill_runtime::{
         sanitize_skill_tool_model_text, XeroSkillSourceKind, XeroSkillToolAccessStatus,
@@ -66,8 +67,15 @@ impl AutonomousToolRuntime {
         let query = request.query.trim().to_ascii_lowercase();
         let query_terms = normalized_search_terms(&query);
         let mut matches = Vec::new();
+        let runtime_agent_id = self
+            .runtime_run_controls()
+            .map(|controls| controls.active.runtime_agent_id)
+            .unwrap_or(RuntimeAgentIdDto::Ask);
 
-        let catalog = deferred_tool_catalog(self.skill_tool_enabled());
+        let catalog = deferred_tool_catalog(self.skill_tool_enabled())
+            .into_iter()
+            .filter(|entry| tool_allowed_for_runtime_agent(runtime_agent_id, entry.tool_name))
+            .collect::<Vec<_>>();
         let mut searched_catalog_size = catalog.len();
         for entry in catalog {
             let runtime_available = self.tool_available_by_runtime(entry.tool_name);
@@ -105,12 +113,14 @@ impl AutonomousToolRuntime {
             }
         }
 
-        let mcp_matches = self.mcp_tool_search_matches(&query, &query_terms)?;
-        searched_catalog_size = searched_catalog_size.saturating_add(mcp_matches.len());
-        matches.extend(mcp_matches);
-        let skill_matches = self.skill_tool_search_matches(&query, &query_terms, limit)?;
-        searched_catalog_size = searched_catalog_size.saturating_add(skill_matches.len());
-        matches.extend(skill_matches);
+        if runtime_agent_id == RuntimeAgentIdDto::Engineer {
+            let mcp_matches = self.mcp_tool_search_matches(&query, &query_terms)?;
+            searched_catalog_size = searched_catalog_size.saturating_add(mcp_matches.len());
+            matches.extend(mcp_matches);
+            let skill_matches = self.skill_tool_search_matches(&query, &query_terms, limit)?;
+            searched_catalog_size = searched_catalog_size.saturating_add(skill_matches.len());
+            matches.extend(skill_matches);
+        }
 
         matches.sort_by(|left, right| {
             right

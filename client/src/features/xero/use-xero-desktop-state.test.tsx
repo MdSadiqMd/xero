@@ -546,6 +546,7 @@ function makeRuntimeRun(projectId: string, overrides: Partial<RuntimeRunDto> = {
     controls: {
       active: {
         providerProfileId: 'openai_codex-default',
+        runtimeAgentId: 'ask',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
@@ -1422,6 +1423,7 @@ function createMockAdapter(options?: {
       const pendingControls = request.controls
           ? {
               providerProfileId: request.controls.providerProfileId ?? activeControls.providerProfileId ?? null,
+              runtimeAgentId: request.controls.runtimeAgentId,
               modelId: request.controls.modelId,
               thinkingEffort: request.controls.thinkingEffort ?? null,
               approvalMode: request.controls.approvalMode,

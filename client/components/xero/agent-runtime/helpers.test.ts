@@ -81,6 +81,8 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
       totalBeforeTruncation: 0,
     },
     controlTruthSource: 'fallback',
+    selectedRuntimeAgentId: 'ask',
+    selectedRuntimeAgentLabel: 'Ask',
     selectedModelId: 'openai_codex',
     selectedThinkingEffort: null,
     selectedApprovalMode: 'suggest',

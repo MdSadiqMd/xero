@@ -1,14 +1,17 @@
-import { Activity, ArrowUp, Brain, CheckIcon, ChevronDownIcon, LoaderCircle, Mic, ShieldCheck, Sparkles } from 'lucide-react'
-import { Fragment, useMemo, useState, type KeyboardEvent, type RefObject } from 'react'
+import { Activity, ArrowUp, Brain, CheckIcon, ChevronDownIcon, Cpu, LoaderCircle, MessageCircle, Mic, ShieldCheck, Sparkles, Wrench } from 'lucide-react'
+import * as SelectPrimitive from '@radix-ui/react-select'
+import { forwardRef, Fragment, useMemo, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 
 import type {
   OperatorActionErrorView,
   RuntimeRunActionKind,
   RuntimeRunActionStatus,
 } from '@/src/features/xero/use-xero-desktop-state/types'
-import type {
-  ProviderModelThinkingEffortDto,
-  RuntimeRunApprovalModeDto,
+import {
+  RUNTIME_AGENT_DESCRIPTORS,
+  type ProviderModelThinkingEffortDto,
+  type RuntimeAgentIdDto,
+  type RuntimeRunApprovalModeDto,
 } from '@/src/lib/xero-model'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,8 +28,6 @@ import {
   Select,
   SelectContent,
   SelectItem,
-  SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -61,6 +62,8 @@ interface ComposerDockProps {
   sendButtonLabel: string
   isPromptDisabled: boolean
   isSendDisabled: boolean
+  composerRuntimeAgentId: RuntimeAgentIdDto
+  composerRuntimeAgentLabel: string
   composerModelId: string | null
   composerModelGroups: ComposerModelGroup[]
   composerThinkingLevel: ProviderModelThinkingEffortDto | null
@@ -70,6 +73,7 @@ interface ComposerDockProps {
   composerApprovalOptions: ComposerApprovalOption[]
   autoCompactEnabled: boolean
   controlsDisabled: boolean
+  runtimeAgentSwitchDisabled: boolean
   runtimeSessionBindInFlight: boolean
   runtimeRunActionStatus: RuntimeRunActionStatus
   pendingRuntimeRunAction: RuntimeRunActionKind | null
@@ -80,16 +84,39 @@ interface ComposerDockProps {
   onDraftPromptChange: (value: string) => void
   onSubmitDraftPrompt: () => void
   onAutoCompactEnabledChange: (value: boolean) => void
+  onComposerRuntimeAgentChange: (value: RuntimeAgentIdDto) => void
   onComposerModelChange: (value: string) => void
   onComposerThinkingLevelChange: (value: ProviderModelThinkingEffortDto) => void
   onComposerApprovalModeChange: (value: RuntimeRunApprovalModeDto) => void
 }
 
-const composerInlineSelectTriggerClassName =
-  'h-7 max-w-full gap-1 rounded-md border-0 bg-transparent px-2 text-[12px] font-medium text-muted-foreground/90 shadow-none transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:border-transparent focus-visible:ring-0 data-[state=open]:bg-muted/60 data-[state=open]:text-foreground dark:bg-transparent dark:hover:bg-muted/60 [&_svg]:size-3 [&_svg]:text-muted-foreground/70'
+const composerInlineTriggerClassName =
+  'flex h-7 w-fit min-w-0 items-center gap-1 rounded-md border-0 bg-transparent px-2 text-[12px] font-medium text-muted-foreground/90 whitespace-nowrap shadow-none transition-colors outline-none hover:bg-muted/60 hover:text-foreground focus-visible:border-transparent focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-50 data-[state=open]:bg-muted/60 data-[state=open]:text-foreground dark:bg-transparent dark:hover:bg-muted/60 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:text-muted-foreground/70'
 
 const composerInlineSelectContentClassName =
   'max-h-72 border-border/70 bg-card/95 text-foreground shadow-xl backdrop-blur supports-[backdrop-filter]:bg-card/90'
+
+interface ComposerInlineTriggerProps extends ComponentPropsWithoutRef<'button'> {
+  icon: ReactNode
+  label: ReactNode
+}
+
+const ComposerInlineTrigger = forwardRef<HTMLButtonElement, ComposerInlineTriggerProps>(
+  function ComposerInlineTrigger({ icon, label, className, ...props }, ref) {
+    return (
+      <button
+        ref={ref}
+        type="button"
+        className={cn(composerInlineTriggerClassName, className)}
+        {...props}
+      >
+        {icon}
+        <span className="line-clamp-1 truncate">{label}</span>
+        <ChevronDownIcon aria-hidden="true" className="size-4 opacity-50" />
+      </button>
+    )
+  },
+)
 
 export function ComposerDock({
   placeholder,
@@ -99,6 +126,8 @@ export function ComposerDock({
   sendButtonLabel,
   isPromptDisabled,
   isSendDisabled,
+  composerRuntimeAgentId,
+  composerRuntimeAgentLabel,
   composerModelId,
   composerModelGroups,
   composerThinkingLevel,
@@ -108,6 +137,7 @@ export function ComposerDock({
   composerApprovalOptions,
   autoCompactEnabled,
   controlsDisabled,
+  runtimeAgentSwitchDisabled,
   runtimeSessionBindInFlight,
   runtimeRunActionStatus,
   pendingRuntimeRunAction,
@@ -118,15 +148,23 @@ export function ComposerDock({
   onDraftPromptChange,
   onSubmitDraftPrompt,
   onAutoCompactEnabledChange,
+  onComposerRuntimeAgentChange,
   onComposerModelChange,
   onComposerThinkingLevelChange,
   onComposerApprovalModeChange,
 }: ComposerDockProps) {
   const hasComposerModelOptions = composerModelGroups.length > 0
   const hasThinkingOptions = composerThinkingOptions.length > 0
+  const showApprovalSelector = composerRuntimeAgentId === 'engineer'
+  const isAgentSelectorDisabled = runtimeAgentSwitchDisabled || controlsDisabled
   const isUpdatingControls = runtimeRunActionStatus === 'running' && pendingRuntimeRunAction === 'update_controls'
   const isStartingRun =
     runtimeSessionBindInFlight || (runtimeRunActionStatus === 'running' && pendingRuntimeRunAction === 'start')
+  const thinkingTriggerLabel =
+    composerThinkingOptions.find((option) => option.value === composerThinkingLevel)?.label ?? composerThinkingPlaceholder
+  const approvalTriggerLabel =
+    composerApprovalOptions.find((option) => option.value === composerApprovalMode)?.label ?? 'Approval unavailable'
+  const AgentTriggerIcon = composerRuntimeAgentId === 'ask' ? MessageCircle : Wrench
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey) {
@@ -163,6 +201,37 @@ export function ComposerDock({
             <div className="border-t border-border/40 bg-background/20 px-2 py-1.5">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto pb-0.5">
+                  <Select
+                    disabled={isAgentSelectorDisabled}
+                    value={composerRuntimeAgentId}
+                    onValueChange={(value) => {
+                      if (value === 'ask' || value === 'engineer') {
+                        onComposerRuntimeAgentChange(value)
+                      }
+                    }}
+                  >
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <SelectPrimitive.Trigger asChild>
+                          <ComposerInlineTrigger
+                            aria-label="Agent selector"
+                            icon={<AgentTriggerIcon aria-hidden="true" className="size-3" />}
+                            label={composerRuntimeAgentLabel}
+                          />
+                        </SelectPrimitive.Trigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        {runtimeAgentSwitchDisabled ? 'Selected agent is fixed for the current run.' : `${composerRuntimeAgentLabel} agent`}
+                      </TooltipContent>
+                    </Tooltip>
+                    <SelectContent className={composerInlineSelectContentClassName}>
+                      {RUNTIME_AGENT_DESCRIPTORS.map((agent) => (
+                        <SelectItem key={agent.id} value={agent.id}>
+                          {agent.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <ModelSelectorCombobox
                     disabled={!hasComposerModelOptions || controlsDisabled}
                     groups={composerModelGroups}
@@ -176,10 +245,13 @@ export function ComposerDock({
                   >
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <SelectTrigger aria-label="Thinking level selector" className={composerInlineSelectTriggerClassName} size="sm">
-                          <Brain aria-hidden="true" />
-                          <SelectValue placeholder={composerThinkingPlaceholder} />
-                        </SelectTrigger>
+                        <SelectPrimitive.Trigger asChild>
+                          <ComposerInlineTrigger
+                            aria-label="Thinking level selector"
+                            icon={<Brain aria-hidden="true" className="size-3" />}
+                            label={thinkingTriggerLabel}
+                          />
+                        </SelectPrimitive.Trigger>
                       </TooltipTrigger>
                       <TooltipContent side="top">Thinking effort</TooltipContent>
                     </Tooltip>
@@ -191,24 +263,29 @@ export function ComposerDock({
                       ))}
                     </SelectContent>
                   </Select>
-                  <Select disabled={controlsDisabled} value={composerApprovalMode} onValueChange={(value) => onComposerApprovalModeChange(value as RuntimeRunApprovalModeDto)}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <SelectTrigger aria-label="Approval mode selector" className={composerInlineSelectTriggerClassName} size="sm">
-                          <ShieldCheck aria-hidden="true" />
-                          <SelectValue placeholder="Approval unavailable" />
-                        </SelectTrigger>
-                      </TooltipTrigger>
-                      <TooltipContent side="top">Approval mode</TooltipContent>
-                    </Tooltip>
-                    <SelectContent className={composerInlineSelectContentClassName}>
-                      {composerApprovalOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {showApprovalSelector ? (
+                    <Select disabled={controlsDisabled} value={composerApprovalMode} onValueChange={(value) => onComposerApprovalModeChange(value as RuntimeRunApprovalModeDto)}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <SelectPrimitive.Trigger asChild>
+                            <ComposerInlineTrigger
+                              aria-label="Approval mode selector"
+                              icon={<ShieldCheck aria-hidden="true" className="size-3" />}
+                              label={approvalTriggerLabel}
+                            />
+                          </SelectPrimitive.Trigger>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">Approval mode</TooltipContent>
+                      </Tooltip>
+                      <SelectContent className={composerInlineSelectContentClassName}>
+                        {composerApprovalOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-1">
                   <Tooltip>
@@ -343,23 +420,15 @@ function ModelSelectorCombobox({ disabled, groups, value, onChange }: ModelSelec
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
+        <ComposerInlineTrigger
           role="combobox"
           aria-label="Model selector"
           aria-expanded={open}
           aria-haspopup="listbox"
-          data-state={open ? 'open' : 'closed'}
-          data-placeholder={selectedLabel ? undefined : ''}
           disabled={disabled}
-          className={cn(
-            composerInlineSelectTriggerClassName,
-            'flex w-fit min-w-0 items-center justify-between whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50',
-          )}
-        >
-          <span className="line-clamp-1 truncate">{selectedLabel ?? 'Model not configured'}</span>
-          <ChevronDownIcon aria-hidden="true" className="opacity-50" />
-        </button>
+          icon={<Cpu aria-hidden="true" className="size-3" />}
+          label={selectedLabel ?? 'Model not configured'}
+        />
       </PopoverTrigger>
       <PopoverContent
         align="start"

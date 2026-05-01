@@ -4994,7 +4994,7 @@ mod tests {
     use super::*;
     use crate::{
         commands::{
-            RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
+            RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
             RuntimeRunControlStateDto,
         },
         runtime::AutonomousToolRequest,
@@ -5878,6 +5878,7 @@ mod tests {
             .expect("runtime")
             .with_runtime_run_controls(RuntimeRunControlStateDto {
                 active: RuntimeRunActiveControlSnapshotDto {
+                    runtime_agent_id: RuntimeAgentIdDto::Engineer,
                     provider_profile_id: None,
                     model_id: "test-model".into(),
                     thinking_effort: None,

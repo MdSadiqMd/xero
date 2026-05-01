@@ -1,7 +1,9 @@
 "use client"
 
 import { useMemo } from 'react'
+import { ChevronRight, Loader2, Plus } from 'lucide-react'
 
+import { cn } from '@/lib/utils'
 import type {
   AgentPaneView,
   AgentProviderModelView,
@@ -18,6 +20,7 @@ import type {
   UpsertNotificationRouteRequestDto,
 } from '@/src/lib/xero-model'
 import {
+  getRuntimeAgentLabel,
   getRuntimeRunThinkingEffortLabel,
   type RuntimeRunControlInputDto,
 } from '@/src/lib/xero-model'
@@ -85,6 +88,8 @@ interface AgentRuntimeProps {
   accountAvatarUrl?: string | null
   /** GitHub login for the signed-in account. */
   accountLogin?: string | null
+  onCreateSession?: () => void
+  isCreatingSession?: boolean
 }
 
 const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItems']> = []
@@ -194,6 +199,8 @@ export function AgentRuntime({
   desktopAdapter,
   accountAvatarUrl = null,
   accountLogin = null,
+  onCreateSession,
+  isCreatingSession = false,
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
   const runtimeRun = agent.runtimeRun ?? null
@@ -260,6 +267,7 @@ export function AgentRuntime({
   const controller = useAgentRuntimeController({
     projectId: agent.project.id,
     selectedModelSelectionKey: agent.selectedModelSelectionKey ?? agent.selectedModelOption?.selectionKey ?? selectedModelId,
+    selectedRuntimeAgentId: agent.selectedRuntimeAgentId,
     selectedThinkingEffort: agent.selectedThinkingEffort,
     selectedApprovalMode: agent.selectedApprovalMode,
     selectedPrompt: agent.selectedPrompt,
@@ -325,7 +333,7 @@ export function AgentRuntime({
     checkpointControlLoop.items.length > 0 ||
     Boolean(checkpointControlLoopRecoveryAlert) ||
     Boolean(checkpointControlLoopCoverageAlert)
-  const composerPlaceholder = getComposerPlaceholder(
+  const baseComposerPlaceholder = getComposerPlaceholder(
     runtimeSession,
     streamStatus,
     renderableRuntimeRun,
@@ -335,6 +343,13 @@ export function AgentRuntime({
       agentRuntimeBlocked,
     },
   )
+  const composerPlaceholder =
+    controller.composerRuntimeAgentId === 'ask' &&
+    !agentRuntimeBlocked &&
+    runtimeSession?.isAuthenticated &&
+    !renderableRuntimeRun?.isTerminal
+      ? 'Ask about this project...'
+      : baseComposerPlaceholder
   const showAgentSetupEmptyState = Boolean(
     agentRuntimeBlocked &&
       (!runtimeSession || runtimeSession.isSignedOut || runtimeSession.phase === 'idle'),
@@ -363,15 +378,43 @@ export function AgentRuntime({
   )
   const projectLabel =
     agent.project.repository?.displayName ?? agent.project.name ?? 'this project'
+  const sessionLabel = agent.project.selectedAgentSession?.title?.trim() || 'New Chat'
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-2 px-4 pt-2.5 pb-2.5">
+          <div className="pointer-events-auto flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
+            <span className="truncate font-semibold text-foreground">{projectLabel}</span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+            <span className="truncate font-medium">{sessionLabel}</span>
+          </div>
+          {onCreateSession ? (
+            <button
+              type="button"
+              aria-label="New session"
+              onClick={onCreateSession}
+              disabled={isCreatingSession}
+              className={cn(
+                'pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-semibold text-muted-foreground transition-colors',
+                'hover:bg-primary/10 hover:text-primary',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              {isCreatingSession ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
+              <span>New Session</span>
+            </button>
+          ) : null}
+        </div>
         <div
           className={
             showAgentSetupEmptyState || showEmptySessionState
               ? 'flex flex-1 items-center justify-center overflow-y-auto scrollbar-thin px-6 py-5'
-              : 'flex-1 overflow-y-auto scrollbar-thin px-4 py-4'
+              : 'flex-1 overflow-y-auto scrollbar-thin px-4 pt-14 pb-4'
           }
         >
           {showAgentSetupEmptyState ? (
@@ -416,6 +459,8 @@ export function AgentRuntime({
         </div>
 
         <ComposerDock
+          composerRuntimeAgentId={controller.composerRuntimeAgentId}
+          composerRuntimeAgentLabel={getRuntimeAgentLabel(controller.composerRuntimeAgentId)}
           composerApprovalMode={controller.composerApprovalMode}
           composerApprovalOptions={composerApprovalOptions}
           autoCompactEnabled={controller.autoCompactEnabled}
@@ -425,11 +470,13 @@ export function AgentRuntime({
           composerThinkingOptions={composerThinkingOptions}
           composerThinkingPlaceholder={composerThinkingPlaceholder}
           controlsDisabled={controller.areControlsDisabled}
+          runtimeAgentSwitchDisabled={controller.isRuntimeAgentSwitchDisabled}
           dictation={controller.dictation}
           draftPrompt={controller.draftPrompt}
           isPromptDisabled={controller.isPromptDisabled}
           isSendDisabled={!controller.canSubmitPrompt}
           onComposerApprovalModeChange={controller.handleComposerApprovalModeChange}
+          onComposerRuntimeAgentChange={controller.handleComposerRuntimeAgentChange}
           onAutoCompactEnabledChange={controller.handleAutoCompactEnabledChange}
           onComposerModelChange={controller.handleComposerModelChange}
           onComposerThinkingLevelChange={controller.handleComposerThinkingLevelChange}

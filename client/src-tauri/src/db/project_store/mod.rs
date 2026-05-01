@@ -9,6 +9,8 @@ mod connection;
 mod notifications;
 mod operator;
 mod plugins;
+mod project_record;
+pub(crate) mod project_record_lance;
 mod project_snapshot;
 mod runtime;
 mod runtime_boundary;
@@ -34,6 +36,7 @@ pub(crate) use operator::{
     validate_non_empty_text, ProjectSummaryRow,
 };
 pub use plugins::*;
+pub use project_record::*;
 pub(crate) use project_snapshot::read_project_row;
 pub use project_snapshot::{load_project_snapshot, load_project_summary, ProjectSnapshotRecord};
 pub use runtime::*;

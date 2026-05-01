@@ -11,9 +11,10 @@ use crate::{
         refresh_provider_auth_session, StoredOpenAiCodexSession,
     },
     commands::{
+        default_runtime_agent_approval_mode, default_runtime_agent_id,
         get_runtime_settings::runtime_settings_snapshot_for_provider_profile,
-        provider_credentials::load_provider_credentials_view, CommandError, CommandResult,
-        RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunCheckpointDto,
+        provider_credentials::load_provider_credentials_view, runtime_agent_allows_approval_mode,
+        CommandError, CommandResult, RuntimeRunActiveControlSnapshotDto, RuntimeRunCheckpointDto,
         RuntimeRunCheckpointKindDto, RuntimeRunControlInputDto, RuntimeRunControlStateDto,
         RuntimeRunDiagnosticDto, RuntimeRunDto, RuntimeRunPendingControlSnapshotDto,
         RuntimeRunStatusDto, RuntimeRunTransportDto, RuntimeRunTransportLivenessDto,
@@ -264,7 +265,7 @@ fn launch_owned_runtime_run<R: Runtime + 'static>(
             agent_session_id: agent_session_id.into(),
             run_id: run_id.clone(),
             prompt,
-            controls: requested_controls,
+            controls: Some(runtime_control_input_from_active(&run_controls.active)),
             tool_runtime,
             provider_config,
         };
@@ -695,14 +696,19 @@ fn resolve_owned_runtime_run_control_state(
         .map(|controls| controls.model_id.clone())
         .unwrap_or_else(|| active_profile.model_id.clone());
     let thinking_effort = requested_controls.and_then(|controls| controls.thinking_effort.clone());
+    let runtime_agent_id = requested_controls
+        .map(|controls| controls.runtime_agent_id.clone())
+        .unwrap_or_else(default_runtime_agent_id);
     let approval_mode = requested_controls
         .map(|controls| controls.approval_mode.clone())
-        .unwrap_or(RuntimeRunApprovalModeDto::Yolo);
+        .filter(|mode| runtime_agent_allows_approval_mode(&runtime_agent_id, mode))
+        .unwrap_or_else(|| default_runtime_agent_approval_mode(&runtime_agent_id));
     let plan_mode_required = requested_controls
         .map(|controls| controls.plan_mode_required)
         .unwrap_or(false);
 
     build_runtime_run_control_state_with_profile(
+        runtime_agent_id,
         Some(&active_profile.profile_id),
         &model_id,
         thinking_effort,
@@ -769,6 +775,19 @@ fn persist_owned_runtime_run(
     )
 }
 
+fn runtime_control_input_from_active(
+    active: &RuntimeRunActiveControlSnapshotRecord,
+) -> RuntimeRunControlInputDto {
+    RuntimeRunControlInputDto {
+        runtime_agent_id: active.runtime_agent_id.clone(),
+        provider_profile_id: active.provider_profile_id.clone(),
+        model_id: active.model_id.clone(),
+        thinking_effort: active.thinking_effort.clone(),
+        approval_mode: active.approval_mode.clone(),
+        plan_mode_required: active.plan_mode_required,
+    }
+}
+
 pub(crate) fn stop_owned_runtime_run(
     repo_root: &Path,
     snapshot: &RuntimeRunSnapshotRecord,
@@ -795,6 +814,21 @@ pub(crate) fn update_owned_runtime_run_controls(
     prompt: Option<String>,
 ) -> CommandResult<RuntimeRunSnapshotRecord> {
     let active = &snapshot.controls.active;
+    if let Some(requested_agent_id) = controls
+        .as_ref()
+        .map(|controls| controls.runtime_agent_id.clone())
+        .filter(|agent_id| agent_id != &active.runtime_agent_id)
+    {
+        return Err(CommandError::user_fixable(
+            "runtime_agent_switch_blocked",
+            format!(
+                "Xero cannot switch active runtime run `{}` from {} to {}. Stop the current run before changing agents.",
+                snapshot.run.run_id,
+                active.runtime_agent_id.label(),
+                requested_agent_id.label()
+            ),
+        ));
+    }
     let base_pending = snapshot.controls.pending.as_ref();
     let model_id = controls
         .as_ref()
@@ -816,6 +850,7 @@ pub(crate) fn update_owned_runtime_run_controls(
         .map(|controls| controls.approval_mode.clone())
         .or_else(|| base_pending.map(|pending| pending.approval_mode.clone()))
         .unwrap_or_else(|| active.approval_mode.clone());
+    let runtime_agent_id = active.runtime_agent_id.clone();
     let plan_mode_required = controls
         .as_ref()
         .map(|controls| controls.plan_mode_required)
@@ -847,6 +882,7 @@ pub(crate) fn update_owned_runtime_run_controls(
     let run_controls = RuntimeRunControlStateRecord {
         active: active.clone(),
         pending: Some(RuntimeRunPendingControlSnapshotRecord {
+            runtime_agent_id,
             provider_profile_id: provider_profile_id
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -888,6 +924,7 @@ pub(crate) fn apply_owned_runtime_run_pending_controls(
 
     let run_controls = RuntimeRunControlStateRecord {
         active: RuntimeRunActiveControlSnapshotRecord {
+            runtime_agent_id: pending.runtime_agent_id.clone(),
             provider_profile_id: pending.provider_profile_id.clone(),
             model_id: pending.model_id.clone(),
             thinking_effort: pending.thinking_effort.clone(),
@@ -1043,6 +1080,21 @@ fn reject_runtime_run_provider_profile_switch(
     snapshot: &RuntimeRunSnapshotRecord,
     requested_controls: Option<&RuntimeRunControlInputDto>,
 ) -> CommandResult<()> {
+    if let Some(requested_agent_id) = requested_controls
+        .map(|controls| controls.runtime_agent_id.clone())
+        .filter(|agent_id| agent_id != &snapshot.controls.active.runtime_agent_id)
+    {
+        return Err(CommandError::user_fixable(
+            "runtime_agent_switch_blocked",
+            format!(
+                "Xero cannot reconnect active runtime run `{}` as {} because it was started as {}. Stop the current run before changing agents.",
+                snapshot.run.run_id,
+                requested_agent_id.label(),
+                snapshot.controls.active.runtime_agent_id.label()
+            ),
+        ));
+    }
+
     let requested_profile_id = requested_controls
         .and_then(|controls| controls.provider_profile_id.as_deref())
         .map(str::trim)
@@ -1093,6 +1145,7 @@ fn runtime_run_control_state_dto(
 ) -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            runtime_agent_id: controls.active.runtime_agent_id.clone(),
             provider_profile_id: controls.active.provider_profile_id.clone(),
             model_id: controls.active.model_id.clone(),
             thinking_effort: controls.active.thinking_effort.clone(),
@@ -1105,6 +1158,7 @@ fn runtime_run_control_state_dto(
             .pending
             .as_ref()
             .map(|pending| RuntimeRunPendingControlSnapshotDto {
+                runtime_agent_id: pending.runtime_agent_id.clone(),
                 provider_profile_id: pending.provider_profile_id.clone(),
                 model_id: pending.model_id.clone(),
                 thinking_effort: pending.thinking_effort.clone(),

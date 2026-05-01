@@ -39,6 +39,7 @@ import type {
   ResumeHistoryEntryView,
   RuntimeAuthPhaseDto,
   RuntimeAutoCompactPreferenceDto,
+  RuntimeAgentIdDto,
   RuntimeRunActiveControlSnapshotView,
   RuntimeRunApprovalModeDto,
   RuntimeRunControlInputDto,
@@ -133,6 +134,7 @@ export interface RuntimeRunControlMutationRequest {
 
 export interface AgentRunControlSelectionView {
   source: AgentRunControlTruthSource
+  runtimeAgentId: RuntimeAgentIdDto
   modelId: string | null
   thinkingEffort: ProviderModelThinkingEffortDto | null
   approvalMode: RuntimeRunApprovalModeDto
@@ -301,6 +303,8 @@ export interface AgentPaneView {
   selectedProviderLabel?: string
   selectedProviderSource?: SelectedRuntimeProviderSource | null
   controlTruthSource: AgentRunControlTruthSource
+  selectedRuntimeAgentId: RuntimeAgentIdDto
+  selectedRuntimeAgentLabel: string
   selectedModelId?: string | null
   selectedModelSelectionKey?: string | null
   selectedThinkingEffort: ProviderModelThinkingEffortDto | null

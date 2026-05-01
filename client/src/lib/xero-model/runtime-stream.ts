@@ -728,6 +728,10 @@ export function mergeRuntimeStreamEvent(
       status: 'subscribing',
     })
 
+  if (event.item.sequence < 1) {
+    throw new Error(`non-monotonic runtime stream sequence ${event.item.sequence}`)
+  }
+
   if (base.lastSequence !== null) {
     if (event.item.sequence <= base.lastSequence) {
       return mergeRuntimeStreamMetadata(base, event, getRecoveredRuntimeStreamStatus(base))

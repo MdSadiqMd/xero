@@ -2151,7 +2151,8 @@ fn _known_provider_ids() -> [&'static str; 10] {
 mod tests {
     use super::*;
     use crate::commands::{
-        RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlStateDto,
+        RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto,
+        RuntimeRunControlStateDto,
     };
 
     fn test_request() -> ProviderTurnRequest {
@@ -2173,6 +2174,7 @@ mod tests {
             turn_index: 0,
             controls: RuntimeRunControlStateDto {
                 active: RuntimeRunActiveControlSnapshotDto {
+                    runtime_agent_id: RuntimeAgentIdDto::Engineer,
                     provider_profile_id: None,
                     model_id: "model".into(),
                     thinking_effort: None,

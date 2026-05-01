@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { isoTimestampSchema, nonEmptyOptionalTextSchema, normalizeOptionalText, normalizeText } from './shared'
-import { runtimeRunControlInputSchema, runtimeRunDiagnosticSchema } from './runtime'
+import { getRuntimeAgentLabel, runtimeAgentIdSchema, runtimeRunControlInputSchema, runtimeRunDiagnosticSchema } from './runtime'
 
 export const agentRunStatusSchema = z.enum([
   'starting',
@@ -142,6 +142,7 @@ export const agentActionRequestSchema = z
 
 export const agentRunSchema = z
   .object({
+    runtimeAgentId: runtimeAgentIdSchema,
     projectId: z.string().trim().min(1),
     agentSessionId: z.string().trim().min(1),
     runId: z.string().trim().min(1),
@@ -277,6 +278,7 @@ export type SubscribeAgentStreamRequestDto = z.infer<typeof subscribeAgentStream
 export type SubscribeAgentStreamResponseDto = z.infer<typeof subscribeAgentStreamResponseSchema>
 
 export interface AgentRunView extends AgentRunDto {
+  runtimeAgentLabel: string
   statusLabel: string
   providerLabel: string
   modelLabel: string
@@ -314,6 +316,7 @@ export function mapAgentRun(run: AgentRunDto): AgentRunView {
 
   return {
     ...run,
+    runtimeAgentLabel: getRuntimeAgentLabel(run.runtimeAgentId),
     providerLabel: normalizeText(run.providerId, 'provider-unavailable'),
     modelLabel: normalizeText(run.modelId, 'model-unavailable'),
     statusLabel: getAgentRunStatusLabel(run.status),

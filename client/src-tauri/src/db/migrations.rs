@@ -386,6 +386,7 @@ const BASELINE_SCHEMA_SQL: &str = r#"
         ON autonomous_runs(provider_id, status, updated_at DESC);
 
     CREATE TABLE IF NOT EXISTS agent_runs (
+        runtime_agent_id TEXT NOT NULL,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         agent_session_id TEXT NOT NULL,
         run_id TEXT NOT NULL,
@@ -404,6 +405,7 @@ const BASELINE_SCHEMA_SQL: &str = r#"
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         PRIMARY KEY (project_id, run_id),
         CHECK (agent_session_id <> ''),
+        CHECK (runtime_agent_id IN ('ask', 'engineer')),
         CHECK (run_id <> ''),
         CHECK (provider_id <> ''),
         CHECK (model_id <> ''),

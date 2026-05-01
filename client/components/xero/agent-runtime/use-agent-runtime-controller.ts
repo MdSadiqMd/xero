@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
 import type {
   ProviderModelThinkingEffortDto,
+  RuntimeAgentIdDto,
   RuntimeAutoCompactPreferenceDto,
   RuntimeRunApprovalModeDto,
   RuntimeRunControlInputDto,
@@ -33,6 +34,7 @@ export interface PendingOperatorIntent {
 interface UseAgentRuntimeControllerOptions {
   projectId: string
   selectedModelSelectionKey: string | null
+  selectedRuntimeAgentId: RuntimeAgentIdDto
   selectedThinkingEffort: ComposerThinkingLevel
   selectedApprovalMode: RuntimeRunApprovalModeDto
   selectedPrompt: AgentPaneView['selectedPrompt']
@@ -99,6 +101,7 @@ function sameRuntimeControlInput(
 
   return (
     (left.providerProfileId ?? null) === (right.providerProfileId ?? null) &&
+    left.runtimeAgentId === right.runtimeAgentId &&
     left.modelId === right.modelId &&
     (left.thinkingEffort ?? null) === (right.thinkingEffort ?? null) &&
     left.approvalMode === right.approvalMode &&
@@ -119,6 +122,7 @@ function readStoredAutoCompactEnabled(): boolean {
 export function useAgentRuntimeController({
   projectId,
   selectedModelSelectionKey,
+  selectedRuntimeAgentId,
   selectedThinkingEffort,
   selectedApprovalMode,
   selectedPrompt,
@@ -147,6 +151,7 @@ export function useAgentRuntimeController({
 }: UseAgentRuntimeControllerOptions) {
   const [draftPrompt, setDraftPrompt] = useState('')
   const [draftModelSelectionKey, setDraftModelSelectionKey] = useState<string | null>(selectedModelSelectionKey)
+  const [draftRuntimeAgentId, setDraftRuntimeAgentId] = useState<RuntimeAgentIdDto>(selectedRuntimeAgentId)
   const [draftThinkingEffort, setDraftThinkingEffort] = useState<ComposerThinkingLevel>(selectedThinkingEffort)
   const [draftApprovalMode, setDraftApprovalMode] = useState<RuntimeRunApprovalModeDto>(selectedApprovalMode)
   const [runtimeSessionBindInFlight, setRuntimeSessionBindInFlight] = useState(false)
@@ -167,18 +172,25 @@ export function useAgentRuntimeController({
   const lastReportedComposerControlsRef = useRef<RuntimeRunControlInputDto | null | undefined>(undefined)
 
   const activeRuntimeRun = renderableRuntimeRun && !renderableRuntimeRun.isTerminal ? renderableRuntimeRun : null
+  const effectiveRuntimeAgentId = activeRuntimeRun ? selectedRuntimeAgentId : draftRuntimeAgentId
   const effectiveModelSelectionKey = activeRuntimeRun ? selectedModelSelectionKey : draftModelSelectionKey
   const effectiveThinkingEffort = activeRuntimeRun ? selectedThinkingEffort : draftThinkingEffort
-  const effectiveApprovalMode = activeRuntimeRun ? selectedApprovalMode : draftApprovalMode
+  const effectiveApprovalMode =
+    effectiveRuntimeAgentId === 'ask'
+      ? 'suggest'
+      : activeRuntimeRun
+        ? selectedApprovalMode
+        : draftApprovalMode
   const selectedControlInput = useMemo(
     () =>
       getComposerControlInput({
+        runtimeAgentId: effectiveRuntimeAgentId,
         models: availableModels,
         selectionKey: effectiveModelSelectionKey,
         thinkingEffort: effectiveThinkingEffort,
         approvalMode: effectiveApprovalMode,
       }),
-    [availableModels, effectiveApprovalMode, effectiveModelSelectionKey, effectiveThinkingEffort],
+    [availableModels, effectiveApprovalMode, effectiveModelSelectionKey, effectiveRuntimeAgentId, effectiveThinkingEffort],
   )
 
   const trimmedDraftPrompt = draftPrompt.trim()
@@ -204,6 +216,7 @@ export function useAgentRuntimeController({
     runtimeMutationInFlight ||
       (activeRuntimeRun ? !onUpdateRuntimeRunControls : !canStartNewRuntimeRun),
   )
+  const isRuntimeAgentSwitchDisabled = Boolean(activeRuntimeRun || runtimeMutationInFlight)
   const canSubmitPrompt = Boolean(
     !runtimeMutationInFlight &&
       !hasQueuedPrompt &&
@@ -250,15 +263,17 @@ export function useAgentRuntimeController({
   useEffect(() => {
     if (renderableRuntimeRun) {
       setDraftModelSelectionKey(selectedModelSelectionKey)
+      setDraftRuntimeAgentId(selectedRuntimeAgentId)
       setDraftThinkingEffort(selectedThinkingEffort)
       setDraftApprovalMode(selectedApprovalMode)
       return
     }
 
     setDraftModelSelectionKey(selectedModelSelectionKey)
+    setDraftRuntimeAgentId(selectedRuntimeAgentId)
     setDraftThinkingEffort(selectedThinkingEffort)
     setDraftApprovalMode(selectedApprovalMode)
-  }, [projectId, renderableRuntimeRun?.runId, selectedApprovalMode, selectedModelSelectionKey, selectedThinkingEffort])
+  }, [projectId, renderableRuntimeRun?.runId, selectedApprovalMode, selectedModelSelectionKey, selectedRuntimeAgentId, selectedThinkingEffort])
 
   useEffect(() => {
     if (runtimeRunActionError) {
@@ -516,6 +531,7 @@ export function useAgentRuntimeController({
 
     void queueRuntimeRunControls(
       getComposerControlInput({
+        runtimeAgentId: effectiveRuntimeAgentId,
         models: availableModels,
         selectionKey: value,
         thinkingEffort: selectedThinkingEffort,
@@ -537,6 +553,7 @@ export function useAgentRuntimeController({
 
     void queueRuntimeRunControls(
       getComposerControlInput({
+        runtimeAgentId: effectiveRuntimeAgentId,
         models: availableModels,
         selectionKey: effectiveModelSelectionKey,
         thinkingEffort: value,
@@ -546,6 +563,10 @@ export function useAgentRuntimeController({
   }
 
   function handleComposerApprovalModeChange(value: RuntimeRunApprovalModeDto) {
+    if (effectiveRuntimeAgentId === 'ask') {
+      return
+    }
+
     if (!activeRuntimeRun) {
       setDraftApprovalMode(value)
       return
@@ -553,12 +574,24 @@ export function useAgentRuntimeController({
 
     void queueRuntimeRunControls(
       getComposerControlInput({
+        runtimeAgentId: effectiveRuntimeAgentId,
         models: availableModels,
         selectionKey: effectiveModelSelectionKey,
         thinkingEffort: effectiveThinkingEffort,
         approvalMode: value,
       }),
     )
+  }
+
+  function handleComposerRuntimeAgentChange(value: RuntimeAgentIdDto) {
+    if (isRuntimeAgentSwitchDisabled) {
+      return
+    }
+
+    setDraftRuntimeAgentId(value)
+    if (value === 'ask') {
+      setDraftApprovalMode('suggest')
+    }
   }
 
   async function handleResolveOperatorAction(
@@ -644,11 +677,13 @@ export function useAgentRuntimeController({
     draftPrompt,
     autoCompactEnabled,
     composerModelId: effectiveModelSelectionKey,
+    composerRuntimeAgentId: effectiveRuntimeAgentId,
     composerThinkingEffort: effectiveThinkingEffort,
     composerApprovalMode: effectiveApprovalMode,
     promptInputAvailable,
     isPromptDisabled,
     areControlsDisabled,
+    isRuntimeAgentSwitchDisabled,
     canSubmitPrompt,
     runtimeSessionBindInFlight,
     operatorAnswers,
@@ -662,6 +697,7 @@ export function useAgentRuntimeController({
     handleAutoCompactEnabledChange,
     handleSubmitDraftPrompt,
     handleComposerModelChange,
+    handleComposerRuntimeAgentChange,
     handleComposerThinkingLevelChange,
     handleComposerApprovalModeChange,
     handleOperatorAnswerChange,

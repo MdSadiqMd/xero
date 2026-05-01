@@ -4,7 +4,10 @@ use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::{commands::CommandError, db::database_path_for_repo};
+use crate::{
+    commands::{CommandError, RuntimeAgentIdDto},
+    db::database_path_for_repo,
+};
 
 use super::open_runtime_database;
 
@@ -68,6 +71,7 @@ pub struct AgentRunDiagnosticRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentRunRecord {
+    pub runtime_agent_id: RuntimeAgentIdDto,
     pub project_id: String,
     pub agent_session_id: String,
     pub run_id: String,
@@ -183,6 +187,7 @@ pub struct AgentRunSnapshotRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewAgentRunRecord {
+    pub runtime_agent_id: RuntimeAgentIdDto,
     pub project_id: String,
     pub agent_session_id: String,
     pub run_id: String,
@@ -274,6 +279,7 @@ pub fn insert_agent_run(
         .execute(
             r#"
             INSERT INTO agent_runs (
+                runtime_agent_id,
                 project_id,
                 agent_session_id,
                 run_id,
@@ -286,9 +292,10 @@ pub fn insert_agent_run(
                 last_heartbeat_at,
                 updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, 'starting', ?6, ?7, ?8, ?8, ?8)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'starting', ?7, ?8, ?9, ?9, ?9)
             "#,
             params![
+                record.runtime_agent_id.as_str(),
                 record.project_id,
                 record.agent_session_id,
                 record.run_id,
@@ -844,6 +851,7 @@ pub fn load_agent_run(
         .query_row(
             r#"
             SELECT
+                runtime_agent_id,
                 project_id,
                 agent_session_id,
                 run_id,
@@ -1174,6 +1182,7 @@ pub fn list_agent_runs(
         .prepare(
             r#"
             SELECT
+                runtime_agent_id,
                 project_id,
                 agent_session_id,
                 run_id,
@@ -1221,6 +1230,7 @@ fn list_agent_runs_for_session(
         .prepare(
             r#"
             SELECT
+                runtime_agent_id,
                 project_id,
                 agent_session_id,
                 run_id,
@@ -1565,26 +1575,27 @@ fn read_agent_action_requests(
 }
 
 fn read_agent_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRunRecord> {
-    let last_error_code: Option<String> = row.get(12)?;
-    let last_error_message: Option<String> = row.get(13)?;
+    let last_error_code: Option<String> = row.get(13)?;
+    let last_error_message: Option<String> = row.get(14)?;
     Ok(AgentRunRecord {
-        project_id: row.get(0)?,
-        agent_session_id: row.get(1)?,
-        run_id: row.get(2)?,
-        provider_id: row.get(3)?,
-        model_id: row.get(4)?,
-        status: parse_agent_run_status(row.get::<_, String>(5)?.as_str()),
-        prompt: row.get(6)?,
-        system_prompt: row.get(7)?,
-        started_at: row.get(8)?,
-        last_heartbeat_at: row.get(9)?,
-        completed_at: row.get(10)?,
-        cancelled_at: row.get(11)?,
+        runtime_agent_id: parse_runtime_agent_id(row.get::<_, String>(0)?.as_str()),
+        project_id: row.get(1)?,
+        agent_session_id: row.get(2)?,
+        run_id: row.get(3)?,
+        provider_id: row.get(4)?,
+        model_id: row.get(5)?,
+        status: parse_agent_run_status(row.get::<_, String>(6)?.as_str()),
+        prompt: row.get(7)?,
+        system_prompt: row.get(8)?,
+        started_at: row.get(9)?,
+        last_heartbeat_at: row.get(10)?,
+        completed_at: row.get(11)?,
+        cancelled_at: row.get(12)?,
         last_error: match (last_error_code, last_error_message) {
             (Some(code), Some(message)) => Some(AgentRunDiagnosticRecord { code, message }),
             _ => None,
         },
-        updated_at: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
@@ -1619,6 +1630,10 @@ pub fn agent_run_status_sql_value(status: &AgentRunStatus) -> &'static str {
         AgentRunStatus::Completed => "completed",
         AgentRunStatus::Failed => "failed",
     }
+}
+
+pub fn runtime_agent_id_sql_value(runtime_agent_id: &RuntimeAgentIdDto) -> &'static str {
+    runtime_agent_id.as_str()
 }
 
 pub fn agent_event_kind_sql_value(kind: &AgentRunEventKind) -> &'static str {
@@ -1673,6 +1688,13 @@ fn parse_agent_run_status(value: &str) -> AgentRunStatus {
         "completed" => AgentRunStatus::Completed,
         "failed" => AgentRunStatus::Failed,
         _ => AgentRunStatus::Failed,
+    }
+}
+
+fn parse_runtime_agent_id(value: &str) -> RuntimeAgentIdDto {
+    match value {
+        "engineer" => RuntimeAgentIdDto::Engineer,
+        _ => RuntimeAgentIdDto::Ask,
     }
 }
 

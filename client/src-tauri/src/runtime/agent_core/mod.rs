@@ -48,11 +48,11 @@ use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use crate::{
     auth::now_timestamp,
     commands::{
-        context_budget, estimate_tokens, evaluate_compaction_policy,
+        context_budget, default_runtime_agent_id, estimate_tokens, evaluate_compaction_policy,
         provider_context_budget_tokens, redact_session_context_text, BrowserControlPreferenceDto,
-        CommandError, CommandErrorClass, CommandResult, RuntimeRunActiveControlSnapshotDto,
-        RuntimeRunApprovalModeDto, RuntimeRunControlInputDto, RuntimeRunControlStateDto,
-        SessionCompactionPolicyInput, SessionContextBudgetPressureDto,
+        CommandError, CommandErrorClass, CommandResult, RuntimeAgentIdDto,
+        RuntimeRunActiveControlSnapshotDto, RuntimeRunApprovalModeDto, RuntimeRunControlInputDto,
+        RuntimeRunControlStateDto, SessionCompactionPolicyInput, SessionContextBudgetPressureDto,
         SessionContextPolicyActionDto,
     },
     db::project_store::{
@@ -65,7 +65,8 @@ use crate::{
     runtime::{
         autonomous_tool_runtime::{
             emulator::emulator_schema, tool_access_all_known_tools, tool_access_group_tools,
-            tool_catalog_metadata_for_tool, AUTONOMOUS_TOOL_BROWSER, AUTONOMOUS_TOOL_EMULATOR,
+            tool_allowed_for_runtime_agent, tool_catalog_metadata_for_tool,
+            AUTONOMOUS_DYNAMIC_MCP_TOOL_PREFIX, AUTONOMOUS_TOOL_BROWSER, AUTONOMOUS_TOOL_EMULATOR,
             AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT, AUTONOMOUS_TOOL_SOLANA_ALT,
             AUTONOMOUS_TOOL_SOLANA_AUDIT_COVERAGE, AUTONOMOUS_TOOL_SOLANA_AUDIT_EXTERNAL,
             AUTONOMOUS_TOOL_SOLANA_AUDIT_FUZZ, AUTONOMOUS_TOOL_SOLANA_AUDIT_STATIC,

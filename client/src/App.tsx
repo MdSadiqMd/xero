@@ -674,6 +674,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 desktopAdapter={resolvedAdapter}
                 accountAvatarUrl={githubSession?.user.avatarUrl ?? null}
                 accountLogin={githubSession?.user.login ?? null}
+                onCreateSession={handleCreateAgentSession}
+                isCreatingSession={isCreatingAgentSession}
                 onLogout={() => logoutRuntimeSession()}
                 onOpenSettings={() => openSettings('providers')}
                 onOpenDiagnostics={() => openSettings('diagnostics')}

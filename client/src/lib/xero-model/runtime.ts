@@ -44,6 +44,113 @@ export const writableRuntimeSettingsProviderIdSchema = z.enum(['openrouter', 'op
 export const runtimeRunThinkingEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'x_high'])
 export const runtimeRunApprovalModeSchema = z.enum(['suggest', 'auto_edit', 'yolo'])
 export const DEFAULT_RUNTIME_RUN_APPROVAL_MODE: RuntimeRunApprovalModeDto = 'suggest'
+export const runtimeAgentIdSchema = z.enum(['ask', 'engineer'])
+export const DEFAULT_RUNTIME_AGENT_ID: RuntimeAgentIdDto = 'ask'
+
+export interface RuntimeAgentDescriptor {
+  id: RuntimeAgentIdDto
+  label: string
+  shortLabel: string
+  description: string
+  taskPurpose: string
+  defaultApprovalMode: RuntimeRunApprovalModeDto
+  allowedApprovalModes: readonly RuntimeRunApprovalModeDto[]
+  promptPolicy: 'ask' | 'engineer'
+  toolPolicy: 'observe_only' | 'engineering'
+  outputContract: 'answer' | 'engineering_summary'
+  projectDataPolicy: {
+    required: true
+    recordKinds: readonly (
+      | 'agent_handoff'
+      | 'project_fact'
+      | 'decision'
+      | 'constraint'
+      | 'plan'
+      | 'finding'
+      | 'verification'
+      | 'question'
+      | 'artifact'
+      | 'context_note'
+      | 'diagnostic'
+    )[]
+    structuredSchemas: readonly string[]
+    unstructuredScopes: readonly ('answer_note' | 'session_summary' | 'artifact_excerpt' | 'troubleshooting_note')[]
+    memoryCandidateKinds: readonly ('project_fact' | 'user_preference' | 'decision' | 'session_summary' | 'troubleshooting')[]
+  }
+  workflowRole: 'interactive' | 'workflow_step'
+  allowPlanGate: boolean
+  allowVerificationGate: boolean
+  allowAutoCompact: boolean
+}
+
+export const RUNTIME_AGENT_DESCRIPTORS = [
+  {
+    id: 'ask',
+    label: 'Ask',
+    shortLabel: 'Ask',
+    description: 'Answer questions about the project without mutating files, app state, processes, or external services.',
+    taskPurpose: 'Answer in chat using audited observe-only tools when grounding is needed.',
+    defaultApprovalMode: 'suggest',
+    allowedApprovalModes: ['suggest'],
+    promptPolicy: 'ask',
+    toolPolicy: 'observe_only',
+    outputContract: 'answer',
+    projectDataPolicy: {
+      required: true,
+      recordKinds: ['agent_handoff', 'project_fact', 'constraint', 'question', 'context_note', 'diagnostic'],
+      structuredSchemas: ['xero.project_record.v1'],
+      unstructuredScopes: ['answer_note', 'session_summary', 'troubleshooting_note'],
+      memoryCandidateKinds: ['project_fact', 'user_preference', 'decision', 'session_summary', 'troubleshooting'],
+    },
+    workflowRole: 'interactive',
+    allowPlanGate: false,
+    allowVerificationGate: false,
+    allowAutoCompact: true,
+  },
+  {
+    id: 'engineer',
+    label: 'Engineer',
+    shortLabel: 'Build',
+    description: 'Implement repository changes with the existing software-building toolset and safety gates.',
+    taskPurpose: 'Inspect, plan when needed, edit, verify, and summarize engineering work.',
+    defaultApprovalMode: 'suggest',
+    allowedApprovalModes: ['suggest', 'auto_edit', 'yolo'],
+    promptPolicy: 'engineer',
+    toolPolicy: 'engineering',
+    outputContract: 'engineering_summary',
+    projectDataPolicy: {
+      required: true,
+      recordKinds: [
+        'agent_handoff',
+        'project_fact',
+        'decision',
+        'constraint',
+        'plan',
+        'finding',
+        'verification',
+        'question',
+        'artifact',
+        'context_note',
+        'diagnostic',
+      ],
+      structuredSchemas: ['xero.project_record.v1'],
+      unstructuredScopes: ['answer_note', 'session_summary', 'artifact_excerpt', 'troubleshooting_note'],
+      memoryCandidateKinds: ['project_fact', 'user_preference', 'decision', 'session_summary', 'troubleshooting'],
+    },
+    workflowRole: 'interactive',
+    allowPlanGate: true,
+    allowVerificationGate: true,
+    allowAutoCompact: true,
+  },
+] as const satisfies readonly RuntimeAgentDescriptor[]
+
+export function getRuntimeAgentDescriptor(agentId: RuntimeAgentIdDto): RuntimeAgentDescriptor {
+  return RUNTIME_AGENT_DESCRIPTORS.find((descriptor) => descriptor.id === agentId) ?? RUNTIME_AGENT_DESCRIPTORS[0]
+}
+
+export function getRuntimeAgentLabel(agentId: RuntimeAgentIdDto): string {
+  return getRuntimeAgentDescriptor(agentId).label
+}
 
 function validateRuntimeSettingsProviderModel(
   payload: { providerId: z.infer<typeof runtimeProviderIdSchema>; modelId: string },
@@ -171,6 +278,7 @@ export const runtimeRunCheckpointSchema = z
 
 export const runtimeRunControlInputSchema = z
   .object({
+    runtimeAgentId: runtimeAgentIdSchema,
     providerProfileId: nonEmptyOptionalTextSchema,
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
@@ -189,6 +297,7 @@ export const runtimeAutoCompactPreferenceSchema = z
 
 export const runtimeRunActiveControlSnapshotSchema = z
   .object({
+    runtimeAgentId: runtimeAgentIdSchema,
     providerProfileId: nonEmptyOptionalTextSchema,
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
@@ -201,6 +310,7 @@ export const runtimeRunActiveControlSnapshotSchema = z
 
 export const runtimeRunPendingControlSnapshotSchema = z
   .object({
+    runtimeAgentId: runtimeAgentIdSchema,
     providerProfileId: nonEmptyOptionalTextSchema,
     modelId: z.string().trim().min(1),
     thinkingEffort: runtimeRunThinkingEffortSchema.nullable().optional(),
@@ -452,6 +562,7 @@ export type RuntimeRunTransportDto = z.infer<typeof runtimeRunTransportSchema>
 export type RuntimeRunCheckpointDto = z.infer<typeof runtimeRunCheckpointSchema>
 export type RuntimeRunThinkingEffortDto = z.infer<typeof runtimeRunThinkingEffortSchema>
 export type RuntimeRunApprovalModeDto = z.infer<typeof runtimeRunApprovalModeSchema>
+export type RuntimeAgentIdDto = z.infer<typeof runtimeAgentIdSchema>
 export type RuntimeRunControlInputDto = z.infer<typeof runtimeRunControlInputSchema>
 export type RuntimeAutoCompactPreferenceDto = z.infer<typeof runtimeAutoCompactPreferenceSchema>
 export type RuntimeRunActiveControlSnapshotDto = z.infer<typeof runtimeRunActiveControlSnapshotSchema>
@@ -543,6 +654,8 @@ export interface RuntimeRunCheckpointView {
 }
 
 export interface RuntimeRunControlInputView {
+  runtimeAgentId: RuntimeAgentIdDto
+  runtimeAgentLabel: string
   providerProfileId: string | null
   modelId: string
   thinkingEffort: RuntimeRunThinkingEffortDto | null
@@ -754,7 +867,10 @@ function getAgentSessionStatusLabel(status: AgentSessionStatusDto): string {
 }
 
 function mapRuntimeRunControlInput(control: RuntimeRunControlInputDto): RuntimeRunControlInputView {
+  const runtimeAgentId = control.runtimeAgentId ?? DEFAULT_RUNTIME_AGENT_ID
   return {
+    runtimeAgentId,
+    runtimeAgentLabel: getRuntimeAgentLabel(runtimeAgentId),
     providerProfileId: normalizeOptionalText(control.providerProfileId),
     modelId: normalizeText(control.modelId, 'model-unavailable'),
     thinkingEffort: control.thinkingEffort ?? null,

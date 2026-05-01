@@ -543,6 +543,7 @@ fn insert_replay_run(
         .execute(
             r#"
             INSERT INTO agent_runs (
+                runtime_agent_id,
                 project_id,
                 agent_session_id,
                 run_id,
@@ -560,9 +561,10 @@ fn insert_replay_run(
                 updated_at,
                 created_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?9, NULL, NULL, NULL, ?9, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10, NULL, NULL, NULL, ?10, ?10)
             "#,
             params![
+                source_snapshot.run.runtime_agent_id.as_str(),
                 project_id,
                 child_agent_session_id,
                 replay_run_id,

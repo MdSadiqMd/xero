@@ -8,9 +8,10 @@ use xero_desktop_lib::{
         run_transcript_from_agent_snapshot, run_transcript_from_runtime_stream_items,
         session_transcript_from_runs, validate_context_snapshot_contract,
         validate_run_transcript_contract, validate_session_memory_record_contract,
-        RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeStreamTranscriptRole,
-        RuntimeToolCallState, SessionCompactionPolicyInput, SessionContextBudgetPressureDto,
-        SessionContextCodeMapDto, SessionContextContributorKindDto, SessionContextDispositionDto,
+        RuntimeAgentIdDto, RuntimeStreamItemDto, RuntimeStreamItemKind,
+        RuntimeStreamTranscriptRole, RuntimeToolCallState, SessionCompactionPolicyInput,
+        SessionContextBudgetPressureDto, SessionContextCodeMapDto,
+        SessionContextContributorKindDto, SessionContextDispositionDto,
         SessionContextPolicyActionDto, SessionContextRedactionClassDto, SessionContextRedactionDto,
         SessionContextSnapshotDto, SessionContextTaskPhaseDto, SessionMemoryKindDto,
         SessionMemoryRecordDto, SessionMemoryReviewStateDto, SessionMemoryScopeDto,
@@ -599,6 +600,7 @@ fn provider_context_budget_tokens_cover_known_model_families() {
 fn sample_snapshot() -> AgentRunSnapshotRecord {
     AgentRunSnapshotRecord {
         run: AgentRunRecord {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             project_id: PROJECT_ID.into(),
             agent_session_id: SESSION_ID.into(),
             run_id: RUN_ID.into(),

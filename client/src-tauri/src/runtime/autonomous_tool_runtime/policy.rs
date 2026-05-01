@@ -1196,7 +1196,9 @@ fn policy_trace(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{RuntimeRunActiveControlSnapshotDto, RuntimeRunControlStateDto};
+    use crate::commands::{
+        RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto, RuntimeRunControlStateDto,
+    };
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -1356,6 +1358,7 @@ mod tests {
             .expect("runtime")
             .with_runtime_run_controls(RuntimeRunControlStateDto {
                 active: RuntimeRunActiveControlSnapshotDto {
+                    runtime_agent_id: RuntimeAgentIdDto::Engineer,
                     provider_profile_id: None,
                     model_id: "test-model".into(),
                     thinking_effort: None,

@@ -10,6 +10,7 @@ import {
 
 function makeAgentRunDto(overrides: Record<string, unknown> = {}) {
   return {
+    runtimeAgentId: 'ask',
     projectId: 'project-1',
     agentSessionId: 'agent-session-main',
     runId: 'run-agent-1',
@@ -225,6 +226,7 @@ describe('owned agent run schemas', () => {
       agentSessionId: 'agent-session-main',
       prompt: 'Fix the failing test.',
       controls: {
+        runtimeAgentId: 'engineer',
         modelId: 'openai_codex',
         approvalMode: 'yolo',
       },

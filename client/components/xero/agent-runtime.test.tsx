@@ -136,6 +136,8 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
     controls: {
       active: {
         providerProfileId: null,
+        runtimeAgentId: 'ask',
+        runtimeAgentLabel: 'Ask',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
@@ -149,6 +151,8 @@ function makeRuntimeRun(overrides: Partial<RuntimeRunView> = {}): RuntimeRunView
       selected: {
         source: 'active',
         providerProfileId: null,
+        runtimeAgentId: 'ask',
+        runtimeAgentLabel: 'Ask',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         thinkingEffortLabel: 'Medium',
@@ -416,6 +420,8 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     selectedProviderLabel,
     selectedProviderSource: overrides.selectedProviderSource ?? 'credential_default',
     controlTruthSource: overrides.controlTruthSource ?? (runtimeRun ? 'runtime_run' : 'fallback'),
+    selectedRuntimeAgentId: overrides.selectedRuntimeAgentId ?? 'ask',
+    selectedRuntimeAgentLabel: overrides.selectedRuntimeAgentLabel ?? 'Ask',
     selectedModelId,
     selectedThinkingEffort: overrides.selectedThinkingEffort ?? selectedModelOption?.defaultThinkingEffort ?? null,
     selectedApprovalMode: overrides.selectedApprovalMode ?? 'suggest',
@@ -727,6 +733,7 @@ describe('AgentRuntime current UI', () => {
       expect(onStartRuntimeRun).toHaveBeenCalledWith({
         controls: {
           providerProfileId: 'unscoped',
+          runtimeAgentId: 'ask',
           modelId: 'openai_codex',
           thinkingEffort: null,
           approvalMode: 'suggest',
@@ -1171,6 +1178,8 @@ describe('AgentRuntime current UI', () => {
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
           runtimeRun: makeRuntimeRun(),
           controlTruthSource: 'runtime_run',
+          selectedRuntimeAgentId: 'engineer',
+          selectedRuntimeAgentLabel: 'Engineer',
           selectedModelSelectionKey: 'anthropic:anthropic/claude-3.5-haiku',
           selectedModelId: 'anthropic/claude-3.5-haiku',
           selectedThinkingEffort: 'low',
@@ -1206,6 +1215,8 @@ describe('AgentRuntime current UI', () => {
           },
           runtimeRunActiveControls: {
             providerProfileId: null,
+            runtimeAgentId: 'engineer',
+            runtimeAgentLabel: 'Engineer',
             modelId: 'openai_codex',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -1217,6 +1228,8 @@ describe('AgentRuntime current UI', () => {
           },
           runtimeRunPendingControls: {
             providerProfileId: null,
+            runtimeAgentId: 'engineer',
+            runtimeAgentLabel: 'Engineer',
             modelId: 'anthropic/claude-3.5-haiku',
             thinkingEffort: 'low',
             thinkingEffortLabel: 'Low',
@@ -1312,6 +1325,8 @@ describe('AgentRuntime current UI', () => {
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
           runtimeRun: makeRuntimeRun(),
           controlTruthSource: 'runtime_run',
+          selectedRuntimeAgentId: 'engineer',
+          selectedRuntimeAgentLabel: 'Engineer',
           selectedModelId: 'openai_codex',
           selectedThinkingEffort: 'medium',
           selectedApprovalMode: 'suggest',
@@ -1322,6 +1337,8 @@ describe('AgentRuntime current UI', () => {
           },
           runtimeRunActiveControls: {
             providerProfileId: null,
+            runtimeAgentId: 'ask',
+            runtimeAgentLabel: 'Ask',
             modelId: 'openai_codex',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -1333,6 +1350,8 @@ describe('AgentRuntime current UI', () => {
           },
           runtimeRunPendingControls: {
             providerProfileId: null,
+            runtimeAgentId: 'ask',
+            runtimeAgentLabel: 'Ask',
             modelId: 'openai_codex',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',
@@ -1510,11 +1529,15 @@ describe('AgentRuntime current UI', () => {
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
           runtimeRun: makeRuntimeRun(),
           controlTruthSource: 'runtime_run',
+          selectedRuntimeAgentId: 'engineer',
+          selectedRuntimeAgentLabel: 'Engineer',
           selectedModelId: 'openai_codex',
           selectedThinkingEffort: 'medium',
           selectedApprovalMode: 'yolo',
           runtimeRunActiveControls: {
             providerProfileId: null,
+            runtimeAgentId: 'engineer',
+            runtimeAgentLabel: 'Engineer',
             modelId: 'openai_codex',
             thinkingEffort: 'medium',
             thinkingEffortLabel: 'Medium',

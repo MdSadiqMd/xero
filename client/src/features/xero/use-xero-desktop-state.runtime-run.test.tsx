@@ -326,6 +326,7 @@ function makeRuntimeRun(projectId: string, overrides: Partial<RuntimeRunDto> = {
     controls: {
       active: {
         providerProfileId: 'openai_codex-default',
+        runtimeAgentId: 'ask',
         modelId: 'openai_codex',
         thinkingEffort: 'medium',
         approvalMode: 'suggest',
@@ -856,6 +857,7 @@ function createMockAdapter(options?: {
           controls: {
             active: {
               providerProfileId: options?.initialControls?.providerProfileId ?? 'openai_codex-default',
+              runtimeAgentId: options?.initialControls?.runtimeAgentId ?? 'ask',
               modelId: options?.initialControls?.modelId ?? 'openai_codex',
               thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
               approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
@@ -866,6 +868,7 @@ function createMockAdapter(options?: {
             pending: options?.initialPrompt
               ? {
                   providerProfileId: options?.initialControls?.providerProfileId ?? 'openai_codex-default',
+                  runtimeAgentId: options?.initialControls?.runtimeAgentId ?? 'ask',
                   modelId: options?.initialControls?.modelId ?? 'openai_codex',
                   thinkingEffort: options?.initialControls?.thinkingEffort ?? 'medium',
                   approvalMode: options?.initialControls?.approvalMode ?? 'suggest',
@@ -907,6 +910,8 @@ function createMockAdapter(options?: {
               currentRun.controls.active.providerProfileId ??
               null,
             modelId: request.controls?.modelId ?? basePending?.modelId ?? currentRun.controls.active.modelId,
+            runtimeAgentId:
+              request.controls?.runtimeAgentId ?? basePending?.runtimeAgentId ?? currentRun.controls.active.runtimeAgentId,
             thinkingEffort:
               request.controls?.thinkingEffort ??
               basePending?.thinkingEffort ??
@@ -1254,6 +1259,7 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
             .startRuntimeRun({
               controls: {
                 modelId: 'openai/gpt-5-mini',
+                runtimeAgentId: 'engineer',
                 thinkingEffort: 'high',
                 approvalMode: 'auto_edit',
                 planModeRequired: false,
@@ -1272,6 +1278,7 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
             .updateRuntimeRunControls({
               controls: {
                 modelId: 'openai/gpt-5-mini',
+                runtimeAgentId: 'engineer',
                 thinkingEffort: 'high',
                 approvalMode: 'auto_edit',
                 planModeRequired: false,
@@ -1290,6 +1297,7 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
             .updateRuntimeRunControls({
               controls: {
                 modelId: 'openai/gpt-5-mini',
+                runtimeAgentId: 'engineer',
                 thinkingEffort: 'high',
                 approvalMode: 'auto_edit',
                 planModeRequired: false,
@@ -1434,6 +1442,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
           controls: {
             active: {
               providerProfileId: 'openai_codex-default',
+              runtimeAgentId: 'ask',
               modelId: 'openai_codex',
               thinkingEffort: 'medium',
               approvalMode: 'suggest',
@@ -1443,6 +1452,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
             },
             pending: {
               providerProfileId: 'openai_codex-default',
+              runtimeAgentId: 'ask',
               modelId: 'openai_codex',
               thinkingEffort: 'medium',
               approvalMode: 'suggest',
@@ -1474,6 +1484,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
         'project-1': makeRuntimeRun('project-1', {
           controls: {
             active: {
+              runtimeAgentId: 'ask',
               modelId: 'openai_codex',
               thinkingEffort: 'medium',
               approvalMode: 'suggest',
@@ -1482,6 +1493,7 @@ describe('useXeroDesktopState runtime-run hydration', () => {
               appliedAt: '2026-04-15T20:00:00Z',
             },
             pending: {
+              runtimeAgentId: 'engineer',
               modelId: 'openai_codex',
               thinkingEffort: 'medium',
               approvalMode: 'yolo',

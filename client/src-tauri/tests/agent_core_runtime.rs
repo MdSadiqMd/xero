@@ -15,7 +15,7 @@ use xero_desktop_lib::{
     commands::{
         cancel_agent_run, compact_session_history, start_agent_task, start_runtime_run,
         update_runtime_run_controls, BrowserControlPreferenceDto, CancelAgentRunRequestDto,
-        CompactSessionHistoryRequestDto, RuntimeRunActiveControlSnapshotDto,
+        CompactSessionHistoryRequestDto, RuntimeAgentIdDto, RuntimeRunActiveControlSnapshotDto,
         RuntimeRunApprovalModeDto, RuntimeRunControlInputDto, RuntimeRunControlStateDto,
         StartAgentTaskRequestDto, StartRuntimeRunRequestDto, UpdateRuntimeRunControlsRequestDto,
     },
@@ -160,6 +160,7 @@ fn current_head_sha(repo_root: &Path) -> Option<String> {
 fn yolo_controls() -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             provider_profile_id: None,
             model_id: "test-model".into(),
             thinking_effort: None,
@@ -174,6 +175,7 @@ fn yolo_controls() -> RuntimeRunControlStateDto {
 
 fn suggest_controls_input() -> RuntimeRunControlInputDto {
     RuntimeRunControlInputDto {
+        runtime_agent_id: RuntimeAgentIdDto::Ask,
         provider_profile_id: None,
         model_id: "test-model".into(),
         thinking_effort: None,
@@ -1230,6 +1232,7 @@ fn owned_agent_auto_compact_provider_failure_does_not_mutate_history() {
     db::project_store::insert_agent_run(
         &repo_root,
         &db::project_store::NewAgentRunRecord {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             project_id: project_id.clone(),
             agent_session_id: db::project_store::DEFAULT_AGENT_SESSION_ID.into(),
             run_id: run_id.into(),
@@ -1351,6 +1354,7 @@ fn owned_agent_plan_mode_allows_read_only_tool_call() {
         run_id: "owned-plan-run-1".into(),
         prompt: "Please inspect the file.\ntool:read src/tracked.txt".into(),
         controls: Some(RuntimeRunControlInputDto {
+            runtime_agent_id: RuntimeAgentIdDto::Engineer,
             provider_profile_id: None,
             model_id: "fake-model".into(),
             thinking_effort: None,

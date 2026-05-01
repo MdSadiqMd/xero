@@ -55,6 +55,106 @@ pub(crate) fn touch_agent_run_heartbeat(
     project_store::touch_agent_run_heartbeat(repo_root, project_id, run_id, &now_timestamp())
 }
 
+pub(crate) fn capture_project_record_for_run(
+    repo_root: &Path,
+    snapshot: &AgentRunSnapshotRecord,
+) -> CommandResult<()> {
+    let latest_assistant_message = snapshot
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == AgentMessageRole::Assistant);
+    let file_paths = snapshot
+        .file_changes
+        .iter()
+        .map(|change| change.path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let final_text = latest_assistant_message
+        .map(|message| message.content.trim())
+        .filter(|content| !content.is_empty());
+    let (record_kind, title, raw_text, visibility) = match final_text {
+        Some(text) => (
+            project_store::ProjectRecordKind::AgentHandoff,
+            format!("{} run handoff", snapshot.run.runtime_agent_id.label()),
+            text.to_string(),
+            project_store::ProjectRecordVisibility::Retrieval,
+        ),
+        None => (
+            project_store::ProjectRecordKind::Diagnostic,
+            format!("{} run diagnostic", snapshot.run.runtime_agent_id.label()),
+            "Run completed without a final assistant message to summarize.".to_string(),
+            project_store::ProjectRecordVisibility::Diagnostic,
+        ),
+    };
+    let (text, redaction) = redact_session_context_text(&raw_text);
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    let summary = trim_project_record_summary(&text);
+    let content = json!({
+        "schema": "xero.project_record.run_handoff.v1",
+        "runtimeAgentId": snapshot.run.runtime_agent_id.as_str(),
+        "providerId": snapshot.run.provider_id.as_str(),
+        "modelId": snapshot.run.model_id.as_str(),
+        "status": format!("{:?}", snapshot.run.status),
+        "fileChanges": file_paths,
+        "messageId": latest_assistant_message.map(|message| message.id),
+    });
+    project_store::insert_project_record(
+        repo_root,
+        &project_store::NewProjectRecordRecord {
+            record_id: project_store::generate_project_record_id(),
+            project_id: snapshot.run.project_id.clone(),
+            record_kind,
+            runtime_agent_id: snapshot.run.runtime_agent_id,
+            agent_session_id: Some(snapshot.run.agent_session_id.clone()),
+            run_id: snapshot.run.run_id.clone(),
+            workflow_run_id: None,
+            workflow_step_id: None,
+            title,
+            summary,
+            text,
+            content_json: Some(content),
+            schema_name: Some("xero.project_record.run_handoff.v1".into()),
+            schema_version: 1,
+            importance: project_store::ProjectRecordImportance::Normal,
+            confidence: Some(0.8),
+            tags: vec![snapshot.run.runtime_agent_id.as_str().into()],
+            source_item_ids: latest_assistant_message
+                .map(|message| vec![format!("agent_messages:{}", message.id)])
+                .unwrap_or_default(),
+            related_paths: snapshot
+                .file_changes
+                .iter()
+                .map(|change| change.path.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            produced_artifact_refs: Vec::new(),
+            redaction_state: if redaction.redacted {
+                project_store::ProjectRecordRedactionState::Redacted
+            } else {
+                project_store::ProjectRecordRedactionState::Clean
+            },
+            visibility,
+            created_at: now_timestamp(),
+        },
+    )?;
+    Ok(())
+}
+
+fn trim_project_record_summary(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= 240 {
+        return trimmed.to_string();
+    }
+    let mut summary = trimmed.chars().take(240).collect::<String>();
+    summary.push_str("...");
+    summary
+}
+
 pub(crate) fn repo_fingerprint(repo_root: &Path) -> JsonValue {
     match git2::Repository::discover(repo_root) {
         Ok(repository) => {

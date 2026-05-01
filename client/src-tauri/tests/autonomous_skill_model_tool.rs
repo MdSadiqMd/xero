@@ -104,6 +104,7 @@ impl AutonomousSkillSource for FixtureSkillSource {
 fn runtime_controls() -> RuntimeRunControlStateDto {
     RuntimeRunControlStateDto {
         active: RuntimeRunActiveControlSnapshotDto {
+            runtime_agent_id: xero_desktop_lib::commands::RuntimeAgentIdDto::Engineer,
             provider_profile_id: None,
             model_id: "test-model".into(),
             thinking_effort: None,

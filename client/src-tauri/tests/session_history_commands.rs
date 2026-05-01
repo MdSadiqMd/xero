@@ -1575,6 +1575,7 @@ fn seed_minimal_run_with_provider(
     project_store::insert_agent_run(
         repo_root,
         &project_store::NewAgentRunRecord {
+            runtime_agent_id: xero_desktop_lib::commands::RuntimeAgentIdDto::Engineer,
             project_id: project_id.into(),
             agent_session_id: agent_session_id.into(),
             run_id: run_id.into(),
