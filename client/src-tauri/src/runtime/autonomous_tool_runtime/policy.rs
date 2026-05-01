@@ -53,17 +53,20 @@ impl AutonomousToolRuntime {
             .command_controls
             .as_ref()
             .map(|controls| controls.active.approval_mode.clone());
+        let context = SafetyDecisionContext {
+            tool_name,
+            metadata,
+            approval_mode,
+            operator_approved,
+            input_sha256,
+        };
 
         if secret_like_tool_input(raw_input) {
             return Ok(safety_decision(
                 AutonomousSafetyPolicyAction::Deny,
                 "policy_denied_secret_like_tool_input",
                 "Xero denied the tool call because its arguments contain credential-like material. Secret-bearing tool inputs are not persisted, replayed, or sent back to the model.",
-                tool_name,
-                metadata,
-                approval_mode,
-                operator_approved,
-                input_sha256,
+                &context,
             ));
         }
 
@@ -74,11 +77,7 @@ impl AutonomousToolRuntime {
                 format!(
                     "Xero denied the tool call because path `{path}` escapes the imported repository root."
                 ),
-                tool_name,
-                metadata,
-                approval_mode,
-                operator_approved,
-                input_sha256,
+                &context,
             ));
         }
 
@@ -87,38 +86,21 @@ impl AutonomousToolRuntime {
                 AutonomousSafetyPolicyAction::Deny,
                 "policy_denied_destructive_system_operation",
                 "Xero denied the tool call because it targets destructive system-level operations that are not allowed in autonomous runs.",
-                tool_name,
-                metadata,
-                approval_mode,
-                operator_approved,
-                input_sha256,
+                &context,
             ));
         }
 
         let command_decision = command_family_policy_decision(self, request)?;
         if let Some((action, code, explanation)) = command_decision {
-            return Ok(safety_decision(
-                action,
-                code,
-                explanation,
-                tool_name,
-                metadata,
-                approval_mode,
-                operator_approved,
-                input_sha256,
-            ));
+            return Ok(safety_decision(action, code, explanation, &context));
         }
 
-        if metadata.requires_approval && !operator_approved {
+        if context.metadata.requires_approval && !context.operator_approved {
             return Ok(safety_decision(
                 AutonomousSafetyPolicyAction::RequireApproval,
-                metadata.require_approval_code,
-                metadata.require_approval_reason,
-                tool_name,
-                metadata,
-                approval_mode,
-                operator_approved,
-                input_sha256,
+                context.metadata.require_approval_code,
+                context.metadata.require_approval_reason,
+                &context,
             ));
         }
 
@@ -126,11 +108,7 @@ impl AutonomousToolRuntime {
             AutonomousSafetyPolicyAction::Allow,
             "policy_allowed_tool_call",
             "Xero allowed the tool call after central safety policy evaluation.",
-            tool_name,
-            metadata,
-            approval_mode,
-            operator_approved,
-            input_sha256,
+            &context,
         ))
     }
 
@@ -293,8 +271,8 @@ fn safety_policy_metadata(request: &AutonomousToolRequest) -> SafetyPolicyMetada
         },
         AutonomousToolRequest::ProcessManager(request) => {
             let trace = process_manager_policy_trace(
-                request.action.clone(),
-                request.target_ownership.clone(),
+                request.action,
+                request.target_ownership,
                 request.persistent,
             );
             SafetyPolicyMetadata {
@@ -419,34 +397,40 @@ fn command_family_policy_decision(
     }))
 }
 
+struct SafetyDecisionContext<'a> {
+    tool_name: &'a str,
+    metadata: SafetyPolicyMetadata,
+    approval_mode: Option<RuntimeRunApprovalModeDto>,
+    operator_approved: bool,
+    input_sha256: &'a str,
+}
+
 fn safety_decision(
     action: AutonomousSafetyPolicyAction,
     code: impl Into<String>,
     explanation: impl Into<String>,
-    tool_name: &str,
-    metadata: SafetyPolicyMetadata,
-    approval_mode: Option<RuntimeRunApprovalModeDto>,
-    operator_approved: bool,
-    input_sha256: &str,
+    context: &SafetyDecisionContext<'_>,
 ) -> AutonomousSafetyPolicyDecision {
-    let approval_grant = operator_approved.then(|| AutonomousSafetyApprovalGrant {
-        scope: format!("tool_call:{tool_name}"),
-        expires: "run_end".into(),
-        replay_rule: "exact_tool_call_input_sha256".into(),
-        input_sha256: input_sha256.into(),
-    });
+    let approval_grant = context
+        .operator_approved
+        .then(|| AutonomousSafetyApprovalGrant {
+            scope: format!("tool_call:{}", context.tool_name),
+            expires: "run_end".into(),
+            replay_rule: "exact_tool_call_input_sha256".into(),
+            input_sha256: context.input_sha256.into(),
+        });
     AutonomousSafetyPolicyDecision {
         action,
         code: code.into(),
         explanation: explanation.into(),
-        tool_name: tool_name.into(),
-        risk_class: metadata.risk_class.into(),
-        approval_mode,
+        tool_name: context.tool_name.into(),
+        risk_class: context.metadata.risk_class.into(),
+        approval_mode: context.approval_mode.clone(),
         project_trust: "imported_project".into(),
-        network_intent: metadata.network_intent.into(),
-        credential_sensitivity: metadata.credential_sensitivity.into(),
-        os_target: metadata.os_target.map(str::to_owned),
-        prior_observation_required: metadata.prior_observation_required,
+        network_intent: context.metadata.network_intent.into(),
+        credential_sensitivity: context.metadata.credential_sensitivity.into(),
+        os_target: context.metadata.os_target.map(str::to_owned),
+        prior_observation_required: context.metadata.prior_observation_required,
         approval_grant,
     }
 }

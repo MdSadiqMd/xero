@@ -6,3 +6,5 @@
 - `.xero/` is legacy repo-local state. New project state belongs under the OS app-data directory.
 - This is a new application, backwards compatability is prohibited unless asked for
 - Build prerequisite: `protoc` must be on PATH (the LanceDB-backed agent memory store pulls lance-* crates whose build scripts compile vendored .proto files). On macOS: `brew install protobuf`.
+- Run scooped tests and format instead of repo wide when working with rust to save time and storage
+- Dont create branches or stash unless user asks, there may be multiple agents working at the same time and doing this will break things

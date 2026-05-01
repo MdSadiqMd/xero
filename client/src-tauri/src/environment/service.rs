@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     auth::now_timestamp,
-    commands::{CommandError, CommandResult},
+    commands::{validate_non_empty, CommandError, CommandResult},
     global_db::{
         environment_profile::{
             parse_environment_profile_status, validate_environment_profile_row,
             EnvironmentDiagnostic, EnvironmentDiagnosticSeverity, EnvironmentPathProfile,
-            EnvironmentPermissionRequest, EnvironmentPlatform, EnvironmentProfilePayload,
-            EnvironmentProfileRow, EnvironmentProfileStatus, EnvironmentProfileSummary,
-            ENVIRONMENT_PROFILE_SCHEMA_VERSION,
+            EnvironmentPermissionRequest, EnvironmentPermissionStatus, EnvironmentPlatform,
+            EnvironmentProfilePayload, EnvironmentProfileRow, EnvironmentProfileStatus,
+            EnvironmentProfileSummary, ENVIRONMENT_PROFILE_SCHEMA_VERSION,
         },
         open_global_database,
     },
@@ -44,6 +44,13 @@ pub struct EnvironmentDiscoveryStatus {
     pub probe_completed_at: Option<String>,
     pub permission_requests: Vec<EnvironmentPermissionRequest>,
     pub diagnostics: Vec<EnvironmentDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnvironmentPermissionDecision {
+    pub id: String,
+    pub status: EnvironmentPermissionStatus,
 }
 
 pub fn environment_discovery_status(
@@ -84,6 +91,99 @@ pub fn refresh_environment_discovery(
     database_path: PathBuf,
 ) -> CommandResult<EnvironmentDiscoveryStatus> {
     start_environment_discovery_with_policy(database_path, true)
+}
+
+pub fn resolve_environment_permission_requests(
+    database_path: &Path,
+    decisions: Vec<EnvironmentPermissionDecision>,
+) -> CommandResult<EnvironmentDiscoveryStatus> {
+    if decisions.is_empty() {
+        return Err(CommandError::invalid_request("decisions"));
+    }
+
+    for decision in &decisions {
+        validate_non_empty(decision.id.as_str(), "decisions.id")?;
+        if decision.status == EnvironmentPermissionStatus::Pending {
+            return Err(CommandError::invalid_request("decisions.status"));
+        }
+    }
+
+    let mut connection = open_global_database(database_path)?;
+    let row = load_environment_profile_row(&connection)?.ok_or_else(|| {
+        CommandError::user_fixable(
+            "environment_profile_missing",
+            "Xero cannot resolve environment access decisions before an environment profile exists.",
+        )
+    })?;
+
+    let mut payload: EnvironmentProfilePayload =
+        serde_json::from_str(&row.payload_json).map_err(|error| {
+            CommandError::system_fault(
+                "environment_profile_payload_decode_failed",
+                format!("Xero could not decode the environment profile payload: {error}"),
+            )
+        })?;
+    let mut summary: EnvironmentProfileSummary =
+        serde_json::from_str(&row.summary_json).map_err(|error| {
+            CommandError::system_fault(
+                "environment_profile_summary_decode_failed",
+                format!("Xero could not decode the environment profile summary: {error}"),
+            )
+        })?;
+
+    for decision in decisions {
+        let Some(permission) = payload
+            .permissions
+            .iter_mut()
+            .find(|permission| permission.id == decision.id)
+        else {
+            return Err(CommandError::user_fixable(
+                "environment_permission_request_not_found",
+                format!(
+                    "Xero could not find an environment access request named `{}`.",
+                    decision.id
+                ),
+            ));
+        };
+
+        if !permission.optional && decision.status != EnvironmentPermissionStatus::Granted {
+            return Err(CommandError::user_fixable(
+                "environment_permission_required",
+                format!(
+                    "Environment access request `{}` must be allowed before onboarding can continue.",
+                    permission.title
+                ),
+            ));
+        }
+
+        permission.status = decision.status;
+        if let Some(summary_permission) = summary
+            .permission_requests
+            .iter_mut()
+            .find(|permission| permission.id == decision.id)
+        {
+            summary_permission.status = decision.status;
+        }
+    }
+
+    let payload_json = serialize_profile_json(&payload)?;
+    let summary_json = serialize_profile_json(&summary)?;
+    let permission_requests_json = serialize_profile_json(&payload.permissions)?;
+    upsert_environment_profile(
+        &mut connection,
+        row.status,
+        &payload.platform,
+        row.path_fingerprint.as_deref(),
+        &payload_json,
+        &summary_json,
+        &permission_requests_json,
+        &row.diagnostics_json,
+        row.probe_started_at.as_deref(),
+        row.probe_completed_at.as_deref(),
+        &row.refreshed_at,
+    )?;
+
+    environment_discovery_status(database_path)
 }
 
 fn start_environment_discovery_with_policy(
@@ -165,10 +265,17 @@ fn status_from_row(
         refreshed_at: Some(row.refreshed_at.clone()),
         probe_started_at: row.probe_started_at.clone(),
         probe_completed_at: row.probe_completed_at.clone(),
-        permission_requests: serde_json::from_str(&row.permission_requests_json)
-            .unwrap_or_default(),
+        permission_requests: pending_permission_requests(&row.permission_requests_json),
         diagnostics: serde_json::from_str(&row.diagnostics_json).unwrap_or_default(),
     }
+}
+
+fn pending_permission_requests(json: &str) -> Vec<EnvironmentPermissionRequest> {
+    serde_json::from_str::<Vec<EnvironmentPermissionRequest>>(json)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|request| request.status == EnvironmentPermissionStatus::Pending)
+        .collect()
 }
 
 fn timestamp_is_stale(timestamp: &str) -> bool {
@@ -477,7 +584,11 @@ fn validation_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::global_db::{configure_connection, migrations};
+    use crate::global_db::{
+        configure_connection,
+        environment_profile::{EnvironmentPermissionKind, EnvironmentPermissionStatus},
+        migrations, open_global_database,
+    };
 
     fn connection() -> Connection {
         let mut connection = Connection::open_in_memory().expect("open db");
@@ -525,5 +636,125 @@ mod tests {
 
         assert!(status_from_row(Some(&row), false).should_start);
         assert!(!status_from_row(Some(&row), true).should_start);
+    }
+
+    #[test]
+    fn resolving_environment_permissions_persists_decisions_and_hides_resolved_requests() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let database_path = dir.path().join("xero.db");
+        seed_permission_profile(&database_path);
+
+        let status = resolve_environment_permission_requests(
+            &database_path,
+            vec![
+                EnvironmentPermissionDecision {
+                    id: "required-toolchain-access".into(),
+                    status: EnvironmentPermissionStatus::Granted,
+                },
+                EnvironmentPermissionDecision {
+                    id: "optional-network-access".into(),
+                    status: EnvironmentPermissionStatus::Skipped,
+                },
+            ],
+        )
+        .expect("resolve permissions");
+
+        assert!(status.permission_requests.is_empty());
+        let summary = environment_profile_summary(&database_path)
+            .expect("summary")
+            .expect("profile");
+        assert!(summary
+            .permission_requests
+            .iter()
+            .any(|request| request.id == "required-toolchain-access"
+                && request.status == EnvironmentPermissionStatus::Granted));
+        assert!(summary
+            .permission_requests
+            .iter()
+            .any(|request| request.id == "optional-network-access"
+                && request.status == EnvironmentPermissionStatus::Skipped));
+    }
+
+    #[test]
+    fn resolving_environment_permissions_rejects_skipped_required_access() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let database_path = dir.path().join("xero.db");
+        seed_permission_profile(&database_path);
+
+        let error = resolve_environment_permission_requests(
+            &database_path,
+            vec![EnvironmentPermissionDecision {
+                id: "required-toolchain-access".into(),
+                status: EnvironmentPermissionStatus::Skipped,
+            }],
+        )
+        .expect_err("required access cannot be skipped");
+
+        assert_eq!(error.code, "environment_permission_required");
+    }
+
+    fn seed_permission_profile(database_path: &Path) {
+        let mut connection = open_global_database(database_path).expect("open global db");
+        let timestamp = now_timestamp();
+        let platform = current_platform();
+        let permissions = vec![
+            EnvironmentPermissionRequest {
+                id: "required-toolchain-access".into(),
+                kind: EnvironmentPermissionKind::ProtectedPath,
+                status: EnvironmentPermissionStatus::Pending,
+                title: "Required toolchain access".into(),
+                reason: "Allow Xero to inspect the selected toolchain directory.".into(),
+                optional: false,
+            },
+            EnvironmentPermissionRequest {
+                id: "optional-network-access".into(),
+                kind: EnvironmentPermissionKind::NetworkAccess,
+                status: EnvironmentPermissionStatus::Pending,
+                title: "Optional network access".into(),
+                reason: "Allow Xero to refresh extra package-manager metadata.".into(),
+                optional: true,
+            },
+        ];
+        let payload = EnvironmentProfilePayload {
+            schema_version: ENVIRONMENT_PROFILE_SCHEMA_VERSION,
+            platform: platform.clone(),
+            path: EnvironmentPathProfile {
+                entry_count: 0,
+                fingerprint: None,
+                sources: vec![],
+            },
+            tools: vec![],
+            capabilities: vec![],
+            permissions: permissions.clone(),
+            diagnostics: vec![],
+        };
+        let summary = EnvironmentProfileSummary {
+            schema_version: ENVIRONMENT_PROFILE_SCHEMA_VERSION,
+            status: EnvironmentProfileStatus::Partial,
+            platform: platform.clone(),
+            refreshed_at: Some(timestamp.clone()),
+            tools: vec![],
+            capabilities: vec![],
+            permission_requests: permissions,
+            diagnostics: vec![],
+        };
+        let payload_json = serialize_profile_json(&payload).expect("payload json");
+        let summary_json = serialize_profile_json(&summary).expect("summary json");
+        let permission_requests_json =
+            serialize_profile_json(&payload.permissions).expect("permissions json");
+        upsert_environment_profile(
+            &mut connection,
+            EnvironmentProfileStatus::Partial,
+            &platform,
+            None,
+            &payload_json,
+            &summary_json,
+            &permission_requests_json,
+            "[]",
+            Some(&timestamp),
+            Some(&timestamp),
+            &timestamp,
+        )
+        .expect("seed profile");
     }
 }

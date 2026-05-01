@@ -93,11 +93,13 @@ pub(crate) fn record_file_change_event(
                 repo_root,
                 project_id,
                 run_id,
-                "patch",
-                file.path.as_str(),
-                None,
-                Some(file.old_hash.clone()),
-                Some(file.new_hash.clone()),
+                FileChangeEvent {
+                    operation: "patch",
+                    path: file.path.as_str(),
+                    to_path: None,
+                    old_hash: Some(file.old_hash.clone()),
+                    new_hash: Some(file.new_hash.clone()),
+                },
             )?;
         }
         return Ok(());
@@ -127,29 +129,42 @@ pub(crate) fn record_file_change_event(
     };
     let old_hash = old_hash_for_path(write_observations, path);
     record_single_file_change_event(
-        repo_root, project_id, run_id, operation, path, to_path, old_hash, new_hash,
+        repo_root,
+        project_id,
+        run_id,
+        FileChangeEvent {
+            operation,
+            path,
+            to_path,
+            old_hash,
+            new_hash,
+        },
     )
+}
+
+struct FileChangeEvent<'a> {
+    operation: &'a str,
+    path: &'a str,
+    to_path: Option<String>,
+    old_hash: Option<String>,
+    new_hash: Option<String>,
 }
 
 fn record_single_file_change_event(
     repo_root: &Path,
     project_id: &str,
     run_id: &str,
-    operation: &str,
-    path: &str,
-    to_path: Option<String>,
-    old_hash: Option<String>,
-    new_hash: Option<String>,
+    change: FileChangeEvent<'_>,
 ) -> CommandResult<()> {
     project_store::append_agent_file_change(
         repo_root,
         &NewAgentFileChangeRecord {
             project_id: project_id.into(),
             run_id: run_id.into(),
-            path: path.into(),
-            operation: operation.into(),
-            old_hash: old_hash.clone(),
-            new_hash: new_hash.clone(),
+            path: change.path.into(),
+            operation: change.operation.into(),
+            old_hash: change.old_hash.clone(),
+            new_hash: change.new_hash.clone(),
             created_at: now_timestamp(),
         },
     )?;
@@ -160,11 +175,11 @@ fn record_single_file_change_event(
         run_id,
         AgentRunEventKind::FileChanged,
         json!({
-            "path": path,
-            "operation": operation,
-            "toPath": to_path,
-            "oldHash": old_hash,
-            "newHash": new_hash,
+            "path": change.path,
+            "operation": change.operation,
+            "toPath": change.to_path,
+            "oldHash": change.old_hash,
+            "newHash": change.new_hash,
         }),
     )?;
     Ok(())

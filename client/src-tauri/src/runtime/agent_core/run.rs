@@ -840,11 +840,13 @@ fn finish_owned_agent_drive_error(
             repo_root,
             project_id,
             run_id,
-            None,
-            AgentRunState::ApprovalWait,
-            "Owned-agent run paused at a harness boundary.",
-            Some(stop_reason),
-            None,
+            AgentStateTransition {
+                from: None,
+                to: AgentRunState::ApprovalWait,
+                reason: "Owned-agent run paused at a harness boundary.",
+                stop_reason: Some(stop_reason),
+                extra: None,
+            },
         )?;
         append_event(
             repo_root,
@@ -877,11 +879,13 @@ fn finish_owned_agent_drive_error(
         repo_root,
         project_id,
         run_id,
-        None,
-        AgentRunState::Blocked,
-        "Owned-agent run stopped before completion.",
-        Some(stop_reason),
-        None,
+        AgentStateTransition {
+            from: None,
+            to: AgentRunState::Blocked,
+            reason: "Owned-agent run stopped before completion.",
+            stop_reason: Some(stop_reason),
+            extra: None,
+        },
     )?;
     append_event(
         repo_root,

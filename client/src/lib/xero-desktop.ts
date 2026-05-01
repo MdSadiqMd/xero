@@ -316,6 +316,8 @@ import {
   type EnvironmentDiscoveryStatusDto,
   environmentProfileSummarySchema,
   type EnvironmentProfileSummaryDto,
+  resolveEnvironmentPermissionRequestsSchema,
+  type ResolveEnvironmentPermissionRequestsDto,
 } from '@/src/lib/xero-model/environment'
 
 const COMMANDS = {
@@ -455,6 +457,7 @@ const COMMANDS = {
   getEnvironmentDiscoveryStatus: 'get_environment_discovery_status',
   getEnvironmentProfileSummary: 'get_environment_profile_summary',
   refreshEnvironmentDiscovery: 'refresh_environment_discovery',
+  resolveEnvironmentPermissionRequests: 'resolve_environment_permission_requests',
   startEnvironmentDiscovery: 'start_environment_discovery',
 } as const
 
@@ -771,6 +774,9 @@ export interface XeroDesktopAdapter {
   getEnvironmentDiscoveryStatus?(): Promise<EnvironmentDiscoveryStatusDto>
   getEnvironmentProfileSummary?(): Promise<EnvironmentProfileSummaryDto>
   refreshEnvironmentDiscovery?(): Promise<EnvironmentDiscoveryStatusDto>
+  resolveEnvironmentPermissionRequests?(
+    request: ResolveEnvironmentPermissionRequestsDto,
+  ): Promise<EnvironmentDiscoveryStatusDto>
   startEnvironmentDiscovery?(): Promise<EnvironmentDiscoveryStatusDto>
   speechDictationStatus?(): Promise<DictationStatusDto>
   speechDictationSettings?(): Promise<DictationSettingsDto>
@@ -2029,6 +2035,15 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
 
   refreshEnvironmentDiscovery() {
     return invokeTyped(COMMANDS.refreshEnvironmentDiscovery, environmentDiscoveryStatusSchema)
+  },
+
+  resolveEnvironmentPermissionRequests(request) {
+    const parsedRequest = resolveEnvironmentPermissionRequestsSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.resolveEnvironmentPermissionRequests,
+      environmentDiscoveryStatusSchema,
+      { request: parsedRequest },
+    )
   },
 
   startEnvironmentDiscovery() {

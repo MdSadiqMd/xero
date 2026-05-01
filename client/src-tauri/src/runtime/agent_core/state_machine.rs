@@ -205,40 +205,46 @@ pub(crate) fn record_initial_state_artifacts(
         repo_root,
         project_id,
         run_id,
-        None,
-        AgentRunState::Intake,
-        "Owned-agent run accepted.",
-        None,
-        Some(json!({
-            "taskClassification": {
-                "requiresPlan": classification.requires_plan,
-                "score": classification.score,
-                "reasonCodes": classification.reason_codes,
-            },
-        })),
+        AgentStateTransition {
+            from: None,
+            to: AgentRunState::Intake,
+            reason: "Owned-agent run accepted.",
+            stop_reason: None,
+            extra: Some(json!({
+                "taskClassification": {
+                    "requiresPlan": classification.requires_plan,
+                    "score": classification.score,
+                    "reasonCodes": classification.reason_codes,
+                },
+            })),
+        },
     )?;
     record_state_transition(
         repo_root,
         project_id,
         run_id,
-        Some(AgentRunState::Intake),
-        AgentRunState::ContextGather,
-        "Repository preflight passed; gathering task context.",
-        None,
-        None,
+        AgentStateTransition {
+            from: Some(AgentRunState::Intake),
+            to: AgentRunState::ContextGather,
+            reason: "Repository preflight passed; gathering task context.",
+            stop_reason: None,
+            extra: None,
+        },
     )?;
     if classification.requires_plan {
         record_state_transition(
             repo_root,
             project_id,
             run_id,
-            Some(AgentRunState::ContextGather),
-            AgentRunState::Plan,
-            "Task classification requires a structured plan before execution.",
-            None,
-            Some(json!({
-                "reasonCodes": classification.reason_codes,
-            })),
+            AgentStateTransition {
+                from: Some(AgentRunState::ContextGather),
+                to: AgentRunState::Plan,
+                reason: "Task classification requires a structured plan before execution.",
+                stop_reason: None,
+                extra: Some(json!({
+                    "reasonCodes": classification.reason_codes,
+                })),
+            },
         )?;
     }
     Ok(classification)
@@ -310,13 +316,15 @@ pub(crate) fn record_plan_gate_message(
         repo_root,
         project_id,
         run_id,
-        Some(AgentRunState::ContextGather),
-        AgentRunState::Plan,
-        "Execution was held until a structured plan is declared.",
-        None,
-        Some(json!({
-            "reasonCodes": classification.reason_codes,
-        })),
+        AgentStateTransition {
+            from: Some(AgentRunState::ContextGather),
+            to: AgentRunState::Plan,
+            reason: "Execution was held until a structured plan is declared.",
+            stop_reason: None,
+            extra: Some(json!({
+                "reasonCodes": classification.reason_codes,
+            })),
+        },
     )?;
     append_event(
         repo_root,
@@ -343,11 +351,13 @@ pub(crate) fn record_plan_review_action_required(
         repo_root,
         project_id,
         run_id,
-        Some(AgentRunState::Plan),
-        AgentRunState::ApprovalWait,
-        "Plan mode requires operator review before execution.",
-        Some(AgentRunStopReason::WaitingForApproval),
-        None,
+        AgentStateTransition {
+            from: Some(AgentRunState::Plan),
+            to: AgentRunState::ApprovalWait,
+            reason: "Plan mode requires operator review before execution.",
+            stop_reason: Some(AgentRunStopReason::WaitingForApproval),
+            extra: None,
+        },
     )?;
     record_action_request(
         repo_root,
@@ -532,25 +542,32 @@ pub(crate) fn verification_gate_prompt(decision: &VerificationGateDecision) -> S
     )
 }
 
+pub(crate) struct AgentStateTransition {
+    pub(crate) from: Option<AgentRunState>,
+    pub(crate) to: AgentRunState,
+    pub(crate) reason: &'static str,
+    pub(crate) stop_reason: Option<AgentRunStopReason>,
+    pub(crate) extra: Option<JsonValue>,
+}
+
 pub(crate) fn record_state_transition(
     repo_root: &Path,
     project_id: &str,
     run_id: &str,
-    from: Option<AgentRunState>,
-    to: AgentRunState,
-    reason: &str,
-    stop_reason: Option<AgentRunStopReason>,
-    extra: Option<JsonValue>,
+    transition: AgentStateTransition,
 ) -> CommandResult<()> {
     let mut payload = JsonMap::new();
     payload.insert("kind".into(), json!("agent_state_transition"));
-    payload.insert("from".into(), json!(from.map(AgentRunState::as_str)));
-    payload.insert("to".into(), json!(to.as_str()));
-    payload.insert("reason".into(), json!(reason));
-    if let Some(stop_reason) = stop_reason {
+    payload.insert(
+        "from".into(),
+        json!(transition.from.map(AgentRunState::as_str)),
+    );
+    payload.insert("to".into(), json!(transition.to.as_str()));
+    payload.insert("reason".into(), json!(transition.reason));
+    if let Some(stop_reason) = transition.stop_reason {
         payload.insert("stopReason".into(), json!(stop_reason.as_str()));
     }
-    if let Some(extra) = extra {
+    if let Some(extra) = transition.extra {
         if let Some(extra) = extra.as_object() {
             for (key, value) in extra {
                 payload.insert(key.clone(), value.clone());

@@ -1336,6 +1336,21 @@ function createAdapter(options?: {
     }
     return currentEnvironmentDiscoveryStatus
   })
+  const resolveEnvironmentPermissionRequests = vi.fn(async (request: {
+    decisions: Array<{ id: string; status: 'granted' | 'denied' | 'skipped' }>
+  }) => {
+    const decisions = new Map(request.decisions.map((decision) => [decision.id, decision.status]))
+    currentEnvironmentDiscoveryStatus = {
+      ...currentEnvironmentDiscoveryStatus,
+      permissionRequests: currentEnvironmentDiscoveryStatus.permissionRequests
+        .map((permission) => ({
+          ...permission,
+          status: decisions.get(permission.id) ?? permission.status,
+        }))
+        .filter((permission) => permission.status === 'pending'),
+    }
+    return currentEnvironmentDiscoveryStatus
+  })
 
   const pickRepositoryFolder = vi.fn(async () => pickedRepositoryPath)
   const importRepository = vi.fn(async (_path: string): Promise<ImportRepositoryResponseDto> => {
@@ -1792,6 +1807,7 @@ function createAdapter(options?: {
       syncedAt: '2026-04-16T13:00:00Z',
     }),
     getEnvironmentDiscoveryStatus,
+    resolveEnvironmentPermissionRequests,
     startEnvironmentDiscovery,
     browserEval: async () => undefined,
     browserCurrentUrl: async () => null,
@@ -1889,6 +1905,7 @@ function createAdapter(options?: {
     updateRuntimeRunControls,
     startAutonomousRun,
     getEnvironmentDiscoveryStatus,
+    resolveEnvironmentPermissionRequests,
     startEnvironmentDiscovery,
     onProjectUpdated,
     onRuntimeUpdated,
@@ -1984,8 +2001,8 @@ describe('XeroApp current UI', () => {
     await waitFor(() => expect(startEnvironmentDiscovery).toHaveBeenCalledTimes(1))
   })
 
-  it('adds the environment access step only when discovery reports permission requests', async () => {
-    const { adapter, startEnvironmentDiscovery } = createAdapter({
+  it('persists environment access decisions before confirmation', async () => {
+    const { adapter, resolveEnvironmentPermissionRequests, startEnvironmentDiscovery } = createAdapter({
       projects: [],
       runtimeSession: makeRuntimeSession('project-1', {
         phase: 'idle',
@@ -2022,10 +2039,66 @@ describe('XeroApp current UI', () => {
 
     expect(await screen.findByRole('heading', { name: 'Review environment access' })).toBeVisible()
     expect(screen.getByText('Developer folder access')).toBeVisible()
-    expect(screen.getByLabelText('Skip this optional access for now')).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Skip optional access' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Allow Developer folder access' })).toBeVisible()
     expect(startEnvironmentDiscovery).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    await waitFor(() =>
+      expect(resolveEnvironmentPermissionRequests).toHaveBeenCalledWith({
+        decisions: [{ id: 'developer-folder-access', status: 'skipped' }],
+      }),
+    )
+    expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
+  })
+
+  it('requires mandatory environment access approval before continuing', async () => {
+    const { adapter, resolveEnvironmentPermissionRequests } = createAdapter({
+      projects: [],
+      runtimeSession: makeRuntimeSession('project-1', {
+        phase: 'idle',
+        sessionId: null,
+        accountId: null,
+      }),
+      environmentDiscoveryStatus: makeEnvironmentDiscoveryStatus({
+        hasProfile: true,
+        status: 'partial',
+        stale: false,
+        shouldStart: false,
+        refreshedAt: '2026-04-30T18:00:00Z',
+        permissionRequests: [
+          {
+            id: 'required-toolchain-access',
+            kind: 'protected_path',
+            status: 'pending',
+            title: 'Required toolchain access',
+            reason: 'Allow Xero to inspect the selected toolchain directory.',
+            optional: false,
+          },
+        ],
+      }),
+    })
+
+    render(<XeroApp adapter={adapter} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Get started' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue' }))
+
+    expect(await screen.findByRole('heading', { name: 'Review environment access' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow Required toolchain access' }))
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() =>
+      expect(resolveEnvironmentPermissionRequests).toHaveBeenCalledWith({
+        decisions: [{ id: 'required-toolchain-access', status: 'granted' }],
+      }),
+    )
     expect(await screen.findByRole('heading', { name: 'Review and finish' })).toBeVisible()
   })
 
@@ -2057,6 +2130,25 @@ describe('XeroApp current UI', () => {
     expect(screen.queryByRole('heading', { name: 'Review environment access' })).not.toBeInTheDocument()
     expect(getEnvironmentDiscoveryStatus).toHaveBeenCalledTimes(1)
     expect(startEnvironmentDiscovery).not.toHaveBeenCalled()
+  })
+
+  it('refreshes stale environment discovery on startup even with existing projects', async () => {
+    const { adapter, getEnvironmentDiscoveryStatus, startEnvironmentDiscovery } = createAdapter({
+      projects: [makeProjectSummary('project-1', 'Xero')],
+      environmentDiscoveryStatus: makeEnvironmentDiscoveryStatus({
+        hasProfile: true,
+        status: 'ready',
+        stale: true,
+        shouldStart: true,
+        refreshedAt: '2026-04-20T18:00:00Z',
+      }),
+    })
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() => expect(getEnvironmentDiscoveryStatus).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(startEnvironmentDiscovery).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('heading', { name: /Welcome to Xero/i })).not.toBeInTheDocument()
   })
 
 

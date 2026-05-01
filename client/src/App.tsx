@@ -241,7 +241,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     useState<EnvironmentDiscoveryStatusDto | null>(null)
   const [environmentProfileSummary, setEnvironmentProfileSummary] =
     useState<EnvironmentProfileSummaryDto>(null)
-  const environmentDiscoveryStartedRef = useRef(false)
+  const environmentDiscoveryCheckedRef = useRef(false)
 
   useEffect(() => {
     setAgentComposerControls(null)
@@ -273,6 +273,27 @@ export function XeroApp({ adapter }: XeroAppProps) {
         status = await resolvedAdapter.startEnvironmentDiscovery()
       }
 
+      setEnvironmentDiscoveryStatus(status)
+      if (resolvedAdapter.getEnvironmentProfileSummary) {
+        const summary = await resolvedAdapter.getEnvironmentProfileSummary()
+        setEnvironmentProfileSummary(summary)
+      }
+      return status
+    },
+    [resolvedAdapter],
+  )
+
+  const resolveEnvironmentPermissions = useCallback(
+    async (
+      decisions: Array<{
+        id: string
+        status: 'granted' | 'denied' | 'skipped'
+      }>,
+    ) => {
+      if (!resolvedAdapter.resolveEnvironmentPermissionRequests) {
+        return null
+      }
+      const status = await resolvedAdapter.resolveEnvironmentPermissionRequests({ decisions })
       setEnvironmentDiscoveryStatus(status)
       if (resolvedAdapter.getEnvironmentProfileSummary) {
         const summary = await resolvedAdapter.getEnvironmentProfileSummary()
@@ -713,23 +734,23 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const showOnboarding = (onboardingOpen || shouldAutoOpenOnboarding) && !onboardingDismissed && !isLoading
 
   useEffect(() => {
-    if (!showOnboarding || environmentDiscoveryStartedRef.current) {
+    if (environmentDiscoveryCheckedRef.current) {
       return
     }
     if (!resolvedAdapter.getEnvironmentDiscoveryStatus) {
-      environmentDiscoveryStartedRef.current = true
+      environmentDiscoveryCheckedRef.current = true
       return
     }
 
     let cancelled = false
-    environmentDiscoveryStartedRef.current = true
+    environmentDiscoveryCheckedRef.current = true
 
     const startEnvironmentDiscovery = async () => {
       try {
         const status = await refreshEnvironmentDiscovery()
         if (cancelled || !status) return
       } catch {
-        // Onboarding remains non-blocking; diagnostics can surface discovery failures later.
+        // Startup remains non-blocking; diagnostics can surface discovery failures later.
       }
     }
 
@@ -738,7 +759,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     return () => {
       cancelled = true
     }
-  }, [refreshEnvironmentDiscovery, resolvedAdapter.getEnvironmentDiscoveryStatus, showOnboarding])
+  }, [refreshEnvironmentDiscovery, resolvedAdapter.getEnvironmentDiscoveryStatus])
 
   if (showOnboarding) {
     return (
@@ -792,6 +813,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           pendingNotificationRouteId={agentView?.pendingNotificationRouteId ?? null}
           notificationRouteMutationError={agentView?.notificationRouteMutationError ?? null}
           environmentPermissionRequests={environmentDiscoveryStatus?.permissionRequests ?? []}
+          onResolveEnvironmentPermissions={resolveEnvironmentPermissions}
           onImportProject={() => importProject()}
           onRefreshProviderCredentials={(options) => refreshProviderCredentials(options)}
           onUpsertProviderCredential={(request) => upsertProviderCredential(request)}

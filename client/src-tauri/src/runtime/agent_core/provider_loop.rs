@@ -64,11 +64,13 @@ pub(crate) fn drive_provider_loop(
                     repo_root,
                     project_id,
                     run_id,
-                    None,
-                    AgentRunState::Summarize,
-                    "Provider returned a candidate final response.",
-                    None,
-                    None,
+                    AgentStateTransition {
+                        from: None,
+                        to: AgentRunState::Summarize,
+                        reason: "Provider returned a candidate final response.",
+                        stop_reason: None,
+                        extra: None,
+                    },
                 )?;
                 record_completion_gate(repo_root, project_id, run_id, &gate)?;
                 if gate.status == VerificationGateStatus::Required {
@@ -90,11 +92,14 @@ pub(crate) fn drive_provider_loop(
                             repo_root,
                             project_id,
                             run_id,
-                            Some(AgentRunState::Summarize),
-                            AgentRunState::Verify,
-                            "Completion was held until verification evidence is recorded.",
-                            None,
-                            None,
+                            AgentStateTransition {
+                                from: Some(AgentRunState::Summarize),
+                                to: AgentRunState::Verify,
+                                reason:
+                                    "Completion was held until verification evidence is recorded.",
+                                stop_reason: None,
+                                extra: None,
+                            },
                         )?;
                         append_message(
                             repo_root,
@@ -139,13 +144,15 @@ pub(crate) fn drive_provider_loop(
                     repo_root,
                     project_id,
                     run_id,
-                    Some(AgentRunState::Summarize),
-                    AgentRunState::Complete,
-                    "Completion gate passed.",
-                    Some(AgentRunStopReason::Complete),
-                    Some(json!({
-                        "verificationStatus": gate.status.as_str(),
-                    })),
+                    AgentStateTransition {
+                        from: Some(AgentRunState::Summarize),
+                        to: AgentRunState::Complete,
+                        reason: "Completion gate passed.",
+                        stop_reason: Some(AgentRunStopReason::Complete),
+                        extra: Some(json!({
+                            "verificationStatus": gate.status.as_str(),
+                        })),
+                    },
                 )?;
                 return Ok(());
             }
@@ -224,16 +231,18 @@ pub(crate) fn drive_provider_loop(
                         repo_root,
                         project_id,
                         run_id,
-                        None,
-                        AgentRunState::Execute,
-                        "Provider requested execution-capable tool calls.",
-                        None,
-                        Some(json!({
-                            "toolNames": tool_calls
-                                .iter()
-                                .map(|tool_call| tool_call.tool_name.as_str())
-                                .collect::<Vec<_>>(),
-                        })),
+                        AgentStateTransition {
+                            from: None,
+                            to: AgentRunState::Execute,
+                            reason: "Provider requested execution-capable tool calls.",
+                            stop_reason: None,
+                            extra: Some(json!({
+                                "toolNames": tool_calls
+                                    .iter()
+                                    .map(|tool_call| tool_call.tool_name.as_str())
+                                    .collect::<Vec<_>>(),
+                            })),
+                        },
                     )?;
                 }
 
@@ -396,11 +405,13 @@ fn record_verification_action_required(
         repo_root,
         project_id,
         run_id,
-        Some(AgentRunState::Verify),
-        AgentRunState::ApprovalWait,
-        "Verification gate still lacked evidence after a retry.",
-        Some(AgentRunStopReason::WaitingForApproval),
-        None,
+        AgentStateTransition {
+            from: Some(AgentRunState::Verify),
+            to: AgentRunState::ApprovalWait,
+            reason: "Verification gate still lacked evidence after a retry.",
+            stop_reason: Some(AgentRunStopReason::WaitingForApproval),
+            extra: None,
+        },
     )?;
     record_action_request(
         repo_root,

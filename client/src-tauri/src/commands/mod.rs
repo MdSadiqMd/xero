@@ -92,7 +92,8 @@ pub use emulator::{
 };
 pub use environment_discovery::{
     get_environment_discovery_status, get_environment_profile_summary,
-    refresh_environment_discovery, start_environment_discovery,
+    refresh_environment_discovery, resolve_environment_permission_requests,
+    start_environment_discovery,
 };
 pub use get_autonomous_run::get_autonomous_run;
 pub use get_project_snapshot::get_project_snapshot;

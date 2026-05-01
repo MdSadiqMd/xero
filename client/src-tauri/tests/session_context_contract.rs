@@ -10,11 +10,12 @@ use xero_desktop_lib::{
         validate_run_transcript_contract, validate_session_memory_record_contract,
         RuntimeStreamItemDto, RuntimeStreamItemKind, RuntimeStreamTranscriptRole,
         RuntimeToolCallState, SessionCompactionPolicyInput, SessionContextBudgetPressureDto,
-        SessionContextContributorKindDto, SessionContextPolicyActionDto,
-        SessionContextRedactionClassDto, SessionContextRedactionDto, SessionContextSnapshotDto,
-        SessionMemoryKindDto, SessionMemoryRecordDto, SessionMemoryReviewStateDto,
-        SessionMemoryScopeDto, SessionTranscriptActorDto, SessionTranscriptItemKindDto,
-        SessionTranscriptSourceKindDto, SessionTranscriptToolStateDto, SessionUsageSourceDto,
+        SessionContextCodeMapDto, SessionContextContributorKindDto, SessionContextDispositionDto,
+        SessionContextPolicyActionDto, SessionContextRedactionClassDto, SessionContextRedactionDto,
+        SessionContextSnapshotDto, SessionContextTaskPhaseDto, SessionMemoryKindDto,
+        SessionMemoryRecordDto, SessionMemoryReviewStateDto, SessionMemoryScopeDto,
+        SessionTranscriptActorDto, SessionTranscriptItemKindDto, SessionTranscriptSourceKindDto,
+        SessionTranscriptToolStateDto, SessionUsageSourceDto,
         XERO_SESSION_CONTEXT_CONTRACT_VERSION,
     },
     db::project_store::{
@@ -487,11 +488,31 @@ fn context_snapshot_contract_validates_budget_and_contributor_integrity() {
         sequence: 2,
         estimated_tokens: 40,
         estimated_chars: 160,
+        recency_score: 85,
+        relevance_score: 90,
+        authority_score: 95,
+        rank_score: 900,
+        task_phase: SessionContextTaskPhaseDto::ContextGather,
+        disposition: SessionContextDispositionDto::Include,
         included: true,
         model_visible: true,
+        summary: None,
+        omitted_reason: None,
         text: Some("Use unit tests only.".into()),
         redaction: SessionContextRedactionDto::public(),
     });
+    let included_token_estimate = contributors
+        .iter()
+        .filter(|contributor| contributor.included && contributor.model_visible)
+        .fold(0_u64, |total, contributor| {
+            total.saturating_add(contributor.estimated_tokens)
+        });
+    let deferred_token_estimate = contributors
+        .iter()
+        .filter(|contributor| !(contributor.included && contributor.model_visible))
+        .fold(0_u64, |total, contributor| {
+            total.saturating_add(contributor.estimated_tokens)
+        });
 
     let snapshot = SessionContextSnapshotDto {
         contract_version: XERO_SESSION_CONTEXT_CONTRACT_VERSION,
@@ -503,6 +524,17 @@ fn context_snapshot_contract_validates_budget_and_contributor_integrity() {
         model_id: MODEL_ID.into(),
         generated_at: "2026-04-26T10:05:00Z".into(),
         budget: context_budget(120, Some(200)),
+        provider_request_hash: "0".repeat(64),
+        included_token_estimate,
+        deferred_token_estimate,
+        code_map: SessionContextCodeMapDto {
+            generated_from_root: "/repo".into(),
+            source_roots: Vec::new(),
+            package_manifests: Vec::new(),
+            symbols: Vec::new(),
+            redaction: SessionContextRedactionDto::public(),
+        },
+        diff: None,
         contributors,
         policy_decisions: vec![evaluate_compaction_policy(SessionCompactionPolicyInput {
             manual_requested: false,

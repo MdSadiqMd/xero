@@ -1,12 +1,21 @@
 import { ShieldCheck, ShieldQuestion } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { EnvironmentPermissionRequestDto } from "@/src/lib/xero-model/environment"
+import type {
+  EnvironmentPermissionDecisionStatusDto,
+  EnvironmentPermissionRequestDto,
+} from "@/src/lib/xero-model/environment"
 import { StepHeader } from "./providers-step"
 
 interface EnvironmentAccessStepProps {
   permissionRequests: EnvironmentPermissionRequestDto[]
+  decisions: Record<string, EnvironmentPermissionDecisionStatusDto | "pending">
+  onDecisionChange: (
+    requestId: string,
+    status: EnvironmentPermissionDecisionStatusDto,
+  ) => void
+  disabled?: boolean
 }
 
 const KIND_LABELS: Record<EnvironmentPermissionRequestDto["kind"], string> = {
@@ -16,7 +25,12 @@ const KIND_LABELS: Record<EnvironmentPermissionRequestDto["kind"], string> = {
   installation_action: "Installation",
 }
 
-export function EnvironmentAccessStep({ permissionRequests }: EnvironmentAccessStepProps) {
+export function EnvironmentAccessStep({
+  permissionRequests,
+  decisions,
+  onDecisionChange,
+  disabled = false,
+}: EnvironmentAccessStepProps) {
   return (
     <div>
       <StepHeader
@@ -64,15 +78,61 @@ export function EnvironmentAccessStep({ permissionRequests }: EnvironmentAccessS
               </div>
             </div>
 
-            {request.optional ? (
-              <label className="mt-3 flex items-center gap-2 text-[11.5px] text-muted-foreground">
-                <Checkbox defaultChecked />
-                Skip this optional access for now
-              </label>
-            ) : null}
+            <EnvironmentAccessDecisionControl
+              request={request}
+              decision={decisions[request.id] ?? (request.optional ? "skipped" : "pending")}
+              disabled={disabled}
+              onDecisionChange={onDecisionChange}
+            />
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+function EnvironmentAccessDecisionControl({
+  request,
+  decision,
+  disabled,
+  onDecisionChange,
+}: {
+  request: EnvironmentPermissionRequestDto
+  decision: EnvironmentPermissionDecisionStatusDto | "pending"
+  disabled: boolean
+  onDecisionChange: (
+    requestId: string,
+    status: EnvironmentPermissionDecisionStatusDto,
+  ) => void
+}) {
+  const isGranted = decision === "granted"
+  const isSkipped = decision === "skipped"
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        size="sm"
+        variant={isGranted ? "default" : "outline"}
+        disabled={disabled}
+        onClick={() => onDecisionChange(request.id, "granted")}
+        className="h-7 px-2.5 text-[11.5px]"
+      >
+        {isGranted ? "Allowed" : `Allow ${request.title}`}
+      </Button>
+
+      {request.optional ? (
+        <Button
+          type="button"
+          size="sm"
+          variant={isSkipped ? "secondary" : "ghost"}
+          disabled={disabled}
+          onClick={() => onDecisionChange(request.id, "skipped")}
+          className="h-7 px-2.5 text-[11.5px] text-muted-foreground"
+        >
+          Skip optional access
+        </Button>
+      ) : null}
     </div>
   )
 }

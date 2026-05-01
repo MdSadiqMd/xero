@@ -219,6 +219,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
             commands::environment_discovery::get_environment_discovery_status,
             commands::environment_discovery::get_environment_profile_summary,
             commands::environment_discovery::refresh_environment_discovery,
+            commands::environment_discovery::resolve_environment_permission_requests,
             commands::environment_discovery::start_environment_discovery,
             commands::provider_diagnostics::check_provider_profile,
             commands::provider_credentials::list_provider_credentials,

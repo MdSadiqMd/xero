@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowLeft, ArrowRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { StepIndicator } from "./step-indicator"
@@ -25,7 +25,11 @@ import {
   type UpsertNotificationRouteRequestDto,
   type UpsertProviderCredentialRequestDto,
 } from "@/src/lib/xero-model"
-import type { EnvironmentPermissionRequestDto } from "@/src/lib/xero-model/environment"
+import type {
+  EnvironmentDiscoveryStatusDto,
+  EnvironmentPermissionDecisionStatusDto,
+  EnvironmentPermissionRequestDto,
+} from "@/src/lib/xero-model/environment"
 import { getCloudProviderPreset } from "@/src/lib/xero-model/provider-presets"
 import { type OnboardingStepId } from "./types"
 
@@ -104,6 +108,10 @@ export interface OnboardingFlowProps {
   pendingNotificationRouteId: string | null
   notificationRouteMutationError: OperatorActionErrorView | null
   environmentPermissionRequests?: EnvironmentPermissionRequestDto[]
+  onResolveEnvironmentPermissions?: (decisions: Array<{
+    id: string
+    status: EnvironmentPermissionDecisionStatusDto
+  }>) => Promise<EnvironmentDiscoveryStatusDto | null>
   onImportProject: () => Promise<void>
   onRefreshProviderCredentials?: (options?: {
     force?: boolean
@@ -141,6 +149,7 @@ export function OnboardingFlow({
   pendingNotificationRouteId,
   notificationRouteMutationError,
   environmentPermissionRequests = [],
+  onResolveEnvironmentPermissions,
   onImportProject,
   onRefreshProviderCredentials,
   onUpsertProviderCredential,
@@ -151,6 +160,13 @@ export function OnboardingFlow({
   onDismiss,
 }: OnboardingFlowProps) {
   const [stepIndex, setStepIndex] = useState(0)
+  const [environmentPermissionDecisions, setEnvironmentPermissionDecisions] = useState<
+    Record<string, EnvironmentPermissionDecisionStatusDto | "pending">
+  >({})
+  const [environmentPermissionSaveStatus, setEnvironmentPermissionSaveStatus] = useState<
+    "idle" | "saving" | "error"
+  >("idle")
+  const [environmentPermissionSaveError, setEnvironmentPermissionSaveError] = useState<string | null>(null)
   const directionRef = useRef<1 | -1>(1)
 
   const stepOrder = useMemo(() => {
@@ -170,6 +186,23 @@ export function OnboardingFlow({
   )
   const currentStep = stepOrder[Math.min(stepIndex, stepOrder.length - 1)]
   const providerReview = getProviderReview(providerCredentials, runtimeSession)
+  const isEnvironmentAccess = currentStep.id === "environment-access"
+
+  useEffect(() => {
+    setEnvironmentPermissionDecisions((current) => {
+      const next: Record<string, EnvironmentPermissionDecisionStatusDto | "pending"> = {}
+      for (const request of environmentPermissionRequests) {
+        if (request.status === "granted" || request.status === "denied" || request.status === "skipped") {
+          next[request.id] = request.status
+        } else if (current[request.id]) {
+          next[request.id] = current[request.id]
+        } else {
+          next[request.id] = request.optional ? "skipped" : "pending"
+        }
+      }
+      return next
+    })
+  }, [environmentPermissionRequests])
 
   const goTo = useCallback((target: number) => {
     setStepIndex((current) => {
@@ -181,6 +214,67 @@ export function OnboardingFlow({
 
   const next = useCallback(() => goTo(stepIndex + 1), [goTo, stepIndex])
   const back = useCallback(() => goTo(stepIndex - 1), [goTo, stepIndex])
+  const setEnvironmentPermissionDecision = useCallback(
+    (requestId: string, status: EnvironmentPermissionDecisionStatusDto) => {
+      setEnvironmentPermissionSaveStatus("idle")
+      setEnvironmentPermissionSaveError(null)
+      setEnvironmentPermissionDecisions((current) => ({
+        ...current,
+        [requestId]: status,
+      }))
+    },
+    [],
+  )
+
+  const hasRequiredEnvironmentPermissionPending = useMemo(
+    () =>
+      environmentPermissionRequests.some(
+        (request) =>
+          !request.optional && environmentPermissionDecisions[request.id] !== "granted",
+      ),
+    [environmentPermissionDecisions, environmentPermissionRequests],
+  )
+
+  const saveEnvironmentAccessAndContinue = useCallback(async () => {
+    if (hasRequiredEnvironmentPermissionPending) {
+      return
+    }
+
+    const decisions = environmentPermissionRequests
+      .map((request) => ({
+        id: request.id,
+        status:
+          environmentPermissionDecisions[request.id] ??
+          (request.optional ? "skipped" : "granted"),
+      }))
+      .filter(
+        (decision): decision is {
+          id: string
+          status: EnvironmentPermissionDecisionStatusDto
+        } => decision.status !== "pending",
+      )
+
+    if (decisions.length > 0 && onResolveEnvironmentPermissions) {
+      setEnvironmentPermissionSaveStatus("saving")
+      try {
+        await onResolveEnvironmentPermissions(decisions)
+        setEnvironmentPermissionSaveStatus("idle")
+        setEnvironmentPermissionSaveError(null)
+      } catch {
+        setEnvironmentPermissionSaveStatus("error")
+        setEnvironmentPermissionSaveError("Xero could not save environment access choices. Try again.")
+        return
+      }
+    }
+
+    next()
+  }, [
+    environmentPermissionDecisions,
+    environmentPermissionRequests,
+    hasRequiredEnvironmentPermissionPending,
+    next,
+    onResolveEnvironmentPermissions,
+  ])
 
   const indicatorIndex = useMemo(
     () => Math.max(0, indicatorSteps.findIndex((step) => step.id === currentStep.id)),
@@ -189,8 +283,19 @@ export function OnboardingFlow({
 
   const showFooter = currentStep.id !== "welcome"
   const isConfirm = currentStep.id === "confirm"
-  const primaryLabel = isConfirm ? "Enter Xero" : "Continue"
-  const handlePrimary = isConfirm ? onComplete : next
+  const primaryLabel = isConfirm
+    ? "Enter Xero"
+    : isEnvironmentAccess && environmentPermissionSaveStatus === "saving"
+      ? "Saving"
+      : "Continue"
+  const handlePrimary = isConfirm
+    ? onComplete
+    : isEnvironmentAccess
+      ? () => void saveEnvironmentAccessAndContinue()
+      : next
+  const primaryDisabled =
+    (isEnvironmentAccess && hasRequiredEnvironmentPermissionPending) ||
+    environmentPermissionSaveStatus === "saving"
 
   return (
     <div className="relative flex min-h-full flex-1 flex-col overflow-hidden bg-background text-foreground">
@@ -256,7 +361,17 @@ export function OnboardingFlow({
             />
           ) : null}
           {currentStep.id === "environment-access" ? (
-            <EnvironmentAccessStep permissionRequests={environmentPermissionRequests} />
+            <EnvironmentAccessStep
+              permissionRequests={environmentPermissionRequests}
+              decisions={environmentPermissionDecisions}
+              disabled={environmentPermissionSaveStatus === "saving"}
+              onDecisionChange={setEnvironmentPermissionDecision}
+            />
+          ) : null}
+          {currentStep.id === "environment-access" && environmentPermissionSaveError ? (
+            <p className="mt-3 text-[11.5px] leading-relaxed text-destructive">
+              {environmentPermissionSaveError}
+            </p>
           ) : null}
           {currentStep.id === "confirm" ? (
             <ConfirmationStep
@@ -293,7 +408,15 @@ export function OnboardingFlow({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={next}
+                  onClick={
+                    isEnvironmentAccess
+                      ? () => void saveEnvironmentAccessAndContinue()
+                      : next
+                  }
+                  disabled={
+                    (isEnvironmentAccess && hasRequiredEnvironmentPermissionPending) ||
+                    environmentPermissionSaveStatus === "saving"
+                  }
                   className="h-8 text-[12px] text-muted-foreground hover:text-foreground"
                 >
                   Skip
@@ -302,6 +425,7 @@ export function OnboardingFlow({
               <Button
                 size="sm"
                 onClick={handlePrimary}
+                disabled={primaryDisabled}
                 className="group h-8 gap-1.5 bg-primary px-3 text-[12px] font-medium hover:bg-primary/90"
               >
                 {primaryLabel}

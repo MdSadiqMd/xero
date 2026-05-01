@@ -87,6 +87,21 @@ export const environmentDiscoveryStatusSchema = z
   })
   .strict()
 
+export const environmentPermissionDecisionStatusSchema = z.enum(['granted', 'denied', 'skipped'])
+
+export const environmentPermissionDecisionSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    status: environmentPermissionDecisionStatusSchema,
+  })
+  .strict()
+
+export const resolveEnvironmentPermissionRequestsSchema = z
+  .object({
+    decisions: z.array(environmentPermissionDecisionSchema).min(1),
+  })
+  .strict()
+
 export const environmentToolSummarySchema = z
   .object({
     id: z.string().trim().min(1),
@@ -133,11 +148,14 @@ export const environmentProfileSummarySchema = z
 export type EnvironmentProfileStatusDto = z.infer<typeof environmentProfileStatusSchema>
 export type EnvironmentPermissionKindDto = z.infer<typeof environmentPermissionKindSchema>
 export type EnvironmentPermissionStatusDto = z.infer<typeof environmentPermissionStatusSchema>
+export type EnvironmentPermissionDecisionStatusDto = z.infer<typeof environmentPermissionDecisionStatusSchema>
 export type EnvironmentDiagnosticSeverityDto = z.infer<typeof environmentDiagnosticSeveritySchema>
 export type EnvironmentToolCategoryDto = z.infer<typeof environmentToolCategorySchema>
 export type EnvironmentToolProbeStatusDto = z.infer<typeof environmentToolProbeStatusSchema>
 export type EnvironmentCapabilityStateDto = z.infer<typeof environmentCapabilityStateSchema>
 export type EnvironmentPermissionRequestDto = z.infer<typeof environmentPermissionRequestSchema>
+export type EnvironmentPermissionDecisionDto = z.infer<typeof environmentPermissionDecisionSchema>
+export type ResolveEnvironmentPermissionRequestsDto = z.infer<typeof resolveEnvironmentPermissionRequestsSchema>
 export type EnvironmentDiagnosticDto = z.infer<typeof environmentDiagnosticSchema>
 export type EnvironmentDiscoveryStatusDto = z.infer<typeof environmentDiscoveryStatusSchema>
 export type EnvironmentToolSummaryDto = z.infer<typeof environmentToolSummarySchema>

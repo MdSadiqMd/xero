@@ -31,6 +31,24 @@ pub fn refresh_environment_discovery<R: Runtime>(
     service::refresh_environment_discovery(state.global_db_path(&app)?)
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResolveEnvironmentPermissionRequestsRequest {
+    pub decisions: Vec<service::EnvironmentPermissionDecision>,
+}
+
+#[tauri::command]
+pub fn resolve_environment_permission_requests<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopState>,
+    request: ResolveEnvironmentPermissionRequestsRequest,
+) -> CommandResult<EnvironmentDiscoveryStatus> {
+    service::resolve_environment_permission_requests(
+        &state.global_db_path(&app)?,
+        request.decisions,
+    )
+}
+
 #[tauri::command]
 pub fn get_environment_profile_summary<R: Runtime>(
     app: AppHandle<R>,
