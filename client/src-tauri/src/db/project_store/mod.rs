@@ -1,4 +1,5 @@
 mod agent_context;
+mod agent_continuity;
 mod agent_core;
 mod agent_lineage;
 mod agent_memory;
@@ -17,6 +18,7 @@ mod runtime_boundary;
 mod skills;
 
 pub use agent_context::*;
+pub use agent_continuity::*;
 pub use agent_core::*;
 pub use agent_lineage::*;
 pub use agent_memory::*;

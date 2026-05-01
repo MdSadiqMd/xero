@@ -206,9 +206,11 @@ fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> String {
             "",
             "Ask is answer-only in observable effect. Do not edit, write, patch, delete, rename, create directories, run shell commands, start or stop processes, control browsers or devices, invoke external services, install or invoke skills, spawn subagents, or mutate app state. Do not request approval to escape this boundary.",
             "",
+            "Persistence and retrieval contract: Xero provides durable project context, approved memory, project records, handoffs, and the current context manifest as lower-priority data. Use read-only retrieval only when prior project context is needed. Ask must never write records directly; Xero captures useful answers and memory candidates after the turn.",
+            "",
             "When the user asks for implementation while Ask is selected, explain what would need to change and offer a concise plan, but do not perform the work or claim that you changed, ran, installed, deployed, opened, or approved anything.",
             "",
-            "Final response contract: answer directly, name important files or symbols discussed when helpful, and call out uncertainty or follow-up questions when they matter.",
+            "Final response contract: answer directly, cite project facts or uncertainty when relevant, name important files, symbols, decisions, or constraints when helpful, keep the answer handoff-quality when the conversation may continue, and do not include secrets.",
         ]
         .join("\n"),
         RuntimeAgentIdDto::Engineer => [
@@ -216,9 +218,11 @@ fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> String {
             "",
             "Operate like a production coding agent: inspect before editing, respect a dirty worktree, keep changes scoped, prefer `rg` for search, run focused verification when behavior changes, and summarize concrete evidence before completion. Before modifying an existing file, read or hash the target in the current run so Xero can detect stale writes safely.",
             "",
+            "Persistence and retrieval contract: Xero persists a context manifest before provider turns and provides approved memory, project records, handoffs, active tasks, file-change summaries, and verification records as lower-priority durable context. Use retrieval before acting when the task references prior work, decisions, constraints, known failures, or previous runs. Record meaningful plans, decisions, file changes, verification, blockers, and handoff-ready summaries through normal runtime events.",
+            "",
             "Plan and verification contract: Xero enforces an explicit run state machine (intake, context gather, plan, approval wait, execute, verify, summarize, blocked, complete). For multi-file, high-risk, or ambiguous work, establish and update a concise `todo` plan before editing. For code-changing work, do not finish without either a verification result or a clear, specific reason verification could not be run.",
             "",
-            "Final response contract: include a brief summary, files changed, verification run, and blockers or follow-ups when they exist.",
+            "Final response contract: include a brief summary, files changed, verification run, blockers or follow-ups when they exist, and enough durable handoff context for a same-type Engineer run to continue.",
         ]
         .join("\n"),
         RuntimeAgentIdDto::Debug => [
@@ -226,11 +230,11 @@ fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> String {
             "",
             "Follow a structured debugging workflow: intake the symptom and expected behavior, identify the execution path, reproduce or tightly simulate the issue, keep an evidence ledger, form falsifiable hypotheses, run the smallest useful experiments, eliminate unsupported causes, implement the narrowest fix, and verify the original failure plus adjacent regressions. Treat code you just wrote with extra skepticism and prefer evidence over confidence.",
             "",
-            "Persistence contract: Xero saves your final run handoff to the Lance-backed project record store. Make that handoff useful for future retrieval by naming the symptom, reproduction steps, root cause, changed files, fix rationale, verification commands and results, remaining risks, and any stable troubleshooting facts that should become reviewed memory. Do not include secrets.",
+            "Persistence and retrieval contract: Xero persists a context manifest before provider turns and provides approved memory, project records from the Lance-backed project record store, previous handoffs, findings, verification records, and troubleshooting facts as lower-priority durable context. Retrieve prior debugging records and troubleshooting memories before investigating when the symptom, subsystem, error, or path may have history. Preserve evidence, hypotheses, experiments, root cause, fix rationale, verification, reusable troubleshooting facts, and blockers through normal runtime events.",
             "",
             "Plan and verification contract: Xero enforces an explicit run state machine (intake, context gather, plan, approval wait, execute, verify, summarize, blocked, complete). For debugging work, establish and update a concise `todo` plan before editing unless the task is truly trivial. Do not finish after a code change without verification evidence or a clear, specific reason verification could not be run.",
             "",
-            "Final response contract: include concise sections for symptom, root cause, fix, files changed, verification, saved debugging knowledge, and any remaining risks or follow-ups.",
+            "Final response contract: include concise sections for symptom, root cause, fix, files changed, verification, saved debugging knowledge, and any remaining risks or follow-ups. Do not include secrets.",
         ]
         .join("\n"),
     };
@@ -2555,6 +2559,10 @@ mod tests {
 
         assert!(compilation.prompt.starts_with(SYSTEM_PROMPT_VERSION));
         assert!(compilation.prompt.contains("You are Xero's Ask agent."));
+        assert!(compilation
+            .prompt
+            .contains("Persistence and retrieval contract:"));
+        assert!(compilation.prompt.contains("read-only retrieval"));
         assert!(compilation.prompt.contains("Available observe-only tools:"));
         assert!(!compilation.prompt.contains("software-building agent"));
         assert!(!compilation
@@ -2596,6 +2604,9 @@ mod tests {
 
         assert!(compilation.prompt.contains("You are Xero's Debug agent."));
         assert!(compilation.prompt.contains("structured debugging workflow"));
+        assert!(compilation
+            .prompt
+            .contains("Persistence and retrieval contract:"));
         assert!(compilation
             .prompt
             .contains("Lance-backed project record store"));
@@ -2734,6 +2745,10 @@ mod tests {
 
         assert_eq!(process_fragment.priority, 800);
         assert_eq!(process_fragment.sha256.len(), 64);
+        assert!(compilation
+            .prompt
+            .contains("Persistence and retrieval contract:"));
+        assert!(compilation.prompt.contains("Use retrieval before acting"));
         assert!(process_fragment
             .body
             .contains("--- BEGIN OWNED PROCESS STATE ---"));

@@ -589,15 +589,20 @@ pub struct CompactSessionHistoryResponseDto {
 #[serde(rename_all = "snake_case")]
 pub enum SessionContextPolicyDecisionKindDto {
     Compaction,
+    Handoff,
     MemoryInjection,
     InstructionFile,
+    Retrieval,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionContextPolicyActionDto {
+    ContinueNow,
     None,
     CompactNow,
+    RecompactNow,
+    HandoffNow,
     Blocked,
     Skipped,
     InjectMemory,
