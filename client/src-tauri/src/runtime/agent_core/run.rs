@@ -1660,6 +1660,13 @@ fn agent_specific_handoff(
             "verificationEvidence": verification_status,
             "reusableTroubleshootingFacts": [],
         }),
+        RuntimeAgentIdDto::AgentCreate => json!({
+            "agentDefinitionIntent": handoff_preview(pending_prompt, 700, redaction_count),
+            "draftSections": completed_work,
+            "projectContextUsed": [],
+            "validationStatus": "not_available_in_phase_1",
+            "followUpInformationNeeded": [],
+        }),
     }
 }
 

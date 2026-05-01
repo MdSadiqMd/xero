@@ -44,20 +44,25 @@ export const writableRuntimeSettingsProviderIdSchema = z.enum(['openrouter', 'op
 export const runtimeRunThinkingEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'x_high'])
 export const runtimeRunApprovalModeSchema = z.enum(['suggest', 'auto_edit', 'yolo'])
 export const DEFAULT_RUNTIME_RUN_APPROVAL_MODE: RuntimeRunApprovalModeDto = 'suggest'
-export const runtimeAgentIdSchema = z.enum(['ask', 'engineer', 'debug'])
+export const BUILTIN_RUNTIME_AGENT_IDS = ['ask', 'engineer', 'debug', 'agent_create'] as const
+export const runtimeAgentIdSchema = z.enum(BUILTIN_RUNTIME_AGENT_IDS)
 export const DEFAULT_RUNTIME_AGENT_ID: RuntimeAgentIdDto = 'ask'
 
 export interface RuntimeAgentDescriptor {
   id: RuntimeAgentIdDto
+  version: number
   label: string
   shortLabel: string
   description: string
   taskPurpose: string
+  scope: 'built_in' | 'global_custom' | 'project_custom'
+  lifecycleState: 'draft' | 'active' | 'archived'
+  baseCapabilityProfile: 'observe_only' | 'engineering' | 'debugging' | 'agent_builder'
   defaultApprovalMode: RuntimeRunApprovalModeDto
   allowedApprovalModes: readonly RuntimeRunApprovalModeDto[]
-  promptPolicy: 'ask' | 'engineer' | 'debug'
-  toolPolicy: 'observe_only' | 'engineering'
-  outputContract: 'answer' | 'engineering_summary' | 'debug_summary'
+  promptPolicy: 'ask' | 'engineer' | 'debug' | 'agent_create'
+  toolPolicy: 'observe_only' | 'engineering' | 'agent_builder'
+  outputContract: 'answer' | 'engineering_summary' | 'debug_summary' | 'agent_definition_draft'
   projectDataPolicy: {
     required: true
     recordKinds: readonly (
@@ -86,10 +91,14 @@ export interface RuntimeAgentDescriptor {
 export const RUNTIME_AGENT_DESCRIPTORS = [
   {
     id: 'ask',
+    version: 1,
     label: 'Ask',
     shortLabel: 'Ask',
     description: 'Answer questions about the project without mutating files, app state, processes, or external services.',
     taskPurpose: 'Answer in chat using audited observe-only tools when grounding is needed.',
+    scope: 'built_in',
+    lifecycleState: 'active',
+    baseCapabilityProfile: 'observe_only',
     defaultApprovalMode: 'suggest',
     allowedApprovalModes: ['suggest'],
     promptPolicy: 'ask',
@@ -109,10 +118,14 @@ export const RUNTIME_AGENT_DESCRIPTORS = [
   },
   {
     id: 'engineer',
+    version: 1,
     label: 'Engineer',
     shortLabel: 'Build',
     description: 'Implement repository changes with the existing software-building toolset and safety gates.',
     taskPurpose: 'Inspect, plan when needed, edit, verify, and summarize engineering work.',
+    scope: 'built_in',
+    lifecycleState: 'active',
+    baseCapabilityProfile: 'engineering',
     defaultApprovalMode: 'suggest',
     allowedApprovalModes: ['suggest', 'auto_edit', 'yolo'],
     promptPolicy: 'engineer',
@@ -144,12 +157,16 @@ export const RUNTIME_AGENT_DESCRIPTORS = [
   },
   {
     id: 'debug',
+    version: 1,
     label: 'Debug',
     shortLabel: 'Debug',
     description:
       'Investigate failures with structured evidence, hypotheses, fixes, verification, and durable debugging memory.',
     taskPurpose:
       'Reproduce, gather evidence, test hypotheses, isolate root cause, fix, verify, and preserve reusable debugging knowledge.',
+    scope: 'built_in',
+    lifecycleState: 'active',
+    baseCapabilityProfile: 'debugging',
     defaultApprovalMode: 'suggest',
     allowedApprovalModes: ['suggest', 'auto_edit', 'yolo'],
     promptPolicy: 'debug',
@@ -177,6 +194,44 @@ export const RUNTIME_AGENT_DESCRIPTORS = [
     workflowRole: 'interactive',
     allowPlanGate: true,
     allowVerificationGate: true,
+    allowAutoCompact: true,
+  },
+  {
+    id: 'agent_create',
+    version: 1,
+    label: 'Agent Create',
+    shortLabel: 'Create',
+    description:
+      'Interview the user and draft high-quality custom agent definitions without mutating repositories or saving agents yet.',
+    taskPurpose:
+      'Gather intent, clarify scope, propose least-privilege capabilities, and produce reviewable agent-definition drafts.',
+    scope: 'built_in',
+    lifecycleState: 'active',
+    baseCapabilityProfile: 'agent_builder',
+    defaultApprovalMode: 'suggest',
+    allowedApprovalModes: ['suggest'],
+    promptPolicy: 'agent_create',
+    toolPolicy: 'agent_builder',
+    outputContract: 'agent_definition_draft',
+    projectDataPolicy: {
+      required: true,
+      recordKinds: [
+        'agent_handoff',
+        'project_fact',
+        'decision',
+        'constraint',
+        'plan',
+        'question',
+        'context_note',
+        'diagnostic',
+      ],
+      structuredSchemas: ['xero.project_record.v1'],
+      unstructuredScopes: ['answer_note', 'session_summary', 'troubleshooting_note'],
+      memoryCandidateKinds: ['project_fact', 'user_preference', 'decision', 'session_summary', 'troubleshooting'],
+    },
+    workflowRole: 'interactive',
+    allowPlanGate: false,
+    allowVerificationGate: false,
     allowAutoCompact: true,
   },
 ] as const satisfies readonly RuntimeAgentDescriptor[]

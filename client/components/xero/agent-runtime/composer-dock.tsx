@@ -8,6 +8,7 @@ import type {
   RuntimeRunActionStatus,
 } from '@/src/features/xero/use-xero-desktop-state/types'
 import {
+  getRuntimeAgentDescriptor,
   RUNTIME_AGENT_DESCRIPTORS,
   runtimeAgentIdSchema,
   type ProviderModelThinkingEffortDto,
@@ -158,7 +159,8 @@ export function ComposerDock({
 }: ComposerDockProps) {
   const hasComposerModelOptions = composerModelGroups.length > 0
   const hasThinkingOptions = composerThinkingOptions.length > 0
-  const showApprovalSelector = composerRuntimeAgentId !== 'ask'
+  const composerRuntimeAgentDescriptor = getRuntimeAgentDescriptor(composerRuntimeAgentId)
+  const showApprovalSelector = composerRuntimeAgentDescriptor.allowedApprovalModes.length > 1
   const isAgentSelectorDisabled = runtimeAgentSwitchDisabled || controlsDisabled
   const isUpdatingControls = runtimeRunActionStatus === 'running' && pendingRuntimeRunAction === 'update_controls'
   const isStartingRun =
@@ -168,7 +170,13 @@ export function ComposerDock({
   const approvalTriggerLabel =
     composerApprovalOptions.find((option) => option.value === composerApprovalMode)?.label ?? 'Approval unavailable'
   const AgentTriggerIcon =
-    composerRuntimeAgentId === 'ask' ? MessageCircle : composerRuntimeAgentId === 'debug' ? Bug : Wrench
+    composerRuntimeAgentId === 'ask'
+      ? MessageCircle
+      : composerRuntimeAgentId === 'debug'
+        ? Bug
+        : composerRuntimeAgentId === 'agent_create'
+          ? Sparkles
+          : Wrench
 
   function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey) {

@@ -16,6 +16,7 @@ import type {
   RuntimeStreamStatus,
 } from '@/src/lib/xero-model'
 import {
+  getRuntimeAgentDescriptor,
   getProviderModelThinkingEffortLabel,
   getRuntimeRunApprovalModeLabel,
 } from '@/src/lib/xero-model'
@@ -145,11 +146,22 @@ export function getComposerThinkingOptions(
   }))
 }
 
-export function getComposerApprovalOptions(): ComposerApprovalOption[] {
-  return composerApprovalModes.map((mode) => ({
+export function getComposerApprovalOptions(runtimeAgentId: RuntimeAgentIdDto): ComposerApprovalOption[] {
+  const allowedModes = getRuntimeAgentDescriptor(runtimeAgentId).allowedApprovalModes
+  return composerApprovalModes.filter((mode) => allowedModes.includes(mode)).map((mode) => ({
     value: mode,
     label: getRuntimeRunApprovalModeLabel(mode),
   }))
+}
+
+export function resolveRuntimeAgentApprovalMode(
+  runtimeAgentId: RuntimeAgentIdDto,
+  currentApprovalMode: RuntimeRunApprovalModeDto,
+): RuntimeRunApprovalModeDto {
+  const descriptor = getRuntimeAgentDescriptor(runtimeAgentId)
+  return descriptor.allowedApprovalModes.includes(currentApprovalMode)
+    ? currentApprovalMode
+    : descriptor.defaultApprovalMode
 }
 
 export function resolveComposerThinkingSelection(
@@ -188,7 +200,7 @@ export function getComposerControlInput(options: {
     providerProfileId: model.profileId,
     modelId: model.modelId,
     thinkingEffort: resolveComposerThinkingSelection(model, options.thinkingEffort),
-    approvalMode: options.runtimeAgentId === 'ask' ? 'suggest' : options.approvalMode,
+    approvalMode: resolveRuntimeAgentApprovalMode(options.runtimeAgentId, options.approvalMode),
     planModeRequired: false,
   }
 }

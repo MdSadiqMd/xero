@@ -59,18 +59,41 @@ function makeRuntimeRunDto(overrides: Record<string, unknown> = {}) {
 }
 
 describe('runtime run control schemas', () => {
-  it('registers Debug as an engineering-capable runtime agent', () => {
+  it('registers built-in runtime agents as descriptor-backed entries', () => {
     expect(runtimeAgentIdSchema.parse('debug')).toBe('debug')
-    expect(RUNTIME_AGENT_DESCRIPTORS.map((agent) => agent.id)).toEqual(['ask', 'engineer', 'debug'])
+    expect(runtimeAgentIdSchema.parse('agent_create')).toBe('agent_create')
+    expect(RUNTIME_AGENT_DESCRIPTORS.map((agent) => agent.id)).toEqual([
+      'ask',
+      'engineer',
+      'debug',
+      'agent_create',
+    ])
 
     expect(getRuntimeAgentDescriptor('debug')).toMatchObject({
       id: 'debug',
+      scope: 'built_in',
+      lifecycleState: 'active',
+      baseCapabilityProfile: 'debugging',
       label: 'Debug',
       toolPolicy: 'engineering',
       outputContract: 'debug_summary',
       allowPlanGate: true,
       allowVerificationGate: true,
       allowedApprovalModes: ['suggest', 'auto_edit', 'yolo'],
+    })
+    expect(getRuntimeAgentDescriptor('agent_create')).toMatchObject({
+      id: 'agent_create',
+      label: 'Agent Create',
+      shortLabel: 'Create',
+      scope: 'built_in',
+      lifecycleState: 'active',
+      baseCapabilityProfile: 'agent_builder',
+      promptPolicy: 'agent_create',
+      toolPolicy: 'agent_builder',
+      outputContract: 'agent_definition_draft',
+      allowPlanGate: false,
+      allowVerificationGate: false,
+      allowedApprovalModes: ['suggest'],
     })
   })
 

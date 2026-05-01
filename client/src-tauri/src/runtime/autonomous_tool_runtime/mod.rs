@@ -567,7 +567,7 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
 pub fn tool_allowed_for_runtime_agent(agent_id: RuntimeAgentIdDto, tool_name: &str) -> bool {
     match agent_id {
         RuntimeAgentIdDto::Engineer | RuntimeAgentIdDto::Debug => true,
-        RuntimeAgentIdDto::Ask => {
+        RuntimeAgentIdDto::Ask | RuntimeAgentIdDto::AgentCreate => {
             matches!(tool_name, AUTONOMOUS_TOOL_TOOL_ACCESS)
                 || tool_effect_class(tool_name).is_ask_observe_only()
         }
@@ -584,6 +584,9 @@ fn allowed_runtime_agent_labels(tool_name: &str) -> Vec<&'static str> {
     }
     if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::Debug, tool_name) {
         agents.push(RuntimeAgentIdDto::Debug.as_str());
+    }
+    if tool_allowed_for_runtime_agent(RuntimeAgentIdDto::AgentCreate, tool_name) {
+        agents.push(RuntimeAgentIdDto::AgentCreate.as_str());
     }
     agents
 }

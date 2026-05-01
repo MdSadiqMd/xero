@@ -450,7 +450,10 @@ export function AgentRuntime({
     () => getComposerThinkingOptions(selectedComposerModel),
     [selectedComposerModel],
   )
-  const composerApprovalOptions = useMemo(() => getComposerApprovalOptions(), [])
+  const composerApprovalOptions = useMemo(
+    () => getComposerApprovalOptions(controller.composerRuntimeAgentId),
+    [controller.composerRuntimeAgentId],
+  )
   const streamRunId = getStreamRunId(runtimeStream, renderableRuntimeRun)
   const contextMeterState = useAgentContextMeterSnapshot({
     adapter: desktopAdapter,
@@ -517,6 +520,11 @@ export function AgentRuntime({
     runtimeSession?.isAuthenticated &&
     !renderableRuntimeRun?.isTerminal
       ? 'Ask about this project...'
+      : controller.composerRuntimeAgentId === 'agent_create' &&
+          !agentRuntimeBlocked &&
+          runtimeSession?.isAuthenticated &&
+          !renderableRuntimeRun?.isTerminal
+        ? 'Describe the agent you want to create...'
       : baseComposerPlaceholder
   const showAgentSetupEmptyState = Boolean(
     agentRuntimeBlocked &&

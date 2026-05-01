@@ -16,6 +16,7 @@ import type {
 import {
   getComposerControlInput,
   getComposerModelOption,
+  resolveRuntimeAgentApprovalMode,
   resolveComposerThinkingSelection,
 } from './composer-helpers'
 import {
@@ -175,12 +176,10 @@ export function useAgentRuntimeController({
   const effectiveRuntimeAgentId = activeRuntimeRun ? selectedRuntimeAgentId : draftRuntimeAgentId
   const effectiveModelSelectionKey = activeRuntimeRun ? selectedModelSelectionKey : draftModelSelectionKey
   const effectiveThinkingEffort = activeRuntimeRun ? selectedThinkingEffort : draftThinkingEffort
-  const effectiveApprovalMode =
-    effectiveRuntimeAgentId === 'ask'
-      ? 'suggest'
-      : activeRuntimeRun
-        ? selectedApprovalMode
-        : draftApprovalMode
+  const effectiveApprovalMode = resolveRuntimeAgentApprovalMode(
+    effectiveRuntimeAgentId,
+    activeRuntimeRun ? selectedApprovalMode : draftApprovalMode,
+  )
   const selectedControlInput = useMemo(
     () =>
       getComposerControlInput({
@@ -563,7 +562,7 @@ export function useAgentRuntimeController({
   }
 
   function handleComposerApprovalModeChange(value: RuntimeRunApprovalModeDto) {
-    if (effectiveRuntimeAgentId === 'ask') {
+    if (resolveRuntimeAgentApprovalMode(effectiveRuntimeAgentId, value) !== value) {
       return
     }
 
@@ -589,9 +588,7 @@ export function useAgentRuntimeController({
     }
 
     setDraftRuntimeAgentId(value)
-    if (value === 'ask') {
-      setDraftApprovalMode('suggest')
-    }
+    setDraftApprovalMode((current) => resolveRuntimeAgentApprovalMode(value, current))
   }
 
   async function handleResolveOperatorAction(

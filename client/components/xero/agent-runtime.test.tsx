@@ -1324,6 +1324,21 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('Auto edit')
   })
 
+  it('renders Agent Create as a built-in suggest-only composer agent', () => {
+    render(
+      <AgentRuntime
+        agent={makeAgent({
+          selectedRuntimeAgentId: 'agent_create',
+          selectedRuntimeAgentLabel: 'Agent Create',
+          selectedApprovalMode: 'suggest',
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('combobox', { name: 'Agent selector' })).toHaveTextContent('Agent Create')
+    expect(screen.queryByRole('combobox', { name: 'Approval mode selector' })).not.toBeInTheDocument()
+  })
+
   it('keeps model selectors available while a prompt is pending on an active run', async () => {
     const onUpdateRuntimeRunControls = vi.fn(async () => makeRuntimeRun())
 
