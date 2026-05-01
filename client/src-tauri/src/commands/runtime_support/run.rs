@@ -951,6 +951,54 @@ pub(crate) fn apply_owned_runtime_run_pending_controls(
     )
 }
 
+pub(crate) fn bind_owned_runtime_run_to_agent_handoff(
+    repo_root: &Path,
+    snapshot: &RuntimeRunSnapshotRecord,
+    target: &project_store::AgentRunSnapshotRecord,
+) -> CommandResult<RuntimeRunSnapshotRecord> {
+    let next_active = match snapshot.controls.pending.as_ref() {
+        Some(pending) => RuntimeRunActiveControlSnapshotRecord {
+            runtime_agent_id: target.run.runtime_agent_id,
+            provider_profile_id: pending.provider_profile_id.clone(),
+            model_id: pending.model_id.clone(),
+            thinking_effort: pending.thinking_effort.clone(),
+            approval_mode: pending.approval_mode.clone(),
+            plan_mode_required: target.run.runtime_agent_id.allows_plan_gate()
+                && pending.plan_mode_required,
+            revision: pending.revision,
+            applied_at: now_timestamp(),
+        },
+        None => RuntimeRunActiveControlSnapshotRecord {
+            runtime_agent_id: target.run.runtime_agent_id,
+            provider_profile_id: snapshot.controls.active.provider_profile_id.clone(),
+            model_id: snapshot.controls.active.model_id.clone(),
+            thinking_effort: snapshot.controls.active.thinking_effort.clone(),
+            approval_mode: snapshot.controls.active.approval_mode.clone(),
+            plan_mode_required: target.run.runtime_agent_id.allows_plan_gate()
+                && snapshot.controls.active.plan_mode_required,
+            revision: snapshot.controls.active.revision.saturating_add(1),
+            applied_at: now_timestamp(),
+        },
+    };
+    let run_controls = RuntimeRunControlStateRecord {
+        active: next_active,
+        pending: None,
+    };
+    persist_owned_runtime_run(
+        repo_root,
+        &snapshot.run.project_id,
+        &snapshot.run.agent_session_id,
+        &target.run.run_id,
+        &snapshot.run.provider_id,
+        &run_controls,
+        snapshot.run.status.clone(),
+        snapshot.run.last_error.clone(),
+        "Owned agent runtime handed off to a same-type target run.",
+        snapshot.last_checkpoint_sequence.saturating_add(1),
+        Some(snapshot),
+    )
+}
+
 fn resolve_owned_runtime_profile_selection<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,

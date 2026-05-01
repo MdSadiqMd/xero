@@ -18,6 +18,7 @@ pub enum AgentRunStatusDto {
     Paused,
     Cancelling,
     Cancelled,
+    HandedOff,
     Completed,
     Failed,
 }

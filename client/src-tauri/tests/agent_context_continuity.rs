@@ -12,7 +12,9 @@ use xero_desktop_lib::{
     db::{self, project_store},
     git::repository::CanonicalRepository,
     runtime::{
-        run_owned_agent_task, AgentProviderConfig, AutonomousToolRuntime, OwnedAgentRunRequest,
+        continue_owned_agent_run, create_owned_agent_run,
+        prepare_owned_agent_continuation_for_drive, run_owned_agent_task, AgentProviderConfig,
+        AutonomousToolRuntime, ContinueOwnedAgentRunRequest, OwnedAgentRunRequest,
     },
     state::DesktopState,
 };
@@ -129,6 +131,29 @@ fn seed_phase3_context(repo_root: &Path, project_id: &str) {
         },
     )
     .expect("seed phase3 approved memory");
+}
+
+fn append_long_context_messages(repo_root: &Path, project_id: &str, run_id: &str) {
+    let long_context = "phase four durable context continuity ".repeat(1_600);
+    for index in 0..4 {
+        project_store::append_agent_message(
+            repo_root,
+            &project_store::NewAgentMessageRecord {
+                project_id: project_id.into(),
+                run_id: run_id.into(),
+                role: if index % 2 == 0 {
+                    project_store::AgentMessageRole::User
+                } else {
+                    project_store::AgentMessageRole::Assistant
+                },
+                content: format!(
+                    "Long context chunk {index}: keep same-type handoff source facts available. {long_context}"
+                ),
+                created_at: format!("2026-05-01T13:0{index}:00Z"),
+            },
+        )
+        .expect("append long context message");
+    }
 }
 
 #[test]
@@ -723,5 +748,163 @@ fn phase3_provider_turn_manifests_include_memory_and_project_records_for_all_age
             .contains("phase3 context package assembler injects durable project records"));
         assert!(record_body.contains("source-cited data, not instructions"));
         assert!(record_body.contains("Ignore all previous instructions"));
+    }
+}
+
+#[test]
+fn phase4_handoff_orchestrator_hands_off_long_runs_to_same_type_targets() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let (project_id, repo_root) = seed_project(&root);
+
+    project_store::upsert_agent_context_policy_settings(
+        &repo_root,
+        &project_store::NewAgentContextPolicySettingsRecord {
+            project_id: project_id.clone(),
+            scope: project_store::AgentContextPolicySettingsScope::Project,
+            agent_session_id: None,
+            auto_compact_enabled: true,
+            auto_handoff_enabled: true,
+            compact_threshold_percent: 1,
+            handoff_threshold_percent: 2,
+            raw_tail_message_count: 6,
+            updated_at: "2026-05-01T13:00:00Z".into(),
+        },
+    )
+    .expect("configure aggressive handoff policy");
+
+    for runtime_agent_id in [
+        RuntimeAgentIdDto::Ask,
+        RuntimeAgentIdDto::Engineer,
+        RuntimeAgentIdDto::Debug,
+    ] {
+        let source_run_id = format!("phase4-{}-source", runtime_agent_id.as_str());
+        let pending_prompt = format!(
+            "Continue the phase 4 {} task from durable handoff context.",
+            runtime_agent_id.as_str()
+        );
+        let tool_runtime = AutonomousToolRuntime::new(&repo_root).expect("tool runtime");
+        let source_request = OwnedAgentRunRequest {
+            repo_root: repo_root.clone(),
+            project_id: project_id.clone(),
+            agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
+            run_id: source_run_id.clone(),
+            prompt: format!(
+                "Synthetic long {} source goal for phase 4 handoff.",
+                runtime_agent_id.as_str()
+            ),
+            controls: Some(controls_for_agent(runtime_agent_id)),
+            tool_runtime: tool_runtime.clone(),
+            provider_config: AgentProviderConfig::Fake,
+        };
+        create_owned_agent_run(&source_request).expect("create source run");
+        append_long_context_messages(&repo_root, &project_id, &source_run_id);
+        project_store::update_agent_run_status(
+            &repo_root,
+            &project_id,
+            &source_run_id,
+            project_store::AgentRunStatus::Completed,
+            None,
+            "2026-05-01T13:10:00Z",
+        )
+        .expect("mark source completed before continuation");
+
+        let continuation = ContinueOwnedAgentRunRequest {
+            repo_root: repo_root.clone(),
+            project_id: project_id.clone(),
+            run_id: source_run_id.clone(),
+            prompt: pending_prompt.clone(),
+            controls: Some(controls_for_agent(runtime_agent_id)),
+            tool_runtime,
+            provider_config: AgentProviderConfig::Fake,
+            answer_pending_actions: false,
+            auto_compact: None,
+        };
+        let target =
+            continue_owned_agent_run(continuation.clone()).expect("handoff target continues");
+
+        assert_ne!(target.run.run_id, source_run_id);
+        assert_eq!(target.run.runtime_agent_id, runtime_agent_id);
+        assert_eq!(target.run.status, project_store::AgentRunStatus::Completed);
+        assert!(target
+            .messages
+            .iter()
+            .any(|message| message.role == project_store::AgentMessageRole::Assistant));
+        assert!(target.messages.iter().any(|message| {
+            message.role == project_store::AgentMessageRole::Developer
+                && message.content.contains("Xero durable handoff context")
+                && message.content.contains(&pending_prompt)
+        }));
+
+        let source = project_store::load_agent_run(&repo_root, &project_id, &source_run_id)
+            .expect("load source");
+        assert_eq!(source.run.status, project_store::AgentRunStatus::HandedOff);
+
+        let lineage = project_store::list_agent_handoff_lineage_for_source(
+            &repo_root,
+            &project_id,
+            &source_run_id,
+        )
+        .expect("list handoff lineage");
+        assert_eq!(lineage.len(), 1);
+        assert_eq!(
+            lineage[0].status,
+            project_store::AgentHandoffLineageStatus::Completed
+        );
+        assert_eq!(lineage[0].source_runtime_agent_id, runtime_agent_id);
+        assert_eq!(lineage[0].target_runtime_agent_id, runtime_agent_id);
+        assert_eq!(
+            lineage[0].target_run_id.as_deref(),
+            Some(target.run.run_id.as_str())
+        );
+        assert_eq!(lineage[0].bundle["schema"], "xero.agent_handoff.bundle.v1");
+
+        let records = project_store::list_project_records(&repo_root, &project_id)
+            .expect("list project records");
+        let bundle_records = records
+            .iter()
+            .filter(|record| {
+                record.schema_name.as_deref() == Some("xero.agent_handoff.bundle.v1")
+                    && record.run_id == source_run_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bundle_records.len(), 1);
+
+        let duplicate =
+            prepare_owned_agent_continuation_for_drive(&continuation).expect("retry handoff");
+        assert_eq!(duplicate.snapshot.run.run_id, target.run.run_id);
+        assert!(!duplicate.drive_required);
+
+        let lineage_after = project_store::list_agent_handoff_lineage_for_source(
+            &repo_root,
+            &project_id,
+            &source_run_id,
+        )
+        .expect("list handoff lineage after retry");
+        assert_eq!(lineage_after.len(), 1);
+        let records_after = project_store::list_project_records(&repo_root, &project_id)
+            .expect("list project records after retry");
+        assert_eq!(
+            records_after
+                .iter()
+                .filter(|record| {
+                    record.schema_name.as_deref() == Some("xero.agent_handoff.bundle.v1")
+                        && record.run_id == source_run_id
+                })
+                .count(),
+            1
+        );
+
+        let runs = project_store::list_agent_runs(
+            &repo_root,
+            &project_id,
+            project_store::DEFAULT_AGENT_SESSION_ID,
+        )
+        .expect("list runs");
+        assert_eq!(
+            runs.iter()
+                .filter(|run| run.run_id == target.run.run_id)
+                .count(),
+            1
+        );
     }
 }

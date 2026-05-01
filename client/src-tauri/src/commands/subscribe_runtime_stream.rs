@@ -155,6 +155,7 @@ fn replay_owned_agent_events(
         snapshot.run.status,
         AgentRunStatus::Paused
             | AgentRunStatus::Cancelled
+            | AgentRunStatus::HandedOff
             | AgentRunStatus::Completed
             | AgentRunStatus::Failed
     );

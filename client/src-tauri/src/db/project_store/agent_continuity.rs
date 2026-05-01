@@ -254,6 +254,20 @@ pub struct NewAgentHandoffLineageRecord {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct AgentHandoffLineageUpdateRecord {
+    pub project_id: String,
+    pub handoff_id: String,
+    pub target_agent_session_id: Option<String>,
+    pub target_run_id: Option<String>,
+    pub status: AgentHandoffLineageStatus,
+    pub handoff_record_id: Option<String>,
+    pub bundle: JsonValue,
+    pub diagnostic: Option<JsonValue>,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentRetrievalQueryLogRecord {
     pub id: i64,
     pub query_id: String,
@@ -741,6 +755,168 @@ pub fn get_agent_handoff_lineage_by_idempotency_key(
         .optional()
         .map_err(map_continuity_read_error)?
         .transpose()
+}
+
+pub fn get_agent_handoff_lineage_by_handoff_id(
+    repo_root: &Path,
+    project_id: &str,
+    handoff_id: &str,
+) -> Result<Option<AgentHandoffLineageRecord>, CommandError> {
+    validate_non_empty_text(
+        project_id,
+        "projectId",
+        "agent_handoff_lineage_project_required",
+    )?;
+    validate_non_empty_text(handoff_id, "handoffId", "agent_handoff_lineage_id_required")?;
+    let connection = open_continuity_database(repo_root)?;
+    connection
+        .query_row(
+            handoff_select_sql("WHERE project_id = ?1 AND handoff_id = ?2").as_str(),
+            params![project_id, handoff_id],
+            read_handoff_row,
+        )
+        .optional()
+        .map_err(map_continuity_read_error)?
+        .transpose()
+}
+
+pub fn list_agent_handoff_lineage_for_source(
+    repo_root: &Path,
+    project_id: &str,
+    source_run_id: &str,
+) -> Result<Vec<AgentHandoffLineageRecord>, CommandError> {
+    validate_non_empty_text(
+        project_id,
+        "projectId",
+        "agent_handoff_lineage_project_required",
+    )?;
+    validate_non_empty_text(
+        source_run_id,
+        "sourceRunId",
+        "agent_handoff_lineage_source_run_required",
+    )?;
+    let connection = open_continuity_database(repo_root)?;
+    let mut statement = connection
+        .prepare(
+            handoff_select_sql(
+                r#"
+                WHERE project_id = ?1
+                  AND source_run_id = ?2
+                ORDER BY created_at DESC, id DESC
+                "#,
+            )
+            .as_str(),
+        )
+        .map_err(map_continuity_read_error)?;
+    let rows = statement
+        .query_map(params![project_id, source_run_id], read_handoff_row)
+        .map_err(map_continuity_read_error)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(map_continuity_read_error)?
+        .into_iter()
+        .collect()
+}
+
+pub fn list_agent_handoff_lineage_by_status(
+    repo_root: &Path,
+    project_id: &str,
+    statuses: &[AgentHandoffLineageStatus],
+) -> Result<Vec<AgentHandoffLineageRecord>, CommandError> {
+    validate_non_empty_text(
+        project_id,
+        "projectId",
+        "agent_handoff_lineage_project_required",
+    )?;
+    if statuses.is_empty() {
+        return Ok(Vec::new());
+    }
+    let status_values = statuses
+        .iter()
+        .map(handoff_lineage_status_sql_value)
+        .collect::<Vec<_>>();
+    let placeholders = (0..status_values.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = handoff_select_sql(&format!(
+        r#"
+        WHERE project_id = ?
+          AND status IN ({placeholders})
+        ORDER BY updated_at ASC, id ASC
+        "#
+    ));
+    let connection = open_continuity_database(repo_root)?;
+    let mut statement = connection
+        .prepare(sql.as_str())
+        .map_err(map_continuity_read_error)?;
+    let mut params = vec![project_id.to_string()];
+    params.extend(status_values.into_iter().map(ToOwned::to_owned));
+    let rows = statement
+        .query_map(
+            rusqlite::params_from_iter(params.iter().map(|value| value.as_str())),
+            read_handoff_row,
+        )
+        .map_err(map_continuity_read_error)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(map_continuity_read_error)?
+        .into_iter()
+        .collect()
+}
+
+pub fn update_agent_handoff_lineage(
+    repo_root: &Path,
+    update: &AgentHandoffLineageUpdateRecord,
+) -> Result<AgentHandoffLineageRecord, CommandError> {
+    validate_handoff_update(update)?;
+    let database_path = database_path_for_repo(repo_root);
+    let connection = open_runtime_database(repo_root, &database_path)?;
+    read_project_row(&connection, &database_path, repo_root, &update.project_id)?;
+    let bundle_json = json_string(&update.bundle, "bundle")?;
+    let diagnostic_json = update
+        .diagnostic
+        .as_ref()
+        .map(|diagnostic| json_string(diagnostic, "diagnostic"))
+        .transpose()?;
+
+    connection
+        .execute(
+            r#"
+            UPDATE agent_handoff_lineage
+            SET target_agent_session_id = ?3,
+                target_run_id = ?4,
+                status = ?5,
+                handoff_record_id = ?6,
+                bundle_json = ?7,
+                diagnostic_json = ?8,
+                updated_at = ?9,
+                completed_at = ?10
+            WHERE project_id = ?1
+              AND handoff_id = ?2
+            "#,
+            params![
+                update.project_id,
+                update.handoff_id,
+                update.target_agent_session_id,
+                update.target_run_id,
+                handoff_lineage_status_sql_value(&update.status),
+                update.handoff_record_id,
+                bundle_json,
+                diagnostic_json,
+                update.updated_at,
+                update.completed_at,
+            ],
+        )
+        .map_err(|error| {
+            map_continuity_write_error(&database_path, "agent_handoff_lineage_update_failed", error)
+        })?;
+
+    get_agent_handoff_lineage_by_handoff_id(repo_root, &update.project_id, &update.handoff_id)?
+        .ok_or_else(|| {
+            CommandError::system_fault(
+                "agent_handoff_lineage_update_missing",
+                "Xero updated handoff lineage but could not load it back.",
+            )
+        })
 }
 
 pub fn insert_agent_retrieval_query_log(
@@ -1547,6 +1723,44 @@ fn validate_handoff(record: &NewAgentHandoffLineageRecord) -> Result<(), Command
     )?;
     validate_optional_non_empty(
         &record.completed_at,
+        "completedAt",
+        "agent_handoff_lineage_completed_at_invalid",
+    )
+}
+
+fn validate_handoff_update(update: &AgentHandoffLineageUpdateRecord) -> Result<(), CommandError> {
+    validate_non_empty_text(
+        &update.project_id,
+        "projectId",
+        "agent_handoff_lineage_project_required",
+    )?;
+    validate_non_empty_text(
+        &update.handoff_id,
+        "handoffId",
+        "agent_handoff_lineage_id_required",
+    )?;
+    validate_optional_non_empty(
+        &update.target_agent_session_id,
+        "targetAgentSessionId",
+        "agent_handoff_lineage_target_session_invalid",
+    )?;
+    validate_optional_non_empty(
+        &update.target_run_id,
+        "targetRunId",
+        "agent_handoff_lineage_target_run_invalid",
+    )?;
+    validate_optional_non_empty(
+        &update.handoff_record_id,
+        "handoffRecordId",
+        "agent_handoff_lineage_record_invalid",
+    )?;
+    validate_non_empty_text(
+        &update.updated_at,
+        "updatedAt",
+        "agent_handoff_lineage_updated_at_required",
+    )?;
+    validate_optional_non_empty(
+        &update.completed_at,
         "completedAt",
         "agent_handoff_lineage_completed_at_invalid",
     )

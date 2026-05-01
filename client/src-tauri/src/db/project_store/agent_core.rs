@@ -18,6 +18,7 @@ pub enum AgentRunStatus {
     Paused,
     Cancelling,
     Cancelled,
+    HandedOff,
     Completed,
     Failed,
 }
@@ -789,7 +790,7 @@ pub fn update_agent_run_status(
             UPDATE agent_runs
             SET status = ?3,
                 last_heartbeat_at = ?4,
-                completed_at = CASE WHEN ?3 = 'completed' THEN ?4 ELSE NULL END,
+                completed_at = CASE WHEN ?3 IN ('completed', 'handed_off') THEN ?4 ELSE NULL END,
                 cancelled_at = CASE WHEN ?3 = 'cancelled' THEN ?4 ELSE NULL END,
                 last_error_code = ?5,
                 last_error_message = ?6,
@@ -1627,6 +1628,7 @@ pub fn agent_run_status_sql_value(status: &AgentRunStatus) -> &'static str {
         AgentRunStatus::Paused => "paused",
         AgentRunStatus::Cancelling => "cancelling",
         AgentRunStatus::Cancelled => "cancelled",
+        AgentRunStatus::HandedOff => "handed_off",
         AgentRunStatus::Completed => "completed",
         AgentRunStatus::Failed => "failed",
     }
@@ -1685,6 +1687,7 @@ fn parse_agent_run_status(value: &str) -> AgentRunStatus {
         "paused" => AgentRunStatus::Paused,
         "cancelling" => AgentRunStatus::Cancelling,
         "cancelled" => AgentRunStatus::Cancelled,
+        "handed_off" => AgentRunStatus::HandedOff,
         "completed" => AgentRunStatus::Completed,
         "failed" => AgentRunStatus::Failed,
         _ => AgentRunStatus::Failed,

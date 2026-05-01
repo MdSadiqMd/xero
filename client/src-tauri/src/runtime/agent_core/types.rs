@@ -665,12 +665,13 @@ impl ProviderAdapter for FakeProviderAdapter {
         let user_prompt = request
             .messages
             .iter()
-            .find_map(|message| match message {
+            .filter_map(|message| match message {
                 ProviderMessage::User { content } => Some(content.as_str()),
                 _ => None,
             })
-            .unwrap_or_default();
-        let tool_calls = parse_fake_tool_directives(user_prompt);
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tool_calls = parse_fake_tool_directives(&user_prompt);
         let message = "Xero owned-agent runtime accepted the task.".to_string();
         emit(ProviderStreamEvent::MessageDelta(message.clone()))?;
         if tool_calls.is_empty() {

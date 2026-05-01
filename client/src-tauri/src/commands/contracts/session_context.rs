@@ -2320,7 +2320,9 @@ fn aggregate_usage_totals(runs: &[RunTranscriptSummaryDto]) -> Option<SessionUsa
 
 fn terminal_time_for_agent_run(run: &AgentRunRecord) -> Option<String> {
     match run.status {
-        AgentRunStatus::Completed | AgentRunStatus::Failed => run.completed_at.clone(),
+        AgentRunStatus::HandedOff | AgentRunStatus::Completed | AgentRunStatus::Failed => {
+            run.completed_at.clone()
+        }
         AgentRunStatus::Cancelled => run.cancelled_at.clone(),
         _ => None,
     }

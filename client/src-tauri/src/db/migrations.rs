@@ -409,7 +409,7 @@ const BASELINE_SCHEMA_SQL: &str = r#"
         CHECK (run_id <> ''),
         CHECK (provider_id <> ''),
         CHECK (model_id <> ''),
-        CHECK (status IN ('starting', 'running', 'paused', 'cancelling', 'cancelled', 'completed', 'failed')),
+        CHECK (status IN ('starting', 'running', 'paused', 'cancelling', 'cancelled', 'handed_off', 'completed', 'failed')),
         CHECK (prompt <> ''),
         CHECK (system_prompt <> ''),
         CHECK (
