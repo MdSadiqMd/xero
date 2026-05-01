@@ -1,18 +1,40 @@
-# Xero
+# Xero Server
 
-To start your Phoenix server:
+Phoenix service used by the Xero desktop development workflow. It currently backs web callback/shared backend features such as GitHub auth sessions, arcade game stats, Oban jobs, rate limiting, and local service endpoints.
 
-* Run `mix setup` to install and setup dependencies
-* Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+## Local Setup
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+From the repository root, the usual path is:
 
-Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
+```bash
+pnpm run dev
+```
 
-## Learn more
+That runs `scripts/dev-preflight.mjs`, starts Docker/Postgres, fetches missing Mix deps, creates the dev database, applies migrations, and then launches Phoenix alongside the Tauri app and landing site.
 
-* Official website: https://www.phoenixframework.org/
-* Guides: https://hexdocs.pm/phoenix/overview.html
-* Docs: https://hexdocs.pm/phoenix
-* Forum: https://elixirforum.com/c/phoenix-forum
-* Source: https://github.com/phoenixframework/phoenix
+To run the server directly:
+
+```bash
+docker compose -f docker-compose.yml up -d
+mix setup
+mix phx.server
+```
+
+The dev endpoint listens on `http://localhost:4000`.
+
+## Environment
+
+Copy `.env.example` to `.env` for local secrets or overrides. Dev defaults use:
+
+- `DATABASE_URL=ecto://postgres:postgres@localhost/xero_dev`
+- `PORT=4000`
+- CORS origins for the Vite/Tauri dev frontend
+
+## Commands
+
+```bash
+mix setup       # deps, database setup, assets
+mix phx.server  # run Phoenix
+mix test        # server tests
+mix precommit   # warnings-as-errors, format, tests
+```
