@@ -322,7 +322,7 @@ fn binary_name() -> &'static str {
 
 /// Ensure `resources/scrcpy-server-v<VERSION>.jar` exists. If the file is
 /// already present *and* its SHA-256 matches the pinned value we skip the
-/// fetch. Otherwise we try to download via `curl` and verify. Network
+/// fetch. Otherwise we download with reqwest and verify. Network
 /// failures emit a `cargo:warning` rather than aborting the build — the
 /// Android pipeline surfaces a typed `scrcpy_jar_missing` error at runtime
 /// so a dev can still build-and-boot the app even without the jar.
@@ -365,27 +365,12 @@ fn fetch_scrcpy_server() {
     let url = format!(
         "https://github.com/Genymobile/scrcpy/releases/download/v{SCRCPY_VERSION}/scrcpy-server-v{SCRCPY_VERSION}"
     );
-    let fetch = Command::new("curl")
-        .args(["-sSL", "-f", "-o"])
-        .arg(&target)
-        .arg(&url)
-        .status();
-    match fetch {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            println!(
-                "cargo:warning=curl exited {status} fetching scrcpy-server from {url}. Android streaming will fail until the jar is in place."
-            );
-            let _ = std::fs::remove_file(&target);
-            return;
-        }
-        Err(err) => {
-            println!(
-                "cargo:warning=failed to invoke curl for scrcpy-server: {err}. Install curl or drop the jar into {} manually.",
-                resources_dir.display()
-            );
-            return;
-        }
+    if let Err(err) = download_to_path(&url, &target) {
+        println!(
+            "cargo:warning=failed to fetch scrcpy-server from {url}: {err}. Android streaming will fail until the jar is in place."
+        );
+        let _ = std::fs::remove_file(&target);
+        return;
     }
 
     match sha256_of(&target) {
@@ -461,26 +446,12 @@ fn fetch_idb_companion() {
         "https://github.com/facebook/idb/releases/download/v{IDB_COMPANION_VERSION}/idb-companion.universal.tar.gz"
     );
 
-    let fetch = Command::new("curl")
-        .args(["-sSL", "-f", "-o"])
-        .arg(&tarball)
-        .arg(&url)
-        .status();
-    match fetch {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            println!(
-                "cargo:warning=curl exited {status} fetching idb_companion from {url}. iOS streaming will fall back to Homebrew / PATH."
-            );
-            let _ = std::fs::remove_file(&tarball);
-            return;
-        }
-        Err(err) => {
-            println!(
-                "cargo:warning=failed to invoke curl for idb_companion: {err}. iOS streaming will fall back to Homebrew / PATH."
-            );
-            return;
-        }
+    if let Err(err) = download_to_path(&url, &tarball) {
+        println!(
+            "cargo:warning=failed to fetch idb_companion from {url}: {err}. iOS streaming will fall back to Homebrew / PATH."
+        );
+        let _ = std::fs::remove_file(&tarball);
+        return;
     }
 
     match sha256_of(&tarball) {
@@ -499,33 +470,14 @@ fn fetch_idb_companion() {
         }
     }
 
-    // `tar -xzf <tarball> -C resources/` re-materializes the upstream layout
-    // `idb-companion.universal/{bin,Frameworks}` inside resources_dir. Use
-    // `--no-same-owner` so CI runs as a non-root user don't choke on the
-    // archive's preserved uid/gid.
-    let extract = Command::new("tar")
-        .arg("-xzf")
-        .arg(&tarball)
-        .arg("--no-same-owner")
-        .arg("-C")
-        .arg(&resources_dir)
-        .status();
-    match extract {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            println!(
-                "cargo:warning=tar exited {status} extracting {}. iOS streaming will fall back to Homebrew / PATH.",
-                tarball.display()
-            );
-            let _ = std::fs::remove_file(&tarball);
-            let _ = std::fs::remove_dir_all(&extracted);
-            return;
-        }
-        Err(err) => {
-            println!("cargo:warning=failed to invoke tar for idb_companion: {err}");
-            let _ = std::fs::remove_file(&tarball);
-            return;
-        }
+    if let Err(err) = extract_tar_gz_into(&tarball, &resources_dir) {
+        println!(
+            "cargo:warning=failed to extract {}: {err}. iOS streaming will fall back to Homebrew / PATH.",
+            tarball.display()
+        );
+        let _ = std::fs::remove_file(&tarball);
+        let _ = std::fs::remove_dir_all(&extracted);
+        return;
     }
 
     let _ = std::fs::remove_file(&tarball);
@@ -581,6 +533,41 @@ fn sha256_of(path: &Path) -> std::io::Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(hasher.finalize_hex())
+}
+
+fn download_to_path(url: &str, target: &Path) -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(None)
+        .build()
+        .map_err(|error| format!("could not build HTTP client: {error}"))?;
+    let mut response = client
+        .get(url)
+        .send()
+        .map_err(|error| format!("GET failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("GET returned {}", response.status()));
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+    }
+    let mut file = std::fs::File::create(target)
+        .map_err(|error| format!("could not create {}: {error}", target.display()))?;
+    std::io::copy(&mut response, &mut file)
+        .map_err(|error| format!("could not write {}: {error}", target.display()))?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn extract_tar_gz_into(tarball: &Path, target: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(tarball)
+        .map_err(|error| format!("could not open {}: {error}", tarball.display()))?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    archive.set_preserve_ownerships(false);
+    archive
+        .unpack(target)
+        .map_err(|error| format!("could not unpack into {}: {error}", target.display()))
 }
 
 /// Tiny SHA-256 wrapper to avoid pulling the `sha2` crate in build-deps.

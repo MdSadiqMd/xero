@@ -15,6 +15,8 @@ use std::{
 
 use regex::Regex;
 use reqwest::Url;
+#[cfg(any(windows, test))]
+use serde::Deserialize;
 
 use super::{
     policy::{process_manager_policy_trace, CommandPolicyDecision, PreparedCommandRequest},
@@ -2922,12 +2924,17 @@ fn list_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
         macos_system_processes()
     }
 
+    #[cfg(windows)]
+    {
+        windows_system_processes()
+    }
+
     #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
         ps_system_processes()
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         Err(CommandError::user_fixable(
             "autonomous_tool_process_manager_system_process_unsupported",
@@ -3107,6 +3114,157 @@ fn process_executable_path(pid: u32) -> Option<String> {
 #[cfg(all(unix, not(target_os = "macos")))]
 fn process_executable_path(_pid: u32) -> Option<String> {
     None
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct WindowsProcessJson {
+    process_id: Option<u32>,
+    parent_process_id: Option<u32>,
+    name: Option<String>,
+    executable_path: Option<String>,
+    command_line: Option<String>,
+}
+
+#[cfg(windows)]
+fn windows_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
+    const SCRIPT: &str = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 2 -Compress";
+    match windows_powershell_output(SCRIPT).and_then(|stdout| parse_windows_process_json(&stdout)) {
+        Ok(processes) if !processes.is_empty() => return Ok(processes),
+        Ok(_) => {}
+        Err(_) => {}
+    }
+
+    let output = Command::new("tasklist")
+        .args(["/fo", "csv", "/v"])
+        .output()
+        .map_err(|error| {
+            CommandError::system_fault(
+                "autonomous_tool_process_manager_system_process_failed",
+                format!("Xero could not execute tasklist for process inspection: {error}"),
+            )
+        })?;
+    if !output.status.success() {
+        return Err(CommandError::system_fault(
+            "autonomous_tool_process_manager_system_process_failed",
+            format!("tasklist exited with status {}.", output.status),
+        ));
+    }
+    parse_windows_tasklist_csv(&String::from_utf8_lossy(&output.stdout)).map_err(|error| {
+        CommandError::system_fault(
+            "autonomous_tool_process_manager_system_process_failed",
+            format!("Xero could not parse tasklist process output: {error}"),
+        )
+    })
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_process_json(text: &str) -> Result<Vec<SystemProcessInfo>, String> {
+    let rows = parse_powershell_json_rows::<WindowsProcessJson>(text)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let pid = row.process_id?;
+            if pid == 0 {
+                return None;
+            }
+            let name = row
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("unknown")
+                .to_owned();
+            let command_line = row
+                .command_line
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let argv = command_line
+                .map(|value| vec![value.to_owned()])
+                .unwrap_or_else(|| vec![name.clone()]);
+            Some(SystemProcessInfo {
+                pid,
+                parent_pid: row.parent_process_id.filter(|parent| *parent != 0),
+                name,
+                executable_path: row
+                    .executable_path
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty()),
+                cwd: None,
+                argv,
+            })
+        })
+        .collect())
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_tasklist_csv(text: &str) -> Result<Vec<SystemProcessInfo>, String> {
+    let mut lines = text.lines();
+    let Some(header) = lines.next() else {
+        return Ok(Vec::new());
+    };
+    let headers = parse_windows_csv_record(header);
+    let image_index = headers
+        .iter()
+        .position(|value| value.eq_ignore_ascii_case("Image Name"))
+        .unwrap_or(0);
+    let pid_index = headers
+        .iter()
+        .position(|value| value.eq_ignore_ascii_case("PID"))
+        .unwrap_or(1);
+
+    let mut processes = Vec::new();
+    for line in lines {
+        let columns = parse_windows_csv_record(line);
+        let Some(pid) = columns
+            .get(pid_index)
+            .and_then(|value| value.trim().parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let name = columns
+            .get(image_index)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("unknown")
+            .to_owned();
+        processes.push(SystemProcessInfo {
+            pid,
+            parent_pid: None,
+            name: name.clone(),
+            executable_path: None,
+            cwd: None,
+            argv: vec![name],
+        });
+    }
+    Ok(processes)
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_csv_record(line: &str) -> Vec<String> {
+    let mut columns = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quoted = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                current.push('"');
+                let _ = chars.next();
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                columns.push(current.clone());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    columns.push(current);
+    columns
 }
 
 fn filter_system_processes(
@@ -3351,12 +3509,17 @@ fn list_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
         lsof_system_ports()
     }
 
+    #[cfg(windows)]
+    {
+        windows_system_ports()
+    }
+
     #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
     {
         lsof_system_ports()
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         Err(CommandError::user_fixable(
             "autonomous_tool_process_manager_system_ports_unsupported",
@@ -3550,6 +3713,206 @@ fn parse_lsof_address(value: &str) -> Option<(String, u16)> {
     Some((addr, port))
 }
 
+#[cfg(any(windows, test))]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct WindowsNetTcpConnectionJson {
+    local_address: Option<String>,
+    local_port: Option<serde_json::Value>,
+    state: Option<serde_json::Value>,
+    owning_process: Option<serde_json::Value>,
+}
+
+#[cfg(windows)]
+fn windows_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
+    const SCRIPT: &str = "Get-NetTCPConnection -State Listen | Select-Object LocalAddress,LocalPort,State,OwningProcess | ConvertTo-Json -Depth 2 -Compress";
+    let mut ports = match windows_powershell_output(SCRIPT)
+        .and_then(|stdout| parse_windows_net_tcp_json(&stdout))
+    {
+        Ok(ports) => ports,
+        Err(_) => {
+            let output = Command::new("netstat")
+                .args(["-ano", "-p", "tcp"])
+                .output()
+                .map_err(|error| {
+                    CommandError::system_fault(
+                        "autonomous_tool_process_manager_system_ports_failed",
+                        format!("Xero could not execute netstat for listening ports: {error}"),
+                    )
+                })?;
+            if !output.status.success() {
+                return Err(CommandError::system_fault(
+                    "autonomous_tool_process_manager_system_ports_failed",
+                    format!("netstat exited with status {}.", output.status),
+                ));
+            }
+            parse_windows_netstat(&String::from_utf8_lossy(&output.stdout)).map_err(|error| {
+                CommandError::system_fault(
+                    "autonomous_tool_process_manager_system_ports_failed",
+                    format!("Xero could not parse netstat output: {error}"),
+                )
+            })?
+        }
+    };
+
+    let names = windows_system_processes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|process| (process.pid, process.name))
+        .collect::<BTreeMap<_, _>>();
+    for port in &mut ports {
+        if port.process_name.is_none() {
+            port.process_name = port.pid.and_then(|pid| names.get(&pid).cloned());
+        }
+    }
+    Ok(ports)
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_net_tcp_json(text: &str) -> Result<Vec<SystemPortInfo>, String> {
+    let rows = parse_powershell_json_rows::<WindowsNetTcpConnectionJson>(text)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let local_port = row.local_port.as_ref().and_then(json_value_u16)?;
+            let pid = row.owning_process.as_ref().and_then(json_value_u32);
+            let state = row
+                .state
+                .as_ref()
+                .and_then(json_value_string)
+                .unwrap_or_else(|| "Listen".into());
+            let local_addr = row
+                .local_address
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "0.0.0.0".into());
+            let protocol = if local_addr.contains(':') {
+                "tcp6"
+            } else {
+                "tcp"
+            };
+            Some(SystemPortInfo {
+                protocol: protocol.into(),
+                local_addr,
+                local_port,
+                state: state.to_ascii_lowercase(),
+                pid,
+                process_name: None,
+            })
+        })
+        .collect())
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_netstat(text: &str) -> Result<Vec<SystemPortInfo>, String> {
+    let mut ports = Vec::new();
+    for line in text.lines() {
+        let columns = line.split_whitespace().collect::<Vec<_>>();
+        if columns.len() < 5 || !columns[0].eq_ignore_ascii_case("TCP") {
+            continue;
+        }
+        let state = columns[3];
+        if !state.eq_ignore_ascii_case("LISTENING") {
+            continue;
+        }
+        let Some((local_addr, local_port)) = parse_windows_addr_port(columns[1]) else {
+            continue;
+        };
+        let pid = columns[4].parse::<u32>().ok();
+        let protocol = if local_addr.contains(':') {
+            "tcp6"
+        } else {
+            "tcp"
+        };
+        ports.push(SystemPortInfo {
+            protocol: protocol.into(),
+            local_addr,
+            local_port,
+            state: "listen".into(),
+            pid,
+            process_name: None,
+        });
+    }
+    Ok(ports)
+}
+
+#[cfg(any(windows, test))]
+fn parse_windows_addr_port(value: &str) -> Option<(String, u16)> {
+    if let Some(end) = value.rfind("]:") {
+        let addr = value[..=end]
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_owned();
+        let port = value[end + 2..].parse::<u16>().ok()?;
+        return Some((addr, port));
+    }
+    let (addr, port) = value.rsplit_once(':')?;
+    Some((addr.to_owned(), port.parse::<u16>().ok()?))
+}
+
+#[cfg(any(windows, test))]
+fn parse_powershell_json_rows<T>(text: &str) -> Result<Vec<T>, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value = serde_json::from_str::<serde_json::Value>(trimmed)
+        .map_err(|error| format!("invalid PowerShell JSON: {error}"))?;
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    if value.is_array() {
+        serde_json::from_value(value).map_err(|error| format!("invalid row array: {error}"))
+    } else {
+        serde_json::from_value(value)
+            .map(|row| vec![row])
+            .map_err(|error| format!("invalid row object: {error}"))
+    }
+}
+
+#[cfg(any(windows, test))]
+fn json_value_u16(value: &serde_json::Value) -> Option<u16> {
+    value
+        .as_u64()
+        .and_then(|number| u16::try_from(number).ok())
+        .or_else(|| value.as_str()?.parse::<u16>().ok())
+}
+
+#[cfg(any(windows, test))]
+fn json_value_u32(value: &serde_json::Value) -> Option<u32> {
+    value
+        .as_u64()
+        .and_then(|number| u32::try_from(number).ok())
+        .or_else(|| value.as_str()?.parse::<u32>().ok())
+}
+
+#[cfg(any(windows, test))]
+fn json_value_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .or_else(|| value.as_u64().map(|number| number.to_string()))
+}
+
+#[cfg(windows)]
+fn windows_powershell_output(script: &str) -> Result<String, String> {
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .map_err(|error| format!("failed to spawn powershell.exe: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "powershell.exe exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 fn filter_system_ports(
     ports: &mut Vec<SystemPortInfo>,
     request: &AutonomousProcessManagerRequest,
@@ -3648,7 +4011,27 @@ fn normalized_external_signal(signal: Option<&str>) -> CommandResult<ExternalSig
         };
         Ok(signal)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let signal = match normalized.as_str() {
+            "TERM" | "TERMINATE" | "INT" => ExternalSignal {
+                label: "TERM",
+                number: 15,
+            },
+            "KILL" | "FORCE" => ExternalSignal {
+                label: "KILL",
+                number: 9,
+            },
+            _ => {
+                return Err(CommandError::user_fixable(
+                    "autonomous_tool_process_manager_signal_invalid",
+                    "Xero supports external Windows signals TERM and KILL.",
+                ))
+            }
+        };
+        Ok(signal)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = normalized;
         Err(CommandError::user_fixable(
@@ -3729,7 +4112,11 @@ fn signal_external_pid(pid: u32, signal: i32) -> CommandResult<()> {
             format!("Xero could not signal external PID {pid}: {error}"),
         ))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_taskkill(pid, signal == 9)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (pid, signal);
         Err(CommandError::user_fixable(
@@ -3780,11 +4167,58 @@ fn process_exists(pid: u32) -> bool {
         }
         std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_tasklist_has_pid(pid)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         false
     }
+}
+
+#[cfg(windows)]
+fn windows_taskkill(pid: u32, force: bool) -> CommandResult<()> {
+    let mut command = Command::new("taskkill");
+    command.arg("/PID").arg(pid.to_string()).arg("/T");
+    if force {
+        command.arg("/F");
+    }
+    let output = command.output().map_err(|error| {
+        CommandError::retryable(
+            "autonomous_tool_process_manager_system_signal_failed",
+            format!("Xero could not spawn taskkill for external PID {pid}: {error}"),
+        )
+    })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(CommandError::retryable(
+        "autonomous_tool_process_manager_system_signal_failed",
+        format!(
+            "taskkill failed for external PID {pid} with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    ))
+}
+
+#[cfg(windows)]
+fn windows_tasklist_has_pid(pid: u32) -> bool {
+    let Ok(output) = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    !stdout.contains("INFO:")
+        && parse_windows_tasklist_csv(&format!("\"Image Name\",\"PID\"\n{stdout}"))
+            .is_ok_and(|processes| processes.iter().any(|process| process.pid == pid))
 }
 
 struct ProcessOutputRead {
@@ -5871,6 +6305,58 @@ mod tests {
             thread::sleep(Duration::from_millis(100));
         }
         panic!("system_port_list did not report listener on port {port}");
+    }
+
+    #[test]
+    fn windows_process_and_port_parsers_accept_fixture_shapes() {
+        let processes = parse_windows_process_json(
+            r#"[
+              {"ProcessId":4321,"ParentProcessId":4000,"Name":"node.exe","ExecutablePath":"C:\\Program Files\\nodejs\\node.exe","CommandLine":"\"C:\\Program Files\\nodejs\\node.exe\" server.js"},
+              {"ProcessId":9876,"ParentProcessId":4321,"Name":"xero.exe","ExecutablePath":null,"CommandLine":null}
+            ]"#,
+        )
+        .expect("parse powershell process json");
+        assert_eq!(processes.len(), 2);
+        assert_eq!(processes[0].pid, 4321);
+        assert_eq!(processes[0].parent_pid, Some(4000));
+        assert_eq!(processes[0].name, "node.exe");
+        assert!(processes[0].argv[0].contains("server.js"));
+        assert_eq!(processes[1].argv, vec!["xero.exe".to_string()]);
+
+        let tasklist = parse_windows_tasklist_csv(
+            "\"Image Name\",\"PID\",\"Session Name\",\"Session#\",\"Mem Usage\",\"Status\",\"User Name\",\"CPU Time\",\"Window Title\"\n\
+             \"node.exe\",\"4321\",\"Console\",\"1\",\"12,340 K\",\"Running\",\"DEV\\\\alice\",\"0:00:01\",\"N/A\"\n",
+        )
+        .expect("parse tasklist csv");
+        assert_eq!(tasklist.len(), 1);
+        assert_eq!(tasklist[0].pid, 4321);
+        assert_eq!(tasklist[0].name, "node.exe");
+
+        let ports = parse_windows_net_tcp_json(
+            r#"[
+              {"LocalAddress":"127.0.0.1","LocalPort":3000,"State":"Listen","OwningProcess":4321},
+              {"LocalAddress":"::","LocalPort":"5173","State":"Listen","OwningProcess":"9876"}
+            ]"#,
+        )
+        .expect("parse Get-NetTCPConnection json");
+        assert_eq!(ports.len(), 2);
+        assert_eq!(ports[0].local_addr, "127.0.0.1");
+        assert_eq!(ports[0].local_port, 3000);
+        assert_eq!(ports[0].pid, Some(4321));
+        assert_eq!(ports[1].protocol, "tcp6");
+        assert_eq!(ports[1].local_port, 5173);
+
+        let netstat = parse_windows_netstat(
+            "\n  Proto  Local Address          Foreign Address        State           PID\n\
+               TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1000\n\
+               TCP    [::]:3000              [::]:0                 LISTENING       4321\n",
+        )
+        .expect("parse netstat");
+        assert_eq!(netstat.len(), 2);
+        assert_eq!(netstat[0].local_addr, "0.0.0.0");
+        assert_eq!(netstat[0].local_port, 135);
+        assert_eq!(netstat[1].local_addr, "::");
+        assert_eq!(netstat[1].protocol, "tcp6");
     }
 
     fn test_runtime(repo_root: &std::path::Path) -> AutonomousToolRuntime {

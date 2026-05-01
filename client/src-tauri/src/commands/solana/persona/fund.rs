@@ -807,7 +807,7 @@ mod tests {
             cluster: "localnet".to_string(),
             rpc_url: "http://127.0.0.1:8899".to_string(),
             recipient_pubkey: "Recipient1111111111111111111111111111111".to_string(),
-            keypair_path: std::path::PathBuf::from("/tmp/fake-keypair.json"),
+            keypair_path: std::env::temp_dir().join("fake-keypair.json"),
         }
     }
 

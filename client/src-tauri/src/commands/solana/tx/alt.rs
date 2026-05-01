@@ -432,16 +432,18 @@ mod tests {
     fn mock_runner_records_create_and_extend_calls() {
         use test_support::MockAltRunner;
         let runner = MockAltRunner::new();
-        let create = runner
-            .create("http://rpc.test", "/tmp/keypair.json")
-            .unwrap();
+        let keypair = std::env::temp_dir()
+            .join("keypair.json")
+            .to_string_lossy()
+            .into_owned();
+        let create = runner.create("http://rpc.test", &keypair).unwrap();
         assert_eq!(create.pubkey, "AltMockAddress1111111111111111111111111111");
         let _ = runner
             .extend(
                 "http://rpc.test",
                 &create.pubkey,
                 &["AddrX".into()],
-                "/tmp/keypair.json",
+                &keypair,
             )
             .unwrap();
         assert_eq!(runner.create_calls.lock().unwrap().len(), 1);
@@ -451,8 +453,12 @@ mod tests {
     #[test]
     fn mock_runner_extend_errors_on_empty_list_via_production_runner() {
         let runner = SolanaCliRunner::new();
+        let keypair = std::env::temp_dir()
+            .join("keypair.json")
+            .to_string_lossy()
+            .into_owned();
         let err = runner
-            .extend("http://rpc.test", "alt", &[], "/tmp/keypair.json")
+            .extend("http://rpc.test", "alt", &[], &keypair)
             .unwrap_err();
         assert_eq!(err.code, "solana_alt_extend_empty");
     }

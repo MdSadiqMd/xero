@@ -28,6 +28,9 @@ doctest = false
 tauri-build = { version = "2", features = [] }
 tonic-build = { version = "0.12", optional = true }
 protoc-bin-vendored = { version = "3", optional = true }
+flate2 = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+tar = "0.4"
 
 [features]
 # Keep dev startup lean. `ios-grpc` remains available for full iOS
@@ -91,6 +94,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
 tokio-stream = { version = "0.1", optional = true }
 tonic = { version = "0.12", optional = true }
 url = "2"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.23", features = ["elcapitan"] }

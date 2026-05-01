@@ -625,6 +625,10 @@ mod tests {
         }
     }
 
+    fn keypair_path() -> PathBuf {
+        std::env::temp_dir().join("whale.json")
+    }
+
     #[derive(Debug, Default)]
     struct CapturingRunner {
         calls: Mutex<Vec<TokenCreateInvocation>>,
@@ -660,7 +664,7 @@ mod tests {
             mint_address: None,
         });
         let spec = base_spec(ClusterKind::Localnet);
-        let report = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap();
+        let report = create_token(&runner, keypair_path().as_path(), spec).unwrap();
         assert!(report.success);
         assert!(report.argv.iter().any(|a| a == "--program-2022"));
         assert!(report.argv.iter().any(|a| a == "--decimals"));
@@ -685,7 +689,7 @@ mod tests {
         spec.extensions = vec![TokenExtension::TransferFee];
         spec.config.transfer_fee_basis_points = Some(25);
         spec.config.transfer_fee_maximum = Some(1_000_000);
-        let err = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap_err();
+        let err = create_token(&runner, keypair_path().as_path(), spec).unwrap_err();
         assert_eq!(
             err.code,
             "solana_token_create_extensions_require_token_2022"
@@ -704,7 +708,7 @@ mod tests {
         });
         let mut spec = base_spec(ClusterKind::Localnet);
         spec.extensions = vec![TokenExtension::TransferFee];
-        let err = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap_err();
+        let err = create_token(&runner, keypair_path().as_path(), spec).unwrap_err();
         assert_eq!(err.code, "solana_token_create_missing_transfer_fee_bps");
     }
 
@@ -720,7 +724,7 @@ mod tests {
         });
         let mut spec = base_spec(ClusterKind::Localnet);
         spec.extensions = vec![TokenExtension::TransferHook];
-        let err = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap_err();
+        let err = create_token(&runner, keypair_path().as_path(), spec).unwrap_err();
         assert_eq!(
             err.code,
             "solana_token_create_missing_transfer_hook_program"
@@ -741,7 +745,7 @@ mod tests {
         spec.extensions = vec![TokenExtension::TransferFee];
         spec.config.transfer_fee_basis_points = Some(42);
         spec.config.transfer_fee_maximum = Some(1_000_000);
-        let report = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap();
+        let report = create_token(&runner, keypair_path().as_path(), spec).unwrap();
         assert!(report.success);
         assert!(report.argv.iter().any(|a| a == "--transfer-fee"));
         assert!(report.argv.iter().any(|a| a == "42"));
@@ -762,7 +766,7 @@ mod tests {
         spec.extensions = vec![TokenExtension::TransferHook];
         spec.config.transfer_hook_program_id =
             Some("HookPr0g111111111111111111111111111111111111".into());
-        let report = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap();
+        let report = create_token(&runner, keypair_path().as_path(), spec).unwrap();
         assert!(
             !report.incompatibilities.is_empty(),
             "transfer_hook must surface at least one incompatibility row"
@@ -785,7 +789,7 @@ mod tests {
         });
         let mut spec = base_spec(ClusterKind::Localnet);
         spec.decimals = 19;
-        let err = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap_err();
+        let err = create_token(&runner, keypair_path().as_path(), spec).unwrap_err();
         assert_eq!(err.code, "solana_token_create_bad_decimals");
     }
 
@@ -801,7 +805,7 @@ mod tests {
         });
         let mut spec = base_spec(ClusterKind::Localnet);
         spec.rpc_url = None;
-        let err = create_token(&runner, Path::new("/tmp/whale.json"), spec).unwrap_err();
+        let err = create_token(&runner, keypair_path().as_path(), spec).unwrap_err();
         assert_eq!(err.code, "solana_token_create_no_rpc");
     }
 

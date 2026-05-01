@@ -44,6 +44,11 @@ has to stay intact — shipping only `bin/idb_companion` yields
 under the directory into the bundle's `Resources/resources/`, preserving
 that layout.
 
+The base `tauri.conf.json` intentionally excludes this tree so Windows
+and Linux bundles do not depend on macOS-only resources. The macOS
+overlay `tauri.macos.conf.json` adds it back for app builds that can
+actually run iOS Simulator support.
+
 The pinned version and digest live in `build.rs::IDB_COMPANION_VERSION` /
 `IDB_COMPANION_SHA256`. A `.xero-version` sentinel inside the
 extracted directory lets incremental builds skip the refetch. Bumping

@@ -1,0 +1,10 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "resources": [
+      "resources/scrcpy-server-v2.7.jar",
+      "resources/idb-companion.universal/**/*",
+      "resources/solana-toolchain/**/*"
+    ]
+  }
+}

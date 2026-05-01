@@ -29,7 +29,7 @@
 //!   if the user's host lacks KVM/HAXM/WHPX.
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{copy, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1046,65 +1046,97 @@ fn verify_sha256(path: &Path, expected: &str) -> CommandResult<()> {
 // ---- Archive extraction ----------------------------------------------
 
 fn unzip_into(zip: &Path, target: &Path) -> CommandResult<()> {
-    // macOS + Linux ship `unzip`; Windows ships `tar` (which handles zip
-    // since Windows 10 1803). Shell out rather than pull a zip crate.
-    let status = if cfg!(windows) {
-        Command::new("tar")
-            .arg("-xf")
-            .arg(zip)
-            .arg("-C")
-            .arg(target)
-            .status()
-    } else {
-        Command::new("unzip")
-            .arg("-q")
-            .arg("-o")
-            .arg(zip)
-            .arg("-d")
-            .arg(target)
-            .status()
-    };
-
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(CommandError::system_fault(
+    let file = fs::File::open(zip).map_err(|e| {
+        CommandError::system_fault(
+            "android_provision_unzip_open_failed",
+            format!("could not open {}: {e}", zip.display()),
+        )
+    })?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+        CommandError::system_fault(
             "android_provision_unzip_failed",
-            format!(
-                "unzip exited {s} extracting {} → {}",
-                zip.display(),
-                target.display()
-            ),
-        )),
-        Err(e) => Err(CommandError::system_fault(
-            "android_provision_unzip_spawn_failed",
-            format!("failed to spawn unzip: {e}"),
-        )),
+            format!("could not read zip {}: {e}", zip.display()),
+        )
+    })?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|e| {
+            CommandError::system_fault(
+                "android_provision_unzip_failed",
+                format!(
+                    "could not read zip entry {index} from {}: {e}",
+                    zip.display()
+                ),
+            )
+        })?;
+        let Some(enclosed_name) = entry.enclosed_name().map(|path| path.to_owned()) else {
+            return Err(CommandError::system_fault(
+                "android_provision_unzip_path_rejected",
+                format!("zip entry {} escapes extraction directory", entry.name()),
+            ));
+        };
+        let output_path = target.join(enclosed_name);
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path).map_err(|e| {
+                CommandError::system_fault(
+                    "android_provision_unzip_mkdir_failed",
+                    format!("could not create {}: {e}", output_path.display()),
+                )
+            })?;
+            continue;
+        }
+
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                CommandError::system_fault(
+                    "android_provision_unzip_mkdir_failed",
+                    format!("could not create {}: {e}", parent.display()),
+                )
+            })?;
+        }
+        let mut output = fs::File::create(&output_path).map_err(|e| {
+            CommandError::system_fault(
+                "android_provision_unzip_write_failed",
+                format!("could not create {}: {e}", output_path.display()),
+            )
+        })?;
+        copy(&mut entry, &mut output).map_err(|e| {
+            CommandError::system_fault(
+                "android_provision_unzip_write_failed",
+                format!("could not write {}: {e}", output_path.display()),
+            )
+        })?;
+
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&output_path, fs::Permissions::from_mode(mode));
+        }
     }
+
+    Ok(())
 }
 
 fn untar_gz_into(tarball: &Path, target: &Path) -> CommandResult<()> {
-    let status = Command::new("tar")
-        .arg("-xzf")
-        .arg(tarball)
-        .arg("--no-same-owner")
-        .arg("-C")
-        .arg(target)
-        .status();
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => Err(CommandError::system_fault(
+    let file = fs::File::open(tarball).map_err(|e| {
+        CommandError::system_fault(
+            "android_provision_untar_open_failed",
+            format!("could not open {}: {e}", tarball.display()),
+        )
+    })?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    archive.set_preserve_ownerships(false);
+    archive.unpack(target).map_err(|e| {
+        CommandError::system_fault(
             "android_provision_untar_failed",
             format!(
-                "tar exited {s} extracting {} → {}",
+                "could not unpack {} into {}: {e}",
                 tarball.display(),
                 target.display()
             ),
-        )),
-        Err(e) => Err(CommandError::system_fault(
-            "android_provision_untar_spawn_failed",
-            format!("failed to spawn tar: {e}"),
-        )),
-    }
+        )
+    })
 }
 
 // ---- Platform-specific helpers ----------------------------------------

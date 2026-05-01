@@ -99,6 +99,10 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn ledger_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
     #[test]
     fn test_validator_args_include_rpc_port_and_ledger() {
         let opts = StartOpts {
@@ -106,13 +110,14 @@ mod tests {
             reset: Some(true),
             ..StartOpts::default()
         };
-        let ledger = PathBuf::from("/tmp/xero-test");
+        let ledger = ledger_path("xero-test");
+        let ledger_arg = ledger.to_string_lossy().into_owned();
         let args = test_validator_args(&opts, &ledger);
 
         let rpc_pos = args.iter().position(|a| a == "--rpc-port").unwrap();
         assert_eq!(args[rpc_pos + 1], "12345");
         assert!(args.contains(&"--reset".to_string()));
-        assert!(args.contains(&"/tmp/xero-test".to_string()));
+        assert!(args.contains(&ledger_arg));
     }
 
     #[test]
@@ -121,7 +126,7 @@ mod tests {
             clone_programs: vec!["JUP6i...".into(), "JUP7i...".into()],
             ..StartOpts::default()
         };
-        let ledger = PathBuf::from("/tmp");
+        let ledger = ledger_path("xero-solana-clone-programs");
         let args = test_validator_args(&opts, &ledger);
         let mut cursor = 0;
         for program in ["JUP6i...", "JUP7i..."] {
@@ -136,7 +141,8 @@ mod tests {
 
     #[test]
     fn test_validator_args_default_reset_enabled() {
-        let args = test_validator_args(&StartOpts::default(), &PathBuf::from("/tmp"));
+        let ledger = ledger_path("xero-solana-default-reset");
+        let args = test_validator_args(&StartOpts::default(), &ledger);
         assert!(
             args.contains(&"--reset".to_string()),
             "localnet defaults to --reset so the ledger never leaks state"
@@ -149,7 +155,8 @@ mod tests {
             reset: Some(false),
             ..StartOpts::default()
         };
-        let args = test_validator_args(&opts, &PathBuf::from("/tmp"));
+        let ledger = ledger_path("xero-solana-reset-opt-out");
+        let args = test_validator_args(&opts, &ledger);
         assert!(!args.contains(&"--reset".to_string()));
     }
 
@@ -160,7 +167,8 @@ mod tests {
             clone_accounts: vec!["So11111111111111111111111111111111111111112".into()],
             ..StartOpts::default()
         };
-        let args = test_validator_fork_args(&opts, &PathBuf::from("/tmp"));
+        let ledger = ledger_path("xero-solana-fork-clones");
+        let args = test_validator_fork_args(&opts, &ledger);
         assert!(!args.contains(&"--reset".to_string()));
         assert_eq!(args.iter().filter(|arg| *arg == "--clone").count(), 2);
     }
@@ -171,7 +179,8 @@ mod tests {
             reset: Some(true),
             ..StartOpts::default()
         };
-        let args = test_validator_fork_args(&opts, &PathBuf::from("/tmp"));
+        let ledger = ledger_path("xero-solana-fork-reset");
+        let args = test_validator_fork_args(&opts, &ledger);
         assert!(args.contains(&"--reset".to_string()));
     }
 
@@ -183,7 +192,7 @@ mod tests {
             ws_port: Some(7001),
             ..StartOpts::default()
         };
-        let ledger = PathBuf::from("/tmp");
+        let ledger = ledger_path("xero-solana-surfpool");
         let args = surfpool_args(&opts, &ledger);
         let idx = args
             .iter()
@@ -198,14 +207,12 @@ mod tests {
 
     #[test]
     fn resolve_ledger_dir_respects_caller_path() {
+        let ledger = ledger_path("custom-ledger");
         let opts = StartOpts {
-            ledger_dir: Some(PathBuf::from("/custom/ledger")),
+            ledger_dir: Some(ledger.clone()),
             ..StartOpts::default()
         };
-        assert_eq!(
-            resolve_ledger_dir(&opts, "localnet"),
-            PathBuf::from("/custom/ledger")
-        );
+        assert_eq!(resolve_ledger_dir(&opts, "localnet"), ledger);
     }
 
     #[test]

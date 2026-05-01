@@ -407,7 +407,6 @@ impl regex::Replacer for NoExpand<'_> {
 #[cfg(test)]
 mod tests {
     use super::{build_pattern, build_preview, to_virtual_path, utf8_char_col};
-    use std::path::PathBuf;
 
     #[test]
     fn pattern_literal_case_insensitive() {
@@ -431,8 +430,8 @@ mod tests {
 
     #[test]
     fn virtual_path_strips_root() {
-        let root = PathBuf::from("/tmp/project");
-        let abs = PathBuf::from("/tmp/project/src/foo.ts");
+        let root = std::env::temp_dir().join("project");
+        let abs = root.join("src").join("foo.ts");
         assert_eq!(to_virtual_path(&root, &abs).as_deref(), Some("/src/foo.ts"));
     }
 

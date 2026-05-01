@@ -45,6 +45,34 @@ export function detectPlatform(): PlatformVariant {
   return "linux"
 }
 
+function isPlatformVariant(value: unknown): value is PlatformVariant {
+  return value === "macos" || value === "windows" || value === "linux"
+}
+
+function useDesktopPlatform(desktopRuntime: boolean): PlatformVariant {
+  const [platform, setPlatform] = useState<PlatformVariant>(() => detectPlatform())
+
+  useEffect(() => {
+    if (!desktopRuntime || !isTauri()) return
+    let cancelled = false
+    void invoke<unknown>("desktop_platform")
+      .then((value) => {
+        if (!cancelled && isPlatformVariant(value)) {
+          setPlatform(value)
+        }
+      })
+      .catch(() => {
+        // Keep the user-agent fallback when the command is unavailable in
+        // tests or older dev builds.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [desktopRuntime])
+
+  return platform
+}
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -223,7 +251,8 @@ export function XeroShell({
   footer,
 }: XeroShellProps) {
   const desktopRuntime = isTauri()
-  const platform = platformOverride ?? detectPlatform()
+  const detectedPlatform = useDesktopPlatform(desktopRuntime)
+  const platform = platformOverride ?? detectedPlatform
   const emulatorSdk = useEmulatorSdkSignal(desktopRuntime)
 
   const handleWindowAction = async (action: WindowAction) => {

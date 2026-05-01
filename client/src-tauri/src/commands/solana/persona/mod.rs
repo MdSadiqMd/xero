@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::{CommandError, CommandResult};
 
 use super::cluster::ClusterKind;
+use super::SOLANA_STATE_ROOT_ENV;
 use fund::{apply_delta, FundingContext};
 use keygen::{KeypairStore, OsRngKeypairProvider};
 use roles::PersonaRole;
@@ -496,6 +497,9 @@ fn validate_name(name: &str) -> CommandResult<()> {
 }
 
 fn default_root() -> CommandResult<PathBuf> {
+    if let Some(root) = std::env::var_os(SOLANA_STATE_ROOT_ENV) {
+        return Ok(PathBuf::from(root).join("personas"));
+    }
     let data_dir = dirs::data_dir().ok_or_else(|| {
         CommandError::system_fault(
             "solana_persona_no_data_dir",

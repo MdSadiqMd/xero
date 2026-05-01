@@ -121,6 +121,15 @@ describe('diagnostics contract', () => {
     expect(cloudPaths.value).not.toContain('wJalrXUtnFEMI')
     expect(cloudPaths.value).toContain('[redacted-path]')
 
+    const windowsPaths = sanitizeDiagnosticText(
+      String.raw`Settings failed at C:\ProgramData\Xero\secrets.json and C:\Windows\Temp\xero-token.txt plus %LOCALAPPDATA%\Xero\credentials.json.`,
+    )
+    expect(windowsPaths.redacted).toBe(true)
+    expect(windowsPaths.redactionClass).toBe('local_path')
+    expect(windowsPaths.value).not.toContain('ProgramData')
+    expect(windowsPaths.value).not.toContain('Windows\\Temp')
+    expect(windowsPaths.value).not.toContain('%LOCALAPPDATA%')
+
     const rawNested = {
       contractVersion: 1,
       checkId: 'diagnostic:v1:settings_dependency:global:global:nested_secret_payload',

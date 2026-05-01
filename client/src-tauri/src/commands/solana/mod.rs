@@ -45,6 +45,9 @@ use crate::{
     state::DesktopState,
 };
 
+pub const SOLANA_PROGRAM_ARCHIVE_ROOT_ENV: &str = "XERO_SOLANA_PROGRAM_ARCHIVE_ROOT";
+pub const SOLANA_STATE_ROOT_ENV: &str = "XERO_SOLANA_STATE_ROOT";
+
 pub use audit::{
     coverage::{
         CoverageReport, CoverageRequest, FunctionCoverage, InstructionCoverage, LcovRecord,
@@ -204,6 +207,8 @@ pub struct SolanaState {
     /// Lives under the OS data dir by default; tests redirect it to a
     /// `TempDir`.
     metaplex_worker_root: Arc<Mutex<PathBuf>>,
+    /// Filesystem root for archived program `.so` artifacts.
+    program_archive_root: PathBuf,
     /// Phase 9 — in-process cost ledger aggregating the lamport + CU
     /// spend of every tx the workbench sends. Survives panels closing
     /// and reopening; reset explicitly via `solana_cost_reset`.
@@ -264,12 +269,38 @@ fn build_idl_registry(transport: Arc<dyn RpcTransport>) -> Arc<IdlRegistry> {
     Arc::new(IdlRegistry::new(fetcher))
 }
 
-fn default_metaplex_worker_root() -> PathBuf {
-    if let Some(dir) = dirs::data_dir() {
-        dir.join("xero-solana-metaplex-worker")
-    } else {
-        std::env::temp_dir().join("xero-solana-metaplex-worker")
+fn default_solana_state_root() -> PathBuf {
+    if let Some(root) = std::env::var_os(SOLANA_STATE_ROOT_ENV) {
+        return PathBuf::from(root);
     }
+    dirs::data_dir()
+        .map(|dir| dir.join("xero").join("solana"))
+        .unwrap_or_else(|| std::env::temp_dir().join("xero-solana"))
+}
+
+fn metaplex_worker_root_for(root: &Path) -> PathBuf {
+    root.join("metaplex-worker")
+}
+
+fn program_archive_root_for(root: &Path) -> PathBuf {
+    root.join("program-archive")
+}
+
+fn snapshot_store_for(root: &Path) -> SnapshotStore {
+    SnapshotStore::new(root.join("snapshots"), Box::new(RpcAccountFetcher))
+}
+
+fn persona_store_for(root: &Path) -> PersonaStore {
+    let persona_root = root.join("personas");
+    let keypairs = KeypairStore::new(
+        persona_root.join("keypairs"),
+        Box::new(OsRngKeypairProvider),
+    );
+    PersonaStore::new(
+        persona_root,
+        keypairs,
+        Box::new(DefaultFundingBackend::new()),
+    )
 }
 
 #[derive(Debug)]
@@ -288,22 +319,19 @@ impl IdlFetcher for NoopIdlFetcher {
 
 impl Default for SolanaState {
     fn default() -> Self {
-        let snapshots = SnapshotStore::with_default_root(Box::new(RpcAccountFetcher))
-            .unwrap_or_else(|_| {
-                // Fall back to an in-temp scratch dir if the OS data dir
-                // can't be resolved so the app still boots.
-                let scratch = std::env::temp_dir().join("xero-solana-snapshots");
-                SnapshotStore::new(scratch, Box::new(RpcAccountFetcher))
-            });
+        Self::with_solana_state_root(default_solana_state_root())
+    }
+}
+
+impl SolanaState {
+    pub fn with_app_data_dir(app_data_dir: impl Into<PathBuf>) -> Self {
+        Self::with_solana_state_root(app_data_dir.into().join("solana"))
+    }
+
+    fn with_solana_state_root(root: PathBuf) -> Self {
+        let snapshots = snapshot_store_for(&root);
         let supervisor = Arc::new(ValidatorSupervisor::with_default_launcher());
-        let personas = PersonaStore::with_default_root().unwrap_or_else(|_| {
-            // Same fallback reasoning as snapshots: never block the app
-            // from booting because the OS data dir is missing.
-            let scratch = std::env::temp_dir().join("xero-solana-personas");
-            let keypairs =
-                KeypairStore::new(scratch.join("keypairs"), Box::new(OsRngKeypairProvider));
-            PersonaStore::new(scratch, keypairs, Box::new(DefaultFundingBackend::new()))
-        });
+        let personas = persona_store_for(&root);
         let personas = Arc::new(personas);
         let scenarios = Arc::new(ScenarioEngine::new(
             Arc::clone(&personas),
@@ -330,25 +358,20 @@ impl Default for SolanaState {
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
-            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            metaplex_worker_root: Arc::new(Mutex::new(metaplex_worker_root_for(&root))),
+            program_archive_root: program_archive_root_for(&root),
             cost_ledger: Arc::new(LocalCostLedger::new()),
             cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
     }
-}
 
-impl SolanaState {
     pub fn new(
         supervisor: Arc<ValidatorSupervisor>,
         rpc_router: Arc<RpcRouter>,
         snapshots: Arc<SnapshotStore>,
     ) -> Self {
-        let personas = PersonaStore::with_default_root().unwrap_or_else(|_| {
-            let scratch = std::env::temp_dir().join("xero-solana-personas-test");
-            let keypairs =
-                KeypairStore::new(scratch.join("keypairs"), Box::new(OsRngKeypairProvider));
-            PersonaStore::new(scratch, keypairs, Box::new(DefaultFundingBackend::new()))
-        });
+        let root = default_solana_state_root();
+        let personas = persona_store_for(&root);
         let personas = Arc::new(personas);
         let scenarios = Arc::new(ScenarioEngine::new(
             Arc::clone(&personas),
@@ -374,7 +397,8 @@ impl SolanaState {
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
-            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            metaplex_worker_root: Arc::new(Mutex::new(metaplex_worker_root_for(&root))),
+            program_archive_root: program_archive_root_for(&root),
             cost_ledger: Arc::new(LocalCostLedger::new()),
             cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
@@ -388,6 +412,7 @@ impl SolanaState {
         snapshots: Arc<SnapshotStore>,
         personas: Arc<PersonaStore>,
     ) -> Self {
+        let root = default_solana_state_root();
         let scenarios = Arc::new(ScenarioEngine::new(
             Arc::clone(&personas),
             Arc::clone(&supervisor),
@@ -412,7 +437,8 @@ impl SolanaState {
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
-            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            metaplex_worker_root: Arc::new(Mutex::new(metaplex_worker_root_for(&root))),
+            program_archive_root: program_archive_root_for(&root),
             cost_ledger: Arc::new(LocalCostLedger::new()),
             cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
@@ -428,6 +454,7 @@ impl SolanaState {
         personas: Arc<PersonaStore>,
         tx_pipeline: Arc<TxPipeline>,
     ) -> Self {
+        let root = default_solana_state_root();
         let scenarios = Arc::new(ScenarioEngine::new(
             Arc::clone(&personas),
             Arc::clone(&supervisor),
@@ -454,7 +481,8 @@ impl SolanaState {
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
-            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            metaplex_worker_root: Arc::new(Mutex::new(metaplex_worker_root_for(&root))),
+            program_archive_root: program_archive_root_for(&root),
             cost_ledger: Arc::new(LocalCostLedger::new()),
             cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
@@ -472,6 +500,7 @@ impl SolanaState {
         transport: Arc<dyn RpcTransport>,
         deploy_services: Arc<DeployServices>,
     ) -> Self {
+        let root = default_solana_state_root();
         let scenarios = Arc::new(ScenarioEngine::new(
             Arc::clone(&personas),
             Arc::clone(&supervisor),
@@ -495,7 +524,8 @@ impl SolanaState {
             log_source,
             log_pollers: Arc::new(Mutex::new(HashMap::new())),
             token_services: Arc::new(TokenServices::system()),
-            metaplex_worker_root: Arc::new(Mutex::new(default_metaplex_worker_root())),
+            metaplex_worker_root: Arc::new(Mutex::new(metaplex_worker_root_for(&root))),
+            program_archive_root: program_archive_root_for(&root),
             cost_ledger: Arc::new(LocalCostLedger::new()),
             cost_provider_runner: Arc::new(SystemProviderUsageRunner::new()),
         }
@@ -604,6 +634,10 @@ impl SolanaState {
             .lock()
             .expect("metaplex worker root mutex not poisoned")
             .clone()
+    }
+
+    pub fn program_archive_root(&self) -> PathBuf {
+        self.program_archive_root.clone()
     }
 
     pub fn log_bus(&self) -> Arc<LogBus> {
@@ -1840,6 +1874,10 @@ pub fn solana_program_deploy<R: Runtime>(
                 "No RPC URL available — start a cluster or provide rpcUrl explicitly.",
             )
         })?;
+    let mut post = request.post.unwrap_or_default();
+    if post.program_archive_root.is_none() {
+        post.program_archive_root = Some(state.program_archive_root().display().to_string());
+    }
     let spec = DeploySpec {
         program_id: request.program_id,
         cluster: request.cluster,
@@ -1848,7 +1886,7 @@ pub fn solana_program_deploy<R: Runtime>(
         idl_path: request.idl_path,
         authority: request.authority,
         is_first_deploy: request.is_first_deploy,
-        post: request.post.unwrap_or_default(),
+        post,
         project_root: request.project_root,
         block_on_any_secret: request.block_on_any_secret,
     };
@@ -1893,7 +1931,9 @@ pub fn solana_program_rollback<R: Runtime>(
         rpc_url,
         previous_sha256: request.previous_sha256,
         authority: request.authority,
-        program_archive_root: request.program_archive_root,
+        program_archive_root: request
+            .program_archive_root
+            .or_else(|| Some(state.program_archive_root().display().to_string())),
         post: request.post.unwrap_or_default(),
     };
     let services = state.deploy_services();
@@ -2535,5 +2575,17 @@ mod tests {
     fn default_state_has_idle_supervisor() {
         let state = SolanaState::default();
         assert!(!state.supervisor.status().running);
+    }
+
+    #[test]
+    fn app_data_state_roots_solana_stores_together() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let state = SolanaState::with_app_data_dir(tempdir.path());
+        let root = tempdir.path().join("solana");
+
+        assert_eq!(state.snapshots.root(), root.join("snapshots"));
+        assert_eq!(state.personas.root(), root.join("personas"));
+        assert_eq!(state.metaplex_worker_root(), root.join("metaplex-worker"));
+        assert_eq!(state.program_archive_root(), root.join("program-archive"));
     }
 }

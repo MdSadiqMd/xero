@@ -2757,8 +2757,14 @@ fn context_redaction_rank(class: &SessionContextRedactionClassDto) -> u8 {
 
 fn sanitize_context_path(value: &str) -> (String, SessionContextRedactionDto) {
     let normalized = value.trim().replace('\\', "/");
+    let lowered = normalized.to_ascii_lowercase();
     if normalized.starts_with("/Users/")
         || normalized.starts_with("/home/")
+        || lowered.contains(":/users/")
+        || lowered.contains(":/programdata/")
+        || lowered.contains(":/windows/temp/")
+        || lowered.starts_with("%appdata%/")
+        || lowered.starts_with("%localappdata%/")
         || normalized.contains("/.ssh/")
         || normalized.contains("/.aws/")
     {

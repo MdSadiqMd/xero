@@ -211,7 +211,12 @@ impl TridentRunner for ScriptedTridentRunner {
     fn probe(&self) -> TridentProbe {
         self.probe.lock().unwrap().clone().unwrap_or(TridentProbe {
             installed: true,
-            binary_path: Some("/tmp/trident".into()),
+            binary_path: Some(
+                std::env::temp_dir()
+                    .join("trident")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
         })
     }
     fn run(&self, _invocation: &TridentInvocation) -> CommandResult<TridentOutcome> {
@@ -365,7 +370,12 @@ pub fn fuzz_engine_reports_crashes_with_reproducer() {
     let trident = Arc::new(ScriptedTridentRunner::new());
     trident.set_probe(TridentProbe {
         installed: true,
-        binary_path: Some("/tmp/trident".into()),
+        binary_path: Some(
+            std::env::temp_dir()
+                .join("trident")
+                .to_string_lossy()
+                .into_owned(),
+        ),
     });
     trident.set_outcome(TridentOutcome {
         exit_code: Some(0),

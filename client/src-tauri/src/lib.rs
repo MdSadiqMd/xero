@@ -28,7 +28,6 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
         .manage(commands::BrowserState::default())
         .manage(commands::DictationState::default())
         .manage(commands::EmulatorState::default())
-        .manage(commands::SolanaState::default())
         .register_asynchronous_uri_scheme_protocol(
             commands::emulator::URI_SCHEME,
             commands::emulator::handle_uri_scheme,
@@ -40,6 +39,25 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
         .setup(|app| {
             commands::solana::toolchain::configure_tauri_roots(app.handle());
             window_state::configure_main_window(app.handle().clone());
+
+            // Solana workbench state is rooted under Tauri's app-data dir.
+            // This app is new, so we deliberately do not migrate any older
+            // dirs::data_dir()/xero-solana-* locations.
+            {
+                use tauri::Manager;
+                let app_handle = app.handle().clone();
+                let desktop_state = app_handle.state::<state::DesktopState>();
+                let solana_state = match desktop_state.app_data_dir(&app_handle) {
+                    Ok(app_data_dir) => commands::SolanaState::with_app_data_dir(app_data_dir),
+                    Err(error) => {
+                        eprintln!(
+                            "[solana] app-data root unavailable, using temporary fallback: {error}"
+                        );
+                        commands::SolanaState::default()
+                    }
+                };
+                let _ = app.manage(solana_state);
+            }
 
             // Configure the current global database path and tighten file-mode permissions on
             // app-data storage so credentials at rest are not world-readable on multi-user systems.
@@ -146,6 +164,7 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
         .invoke_handler(tauri::generate_handler![
             commands::import_repository::import_repository,
             commands::create_repository::create_repository,
+            commands::platform::desktop_platform,
             commands::development_storage::developer_storage_overview,
             commands::development_storage::developer_storage_read_table,
             commands::list_projects::list_projects,

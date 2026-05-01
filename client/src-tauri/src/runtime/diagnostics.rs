@@ -1572,6 +1572,7 @@ fn looks_like_secret_token(value: &str) -> bool {
 }
 
 fn looks_like_raw_local_path(value: &str) -> bool {
+    let windows = value.replace('/', "\\").to_ascii_lowercase();
     value.starts_with("/Users/")
         || value.starts_with("/home/")
         || value.starts_with("/var/folders/")
@@ -1579,6 +1580,10 @@ fn looks_like_raw_local_path(value: &str) -> bool {
         || value.starts_with("~/")
         || value.starts_with("\\Users\\")
         || value.contains(":\\Users\\")
+        || windows.contains(":\\programdata\\")
+        || windows.contains(":\\windows\\temp\\")
+        || windows.starts_with("%appdata%\\")
+        || windows.starts_with("%localappdata%\\")
 }
 
 fn looks_like_secret_path_segment(value: &str) -> bool {

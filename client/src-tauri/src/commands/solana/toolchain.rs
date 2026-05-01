@@ -197,7 +197,7 @@ pub fn configure_tauri_roots<R: Runtime>(app: &AppHandle<R>) {
 pub fn managed_root_for_app<R: Runtime>(app: &AppHandle<R>) -> CommandResult<PathBuf> {
     app.path()
         .app_data_dir()
-        .map(|dir| dir.join("solana-toolchain"))
+        .map(|dir| dir.join("solana").join("toolchain"))
         .map_err(|error| {
             CommandError::system_fault(
                 "solana_toolchain_data_dir_unavailable",
@@ -1060,7 +1060,8 @@ mod tests {
 
     #[test]
     fn root_dirs_include_expected_agave_layout() {
-        let root = PathBuf::from("/tmp/xero-solana");
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let root = tempdir.path().join("xero-solana");
         let dirs = tool_dirs_from_root(&root);
         assert!(dirs.contains(
             &root

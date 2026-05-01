@@ -19,6 +19,8 @@ use serde_json::json;
 
 use crate::commands::{CommandError, CommandResult};
 
+use super::SOLANA_STATE_ROOT_ENV;
+
 const SNAPSHOT_VERSION: u32 = 1;
 const MANIFEST_FILE: &str = "snapshot.json";
 
@@ -378,6 +380,9 @@ fn next_id(root: &Path) -> CommandResult<String> {
 }
 
 fn default_root() -> CommandResult<PathBuf> {
+    if let Some(root) = std::env::var_os(SOLANA_STATE_ROOT_ENV) {
+        return Ok(PathBuf::from(root).join("snapshots"));
+    }
     let data_dir = dirs::data_dir().ok_or_else(|| {
         CommandError::system_fault(
             "solana_snapshot_no_data_dir",

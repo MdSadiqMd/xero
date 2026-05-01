@@ -49,7 +49,7 @@ fn serve_route(state: &SolanaState, route: SolanaUriRoute) -> http::Response<Vec
             Err(error) => command_error_response(http::StatusCode::NOT_FOUND, &error),
         },
         [kind, program_id, file_name] if kind == "program" => {
-            serve_program_archive(program_id, file_name)
+            serve_program_archive(state, program_id, file_name)
         }
         [kind, signature, action] if kind == "tx" && action == "trace" => {
             serve_tx_trace(state, signature, route.cluster)
@@ -61,8 +61,13 @@ fn serve_route(state: &SolanaState, route: SolanaUriRoute) -> http::Response<Vec
     }
 }
 
-fn serve_program_archive(program_id: &str, file_name: &str) -> http::Response<Vec<u8>> {
-    let path = match program_archive_path(program_id, file_name) {
+fn serve_program_archive(
+    state: &SolanaState,
+    program_id: &str,
+    file_name: &str,
+) -> http::Response<Vec<u8>> {
+    let root = state.program_archive_root();
+    let path = match program_archive_path(&root, program_id, file_name) {
         Some(path) => path,
         None => return bad_request("invalid program archive path"),
     };
@@ -163,7 +168,11 @@ fn cluster_from_str(value: &str) -> Option<ClusterKind> {
     }
 }
 
-fn program_archive_path(program_id: &str, file_name: &str) -> Option<PathBuf> {
+fn program_archive_path(
+    root: &std::path::Path,
+    program_id: &str,
+    file_name: &str,
+) -> Option<PathBuf> {
     if !is_safe_segment(program_id) {
         return None;
     }
@@ -171,11 +180,7 @@ fn program_archive_path(program_id: &str, file_name: &str) -> Option<PathBuf> {
     if !is_safe_segment(sha) {
         return None;
     }
-    Some(
-        default_program_archive_root()
-            .join(program_id)
-            .join(format!("{sha}.so")),
-    )
+    Some(root.join(program_id).join(format!("{sha}.so")))
 }
 
 fn is_safe_segment(segment: &str) -> bool {
@@ -184,13 +189,6 @@ fn is_safe_segment(segment: &str) -> bool {
         && segment != ".."
         && !segment.contains('/')
         && !segment.contains('\\')
-}
-
-fn default_program_archive_root() -> PathBuf {
-    if let Some(dir) = dirs::data_dir() {
-        return dir.join("xero/solana/program-archive");
-    }
-    std::env::temp_dir().join("xero-solana-program-archive")
 }
 
 fn json_response<T: Serialize + ?Sized>(value: &T) -> http::Response<Vec<u8>> {
@@ -278,7 +276,8 @@ mod tests {
 
     #[test]
     fn rejects_program_archive_traversal() {
-        assert!(program_archive_path("Prog111", "../bad.so").is_none());
-        assert!(program_archive_path("..", "hash.so").is_none());
+        let root = std::env::temp_dir().join("xero-solana-uri-test");
+        assert!(program_archive_path(&root, "Prog111", "../bad.so").is_none());
+        assert!(program_archive_path(&root, "..", "hash.so").is_none());
     }
 }

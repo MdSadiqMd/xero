@@ -683,10 +683,14 @@ mod tests {
 
     #[test]
     fn argv_for_sec3_uses_audit_subcommand() {
-        let argv = argv_for(AnalyzerKind::Sec3, "/tmp/proj");
+        let project_root = std::env::temp_dir()
+            .join("proj")
+            .to_string_lossy()
+            .into_owned();
+        let argv = argv_for(AnalyzerKind::Sec3, &project_root);
         assert_eq!(
             argv,
-            vec!["audit".to_string(), "--json".into(), "/tmp/proj".into()]
+            vec!["audit".to_string(), "--json".into(), project_root]
         );
     }
 

@@ -721,6 +721,7 @@ function looksLikeSecretToken(value: string): boolean {
 }
 
 function looksLikeRawLocalPath(value: string): boolean {
+  const windows = value.replace(/\//g, '\\').toLowerCase()
   return (
     value.startsWith('/Users/') ||
     value.startsWith('/home/') ||
@@ -728,7 +729,11 @@ function looksLikeRawLocalPath(value: string): boolean {
     value.startsWith('/tmp/') ||
     value.startsWith('~/') ||
     value.startsWith('\\Users\\') ||
-    value.includes(':\\Users\\')
+    value.includes(':\\Users\\') ||
+    windows.includes(':\\programdata\\') ||
+    windows.includes(':\\windows\\temp\\') ||
+    windows.startsWith('%appdata%\\') ||
+    windows.startsWith('%localappdata%\\')
   )
 }
 

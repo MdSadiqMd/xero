@@ -247,7 +247,7 @@ fn import_normalizes_valid_entries_and_reports_invalid_rows() {
         updated_at: "2026-04-23T23:00:00Z".into(),
     };
 
-    let source_path = PathBuf::from("/tmp/import.json");
+    let source_path = std::env::temp_dir().join("import.json");
     let result = apply_mcp_registry_import(
         &current,
         vec![
@@ -319,7 +319,8 @@ fn import_handles_large_entry_lists_with_deterministic_order() {
         })
         .collect::<Vec<_>>();
 
-    let result = apply_mcp_registry_import(&current, entries, Path::new("/tmp/large-import.json"));
+    let large_import_path = std::env::temp_dir().join("large-import.json");
+    let result = apply_mcp_registry_import(&current, entries, &large_import_path);
 
     assert!(result.diagnostics.is_empty());
     assert_eq!(result.registry.servers.len(), 250);

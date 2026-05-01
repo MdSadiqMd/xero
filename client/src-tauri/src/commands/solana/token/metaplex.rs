@@ -479,6 +479,7 @@ mod tests {
     #[test]
     fn worker_materialises_and_hashes_to_expected_bytes() {
         let tmp = TempDir::new().unwrap();
+        let authority = tmp.path().join("authority.json");
         let runner = RecordingRunner::with(MetaplexMintOutcome {
             exit_code: Some(0),
             success: true,
@@ -487,13 +488,7 @@ mod tests {
             mint_address: None,
             signature: None,
         });
-        let report = mint_metaplex_nft(
-            &runner,
-            tmp.path(),
-            Path::new("/tmp/authority.json"),
-            basic_request(),
-        )
-        .unwrap();
+        let report = mint_metaplex_nft(&runner, tmp.path(), &authority, basic_request()).unwrap();
         assert!(report.success);
         assert!(Path::new(&report.worker_path).exists());
         let disk = std::fs::read(&report.worker_path).unwrap();
@@ -504,6 +499,7 @@ mod tests {
     #[test]
     fn runner_receives_every_required_env_var() {
         let tmp = TempDir::new().unwrap();
+        let authority = tmp.path().join("authority.json");
         let runner = RecordingRunner::with(MetaplexMintOutcome {
             exit_code: Some(0),
             success: true,
@@ -512,13 +508,7 @@ mod tests {
             mint_address: None,
             signature: None,
         });
-        let _ = mint_metaplex_nft(
-            &runner,
-            tmp.path(),
-            Path::new("/tmp/authority.json"),
-            basic_request(),
-        )
-        .unwrap();
+        let _ = mint_metaplex_nft(&runner, tmp.path(), &authority, basic_request()).unwrap();
         let calls = runner.calls.lock().unwrap();
         let env: std::collections::BTreeMap<OsString, OsString> =
             calls[0].envs.iter().cloned().collect();
@@ -560,8 +550,8 @@ mod tests {
         });
         let mut req = basic_request();
         req.symbol = "TOOLONGSYMBOL".into();
-        let err = mint_metaplex_nft(&runner, tmp.path(), Path::new("/tmp/authority.json"), req)
-            .unwrap_err();
+        let authority = tmp.path().join("authority.json");
+        let err = mint_metaplex_nft(&runner, tmp.path(), &authority, req).unwrap_err();
         assert_eq!(err.code, "solana_metaplex_mint_bad_symbol");
     }
 
@@ -578,8 +568,8 @@ mod tests {
         });
         let mut req = basic_request();
         req.rpc_url = None;
-        let err = mint_metaplex_nft(&runner, tmp.path(), Path::new("/tmp/authority.json"), req)
-            .unwrap_err();
+        let authority = tmp.path().join("authority.json");
+        let err = mint_metaplex_nft(&runner, tmp.path(), &authority, req).unwrap_err();
         assert_eq!(err.code, "solana_metaplex_mint_no_rpc");
     }
 

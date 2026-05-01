@@ -40,6 +40,7 @@ use crate::commands::solana::idl::{
     },
 };
 use crate::commands::solana::toolchain;
+use crate::commands::solana::{SOLANA_PROGRAM_ARCHIVE_ROOT_ENV, SOLANA_STATE_ROOT_ENV};
 use crate::commands::{CommandError, CommandResult};
 
 use super::squads::{synthesize as synthesize_squads, SquadsProposalDescriptor};
@@ -109,8 +110,8 @@ pub struct PostDeployOptions {
     /// rollback can restore it.
     #[serde(default = "default_archive_artifact")]
     pub archive_artifact: bool,
-    /// Override directory for the `.so` archive. Defaults to the OS
-    /// data dir under `xero-solana-program-archive/`.
+    /// Override directory for the `.so` archive. Tauri commands default
+    /// this to the app-data `solana/program-archive` directory.
     #[serde(default)]
     pub program_archive_root: Option<String>,
 }
@@ -810,10 +811,15 @@ fn archive_so(spec: &DeploySpec) -> CommandResult<ArchiveRecord> {
 }
 
 fn default_archive_root() -> PathBuf {
-    if let Some(d) = dirs::data_dir() {
-        return d.join("xero/solana/program-archive");
+    if let Some(root) = std::env::var_os(SOLANA_PROGRAM_ARCHIVE_ROOT_ENV) {
+        return PathBuf::from(root);
     }
-    std::env::temp_dir().join("xero-solana-program-archive")
+    if let Some(root) = std::env::var_os(SOLANA_STATE_ROOT_ENV) {
+        return PathBuf::from(root).join("program-archive");
+    }
+    std::env::temp_dir()
+        .join("xero-solana")
+        .join("program-archive")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -826,8 +832,8 @@ pub struct RollbackRequest {
     /// restore. Must exist under `program_archive_root`.
     pub previous_sha256: String,
     pub authority: DeployAuthority,
-    /// Override directory for the `.so` archive lookup. Defaults to
-    /// the same OS data dir used by `deploy()`.
+    /// Override directory for the `.so` archive lookup. Tauri commands
+    /// default this to the app-data root used by `deploy()`.
     #[serde(default)]
     pub program_archive_root: Option<String>,
     #[serde(default)]

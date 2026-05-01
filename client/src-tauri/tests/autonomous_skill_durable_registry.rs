@@ -194,7 +194,13 @@ fn registry_record(
         description: "Find installable skills.".into(),
         user_invocable: Some(false),
         cache_key: Some("find-skills-cache".into()),
-        local_location: Some("/tmp/xero-cache/find-skills".into()),
+        local_location: Some(
+            std::env::temp_dir()
+                .join("xero-cache")
+                .join("find-skills")
+                .to_string_lossy()
+                .into_owned(),
+        ),
         version_hash: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
         installed_at: timestamp.into(),
         updated_at: timestamp.into(),

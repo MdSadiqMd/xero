@@ -975,11 +975,15 @@ function isSensitiveContextName(value: string): boolean {
 }
 
 function looksLikeSecretBearingPath(value: string): boolean {
-  const normalized = value.toLowerCase()
+  const normalized = value.replace(/\\/g, '/').toLowerCase()
   return (
     normalized.includes('/.ssh/') ||
     normalized.includes('/.aws/') ||
     normalized.includes('/.config/') ||
+    normalized.includes(':/programdata/') ||
+    normalized.includes(':/windows/temp/') ||
+    normalized.startsWith('%appdata%/') ||
+    normalized.startsWith('%localappdata%/') ||
     normalized.includes('.env') ||
     normalized.includes('credentials') ||
     normalized.includes('keychain')

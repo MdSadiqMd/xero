@@ -973,7 +973,7 @@ mod tests {
             binaries.insert(
                 command.into(),
                 ResolvedEnvironmentBinary {
-                    path: PathBuf::from(format!("/tmp/{command}")),
+                    path: std::env::temp_dir().join(command),
                     source: EnvironmentToolSource::Path,
                 },
             );
@@ -1164,7 +1164,7 @@ mod tests {
             binaries.insert(
                 command.into(),
                 ResolvedEnvironmentBinary {
-                    path: PathBuf::from(format!("/tmp/{command}")),
+                    path: std::env::temp_dir().join(command),
                     source: EnvironmentToolSource::Path,
                 },
             );

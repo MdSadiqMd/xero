@@ -547,6 +547,15 @@ fn diagnostics_redact_auth_headers_cloud_paths_and_nested_report_payloads() {
     assert!(!cloud_paths.contains("wJalrXUtnFEMI"));
     assert!(cloud_paths.contains("[redacted-path]"));
 
+    let (windows_paths, windows_redacted, windows_class) = sanitize_diagnostic_text(
+        r"Settings failed at C:\ProgramData\Xero\secrets.json and C:\Windows\Temp\xero-token.txt plus %LOCALAPPDATA%\Xero\credentials.json.",
+    );
+    assert!(windows_redacted);
+    assert_eq!(windows_class, XeroDiagnosticRedactionClass::LocalPath);
+    assert!(!windows_paths.contains("ProgramData"));
+    assert!(!windows_paths.contains(r"Windows\Temp"));
+    assert!(!windows_paths.contains("%LOCALAPPDATA%"));
+
     let raw_nested = XeroDiagnosticCheck {
         contract_version: XERO_DIAGNOSTIC_CONTRACT_VERSION,
         check_id: "diagnostic:v1:settings_dependency:global:global:nested_secret_payload".into(),
