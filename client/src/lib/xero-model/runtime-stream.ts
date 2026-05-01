@@ -459,6 +459,36 @@ function runtimeStreamActionRequiredItemId(runId: string, actionId: string): str
   return `action_required:${runId}:${actionId}`
 }
 
+function getRecoveredRuntimeStreamStatus(base: RuntimeStreamView): RuntimeStreamStatus {
+  if (base.completion) {
+    return 'complete'
+  }
+
+  if (base.failure) {
+    return base.failure.retryable ? 'stale' : 'error'
+  }
+
+  return 'live'
+}
+
+function mergeRuntimeStreamMetadata(
+  base: RuntimeStreamView,
+  event: RuntimeStreamEventDto,
+  status: RuntimeStreamStatus,
+): RuntimeStreamView {
+  return {
+    ...base,
+    agentSessionId: event.agentSessionId,
+    runtimeKind: normalizeText(event.runtimeKind, base.runtimeKind),
+    runId: normalizeOptionalText(event.runId) ?? base.runId,
+    sessionId: normalizeOptionalText(event.sessionId) ?? base.sessionId,
+    flowId: normalizeOptionalText(event.flowId) ?? base.flowId,
+    subscribedItemKinds: uniqueRuntimeStreamKinds(event.subscribedItemKinds),
+    status,
+    lastIssue: base.failure ? base.lastIssue : null,
+  }
+}
+
 function normalizeRuntimeStreamItem(event: RuntimeStreamEventDto): RuntimeStreamViewItem {
   const projectId = normalizeOptionalText(event.projectId)
   if (!projectId) {
@@ -699,14 +729,8 @@ export function mergeRuntimeStreamEvent(
     })
 
   if (base.lastSequence !== null) {
-    if (event.item.sequence < base.lastSequence) {
-      throw new Error(
-        `Xero rejected non-monotonic runtime stream sequence ${event.item.sequence} for run ${event.runId}; last sequence was ${base.lastSequence}.`,
-      )
-    }
-
-    if (event.item.sequence === base.lastSequence) {
-      return base
+    if (event.item.sequence <= base.lastSequence) {
+      return mergeRuntimeStreamMetadata(base, event, getRecoveredRuntimeStreamStatus(base))
     }
   }
 

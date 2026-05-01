@@ -14,6 +14,7 @@ use super::{
 };
 
 pub const IMPORT_REPOSITORY_COMMAND: &str = "import_repository";
+pub const CREATE_REPOSITORY_COMMAND: &str = "create_repository";
 pub const LIST_PROJECTS_COMMAND: &str = "list_projects";
 pub const REMOVE_PROJECT_COMMAND: &str = "remove_project";
 pub const CREATE_AGENT_SESSION_COMMAND: &str = "create_agent_session";
@@ -87,6 +88,7 @@ pub const SYNC_NOTIFICATION_ADAPTERS_COMMAND: &str = "sync_notification_adapters
 pub const SPEECH_DICTATION_STATUS_COMMAND: &str = "speech_dictation_status";
 pub const REGISTERED_COMMAND_NAMES: &[&str] = &[
     IMPORT_REPOSITORY_COMMAND,
+    CREATE_REPOSITORY_COMMAND,
     LIST_PROJECTS_COMMAND,
     REMOVE_PROJECT_COMMAND,
     CREATE_AGENT_SESSION_COMMAND,
@@ -205,6 +207,13 @@ pub enum ProjectUpdateReason {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportRepositoryRequestDto {
     pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateRepositoryRequestDto {
+    pub parent_path: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

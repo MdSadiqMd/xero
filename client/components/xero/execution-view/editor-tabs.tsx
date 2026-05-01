@@ -26,7 +26,7 @@ export function EditorTabs({
           {pendingFilePath ? `Opening ${pendingFilePath.split('/').pop() ?? pendingFilePath}…` : 'No files open'}
         </div>
       ) : (
-        <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto scrollbar-thin">
+        <div className="flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden scrollbar-thin">
           {openTabs.map((tabPath) => {
             const isActive = activePath === tabPath
             const isDirty = dirtyPaths.has(tabPath)
@@ -63,7 +63,7 @@ export function EditorTabs({
                 >
                   {isDirty ? <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden /> : <X className="h-3 w-3" />}
                 </button>
-                {isActive ? <span className="absolute inset-x-0 -bottom-px h-px bg-primary" aria-hidden /> : null}
+                {isActive ? <span className="absolute inset-x-0 bottom-0 h-px bg-primary" aria-hidden /> : null}
               </div>
             )
           })}

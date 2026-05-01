@@ -191,3 +191,89 @@ describe('XeroDesktopAdapter dictation', () => {
     expect(mocks.invoke).toHaveBeenNthCalledWith(2, 'speech_dictation_cancel', undefined)
   })
 })
+
+function makeRuntimeStreamItem(sequence: number, text: string) {
+  return {
+    kind: 'transcript',
+    runId: 'run-1',
+    sequence,
+    sessionId: 'session-1',
+    flowId: null,
+    text,
+    transcriptRole: 'assistant',
+    toolCallId: null,
+    toolName: null,
+    toolState: null,
+    toolSummary: null,
+    skillId: null,
+    skillStage: null,
+    skillResult: null,
+    skillSource: null,
+    skillCacheStatus: null,
+    skillDiagnostic: null,
+    actionId: null,
+    boundaryId: null,
+    actionType: null,
+    title: null,
+    detail: null,
+    code: null,
+    message: null,
+    retryable: null,
+    createdAt: '2026-04-30T22:41:55Z',
+  }
+}
+
+describe('XeroDesktopAdapter runtime stream', () => {
+  beforeEach(() => {
+    mocks.invoke.mockReset()
+    mocks.isTauri.mockReturnValue(true)
+    mocks.channels.length = 0
+  })
+
+  it('drops stale replayed channel items without surfacing an adapter warning', async () => {
+    const { XeroDesktopAdapter } = await import('./xero-desktop')
+    const handler = vi.fn()
+    const onError = vi.fn()
+
+    mocks.invoke.mockImplementationOnce(async (_command, args) => {
+      args.request.channel.onmessage(makeRuntimeStreamItem(3, 'newest replay item'))
+      args.request.channel.onmessage(makeRuntimeStreamItem(2, 'older replay item'))
+      args.request.channel.onmessage(makeRuntimeStreamItem(3, 'duplicate replay item'))
+
+      return {
+        projectId: 'project-1',
+        agentSessionId: 'agent-session-main',
+        runtimeKind: 'openai_codex',
+        runId: 'run-1',
+        sessionId: 'session-1',
+        flowId: null,
+        subscribedItemKinds: ['transcript'],
+      }
+    })
+
+    const subscription = await XeroDesktopAdapter.subscribeRuntimeStream(
+      'project-1',
+      'agent-session-main',
+      ['transcript'],
+      handler,
+      onError,
+    )
+
+    mocks.channels[0].onmessage?.(makeRuntimeStreamItem(2, 'late stale replay item'))
+
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'project-1',
+        runId: 'run-1',
+        item: expect.objectContaining({
+          sequence: 3,
+          text: 'newest replay item',
+        }),
+      }),
+    )
+    expect(onError).not.toHaveBeenCalled()
+
+    subscription.unsubscribe()
+  })
+})

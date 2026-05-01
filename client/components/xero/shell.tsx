@@ -96,7 +96,7 @@ interface XeroShellProps {
 type WindowAction = "close" | "minimize" | "toggle-maximize"
 
 const NAV_ITEMS: { id: View; label: string }[] = [
-  { id: "phases", label: "Auto" },
+  { id: "phases", label: "Workflow" },
   { id: "agent", label: "Agent" },
   { id: "execution", label: "Editor" },
 ]

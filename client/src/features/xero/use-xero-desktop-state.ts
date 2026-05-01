@@ -1166,6 +1166,7 @@ export function useXeroDesktopState(
 
   const {
     importProject,
+    createProject,
     removeProject,
     listProjectFiles,
     readProjectFile,
@@ -1622,6 +1623,7 @@ export function useXeroDesktopState(
     runtimeRunActionError,
     selectProject,
     importProject,
+    createProject,
     removeProject,
     retry,
     showRepositoryDiff,

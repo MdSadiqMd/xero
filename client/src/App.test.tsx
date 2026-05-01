@@ -1395,7 +1395,20 @@ function createAdapter(options?: {
   const adapter: XeroDesktopAdapter = {
     isDesktopRuntime: () => true,
     pickRepositoryFolder,
+    pickParentFolder: async () => null,
     importRepository,
+    createRepository: async () => ({
+      project: currentSnapshot.project,
+      repository: currentSnapshot.repository ?? {
+        id: 'repo-stub',
+        projectId: currentSnapshot.project.id,
+        rootPath: '',
+        displayName: '',
+        branch: null,
+        headSha: null,
+        isGitRepo: true,
+      },
+    }),
     listProjects: async () => ({ projects: currentProjects }),
     removeProject: async (projectId) => {
       currentProjects = currentProjects.filter((project) => project.id !== projectId)

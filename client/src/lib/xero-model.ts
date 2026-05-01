@@ -79,6 +79,7 @@ export * from './xero-model/dictation'
 export * from './xero-model/browser'
 export * from './xero-model/usage'
 export * from './xero-model/environment'
+export * from './xero-model/developer-storage'
 
 export const projectSnapshotResponseSchema = z
   .object({

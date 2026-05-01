@@ -16,6 +16,7 @@ export function useXeroDesktopMutations(
 ): XeroDesktopMutationActions {
   const {
     importProject,
+    createProject,
     removeProject,
     listProjectFiles,
     readProjectFile,
@@ -82,6 +83,7 @@ export function useXeroDesktopMutations(
 
   return {
     importProject,
+    createProject,
     removeProject,
     listProjectFiles,
     readProjectFile,

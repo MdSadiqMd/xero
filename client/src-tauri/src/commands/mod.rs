@@ -3,6 +3,8 @@ pub mod agent_task;
 pub mod browser;
 pub mod cancel_autonomous_run;
 pub mod complete_oauth_callback;
+pub mod create_repository;
+pub mod development_storage;
 pub mod dictation;
 pub mod doctor_report;
 pub mod emulator;
@@ -78,6 +80,8 @@ pub use browser::{
 };
 pub use cancel_autonomous_run::cancel_autonomous_run;
 pub use complete_oauth_callback::complete_oauth_callback;
+pub use create_repository::create_repository;
+pub use development_storage::{developer_storage_overview, developer_storage_read_table};
 pub use dictation::{
     speech_dictation_cancel, speech_dictation_settings, speech_dictation_start,
     speech_dictation_status, speech_dictation_stop, speech_dictation_update_settings,

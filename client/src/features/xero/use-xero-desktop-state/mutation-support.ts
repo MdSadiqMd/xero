@@ -52,6 +52,7 @@ export type AutonomousInspection = ReturnType<typeof mapAutonomousRunInspection>
 export type XeroDesktopMutationActions = Pick<
   UseXeroDesktopStateResult,
   | 'importProject'
+  | 'createProject'
   | 'removeProject'
   | 'listProjectFiles'
   | 'readProjectFile'

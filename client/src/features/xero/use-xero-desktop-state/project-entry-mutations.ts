@@ -18,6 +18,7 @@ export function useProjectEntryMutations({
 }: UseXeroDesktopMutationsArgs): Pick<
   XeroDesktopMutationActions,
   | 'importProject'
+  | 'createProject'
   | 'removeProject'
   | 'listProjectFiles'
   | 'readProjectFile'
@@ -39,27 +40,54 @@ export function useProjectEntryMutations({
   } = setters
   const { bootstrap, loadProject } = operations
 
-  const importProject = useCallback(async () => {
-    setIsImporting(true)
-    setRefreshSource('import')
-    setErrorMessage(null)
+  const importProject = useCallback(
+    async (path?: string) => {
+      setIsImporting(true)
+      setRefreshSource('import')
+      setErrorMessage(null)
 
-    try {
-      const selectedPath = await adapter.pickRepositoryFolder()
-      if (!selectedPath) {
-        return
+      try {
+        const selectedPath = path ?? (await adapter.pickRepositoryFolder())
+        if (!selectedPath) {
+          return false
+        }
+
+        const response = await adapter.importRepository(selectedPath)
+        const summary = mapProjectSummary(response.project)
+        setProjects((currentProjects) => upsertProjectListItem(currentProjects, summary))
+        await loadProject(summary.id, 'import')
+        return true
+      } catch (error) {
+        setErrorMessage(getDesktopErrorMessage(error))
+        return false
+      } finally {
+        setIsImporting(false)
       }
+    },
+    [adapter, loadProject, setErrorMessage, setIsImporting, setProjects, setRefreshSource],
+  )
 
-      const response = await adapter.importRepository(selectedPath)
-      const summary = mapProjectSummary(response.project)
-      setProjects((currentProjects) => upsertProjectListItem(currentProjects, summary))
-      await loadProject(summary.id, 'import')
-    } catch (error) {
-      setErrorMessage(getDesktopErrorMessage(error))
-    } finally {
-      setIsImporting(false)
-    }
-  }, [adapter, loadProject, setErrorMessage, setIsImporting, setProjects, setRefreshSource])
+  const createProject = useCallback(
+    async (parentPath: string, name: string) => {
+      setIsImporting(true)
+      setRefreshSource('import')
+      setErrorMessage(null)
+
+      try {
+        const response = await adapter.createRepository(parentPath, name)
+        const summary = mapProjectSummary(response.project)
+        setProjects((currentProjects) => upsertProjectListItem(currentProjects, summary))
+        await loadProject(summary.id, 'import')
+        return true
+      } catch (error) {
+        setErrorMessage(getDesktopErrorMessage(error))
+        return false
+      } finally {
+        setIsImporting(false)
+      }
+    },
+    [adapter, loadProject, setErrorMessage, setIsImporting, setProjects, setRefreshSource],
+  )
 
   const removeProject = useCallback(
     async (projectId: string) => {
@@ -150,6 +178,7 @@ export function useProjectEntryMutations({
 
   return {
     importProject,
+    createProject,
     removeProject,
     listProjectFiles,
     readProjectFile,

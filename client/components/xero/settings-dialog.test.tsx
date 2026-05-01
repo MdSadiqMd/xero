@@ -562,7 +562,68 @@ function makeSettingsDialogProps(overrides: Partial<SettingsDialogProps> & Recor
 describe('SettingsDialog', () => {
   beforeEach(() => {
     invokeMock.mockReset()
-    invokeMock.mockImplementation((command: string) => {
+    invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
+      if (command === 'developer_storage_overview') {
+        return Promise.resolve({
+          globalSqlite: {
+            path: '/Users/sn0w/Library/Application Support/dev.sn0w.xero/xero.db',
+            tables: [
+              {
+                name: 'provider_credentials',
+                columns: [
+                  { name: 'provider_id', typeLabel: 'TEXT' },
+                  { name: 'api_key', typeLabel: 'TEXT' },
+                ],
+                rowCount: 1,
+              },
+            ],
+          },
+          projectLance: [
+            {
+              projectId: 'project-1',
+              projectName: 'Xero',
+              repositoryRoot: '/tmp/Xero',
+              stateDatabasePath: '/Users/sn0w/Library/Application Support/dev.sn0w.xero/projects/project-1/state.db',
+              lancePath: '/Users/sn0w/Library/Application Support/dev.sn0w.xero/projects/project-1/lance',
+              exists: true,
+              tables: [
+                {
+                  name: 'agent_memories',
+                  columns: [
+                    { name: 'memory_id', typeLabel: 'TEXT' },
+                    { name: 'text', typeLabel: 'TEXT' },
+                  ],
+                  rowCount: 1,
+                },
+              ],
+            },
+          ],
+        })
+      }
+      if (command === 'developer_storage_read_table') {
+        const request = args?.request as { revealSensitive?: boolean; tableName?: string } | undefined
+        return Promise.resolve({
+          source: { kind: 'global_sqlite', projectId: null },
+          tableName: request?.tableName ?? 'provider_credentials',
+          path: '/Users/sn0w/Library/Application Support/dev.sn0w.xero/xero.db',
+          columns: [
+            { name: 'provider_id', typeLabel: 'TEXT' },
+            { name: 'api_key', typeLabel: 'TEXT' },
+          ],
+          rows: [
+            {
+              values: {
+                provider_id: 'openrouter',
+                api_key: request?.revealSensitive ? 'sk-test' : '[redacted]',
+              },
+            },
+          ],
+          rowCount: 1,
+          limit: 50,
+          offset: 0,
+          redacted: !request?.revealSensitive,
+        })
+      }
       if (command === 'browser_control_settings') {
         return Promise.resolve({
           preference: 'default',
@@ -583,6 +644,36 @@ describe('SettingsDialog', () => {
     isTauriMock.mockReset()
     isTauriMock.mockReturnValue(true)
     openUrlMock.mockReset()
+  })
+
+  it('shows local storage data from the development section with sensitive values redacted by default', async () => {
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'development',
+        })}
+      />,
+    )
+
+    expect(await screen.findByText('Local storage')).toBeVisible()
+    expect(screen.getByText('provider_credentials')).toBeVisible()
+    expect(await screen.findByText('[redacted]')).toBeVisible()
+    expect(screen.queryByText('sk-test')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByLabelText('Reveal sensitive storage values'))
+
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenLastCalledWith('developer_storage_read_table', {
+        request: {
+          source: { kind: 'global_sqlite', projectId: null },
+          tableName: 'provider_credentials',
+          limit: 50,
+          offset: 0,
+          revealSensitive: true,
+        },
+      }),
+    )
+    expect(await screen.findByText('sk-test')).toBeVisible()
   })
 
   it('renders doctor reports from the diagnostics section and runs extended checks explicitly', async () => {

@@ -7,7 +7,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from 'react'
-import { Archive, Loader2, MoreHorizontal, PanelLeftOpen, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Archive, Loader2, PanelLeftOpen, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { motion, type Transition } from 'motion/react'
 
 import { cn } from '@/lib/utils'
@@ -27,12 +27,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { buttonVariants } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import type { AgentSessionView, ProjectListItem } from '@/src/lib/xero-model'
 
 const COLLAPSED_WIDTH = 44
@@ -400,7 +394,7 @@ function ProjectRailItem({
                   !isActive && 'hover:bg-secondary/60',
                 )
               : cn(
-                  'flex items-center gap-2.5 rounded-md px-2 py-2 text-left',
+                  'flex items-center gap-2 rounded-md px-2 py-1 text-left',
                   isActive
                     ? 'border border-border/40 bg-primary/[0.08]'
                     : 'border border-transparent hover:bg-secondary/50',
@@ -414,7 +408,7 @@ function ProjectRailItem({
         >
           <motion.div
             className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border text-[12px] font-semibold leading-none transition-colors duration-150',
+              'flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-semibold leading-none transition-colors duration-150',
               isActive
                 ? 'border-primary/45 bg-primary/15 text-primary'
                 : 'border-border/70 bg-secondary/70 text-muted-foreground group-hover:border-border group-hover:bg-secondary group-hover:text-foreground',
@@ -451,40 +445,28 @@ function ProjectRailItem({
         </motion.button>
 
         {!collapsed ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                aria-label={`Project actions for ${project.name}`}
-                className={cn(
-                  'absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-[opacity,color,background-color] motion-fast',
-                  'hover:bg-secondary hover:text-foreground disabled:opacity-50',
-                  isActive || isRemovalPending
-                    ? 'opacity-100'
-                    : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                )}
-                disabled={isRemovalLocked}
-                type="button"
-              >
-                {isRemovalPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <MoreHorizontal className="h-3.5 w-3.5" />
-                )}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault()
-                  setConfirmOpen(true)
-                }}
-                variant="destructive"
-              >
-                <Trash2 className="h-4 w-4" />
-                Remove
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <button
+            aria-label={`Remove ${project.name}`}
+            className={cn(
+              'absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-[opacity,color,background-color] motion-fast',
+              'hover:bg-destructive/10 hover:text-destructive disabled:opacity-50',
+              isActive || isRemovalPending
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            )}
+            disabled={isRemovalLocked}
+            onClick={(event) => {
+              event.stopPropagation()
+              setConfirmOpen(true)
+            }}
+            type="button"
+          >
+            {isRemovalPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}
+          </button>
         ) : null}
       </div>
 

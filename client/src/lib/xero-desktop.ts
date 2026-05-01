@@ -322,6 +322,7 @@ import {
 
 const COMMANDS = {
   importRepository: 'import_repository',
+  createRepository: 'create_repository',
   listProjects: 'list_projects',
   removeProject: 'remove_project',
   getProjectSnapshot: 'get_project_snapshot',
@@ -612,7 +613,9 @@ export interface XeroDictationSession {
 export interface XeroDesktopAdapter {
   isDesktopRuntime(): boolean
   pickRepositoryFolder(): Promise<string | null>
+  pickParentFolder(): Promise<string | null>
   importRepository(path: string): Promise<ImportRepositoryResponseDto>
+  createRepository(parentPath: string, name: string): Promise<ImportRepositoryResponseDto>
   listProjects(): Promise<ListProjectsResponseDto>
   removeProject(projectId: string): Promise<ListProjectsResponseDto>
   getProjectSnapshot(projectId: string): Promise<ProjectSnapshotResponseDto>
@@ -1018,11 +1021,7 @@ async function createRuntimeStreamSubscription(
 
       if (lastDeliveredSequence !== null) {
         if (item.sequence < lastDeliveredSequence) {
-          throw new XeroDesktopError({
-            code: 'adapter_contract_mismatch',
-            errorClass: 'adapter_contract_mismatch',
-            message: `Command ${COMMANDS.subscribeRuntimeStream} channel returned non-monotonic sequence ${item.sequence} after ${lastDeliveredSequence} for run ${item.runId}.`,
-          })
+          return
         }
 
         if (item.sequence === lastDeliveredSequence) {
@@ -1278,9 +1277,35 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     }
   },
 
+  async pickParentFolder() {
+    ensureDesktopRuntime('Project create')
+
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      })
+
+      if (selected === null) {
+        return null
+      }
+
+      const path = Array.isArray(selected) ? selected[0] : selected
+      return typeof path === 'string' && path.trim().length > 0 ? path : null
+    } catch (error) {
+      throw normalizeError(error, 'Project create')
+    }
+  },
+
   importRepository(path) {
     return invokeTyped(COMMANDS.importRepository, importRepositoryResponseSchema, {
       request: { path },
+    })
+  },
+
+  createRepository(parentPath, name) {
+    return invokeTyped(COMMANDS.createRepository, importRepositoryResponseSchema, {
+      request: { parentPath, name },
     })
   },
 

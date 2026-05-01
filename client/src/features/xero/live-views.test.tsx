@@ -561,10 +561,10 @@ function makeAgent(project = makeProject(), overrides: Partial<AgentPaneView> = 
 }
 
 describe('live views', () => {
-  it('renders the workflow tab as a blank slate', () => {
-    const { container } = render(<PhaseView workflow={makeWorkflow()} />)
+  it('renders the workflow tab as an interactive canvas', () => {
+    render(<PhaseView workflow={makeWorkflow()} />)
 
-    expect(container).toBeEmptyDOMElement()
+    expect(screen.getByLabelText('Workflow canvas')).toBeInTheDocument()
   })
 
   it('does not render the mock pipeline controls on the workflow tab', () => {

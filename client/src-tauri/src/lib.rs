@@ -145,6 +145,9 @@ pub fn configure_builder_with_state<R: tauri::Runtime>(
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::import_repository::import_repository,
+            commands::create_repository::create_repository,
+            commands::development_storage::developer_storage_overview,
+            commands::development_storage::developer_storage_read_table,
             commands::list_projects::list_projects,
             commands::remove_project::remove_project,
             commands::agent_session::create_agent_session,

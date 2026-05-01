@@ -446,7 +446,8 @@ export interface UseXeroDesktopStateResult {
   pendingRuntimeRunAction: RuntimeRunActionKind | null
   runtimeRunActionError: OperatorActionErrorView | null
   selectProject: (projectId: string) => Promise<void>
-  importProject: () => Promise<void>
+  importProject: (path?: string) => Promise<boolean>
+  createProject: (parentPath: string, name: string) => Promise<boolean>
   removeProject: (projectId: string) => Promise<void>
   retry: () => Promise<void>
   showRepositoryDiff: (scope: RepositoryDiffScope, options?: { force?: boolean }) => Promise<void>

@@ -10,6 +10,7 @@ import { NoProjectEmptyState } from '@/components/xero/no-project-empty-state'
 import { OnboardingFlow } from '@/components/xero/onboarding/onboarding-flow'
 import { ProjectLoadErrorState } from '@/components/xero/project-load-error-state'
 import { PhaseView } from '@/components/xero/phase-view'
+import { ProjectAddDialog } from '@/components/xero/project-add-dialog'
 import { ProjectRail } from '@/components/xero/project-rail'
 import { XeroShell, type PlatformVariant } from '@/components/xero/shell'
 import type { StatusFooterProps } from '@/components/xero/status-footer'
@@ -158,6 +159,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     isDesktopRuntime,
     selectProject,
     importProject,
+    createProject,
     removeProject,
     retry,
     listProjectFiles,
@@ -230,6 +232,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     useState<RuntimeRunControlInputDto | null>(null)
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
   const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(false)
+  const [projectAddOpen, setProjectAddOpen] = useState(false)
   const [gamesOpen, setGamesOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
   const [iosOpen, setIosOpen] = useState(false)
@@ -814,7 +817,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
           notificationRouteMutationError={agentView?.notificationRouteMutationError ?? null}
           environmentPermissionRequests={environmentDiscoveryStatus?.permissionRequests ?? []}
           onResolveEnvironmentPermissions={resolveEnvironmentPermissions}
-          onImportProject={() => importProject()}
+          onImportProject={async () => {
+            await importProject()
+          }}
           onRefreshProviderCredentials={(options) => refreshProviderCredentials(options)}
           onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
           onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
@@ -872,7 +877,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         errorMessage={errorMessage}
         isImporting={isImporting}
         isLoading={isLoading || isProjectLoading}
-        onImportProject={() => void importProject()}
+        onImportProject={() => setProjectAddOpen(true)}
         onRemoveProject={(projectId) => void removeProject(projectId)}
         onSelectProject={(projectId) => void selectProject(projectId)}
         pendingProjectRemovalId={pendingProjectRemovalId}
@@ -1002,6 +1007,14 @@ export function XeroApp({ adapter }: XeroAppProps) {
         githubAuthError={githubAuthError}
         onGithubLogin={() => void loginWithGithub()}
         onGithubLogout={() => void logoutGithub()}
+      />
+      <ProjectAddDialog
+        open={projectAddOpen}
+        onOpenChange={setProjectAddOpen}
+        isImporting={isImporting}
+        onSelectExisting={() => importProject()}
+        onPickParentFolder={() => resolvedAdapter.pickParentFolder()}
+        onCreate={(parentPath, name) => createProject(parentPath, name)}
       />
     </XeroShell>
   )

@@ -1958,7 +1958,7 @@ describe('xero-model', () => {
     expect(resumedLive.lastSequence).toBe(8)
   })
 
-  it('rejects non-monotonic sequence regressions while allowing same-sequence replay dedupe', () => {
+  it('ignores stale replayed sequence regressions while preserving the latest transcript', () => {
     const liveStream = mergeRuntimeStreamEvent(
       createRuntimeStreamFromSubscription(streamSubscription),
       makeStreamEvent(
@@ -2006,31 +2006,45 @@ describe('xero-model', () => {
     )
 
     expect(replayedSameSequence.items).toHaveLength(1)
+    expect(replayedSameSequence.status).toBe('live')
 
-    expect(() =>
-      mergeRuntimeStreamEvent(
-        liveStream,
-        makeStreamEvent(
-          {
-            kind: 'activity',
-            sessionId: 'session-1',
-            flowId: 'flow-1',
-            text: null,
-            toolCallId: null,
-            toolName: null,
-            toolState: null,
-            actionType: null,
-            title: 'Out of order',
-            detail: 'older sequence should fail',
-            code: 'phase_progress',
-            message: null,
-            retryable: null,
-            createdAt: '2026-04-13T20:01:01Z',
-          },
-          { sequence: 6 },
-        ),
+    const staleReplay = mergeRuntimeStreamEvent(
+      {
+        ...liveStream,
+        status: 'replaying',
+        lastIssue: {
+          code: 'runtime_stream_contract_mismatch',
+          message: 'Older replay events should not keep the stream degraded.',
+          retryable: false,
+          observedAt: '2026-04-13T20:01:02Z',
+        },
+      },
+      makeStreamEvent(
+        {
+          kind: 'activity',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          text: null,
+          toolCallId: null,
+          toolName: null,
+          toolState: null,
+          actionType: null,
+          title: 'Out of order',
+          detail: 'older replay should be ignored',
+          code: 'phase_progress',
+          message: null,
+          retryable: null,
+          createdAt: '2026-04-13T20:01:01Z',
+        },
+        { sequence: 6 },
       ),
-    ).toThrow(/non-monotonic runtime stream sequence/i)
+    )
+
+    expect(staleReplay.items).toHaveLength(1)
+    expect(staleReplay.transcriptItems[0]?.text).toBe('Connected to Xero.')
+    expect(staleReplay.lastSequence).toBe(7)
+    expect(staleReplay.status).toBe('live')
+    expect(staleReplay.lastIssue).toBeNull()
   })
 
   it('ignores events from a different run so same-session run replacement cannot inherit stale items', () => {

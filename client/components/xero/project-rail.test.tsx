@@ -39,13 +39,9 @@ describe('ProjectRail', () => {
       />,
     )
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Project actions for mesh-lang' }), {
-      button: 0,
-      ctrlKey: false,
-    })
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove mesh-lang' }))
 
-    expect(screen.getByText('Remove mesh-lang from the sidebar?')).toBeInTheDocument()
+    expect(await screen.findByText('Remove mesh-lang from the sidebar?')).toBeInTheDocument()
     expect(screen.getByText(/You can import the same folder again any time/i)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
@@ -125,8 +121,8 @@ describe('ProjectRail', () => {
     expect(projectButton).toBeVisible()
     expect(projectButton).not.toHaveClass('bg-primary/10')
     expect(screen.getByText('M')).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Project actions for mesh-lang' })).not.toBeInTheDocument()
-    expect(container.querySelector('button[aria-label="Project actions for mesh-lang"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Remove mesh-lang' })).not.toBeInTheDocument()
+    expect(container.querySelector('button[aria-label="Remove mesh-lang"]')).toBeNull()
     expect(screen.queryByRole('separator', { name: 'Resize projects sidebar' })).not.toBeInTheDocument()
     expect(rail).toHaveAttribute('data-collapsed', 'true')
     expect(rail).toHaveClass('w-11')

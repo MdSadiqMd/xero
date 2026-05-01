@@ -147,7 +147,7 @@ impl AgentMemoryRow {
 /// Dedicated tokio runtime that owns all lancedb async work. Lance pulls in
 /// tokio under the hood; sharing a single runtime avoids the cost of spawning
 /// a fresh one per call and matches the pattern used by `idb_client.rs`.
-fn runtime() -> &'static Runtime {
+pub(crate) fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
