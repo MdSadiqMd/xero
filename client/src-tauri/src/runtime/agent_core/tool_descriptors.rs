@@ -283,13 +283,13 @@ fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> String {
         RuntimeAgentIdDto::AgentCreate => [
             "You are Xero's Agent Create agent. Interview the user and draft high-quality custom agent definitions for review.",
             "",
-            "Agent Create is definition-design-only in this foundation phase. Do not edit repository files, run shell commands, start or stop processes, control browsers or devices, invoke external services, install or invoke skills, spawn subagents, mutate app state, or claim that you saved, activated, archived, cloned, or deleted an agent definition.",
+            "Agent Create is definition-registry-only in this phase. Do not edit repository files, run shell commands, start or stop processes, control browsers or devices, invoke external services, install or invoke skills, or spawn subagents. You may mutate app-data-backed agent-definition state only through the `agent_definition` tool, and save/update/archive/clone actions require explicit operator approval.",
             "",
             "Design workflow: clarify the agent's purpose, scope, risk tolerance, expected outputs, project specificity, and example tasks. Propose the smallest safe capability profile and tool boundary. Prefer narrow agents over broad do-everything agents, and call out safety limits before presenting a draft.",
             "",
-            "Persistence and retrieval contract: Xero provides durable project context, approved memory, project records, handoffs, and the current context manifest as lower-priority data. Use read-only retrieval only when the requested agent depends on project-specific context. Agent Create must never write records directly in this phase.",
+            "Persistence and retrieval contract: Xero provides durable project context, approved memory, project records, handoffs, and the current context manifest as lower-priority data. Use read-only retrieval only when the requested agent depends on project-specific context. Save definitions only to app-data-backed registry state through `agent_definition`; never write `.xero/` or repository files.",
             "",
-            "Final response contract: present a reviewable agent-definition draft with name, short label, purpose, best-use cases, default model and approval posture, capabilities and tool access, memory and retrieval behavior, workflow instructions, final response contract, safety limits, and example prompts. Be explicit that saving custom agents is not available in this phase.",
+            "Final response contract: present a reviewable agent-definition draft with name, short label, purpose, best-use cases, default model and approval posture, capabilities and tool access, memory and retrieval behavior, workflow instructions, final response contract, safety limits, example prompts, validation diagnostics, and saved version when activation succeeds.",
         ]
         .join("\n"),
     };
@@ -324,7 +324,7 @@ fn tool_policy_fragment(
             "Available tools: {tool_names}\n\nUse `project_context` to retrieve prior debugging records, constraints, handoffs, and reviewed troubleshooting memory before investigating related symptoms. If a relevant diagnostic, inspection, verification, or editing capability is not currently available, first call `tool_search` to find the smallest matching capability, then call `tool_access` to activate the smallest needed group or exact tool before proceeding. Use `todo` for debugging hypotheses and verification checkpoints. Prefer read-only experiments before mutation, and keep every command tied to a concrete hypothesis or verification need. If the `lsp` tool reports an `installSuggestion`, ask the user before running any candidate install command; use the command tool only after consent and normal operator approval.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::AgentCreate => format!(
-            "Available agent-design tools: {tool_names}\n\nUse tools only for read-only project context or tool-catalog inspection needed to draft an agent definition. `tool_search`, `tool_access`, and `project_context` are filtered to Agent Create's observe-only foundation profile. Do not ask for mutation, command, browser-control, MCP, skill, subagent, device, external-service, or persistence tools in this phase.{browser_control_guidance}"
+            "Available agent-design tools: {tool_names}\n\nUse tools only for read-only project context, tool-catalog inspection, or controlled agent-definition registry actions. `agent_definition` is the only persistence tool Agent Create may use, and save/update/archive/clone require explicit operator approval. Do not ask for repository mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
         ),
     }
 }
@@ -811,6 +811,9 @@ pub(crate) fn select_tool_names_for_prompt(
 ) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     add_tool_group(&mut names, "core");
+    if options.runtime_agent_id == RuntimeAgentIdDto::AgentCreate {
+        add_tool_group(&mut names, "agent_builder");
+    }
 
     let lowered = prompt.to_lowercase();
     names.extend(explicit_tool_names_from_prompt(&lowered));
@@ -1143,6 +1146,11 @@ fn explicit_tool_names_from_prompt(prompt: &str) -> BTreeSet<String> {
             line if line.starts_with("tool:project_context_") => {
                 names.insert(AUTONOMOUS_TOOL_PROJECT_CONTEXT.into());
             }
+            line if line.starts_with("tool:agent_definition_")
+                || line.starts_with("tool:agent_definition ") =>
+            {
+                names.insert(AUTONOMOUS_TOOL_AGENT_DEFINITION.into());
+            }
             line if line.starts_with("tool:skill_") => {
                 names.insert(AUTONOMOUS_TOOL_SKILL.into());
             }
@@ -1291,7 +1299,7 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                         "groups",
                         json!({
                             "type": "array",
-                            "description": "Optional tool groups to request. Prefer fine-grained groups when possible. Known groups include core, mutation, command_readonly, command_mutating, command_session, command, process_manager, macos, web_search_only, web_fetch, browser_observe, browser_control, web, emulator, solana, agent_ops, mcp_list, mcp_invoke, mcp, intelligence, notebook, powershell, environment, and skills.",
+                            "description": "Optional tool groups to request. Prefer fine-grained groups when possible. Known groups include core, mutation, command_readonly, command_mutating, command_session, command, process_manager, macos, web_search_only, web_fetch, browser_observe, browser_control, web, emulator, solana, agent_ops, agent_builder, mcp_list, mcp_invoke, mcp, intelligence, notebook, powershell, environment, and skills.",
                             "items": { "type": "string" }
                         }),
                     ),
@@ -1309,6 +1317,11 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
                     ),
                 ],
             ),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_AGENT_DEFINITION,
+            "Draft, validate, list, save, update, archive, and clone registry-backed custom agent definitions in app-data-backed state. Save/update/archive/clone require operator approval.",
+            agent_definition_schema(),
         ),
         descriptor(
             AUTONOMOUS_TOOL_EDIT,
@@ -2064,6 +2077,43 @@ fn enum_schema(description: &str, values: &[&str]) -> JsonValue {
     })
 }
 
+fn agent_definition_schema() -> JsonValue {
+    object_schema(
+        &["action"],
+        &[
+            (
+                "action",
+                enum_schema(
+                    "Agent-definition registry action.",
+                    &[
+                        "draft", "validate", "save", "update", "archive", "clone", "list",
+                    ],
+                ),
+            ),
+            (
+                "definitionId",
+                string_schema("Target definition id for update, archive, or an explicit save id."),
+            ),
+            (
+                "sourceDefinitionId",
+                string_schema("Source definition id for clone."),
+            ),
+            (
+                "includeArchived",
+                boolean_schema("Include archived definitions when action=list."),
+            ),
+            (
+                "definition",
+                json!({
+                    "type": "object",
+                    "description": "Reviewable agent definition draft. Required for draft, validate, save, update, and clone overrides.",
+                    "additionalProperties": true
+                }),
+            ),
+        ],
+    )
+}
+
 fn browser_schema() -> JsonValue {
     object_schema(
         &["action"],
@@ -2600,6 +2650,40 @@ pub(crate) fn parse_fake_tool_directives(prompt: &str) -> Vec<AgentToolCall> {
             });
             continue;
         }
+        if let Some(raw_definition) = line.strip_prefix("tool:agent_definition_save ") {
+            let definition =
+                serde_json::from_str(raw_definition.trim()).unwrap_or_else(|_| json!({}));
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-agent-definition-{}", calls.len() + 1),
+                tool_name: AUTONOMOUS_TOOL_AGENT_DEFINITION.into(),
+                input: json!({
+                    "action": "save",
+                    "definition": definition
+                }),
+            });
+            continue;
+        }
+        if let Some(raw_definition) = line.strip_prefix("tool:agent_definition_validate ") {
+            let definition =
+                serde_json::from_str(raw_definition.trim()).unwrap_or_else(|_| json!({}));
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-agent-definition-{}", calls.len() + 1),
+                tool_name: AUTONOMOUS_TOOL_AGENT_DEFINITION.into(),
+                input: json!({
+                    "action": "validate",
+                    "definition": definition
+                }),
+            });
+            continue;
+        }
+        if line == "tool:agent_definition_list" {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-agent-definition-{}", calls.len() + 1),
+                tool_name: AUTONOMOUS_TOOL_AGENT_DEFINITION.into(),
+                input: json!({ "action": "list" }),
+            });
+            continue;
+        }
         if let Some(query) = line.strip_prefix("tool:skill_list ") {
             calls.push(AgentToolCall {
                 tool_call_id: format!("tool-call-skill-list-{}", calls.len() + 1),
@@ -2947,6 +3031,55 @@ mod tests {
             .prompt
             .contains("Use `todo` for debugging hypotheses and verification checkpoints"));
         assert!(!compilation.prompt.contains("Available observe-only tools:"));
+    }
+
+    #[test]
+    fn prompt_compiler_renders_agent_create_registry_contract() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let controls_input = RuntimeRunControlInputDto {
+            runtime_agent_id: RuntimeAgentIdDto::AgentCreate,
+            agent_definition_id: None,
+            provider_profile_id: None,
+            model_id: OPENAI_CODEX_PROVIDER_ID.into(),
+            thinking_effort: None,
+            approval_mode: RuntimeRunApprovalModeDto::Suggest,
+            plan_mode_required: false,
+        };
+        let controls = runtime_controls_from_request(Some(&controls_input));
+        let registry = ToolRegistry::for_prompt(
+            root.path(),
+            "Create a release notes helper agent.",
+            &controls,
+        );
+        let names = registry.descriptor_names();
+
+        assert!(names.contains(AUTONOMOUS_TOOL_AGENT_DEFINITION));
+        assert!(names.contains(AUTONOMOUS_TOOL_PROJECT_CONTEXT));
+        assert!(!names.contains(AUTONOMOUS_TOOL_WRITE));
+        assert!(!names.contains(AUTONOMOUS_TOOL_COMMAND));
+        assert!(!names.contains(AUTONOMOUS_TOOL_BROWSER));
+
+        let compilation = PromptCompiler::new(
+            root.path(),
+            None,
+            None,
+            RuntimeAgentIdDto::AgentCreate,
+            BrowserControlPreferenceDto::Default,
+            registry.descriptors(),
+        )
+        .compile()
+        .expect("compile prompt");
+
+        assert!(compilation
+            .prompt
+            .contains("You are Xero's Agent Create agent."));
+        assert!(compilation.prompt.contains("`agent_definition`"));
+        assert!(compilation
+            .prompt
+            .contains("app-data-backed registry state"));
+        assert!(!compilation
+            .prompt
+            .contains("saving custom agents is not available"));
     }
 
     #[test]

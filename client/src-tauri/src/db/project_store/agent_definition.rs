@@ -261,6 +261,127 @@ pub fn load_agent_definition_version(
         .and_then(|row| row.transpose())
 }
 
+pub fn list_agent_definitions(
+    repo_root: &Path,
+    include_archived: bool,
+) -> Result<Vec<AgentDefinitionRecord>, CommandError> {
+    let database_path = database_path_for_repo(repo_root);
+    let connection = open_runtime_database(repo_root, &database_path)?;
+    let sql = if include_archived {
+        r#"
+        SELECT
+            definition_id,
+            current_version,
+            display_name,
+            short_label,
+            description,
+            scope,
+            lifecycle_state,
+            base_capability_profile,
+            created_at,
+            updated_at
+        FROM agent_definitions
+        ORDER BY
+            CASE scope
+                WHEN 'built_in' THEN 0
+                WHEN 'project_custom' THEN 1
+                ELSE 2
+            END,
+            display_name COLLATE NOCASE,
+            definition_id COLLATE NOCASE
+        "#
+    } else {
+        r#"
+        SELECT
+            definition_id,
+            current_version,
+            display_name,
+            short_label,
+            description,
+            scope,
+            lifecycle_state,
+            base_capability_profile,
+            created_at,
+            updated_at
+        FROM agent_definitions
+        WHERE lifecycle_state != 'archived'
+        ORDER BY
+            CASE scope
+                WHEN 'built_in' THEN 0
+                WHEN 'project_custom' THEN 1
+                ELSE 2
+            END,
+            display_name COLLATE NOCASE,
+            definition_id COLLATE NOCASE
+        "#
+    };
+    let mut statement = connection.prepare(sql).map_err(|error| {
+        map_agent_definition_read_error("agent_definition_list_prepare_failed", error)
+    })?;
+    let rows = statement
+        .query_map([], read_agent_definition_row)
+        .map_err(|error| map_agent_definition_read_error("agent_definition_list_failed", error))?;
+    let mut definitions = Vec::new();
+    for row in rows {
+        let definition = row.map_err(|error| {
+            map_agent_definition_read_error("agent_definition_list_row_failed", error)
+        })??;
+        definitions.push(definition);
+    }
+    Ok(definitions)
+}
+
+pub fn archive_agent_definition(
+    repo_root: &Path,
+    definition_id: &str,
+    updated_at: &str,
+) -> Result<AgentDefinitionRecord, CommandError> {
+    validate_non_empty_text(
+        definition_id,
+        "definitionId",
+        "agent_definition_request_invalid",
+    )?;
+    validate_non_empty_text(updated_at, "updatedAt", "agent_definition_request_invalid")?;
+    let definition = load_agent_definition(repo_root, definition_id)?.ok_or_else(|| {
+        CommandError::user_fixable(
+            "agent_definition_not_found",
+            format!("Xero could not find agent definition `{definition_id}`."),
+        )
+    })?;
+    if definition.scope == "built_in" {
+        return Err(CommandError::user_fixable(
+            "agent_definition_builtin_immutable",
+            format!(
+                "Xero cannot archive built-in agent definition `{}`.",
+                definition.definition_id
+            ),
+        ));
+    }
+
+    let database_path = database_path_for_repo(repo_root);
+    let connection = open_runtime_database(repo_root, &database_path)?;
+    connection
+        .execute(
+            r#"
+            UPDATE agent_definitions
+            SET lifecycle_state = 'archived',
+                updated_at = ?2
+            WHERE definition_id = ?1
+            "#,
+            params![definition_id, updated_at],
+        )
+        .map_err(|error| {
+            map_agent_definition_write_error("agent_definition_archive_failed", error)
+        })?;
+
+    load_agent_definition(repo_root, definition_id)?.ok_or_else(|| {
+        CommandError::system_fault(
+            "agent_definition_archive_missing",
+            "Xero archived an agent definition but could not load it back.",
+        )
+    })
+}
+
 pub fn resolve_agent_definition_for_run(
     repo_root: &Path,
     requested_definition_id: Option<&str>,

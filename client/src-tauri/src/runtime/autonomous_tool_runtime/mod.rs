@@ -1,3 +1,4 @@
+mod agent_definition;
 pub mod browser;
 pub mod emulator;
 mod environment_context;
@@ -47,6 +48,12 @@ use crate::{
     state::DesktopState,
 };
 
+pub use agent_definition::{
+    AutonomousAgentDefinitionAction, AutonomousAgentDefinitionOutput,
+    AutonomousAgentDefinitionRequest, AutonomousAgentDefinitionSummary,
+    AutonomousAgentDefinitionValidationDiagnostic, AutonomousAgentDefinitionValidationReport,
+    AutonomousAgentDefinitionValidationStatus, AUTONOMOUS_TOOL_AGENT_DEFINITION,
+};
 pub use browser::{
     AutonomousBrowserAction, AutonomousBrowserOutput, AutonomousBrowserRequest, BrowserExecutor,
     UnavailableBrowserExecutor, AUTONOMOUS_TOOL_BROWSER,
@@ -223,6 +230,7 @@ const TOOL_ACCESS_NOTEBOOK_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_NOTEBOOK_EDIT];
 const TOOL_ACCESS_POWERSHELL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_POWERSHELL];
 const TOOL_ACCESS_ENVIRONMENT_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT];
 const TOOL_ACCESS_SKILL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_SKILL];
+const TOOL_ACCESS_AGENT_DEFINITION_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_AGENT_DEFINITION];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ToolAccessGroupDefinition {
@@ -388,6 +396,12 @@ const TOOL_ACCESS_GROUP_DEFINITIONS: &[ToolAccessGroupDefinition] = &[
         tools: TOOL_ACCESS_SKILL_TOOLS,
         risk_class: "skill_runtime",
     },
+    ToolAccessGroupDefinition {
+        name: "agent_builder",
+        description: "Draft, validate, list, save, update, archive, and clone registry-backed agent definitions.",
+        tools: TOOL_ACCESS_AGENT_DEFINITION_TOOLS,
+        risk_class: "agent_definition_state",
+    },
 ];
 
 pub fn tool_access_group_tools(group: &str) -> Option<&'static [&'static str]> {
@@ -511,7 +525,7 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
         | AUTONOMOUS_TOOL_TOOL_SEARCH
         | AUTONOMOUS_TOOL_PROJECT_CONTEXT
         | AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT => AutonomousToolEffectClass::Observe,
-        AUTONOMOUS_TOOL_TOOL_ACCESS | AUTONOMOUS_TOOL_TODO => {
+        AUTONOMOUS_TOOL_TOOL_ACCESS | AUTONOMOUS_TOOL_TODO | AUTONOMOUS_TOOL_AGENT_DEFINITION => {
             AutonomousToolEffectClass::RuntimeState
         }
         AUTONOMOUS_TOOL_WRITE
@@ -565,6 +579,9 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
 }
 
 pub fn tool_allowed_for_runtime_agent(agent_id: RuntimeAgentIdDto, tool_name: &str) -> bool {
+    if tool_name == AUTONOMOUS_TOOL_AGENT_DEFINITION {
+        return agent_id == RuntimeAgentIdDto::AgentCreate;
+    }
     match agent_id {
         RuntimeAgentIdDto::Engineer | RuntimeAgentIdDto::Debug => true,
         RuntimeAgentIdDto::Ask | RuntimeAgentIdDto::AgentCreate => {
@@ -1664,6 +1681,7 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::ToolSearch(request) => self.tool_search(request),
             AutonomousToolRequest::EnvironmentContext(request) => self.environment_context(request),
             AutonomousToolRequest::ProjectContext(request) => self.project_context(request),
+            AutonomousToolRequest::AgentDefinition(request) => self.agent_definition(request),
             AutonomousToolRequest::Skill(request) => self.skill(request),
             AutonomousToolRequest::Browser(request) => self.browser(request),
             AutonomousToolRequest::Emulator(request) => self.emulator(request),
@@ -1781,6 +1799,9 @@ impl AutonomousToolRuntime {
             }
             AutonomousToolRequest::MacosAutomation(request) => {
                 self.macos_automation_with_operator_approval(request)
+            }
+            AutonomousToolRequest::AgentDefinition(request) => {
+                self.agent_definition_with_operator_approval(request)
             }
             request => self.execute(request),
         }
@@ -2055,6 +2076,7 @@ pub enum AutonomousToolRequest {
     ToolSearch(AutonomousToolSearchRequest),
     EnvironmentContext(AutonomousEnvironmentContextRequest),
     ProjectContext(AutonomousProjectContextRequest),
+    AgentDefinition(AutonomousAgentDefinitionRequest),
     Skill(XeroSkillToolInput),
     Browser(AutonomousBrowserRequest),
     Emulator(AutonomousEmulatorRequest),
@@ -2758,6 +2780,7 @@ pub enum AutonomousToolOutput {
     ToolSearch(AutonomousToolSearchOutput),
     EnvironmentContext(AutonomousEnvironmentContextOutput),
     ProjectContext(AutonomousProjectContextOutput),
+    AgentDefinition(AutonomousAgentDefinitionOutput),
     Skill(AutonomousSkillToolOutput),
     Browser(AutonomousBrowserOutput),
     Emulator(AutonomousEmulatorOutput),

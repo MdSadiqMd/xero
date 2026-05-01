@@ -312,6 +312,25 @@ fn safety_policy_metadata(request: &AutonomousToolRequest) -> SafetyPolicyMetada
             require_approval_code: "policy_requires_approval_external_capability",
             require_approval_reason: "External capability invocation requires operator approval.",
         },
+        AutonomousToolRequest::AgentDefinition(request) => {
+            let requires_approval = matches!(
+                request.action,
+                super::AutonomousAgentDefinitionAction::Save
+                    | super::AutonomousAgentDefinitionAction::Update
+                    | super::AutonomousAgentDefinitionAction::Archive
+                    | super::AutonomousAgentDefinitionAction::Clone
+            );
+            SafetyPolicyMetadata {
+                risk_class: "agent_definition_state",
+                network_intent: "none",
+                credential_sensitivity: "possible",
+                os_target: None,
+                prior_observation_required: false,
+                requires_approval,
+                require_approval_code: "policy_requires_approval_agent_definition_mutation",
+                require_approval_reason: "Saving, updating, archiving, or cloning agent definitions requires explicit operator approval.",
+            }
+        }
         AutonomousToolRequest::SolanaDeploy(_)
         | AutonomousToolRequest::SolanaCodama(_)
         | AutonomousToolRequest::SolanaReplay(_)

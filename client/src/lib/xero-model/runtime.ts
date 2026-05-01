@@ -202,9 +202,9 @@ export const RUNTIME_AGENT_DESCRIPTORS = [
     label: 'Agent Create',
     shortLabel: 'Create',
     description:
-      'Interview the user and draft high-quality custom agent definitions without mutating repositories or saving agents yet.',
+      'Interview the user, validate custom agent definitions, and save approved definitions without mutating repositories.',
     taskPurpose:
-      'Gather intent, clarify scope, propose least-privilege capabilities, and produce reviewable agent-definition drafts.',
+      'Gather intent, clarify scope, propose least-privilege capabilities, validate definitions, and persist approved custom agents.',
     scope: 'built_in',
     lifecycleState: 'active',
     baseCapabilityProfile: 'agent_builder',
