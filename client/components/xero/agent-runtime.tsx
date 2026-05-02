@@ -104,19 +104,7 @@ const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItem
 const MAX_VISIBLE_RUNTIME_FEED_ITEMS = 24
 
 function appendTranscriptDelta(current: string, delta: string): string {
-  if (!current) {
-    return delta
-  }
-
-  if (!delta) {
-    return current
-  }
-
-  if (/\s$/.test(current) || /^\s/.test(delta) || /^[.,!?;:%)\]}]/.test(delta)) {
-    return `${current}${delta}`
-  }
-
-  return `${current} ${delta}`
+  return `${current}${delta}`
 }
 
 function shouldShowActionItem(item: RuntimeStreamViewItem): item is RuntimeStreamToolItemView | RuntimeStreamFailureItemView {
@@ -145,7 +133,7 @@ function buildConversationTurns(runtimeStreamItems: RuntimeStreamViewItem[]): Co
       }
 
       const previous = turns.at(-1)
-      if (previous?.kind === 'message' && previous.role === item.role) {
+      if (item.role === 'assistant' && previous?.kind === 'message' && previous.role === item.role) {
         previous.text = appendTranscriptDelta(previous.text, item.text)
         previous.sequence = item.sequence
         continue

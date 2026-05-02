@@ -445,6 +445,36 @@ function createDictationAdapter(options: {
   }
 }
 
+function makeTranscriptItem(options: {
+  sequence: number
+  role?: 'user' | 'assistant'
+  text: string
+}) {
+  return {
+    id: `transcript:run-1:${options.sequence}`,
+    kind: 'transcript' as const,
+    runId: 'run-1',
+    sequence: options.sequence,
+    createdAt: `2026-04-29T00:48:${String(options.sequence).padStart(2, '0')}Z`,
+    role: options.role ?? 'assistant',
+    text: options.text,
+  }
+}
+
+function renderRuntimeStreamItems(runtimeStreamItems: NonNullable<AgentPaneView['runtimeStreamItems']>) {
+  return render(
+    <AgentRuntime
+      agent={makeAgent({
+        runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+        runtimeRun: makeRuntimeRun(),
+        runtimeStreamStatus: 'live',
+        runtimeStreamStatusLabel: 'Live stream',
+        runtimeStreamItems,
+      })}
+    />,
+  )
+}
+
 describe('AgentRuntime current UI', () => {
   it('hides the autonomous ledger and remote-escalation debug panels', () => {
     render(
@@ -717,70 +747,54 @@ describe('AgentRuntime current UI', () => {
     expect(screen.queryByText('Validation started')).not.toBeInTheDocument()
   })
 
-  it('groups streamed assistant transcript deltas into one response', () => {
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
-          runtimeRun: makeRuntimeRun(),
-          runtimeStreamStatus: 'live',
-          runtimeStreamStatusLabel: 'Live stream',
-          runtimeStreamItems: [
-            {
-              id: 'transcript:run-1:2',
-              kind: 'transcript',
-              runId: 'run-1',
-              sequence: 2,
-              createdAt: '2026-04-29T00:48:03Z',
-              role: 'assistant',
-              text: 'Hi',
-            },
-            {
-              id: 'transcript:run-1:3',
-              kind: 'transcript',
-              runId: 'run-1',
-              sequence: 3,
-              createdAt: '2026-04-29T00:48:04Z',
-              role: 'assistant',
-              text: '!',
-            },
-            {
-              id: 'transcript:run-1:4',
-              kind: 'transcript',
-              runId: 'run-1',
-              sequence: 4,
-              createdAt: '2026-04-29T00:48:05Z',
-              role: 'assistant',
-              text: 'What',
-            },
-            {
-              id: 'transcript:run-1:5',
-              kind: 'transcript',
-              runId: 'run-1',
-              sequence: 5,
-              createdAt: '2026-04-29T00:48:06Z',
-              role: 'assistant',
-              text: 'can',
-            },
-            {
-              id: 'transcript:run-1:6',
-              kind: 'transcript',
-              runId: 'run-1',
-              sequence: 6,
-              createdAt: '2026-04-29T00:48:07Z',
-              role: 'assistant',
-              text: 'I',
-            },
-          ],
-        })}
-      />,
-    )
+  it('preserves subword streamed assistant transcript deltas exactly', () => {
+    renderRuntimeStreamItems([
+      makeTranscriptItem({ sequence: 2, text: 'mon' }),
+      makeTranscriptItem({ sequence: 3, text: 'om' }),
+      makeTranscriptItem({ sequence: 4, text: 'orph' }),
+      makeTranscriptItem({ sequence: 5, text: 'ization' }),
+    ])
 
-    expect(screen.getByText('Hi! What can I')).toBeVisible()
+    expect(screen.getByText('monomorphization')).toBeVisible()
     expect(screen.getAllByText('Agent')).toHaveLength(1)
   })
 
+  it('preserves markdown delimiters split across streamed assistant deltas', () => {
+    renderRuntimeStreamItems([
+      makeTranscriptItem({ sequence: 2, text: '**Native binary' }),
+      makeTranscriptItem({ sequence: 3, text: '** Main modules' }),
+    ])
 
+    const boldText = screen.getByText('Native binary')
+
+    expect(boldText.tagName).toBe('STRONG')
+    expect(boldText.textContent).toBe('Native binary')
+    expect(boldText.closest('p')).toHaveTextContent('Native binary Main modules')
+  })
+
+  it('preserves inline code split across streamed assistant deltas', () => {
+    renderRuntimeStreamItems([
+      makeTranscriptItem({ sequence: 2, text: '`mesh' }),
+      makeTranscriptItem({ sequence: 3, text: 'c' }),
+      makeTranscriptItem({ sequence: 4, text: ' build`' }),
+    ])
+
+    const codeText = screen.getByText('meshc build')
+
+    expect(codeText.tagName).toBe('CODE')
+    expect(screen.queryByText('mesh c build')).not.toBeInTheDocument()
+  })
+
+  it('keeps consecutive full user transcript items as separate prompts', () => {
+    renderRuntimeStreamItems([
+      makeTranscriptItem({ sequence: 2, role: 'user', text: 'First prompt.' }),
+      makeTranscriptItem({ sequence: 3, role: 'user', text: 'Second prompt.' }),
+    ])
+
+    expect(screen.getByText('First prompt.')).toBeVisible()
+    expect(screen.getByText('Second prompt.')).toBeVisible()
+    expect(screen.getAllByText('You')).toHaveLength(2)
+  })
 
   it('offers diagnostics from runtime startup failures', () => {
     const onOpenDiagnostics = vi.fn()
