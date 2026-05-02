@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
@@ -908,6 +908,29 @@ describe('AgentRuntime current UI', () => {
 
     expect(codeText.tagName).toBe('CODE')
     expect(screen.queryByText('mesh c build')).not.toBeInTheDocument()
+  })
+
+  it('renders streamed markdown structure after split transcript deltas are reassembled', () => {
+    renderRuntimeStreamItems([
+      makeTranscriptItem({ sequence: 2, text: '# Pl' }),
+      makeTranscriptItem({ sequence: 3, text: 'an\n\n- Keep **bo' }),
+      makeTranscriptItem({ sequence: 4, text: 'ld** text\n- Run `pn' }),
+      makeTranscriptItem({ sequence: 5, text: 'pm test`\n\n```ts\nconst me' }),
+      makeTranscriptItem({ sequence: 6, text: 'ssage = "ok"\n```' }),
+    ])
+
+    const conversation = screen.getByRole('list', { name: 'Agent conversation turns' })
+    const heading = within(conversation).getByText('Plan')
+    const boldText = within(conversation).getByText('bold')
+    const inlineCode = within(conversation).getByText('pnpm test')
+    const codeBlock = within(conversation).getByText('const message = "ok"')
+
+    expect(heading).toHaveClass('font-semibold')
+    expect(boldText.tagName).toBe('STRONG')
+    expect(inlineCode.tagName).toBe('CODE')
+    expect(codeBlock.tagName).toBe('CODE')
+    expect(boldText.closest('li')).toHaveTextContent('Keep bold text')
+    expect(inlineCode.closest('li')).toHaveTextContent('Run pnpm test')
   })
 
   it('keeps consecutive full user transcript items as separate prompts', () => {
