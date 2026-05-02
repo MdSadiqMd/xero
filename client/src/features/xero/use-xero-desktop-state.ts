@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
 import {
   XeroDesktopError,
   XeroDesktopAdapter,
@@ -65,6 +65,13 @@ import {
   buildExecutionView,
   buildWorkflowView,
 } from './use-xero-desktop-state/view-builders'
+import {
+  createXeroHighChurnStore,
+  selectRepositoryStatus,
+  selectRuntimeStreams,
+  useSelectorStoreValue,
+  type XeroHighChurnStore,
+} from './use-xero-desktop-state/high-churn-store'
 import type {
   AgentTrustSnapshotView,
   AutonomousRunActionKind,
@@ -129,6 +136,14 @@ export type {
   WorkflowPaneView,
 } from './use-xero-desktop-state/types'
 export { BLOCKED_NOTIFICATION_SYNC_POLL_MS } from './use-xero-desktop-state/notification-health'
+export {
+  selectRepositoryShellStatus,
+  selectRuntimeStreamForProject,
+  shallowEqualObject,
+  useSelectorStoreValue as useXeroHighChurnStoreValue,
+  type RepositoryShellStatus,
+  type XeroHighChurnStore,
+} from './use-xero-desktop-state/high-churn-store'
 
 const REPOSITORY_STATUS_POLL_MS = 5_000
 const PREFETCH_FALLBACK_DELAY_MS = 250
@@ -362,10 +377,26 @@ export function useXeroDesktopState(
   options: UseXeroDesktopStateOptions = {},
 ): UseXeroDesktopStateResult {
   const adapter = options.adapter ?? XeroDesktopAdapter
+  const highChurnStoreRef = useRef<XeroHighChurnStore | null>(null)
+  if (!highChurnStoreRef.current) {
+    highChurnStoreRef.current = createXeroHighChurnStore()
+  }
+  const highChurnStore = highChurnStoreRef.current
+  const repositoryStatus = useSelectorStoreValue(
+    highChurnStore,
+    selectRepositoryStatus,
+    Object.is,
+    { disabled: options.subscribeRepositoryStatus === false },
+  )
+  const runtimeStreams = useSelectorStoreValue(
+    highChurnStore,
+    selectRuntimeStreams,
+    Object.is,
+    { disabled: options.subscribeRuntimeStreams === false },
+  )
   const [projects, setProjects] = useState<ProjectListItem[]>([])
   const [activeProject, setActiveProject] = useState<ProjectDetailView | null>(null)
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
-  const [repositoryStatus, setRepositoryStatus] = useState<RepositoryStatusView | null>(null)
   const [repositoryDiffs, setRepositoryDiffs] = useState<Record<RepositoryDiffScope, RepositoryDiffState>>(
     createInitialRepositoryDiffs,
   )
@@ -385,7 +416,6 @@ export function useXeroDesktopState(
   const [notificationSyncErrors, setNotificationSyncErrors] = useState<
     Record<string, OperatorActionErrorView | null>
   >({})
-  const [runtimeStreams, setRuntimeStreams] = useState<Record<string, RuntimeStreamView>>({})
   const [runtimeLoadErrors, setRuntimeLoadErrors] = useState<Record<string, string | null>>({})
   const [runtimeRunLoadErrors, setRuntimeRunLoadErrors] = useState<Record<string, string | null>>({})
   const [autonomousRunLoadErrors, setAutonomousRunLoadErrors] = useState<Record<string, string | null>>({})
@@ -506,6 +536,29 @@ export function useXeroDesktopState(
   const runtimeActionRefreshKeysRef = useRef<Record<string, Set<string>>>({})
   const runtimeRunRefreshKeyRef = useRef<Record<string, string>>({})
   const previousRuntimeAuthRef = useRef<Record<string, boolean>>({})
+
+  const setRepositoryStatus = useCallback(
+    (action: SetStateAction<RepositoryStatusView | null>) => {
+      const nextStatus = highChurnStore.setRepositoryStatus(action)
+      repositoryStatusRef.current = nextStatus
+      repositoryStatusSyncKeyRef.current = createRepositoryStatusSyncKey(nextStatus)
+      return nextStatus
+    },
+    [highChurnStore],
+  )
+
+  const setRuntimeStreams = useCallback(
+    (action: SetStateAction<Record<string, RuntimeStreamView>>) => {
+      const nextStreams = highChurnStore.setRuntimeStreams(action)
+      for (const [projectId, runtimeStream] of Object.entries(nextStreams)) {
+        runtimeStreamsBySessionRef.current[
+          createAgentSessionStateKey(projectId, runtimeStream.agentSessionId)
+        ] = runtimeStream
+      }
+      return nextStreams
+    },
+    [highChurnStore],
+  )
 
   useEffect(() => {
     activeProjectRef.current = activeProject
@@ -2243,6 +2296,7 @@ export function useXeroDesktopState(
   )
 
   return {
+    highChurnStore,
     projects,
     activeProject,
     activeProjectId,

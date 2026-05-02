@@ -196,6 +196,64 @@ describe('VcsSidebar', () => {
     expect(screen.getByLabelText('Source control panel')).toHaveClass('invisible')
   })
 
+  it('does not reload the selected diff when only repository totals change', async () => {
+    const initialStatus = makeStatus()
+    const { onLoadDiff, rerender } = renderVcsSidebar('diff --git a/file.txt b/file.txt\n+change', {
+      status: initialStatus,
+    })
+
+    await waitFor(() => expect(onLoadDiff).toHaveBeenCalledTimes(1))
+
+    rerender(
+      <VcsSidebar
+        open
+        projectId="project-1"
+        status={makeStatus({
+          additions: initialStatus.additions + 10,
+          deletions: initialStatus.deletions + 3,
+          statusCount: initialStatus.statusCount + 1,
+          entries: initialStatus.entries.map((entry) => ({ ...entry })),
+        })}
+        branchLabel="main"
+        onClose={vi.fn()}
+        onRefreshStatus={vi.fn()}
+        onLoadDiff={onLoadDiff}
+        commitMessageModel={{
+          providerProfileId: 'openai-api-default',
+          modelId: 'gpt-5.4',
+          thinkingEffort: 'medium',
+          label: 'gpt-5.4',
+        }}
+        onGenerateCommitMessage={vi.fn(async () => ({
+          message: 'feat: update project file',
+          providerId: 'openai_api',
+          modelId: 'gpt-5.4',
+          diffTruncated: false,
+        }))}
+        onStage={vi.fn(async () => undefined)}
+        onUnstage={vi.fn(async () => undefined)}
+        onDiscard={vi.fn(async () => undefined)}
+        onCommit={vi.fn(async () => ({
+          sha: 'def5678',
+          summary: 'Commit summary',
+          signature: { name: 'Test User', email: 'test@example.com' },
+        }))}
+        onFetch={vi.fn(async () => ({ remote: 'origin', refspecs: [] }))}
+        onPull={vi.fn(async () => ({
+          remote: 'origin',
+          branch: 'main',
+          updated: false,
+          summary: 'Already up to date.',
+          newHeadSha: null,
+        }))}
+        onPush={vi.fn(async () => ({ remote: 'origin', branch: 'main', updates: [] }))}
+      />,
+    )
+
+    await waitFor(() => expect(screen.getByText('+11')).toBeInTheDocument())
+    expect(onLoadDiff).toHaveBeenCalledTimes(1)
+  })
+
   it('generates a commit message from the staged diff', async () => {
     const onGenerateCommitMessage = vi.fn(async () => ({
       message: 'fix: tighten source control actions',

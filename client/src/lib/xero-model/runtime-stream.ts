@@ -431,7 +431,9 @@ function capRuntimeTimelineItems(
   transcriptItems: RuntimeStreamTranscriptItemView[],
   nextItem: RuntimeStreamViewItem,
 ): RuntimeStreamViewItem[] {
-  let nonTranscriptItems = currentItems.filter((item) => item.kind !== 'transcript')
+  let nonTranscriptItems: RuntimeStreamViewItem[] = currentItems.filter(
+    (item) => item.kind !== 'transcript',
+  )
 
   if (nextItem.kind === 'tool') {
     nonTranscriptItems = [

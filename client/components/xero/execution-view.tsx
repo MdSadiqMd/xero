@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { EditorView as CodeMirrorView } from '@codemirror/view'
 import type {
   CreateProjectEntryRequestDto,
@@ -301,10 +301,10 @@ function EditorView({
   )
 }
 
-export function ExecutionView(props: ExecutionViewProps) {
+export const ExecutionView = memo(function ExecutionView(props: ExecutionViewProps) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <EditorView {...props} />
     </div>
   )
-}
+})

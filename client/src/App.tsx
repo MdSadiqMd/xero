@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { AgentRuntime } from '@/components/xero/agent-runtime'
 import { SetupEmptyState } from '@/components/xero/agent-runtime/setup-empty-state'
 import { AgentSessionsSidebar } from '@/components/xero/agent-sessions-sidebar'
@@ -35,9 +35,17 @@ import type {
   EnvironmentDiscoveryStatusDto,
   EnvironmentProfileSummaryDto,
 } from '@/src/lib/xero-model/environment'
-import { useXeroDesktopState, type AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
+import {
+  selectRuntimeStreamForProject,
+  useXeroDesktopState,
+  useXeroHighChurnStoreValue,
+  type AgentPaneView,
+  type XeroHighChurnStore,
+} from '@/src/features/xero/use-xero-desktop-state'
+import { getAgentMessagesUnavailableCredentialReason } from '@/src/features/xero/use-xero-desktop-state/runtime-provider'
 import { useGitHubAuth } from '@/src/lib/github-auth'
 import { getCloudProviderDefaultProfileId } from '@/src/lib/xero-model/provider-presets'
+import { getRuntimeStreamStatusLabel } from '@/src/lib/xero-model/runtime-stream'
 import { cn } from '@/lib/utils'
 
 export interface XeroAppProps {
@@ -83,6 +91,62 @@ function getVcsCommitMessageModel(
   }
 }
 
+function useAgentViewWithLiveRuntimeStream(
+  agent: AgentPaneView | null,
+  highChurnStore: XeroHighChurnStore,
+): AgentPaneView | null {
+  const projectId = agent?.project.id ?? null
+  const agentSessionId = agent?.project.selectedAgentSessionId ?? null
+  const streamSelector = useMemo(
+    () => selectRuntimeStreamForProject(projectId, agentSessionId),
+    [agentSessionId, projectId],
+  )
+  const runtimeStream = useXeroHighChurnStoreValue(highChurnStore, streamSelector)
+
+  return useMemo(() => {
+    if (!agent) {
+      return null
+    }
+
+    const streamStatus = runtimeStream?.status ?? 'idle'
+    return {
+      ...agent,
+      runtimeStream,
+      runtimeStreamStatus: streamStatus,
+      runtimeStreamStatusLabel: getRuntimeStreamStatusLabel(streamStatus),
+      runtimeStreamError: runtimeStream?.lastIssue ?? null,
+      runtimeStreamItems: runtimeStream?.items ?? [],
+      skillItems: runtimeStream?.skillItems ?? [],
+      activityItems: runtimeStream?.activityItems ?? [],
+      actionRequiredItems: runtimeStream?.actionRequired ?? [],
+      messagesUnavailableReason: getAgentMessagesUnavailableCredentialReason(
+        agent.runtimeSession ?? null,
+        runtimeStream,
+        agent.runtimeRun ?? null,
+        agent.agentRuntimeBlocked ?? false,
+      ),
+    }
+  }, [agent, runtimeStream])
+}
+
+type LiveAgentRuntimeProps = Omit<ComponentProps<typeof AgentRuntime>, 'agent'> & {
+  agent: AgentPaneView
+  highChurnStore: XeroHighChurnStore
+}
+
+function LiveAgentRuntime({
+  agent,
+  highChurnStore,
+  ...props
+}: LiveAgentRuntimeProps) {
+  const liveAgent = useAgentViewWithLiveRuntimeStream(agent, highChurnStore)
+  if (!liveAgent) {
+    return null
+  }
+
+  return <AgentRuntime {...props} agent={liveAgent} />
+}
+
 export function XeroApp({ adapter }: XeroAppProps) {
   const resolvedAdapter = adapter ?? DefaultXeroDesktopAdapter
   const [activeView, setActiveViewRaw] = useState<View>('phases')
@@ -124,6 +188,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     }
   }, [])
   const {
+    highChurnStore,
     projects,
     activeProject,
     activeProjectId,
@@ -218,7 +283,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     renameAgentSession,
     activeUsageSummary,
     refreshUsageSummary,
-  } = useXeroDesktopState({ adapter })
+  } = useXeroDesktopState({ adapter, subscribeRuntimeStreams: false })
 
   const {
     session: githubSession,
@@ -285,10 +350,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
     }
   }, [activeProjectId, customAgentDefinitionsRevision, resolvedAdapter])
 
-  const openSettings = (section: SettingsSection = 'providers') => {
+  const openSettings = useCallback((section: SettingsSection = 'providers') => {
     setSettingsInitialSection(section)
     setSettingsOpen(true)
-  }
+  }, [])
 
   const refreshEnvironmentDiscovery = useCallback(
     async (options: { force?: boolean } = {}) => {
@@ -342,7 +407,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     [resolvedAdapter],
   )
 
-  const toggleGames = () => {
+  const toggleGames = useCallback(() => {
     setGamesOpen((current) => {
       const next = !current
       if (next) {
@@ -355,9 +420,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
       }
       return next
     })
-  }
+  }, [])
 
-  const toggleBrowser = () => {
+  const toggleBrowser = useCallback(() => {
     setBrowserOpen((current) => {
       const next = !current
       if (next) {
@@ -370,9 +435,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
       }
       return next
     })
-  }
+  }, [])
 
-  const toggleIos = () => {
+  const toggleIos = useCallback(() => {
     setIosOpen((current) => {
       const next = !current
       if (next) {
@@ -385,9 +450,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
       }
       return next
     })
-  }
+  }, [])
 
-  const toggleAndroid = () => {
+  const toggleAndroid = useCallback(() => {
     setAndroidOpen((current) => {
       const next = !current
       if (next) {
@@ -400,9 +465,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
       }
       return next
     })
-  }
+  }, [])
 
-  const toggleSolana = () => {
+  const toggleSolana = useCallback(() => {
     setSolanaOpen((current) => {
       const next = !current
       if (next) {
@@ -415,9 +480,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
       }
       return next
     })
-  }
+  }, [])
 
-  const toggleVcs = () => {
+  const toggleVcs = useCallback(() => {
     setVcsOpen((current) => {
       const next = !current
       if (next) {
@@ -430,9 +495,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
       }
       return next
     })
-  }
+  }, [])
 
-  const toggleWorkflows = () => {
+  const toggleWorkflows = useCallback(() => {
     setWorkflowsOpen((current) => {
       const next = !current
       if (next) {
@@ -445,8 +510,11 @@ export function XeroApp({ adapter }: XeroAppProps) {
       }
       return next
     })
-  }
+  }, [])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((current) => !current)
+  }, [])
   const [explorerCollapsed, setExplorerCollapsed] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
     try {
@@ -533,6 +601,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
       ? () => setUsageOpen((current) => !current)
       : undefined,
   }
+  const vcsCommitMessageModel = useMemo(
+    () => getVcsCommitMessageModel(agentView, agentComposerControls),
+    [agentComposerControls, agentView],
+  )
 
   useEffect(() => {
     const previousView = previousViewRef.current
@@ -638,6 +710,55 @@ export function XeroApp({ adapter }: XeroAppProps) {
       void removeProject(projectId)
     },
     [removeProject],
+  )
+  const closeVcs = useCallback(() => setVcsOpen(false), [])
+  const refreshVcsStatus = useCallback(() => {
+    if (activeProjectId) {
+      return retry()
+    }
+    return undefined
+  }, [activeProjectId, retry])
+  const loadRepositoryDiff = useCallback(
+    (projectId: string, scope: RepositoryDiffScope) => resolvedAdapter.getRepositoryDiff(projectId, scope),
+    [resolvedAdapter],
+  )
+  const generateCommitMessage = useCallback(
+    (projectId: string, model: VcsCommitMessageModel) =>
+      resolvedAdapter.gitGenerateCommitMessage({
+        projectId,
+        providerProfileId: model.providerProfileId,
+        modelId: model.modelId,
+        thinkingEffort: model.thinkingEffort,
+      }),
+    [resolvedAdapter],
+  )
+  const stagePaths = useCallback(
+    (projectId: string, paths: string[]) => resolvedAdapter.gitStagePaths(projectId, paths),
+    [resolvedAdapter],
+  )
+  const unstagePaths = useCallback(
+    (projectId: string, paths: string[]) => resolvedAdapter.gitUnstagePaths(projectId, paths),
+    [resolvedAdapter],
+  )
+  const discardChanges = useCallback(
+    (projectId: string, paths: string[]) => resolvedAdapter.gitDiscardChanges(projectId, paths),
+    [resolvedAdapter],
+  )
+  const commitChanges = useCallback(
+    (projectId: string, message: string) => resolvedAdapter.gitCommit(projectId, message),
+    [resolvedAdapter],
+  )
+  const fetchRepository = useCallback(
+    (projectId: string) => resolvedAdapter.gitFetch(projectId),
+    [resolvedAdapter],
+  )
+  const pullRepository = useCallback(
+    (projectId: string) => resolvedAdapter.gitPull(projectId),
+    [resolvedAdapter],
+  )
+  const pushRepository = useCallback(
+    (projectId: string) => resolvedAdapter.gitPush(projectId),
+    [resolvedAdapter],
   )
 
   const renderBody = () => {
@@ -769,8 +890,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
               className={getViewPaneClassName(activeView === 'agent')}
               inert={activeView !== 'agent' ? true : undefined}
             >
-              <AgentRuntime
+              <LiveAgentRuntime
                 agent={agentView}
+                highChurnStore={highChurnStore}
                 desktopAdapter={resolvedAdapter}
                 accountAvatarUrl={githubSession?.user.avatarUrl ?? null}
                 accountLogin={githubSession?.user.login ?? null}
@@ -907,7 +1029,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         vcsAdditions={repositoryStatus?.additions ?? 0}
         vcsDeletions={repositoryStatus?.deletions ?? 0}
         sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+        onToggleSidebar={toggleSidebarCollapsed}
         platformOverride={platformOverride}
         footer={statusFooter}
         chromeOnly
@@ -982,7 +1104,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
       vcsAdditions={repositoryStatus?.additions ?? 0}
       vcsDeletions={repositoryStatus?.deletions ?? 0}
       sidebarCollapsed={sidebarCollapsed}
-      onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+      onToggleSidebar={toggleSidebarCollapsed}
       platformOverride={platformOverride}
       footer={statusFooter}
     >
@@ -1030,32 +1152,18 @@ export function XeroApp({ adapter }: XeroAppProps) {
         projectId={activeProjectId}
         status={repositoryStatus}
         branchLabel={repositoryStatus?.branchLabel ?? activeProject?.branchLabel ?? null}
-        onClose={() => setVcsOpen(false)}
-        onRefreshStatus={() => {
-          if (activeProjectId) {
-            return retry()
-          }
-          return undefined
-        }}
-        onLoadDiff={(projectId, scope: RepositoryDiffScope) =>
-          resolvedAdapter.getRepositoryDiff(projectId, scope)
-        }
-        commitMessageModel={getVcsCommitMessageModel(agentView, agentComposerControls)}
-        onGenerateCommitMessage={(projectId, model) =>
-          resolvedAdapter.gitGenerateCommitMessage({
-            projectId,
-            providerProfileId: model.providerProfileId,
-            modelId: model.modelId,
-            thinkingEffort: model.thinkingEffort,
-          })
-        }
-        onStage={(projectId, paths) => resolvedAdapter.gitStagePaths(projectId, paths)}
-        onUnstage={(projectId, paths) => resolvedAdapter.gitUnstagePaths(projectId, paths)}
-        onDiscard={(projectId, paths) => resolvedAdapter.gitDiscardChanges(projectId, paths)}
-        onCommit={(projectId, message) => resolvedAdapter.gitCommit(projectId, message)}
-        onFetch={(projectId) => resolvedAdapter.gitFetch(projectId)}
-        onPull={(projectId) => resolvedAdapter.gitPull(projectId)}
-        onPush={(projectId) => resolvedAdapter.gitPush(projectId)}
+        onClose={closeVcs}
+        onRefreshStatus={refreshVcsStatus}
+        onLoadDiff={loadRepositoryDiff}
+        commitMessageModel={vcsCommitMessageModel}
+        onGenerateCommitMessage={generateCommitMessage}
+        onStage={stagePaths}
+        onUnstage={unstagePaths}
+        onDiscard={discardChanges}
+        onCommit={commitChanges}
+        onFetch={fetchRepository}
+        onPull={pullRepository}
+        onPush={pushRepository}
       />
       <SettingsDialog
         open={settingsOpen}

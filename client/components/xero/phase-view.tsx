@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Plus, Workflow as WorkflowIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { WorkflowPaneView } from '@/src/features/xero/use-xero-desktop-state'
@@ -20,7 +20,7 @@ const BASE_GRID_SIZE = 28
 const MIN_ZOOM = 0.25
 const MAX_ZOOM = 4
 
-export function PhaseView(props: PhaseViewProps) {
+export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
   const { onToggleWorkflows, workflowsOpen = false, onCreateWorkflow } = props
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
@@ -167,4 +167,4 @@ export function PhaseView(props: PhaseViewProps) {
       ) : null}
     </div>
   )
-}
+})

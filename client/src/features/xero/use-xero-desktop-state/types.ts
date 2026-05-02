@@ -79,6 +79,7 @@ import type {
   SelectedModelView,
   SelectedRuntimeProviderSource,
 } from './runtime-provider'
+import type { XeroHighChurnStore } from './high-churn-store'
 
 export type RefreshSource =
   | 'startup'
@@ -252,6 +253,18 @@ export interface NotificationChannelHealthView {
 
 export interface UseXeroDesktopStateOptions {
   adapter?: XeroDesktopAdapter
+  /**
+   * Runtime stream items are high-frequency UI data. The full subscription
+   * stays enabled by default for direct hook consumers and tests; app shells
+   * can opt out and subscribe from the visible runtime pane instead.
+   */
+  subscribeRuntimeStreams?: boolean
+  /**
+   * Repository status can be consumed through selectors when only badges need
+   * updates. Defaulting to the legacy full subscription keeps direct callers
+   * straightforward while the app migrates leaf-by-leaf.
+   */
+  subscribeRepositoryStatus?: boolean
 }
 
 export interface RepositoryDiffState {
@@ -391,6 +404,7 @@ export interface NotificationRoutesLoadResult {
 }
 
 export interface UseXeroDesktopStateResult {
+  highChurnStore: XeroHighChurnStore
   projects: ProjectListItem[]
   activeProject: ProjectDetailView | null
   activeProjectId: string | null

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -91,6 +91,14 @@ type ActionKind =
   | "pull"
   | "push"
 
+function getFileEntrySignature(entry: RepositoryStatusEntryView): string {
+  return `${entry.path}\u0000${entry.staged ?? ""}\u0000${entry.unstaged ?? ""}\u0000${entry.untracked ? "1" : "0"}`
+}
+
+function getStatusEntriesSignature(status: RepositoryStatusView | null): string {
+  return status?.entries.map(getFileEntrySignature).join("\u0001") ?? ""
+}
+
 function defaultViewportWidth(): number {
   if (typeof window === "undefined") return 900
   return Math.max(MIN_WIDTH, Math.round(window.innerWidth * DEFAULT_WIDTH_RATIO))
@@ -101,7 +109,7 @@ function viewportMaxWidth(): number {
   return Math.max(MIN_WIDTH, Math.round(window.innerWidth * 0.95))
 }
 
-export function VcsSidebar(props: VcsSidebarProps) {
+export const VcsSidebar = memo(function VcsSidebar(props: VcsSidebarProps) {
   const { open } = props
   const shouldRenderDiffPane = (props.status?.entries.length ?? 0) > 0
   const [width, setWidth] = useState<number>(() => defaultViewportWidth())
@@ -235,7 +243,7 @@ export function VcsSidebar(props: VcsSidebarProps) {
       </motion.aside>
     </>
   )
-}
+})
 
 function VcsSidebarBody({
   projectId,
@@ -264,6 +272,7 @@ function VcsSidebarBody({
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
+  const statusEntriesSignature = useMemo(() => getStatusEntriesSignature(status), [status])
   const allEntries: FileEntry[] = useMemo(() => {
     if (!status) return []
     return status.entries.map((entry) => ({
@@ -272,7 +281,11 @@ function VcsSidebarBody({
       unstaged: entry.unstaged,
       untracked: entry.untracked,
     }))
-  }, [status])
+  }, [statusEntriesSignature])
+  const selectedEntry = useMemo(
+    () => allEntries.find((item) => item.path === selectedPath) ?? null,
+    [allEntries, selectedPath],
+  )
 
   const stagedFiles = useMemo(
     () => allEntries.filter((entry) => entry.staged !== null),
@@ -299,17 +312,16 @@ function VcsSidebarBody({
     }
 
     let cancelled = false
-    const entry = allEntries.find((item) => item.path === selectedPath)
-    if (!entry) {
+    if (!selectedEntry) {
       setDiffPatch("")
       setDiffError(null)
       return
     }
 
     const scope: "staged" | "unstaged" | "worktree" =
-      entry.staged && !entry.unstaged && !entry.untracked
+      selectedEntry.staged && !selectedEntry.unstaged && !selectedEntry.untracked
         ? "staged"
-        : entry.staged && (entry.unstaged || entry.untracked)
+        : selectedEntry.staged && (selectedEntry.unstaged || selectedEntry.untracked)
           ? "worktree"
           : "unstaged"
 
@@ -336,7 +348,7 @@ function VcsSidebarBody({
     return () => {
       cancelled = true
     }
-  }, [projectId, selectedPath, allEntries, onLoadDiff])
+  }, [projectId, selectedPath, selectedEntry, onLoadDiff])
 
   useEffect(() => {
     if (selectedPath && allEntries.some((entry) => entry.path === selectedPath)) {

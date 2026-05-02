@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from 'react'
 import { ArrowDown, ChevronRight, Loader2, Plus } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -540,7 +540,7 @@ function useAgentContextMeterSnapshot(options: {
   return { status, snapshot, error, refresh }
 }
 
-export function AgentRuntime({
+export const AgentRuntime = memo(function AgentRuntime({
   agent,
   onOpenSettings,
   onOpenDiagnostics,
@@ -999,4 +999,4 @@ export function AgentRuntime({
       </div>
     </div>
   )
-}
+})
