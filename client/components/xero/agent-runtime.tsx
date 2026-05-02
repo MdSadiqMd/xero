@@ -44,6 +44,7 @@ import { AgentCreateDraftSection } from './agent-runtime/agent-create-draft-sect
 import { ConversationSection, type ConversationTurn } from './agent-runtime/conversation-section'
 import { EmptySessionState } from './agent-runtime/empty-session-state'
 import {
+  getToolCardTitle,
   getStreamRunId,
   getToolSummaryContext,
   hasUsableRuntimeRunId,
@@ -113,18 +114,96 @@ function shouldShowActionItem(item: RuntimeStreamViewItem): item is RuntimeStrea
 
 function actionTurnFromItem(item: RuntimeStreamToolItemView): ConversationTurn {
   const summary = getToolSummaryContext(item)
+  const detail = getActionDetail(item, summary)
   return {
     id: item.id,
     kind: 'action',
     sequence: item.sequence,
-    title: item.toolName,
-    detail: item.detail ?? summary ?? 'Tool activity recorded.',
+    toolCallId: item.toolCallId,
+    toolName: item.toolName,
+    title: getToolCardTitle(item),
+    detail,
+    detailRows: getActionDetailRows(item, summary),
     state: item.toolState,
+  }
+}
+
+function normalizeToolCopy(value: string): string {
+  return value.trim().replace(/[._-]+/g, ' ').replace(/\s+/g, ' ').toLowerCase()
+}
+
+function isGenericToolDetail(detail: string, item: RuntimeStreamToolItemView): boolean {
+  const normalizedDetail = normalizeToolCopy(detail)
+  return normalizedDetail === normalizeToolCopy(item.toolName) || normalizedDetail === 'tool activity recorded'
+}
+
+function getActionDetail(item: RuntimeStreamToolItemView, summary: string | null): string {
+  if (item.detail && (!summary || !isGenericToolDetail(item.detail, item))) {
+    return item.detail
+  }
+
+  return summary ?? item.detail ?? 'Tool activity recorded.'
+}
+
+function getActionDetailRows(
+  item: RuntimeStreamToolItemView,
+  summary: string | null,
+): Array<{ label: string; value: string }> {
+  const rows: Array<{ label: string; value: string }> = []
+
+  if (item.detail) {
+    rows.push({
+      label: item.toolState === 'running' ? 'Input' : 'Outcome',
+      value: item.detail,
+    })
+  }
+
+  if (summary && summary !== item.detail) {
+    rows.push({
+      label: 'Result',
+      value: summary,
+    })
+  }
+
+  return rows
+}
+
+function mergeActionRows(
+  existing: Array<{ label: string; value: string }>,
+  incoming: Array<{ label: string; value: string }>,
+): Array<{ label: string; value: string }> {
+  const seen = new Set(existing.map((row) => `${row.label}\u0000${row.value}`))
+  const merged = [...existing]
+
+  for (const row of incoming) {
+    const key = `${row.label}\u0000${row.value}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      merged.push(row)
+    }
+  }
+
+  return merged
+}
+
+function mergeActionTurn(existing: ConversationTurn, incoming: ConversationTurn): void {
+  if (existing.kind !== 'action' || incoming.kind !== 'action') {
+    return
+  }
+
+  existing.sequence = incoming.sequence
+  existing.state = incoming.state
+  existing.detail = incoming.detail
+  existing.detailRows = mergeActionRows(existing.detailRows, incoming.detailRows)
+
+  if (incoming.title.length >= existing.title.length) {
+    existing.title = incoming.title
   }
 }
 
 function buildConversationTurns(runtimeStreamItems: RuntimeStreamViewItem[]): ConversationTurn[] {
   const turns: ConversationTurn[] = []
+  const actionTurnIndexByToolCallId = new Map<string, number>()
 
   for (const item of runtimeStreamItems) {
     if (item.kind === 'transcript') {
@@ -164,7 +243,18 @@ function buildConversationTurns(runtimeStreamItems: RuntimeStreamViewItem[]): Co
       continue
     }
 
-    turns.push(actionTurnFromItem(item))
+    const incomingActionTurn = actionTurnFromItem(item)
+    const existingActionTurnIndex = actionTurnIndexByToolCallId.get(item.toolCallId)
+    const existingActionTurn =
+      existingActionTurnIndex != null ? turns[existingActionTurnIndex] : null
+
+    if (existingActionTurn?.kind === 'action') {
+      mergeActionTurn(existingActionTurn, incomingActionTurn)
+      continue
+    }
+
+    actionTurnIndexByToolCallId.set(item.toolCallId, turns.length)
+    turns.push(incomingActionTurn)
   }
 
   return turns.slice(-MAX_VISIBLE_RUNTIME_FEED_ITEMS)

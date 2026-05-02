@@ -27,6 +27,11 @@ import {
 
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import type {
   RuntimeRunView,
   RuntimeStreamCompleteItemView,
@@ -51,8 +56,11 @@ export type ConversationTurn =
       id: string
       kind: 'action'
       sequence: number
+      toolCallId: string
+      toolName: string
       title: string
       detail: string
+      detailRows: Array<{ label: string; value: string }>
       state?: RuntimeStreamToolItemView['toolState'] | null
     }
   | {
@@ -234,7 +242,14 @@ function ConversationTurnRow({ turn, accountAvatarUrl, accountLogin }: Conversat
     return <FailureCard message={turn.message} code={turn.code} />
   }
 
-  return <ActionCard title={turn.title} detail={turn.detail} state={turn.state ?? null} />
+  return (
+    <ActionCard
+      title={turn.title}
+      detail={turn.detail}
+      detailRows={turn.detailRows}
+      state={turn.state ?? null}
+    />
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -388,32 +403,81 @@ function ThinkingBlock({ text }: { text: string }) {
 interface ActionCardProps {
   title: string
   detail: string
+  detailRows: Array<{ label: string; value: string }>
   state: RuntimeStreamToolItemView['toolState'] | null
 }
 
-function ActionCard({ title, detail, state }: ActionCardProps) {
+function ActionCard({ title, detail, detailRows, state }: ActionCardProps) {
+  const [open, setOpen] = useState(false)
+  const hasDetails = detailRows.length > 0
+
   return (
     <div className="flex gap-3">
       <ToolAvatar state={state} />
       <div className="min-w-0 max-w-[82%] flex-1">
-        <div
+        <Collapsible
+          open={open}
+          onOpenChange={setOpen}
           className={cn(
-            'rounded-xl border border-border/50 bg-muted/30 px-3.5 py-2.5',
+            'rounded-lg border border-border/50 bg-muted/30 px-3.5 py-2.5',
             'shadow-sm transition-colors',
           )}
         >
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             {state ? (
               <Badge variant={getToolStateBadgeVariant(state)} className="font-mono text-[10px] uppercase tracking-wider">
                 {getToolStateLabel(state)}
               </Badge>
             ) : null}
-            <p className="min-w-0 flex-1 truncate font-mono text-xs font-medium text-foreground">{title}</p>
+            <p className="min-w-0 flex-1 truncate font-mono text-xs font-medium text-foreground" title={title}>
+              {title}
+            </p>
+            {hasDetails ? (
+              <CollapsibleTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`${open ? 'Hide' : 'Show'} tool details for ${title}`}
+                  className={cn(
+                    'flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground',
+                    'hover:bg-background/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
+                  )}
+                >
+                  <ChevronDown
+                    className={cn(
+                      'h-3.5 w-3.5 transition-transform duration-150',
+                      open ? 'rotate-180' : 'rotate-0',
+                    )}
+                  />
+                </button>
+              </CollapsibleTrigger>
+            ) : null}
           </div>
-          <p className="mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-muted-foreground">
+          <p
+            className="mt-1.5 truncate text-[13px] leading-relaxed text-muted-foreground"
+            title={detail}
+          >
             {detail}
           </p>
-        </div>
+          {hasDetails ? (
+            <CollapsibleContent>
+              <dl className="mt-2 grid gap-2 border-t border-border/50 pt-2">
+                {detailRows.map((row, index) => (
+                  <div key={`${row.label}:${index}`} className="grid gap-0.5">
+                    <dt className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                      {row.label}
+                    </dt>
+                    <dd
+                      className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground/85"
+                      title={row.value}
+                    >
+                      {row.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </CollapsibleContent>
+          ) : null}
+        </Collapsible>
       </div>
     </div>
   )

@@ -25,6 +25,7 @@ import type {
   ProjectDetailView,
   RuntimeRunView,
   RuntimeSessionView,
+  RuntimeStreamToolItemView,
 } from '@/src/lib/xero-model'
 
 function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailView {
@@ -461,6 +462,26 @@ function makeTranscriptItem(options: {
   }
 }
 
+function makeToolItem(
+  options: Partial<RuntimeStreamToolItemView> & {
+    sequence: number
+    toolCallId: string
+    toolName: string
+    toolState: RuntimeStreamToolItemView['toolState']
+  },
+): RuntimeStreamToolItemView {
+  return {
+    id: `tool:run-1:${options.sequence}`,
+    kind: 'tool',
+    runId: 'run-1',
+    sequence: options.sequence,
+    createdAt: `2026-04-29T00:48:${String(options.sequence).padStart(2, '0')}Z`,
+    detail: null,
+    toolSummary: null,
+    ...options,
+  }
+}
+
 function renderRuntimeStreamItems(runtimeStreamItems: NonNullable<AgentPaneView['runtimeStreamItems']>) {
   return render(
     <AgentRuntime
@@ -794,6 +815,68 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('First prompt.')).toBeVisible()
     expect(screen.getByText('Second prompt.')).toBeVisible()
     expect(screen.getAllByText('You')).toHaveLength(2)
+  })
+
+  it('collapses tool state transitions into one compact card with details', () => {
+    renderRuntimeStreamItems([
+      makeToolItem({
+        sequence: 2,
+        toolCallId: 'call-read',
+        toolName: 'read',
+        toolState: 'running',
+        detail: 'path: client/components/xero/agent-runtime.tsx, startLine: 1, lineCount: 80',
+      }),
+      makeToolItem({
+        sequence: 3,
+        toolCallId: 'call-read',
+        toolName: 'read',
+        toolState: 'succeeded',
+        detail: 'Read 80 line(s) from `client/components/xero/agent-runtime.tsx`.',
+        toolSummary: {
+          kind: 'file',
+          path: 'client/components/xero/agent-runtime.tsx',
+          scope: null,
+          lineCount: 80,
+          matchCount: null,
+          truncated: false,
+        },
+      }),
+    ])
+
+    expect(screen.getAllByText('read agent-runtime.tsx')).toHaveLength(1)
+    expect(screen.getByText('Succeeded')).toBeVisible()
+    expect(screen.queryByText('Running')).not.toBeInTheDocument()
+    expect(screen.getByText('Read 80 line(s) from `client/components/xero/agent-runtime.tsx`.')).toBeVisible()
+    expect(screen.queryByText('Tool activity recorded.')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /show tool details for read agent-runtime\.tsx/i }))
+
+    expect(screen.getByText('Input')).toBeVisible()
+    expect(screen.getByText('path: client/components/xero/agent-runtime.tsx, startLine: 1, lineCount: 80')).toBeVisible()
+    expect(screen.getByText('Result')).toBeVisible()
+    expect(screen.getByText('File result · path client/components/xero/agent-runtime.tsx · 80 lines')).toBeVisible()
+  })
+
+  it('uses action plus target labels for search-oriented tool cards', () => {
+    renderRuntimeStreamItems([
+      makeToolItem({
+        sequence: 2,
+        toolCallId: 'call-find',
+        toolName: 'find',
+        toolState: 'running',
+        detail: 'pattern: appendTranscriptDelta, path: client/components/xero',
+      }),
+      makeToolItem({
+        sequence: 3,
+        toolCallId: 'call-list',
+        toolName: 'list',
+        toolState: 'running',
+        detail: 'path: client/components/xero, maxDepth: 2',
+      }),
+    ])
+
+    expect(screen.getByText('find appendTranscriptDelta')).toBeVisible()
+    expect(screen.getByText('list client/components/xero')).toBeVisible()
   })
 
   it('offers diagnostics from runtime startup failures', () => {

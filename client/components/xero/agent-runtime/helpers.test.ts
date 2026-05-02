@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import { getComposerPlaceholder } from '@/components/xero/agent-runtime/composer-helpers'
-import { getStreamStatusMeta, getToolSummaryContext } from '@/components/xero/agent-runtime/runtime-stream-helpers'
+import {
+  getStreamStatusMeta,
+  getToolCardTitle,
+  getToolSummaryContext,
+} from '@/components/xero/agent-runtime/runtime-stream-helpers'
 import { displayValue, formatSequence } from '@/components/xero/agent-runtime/shared-helpers'
 import type { AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
 import type { RuntimeSessionView, RuntimeStreamToolItemView } from '@/src/lib/xero-model'
@@ -171,6 +175,22 @@ function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): Runtim
   }
 }
 
+function makeToolItem(overrides: Partial<RuntimeStreamToolItemView> = {}): RuntimeStreamToolItemView {
+  return {
+    id: 'tool:run-1:1',
+    kind: 'tool',
+    runId: 'run-1',
+    sequence: 1,
+    createdAt: '2026-04-24T17:30:00Z',
+    toolCallId: 'tool-call-1',
+    toolName: 'read',
+    toolState: 'succeeded',
+    detail: null,
+    toolSummary: null,
+    ...overrides,
+  }
+}
+
 describe('agent-runtime helpers', () => {
   it('keeps blank labels and missing sequences on the existing fallback copy', () => {
     expect(displayValue('   ', 'Unavailable')).toBe('Unavailable')
@@ -178,12 +198,7 @@ describe('agent-runtime helpers', () => {
   })
 
   it('formats browser/computer-use tool summaries with safe fallback labels for optional metadata', () => {
-    const browserItem: RuntimeStreamToolItemView = {
-      id: 'tool:run-1:1',
-      kind: 'tool',
-      runId: 'run-1',
-      sequence: 1,
-      createdAt: '2026-04-24T17:30:00Z',
+    const browserItem = makeToolItem({
       toolCallId: 'browser-click-1',
       toolName: 'browser.click',
       toolState: 'succeeded',
@@ -196,7 +211,7 @@ describe('agent-runtime helpers', () => {
         target: 'button[type=submit]',
         outcome: 'Clicked submit and advanced to confirmation.',
       },
-    }
+    })
 
     const computerItem: RuntimeStreamToolItemView = {
       ...browserItem,
@@ -222,6 +237,102 @@ describe('agent-runtime helpers', () => {
       'Computer use action press_key · status Blocked · target Target unavailable · outcome Outcome unavailable',
     )
     expect(getToolSummaryContext({ ...browserItem, toolSummary: null })).toBeNull()
+  })
+
+  it('formats command, file, git, and web summaries for tool detail drawers', () => {
+    expect(
+      getToolSummaryContext(
+        makeToolItem({
+          toolName: 'command',
+          toolSummary: {
+            kind: 'command',
+            exitCode: 0,
+            timedOut: false,
+            stdoutTruncated: true,
+            stderrTruncated: false,
+            stdoutRedacted: false,
+            stderrRedacted: true,
+          },
+        }),
+      ),
+    ).toBe('Command · exit 0 · stdout truncated · stderr redacted')
+
+    expect(
+      getToolSummaryContext(
+        makeToolItem({
+          toolName: 'find',
+          toolSummary: {
+            kind: 'file',
+            path: null,
+            scope: 'client/src-tauri',
+            lineCount: null,
+            matchCount: 2,
+            truncated: true,
+          },
+        }),
+      ),
+    ).toBe('File result · scope client/src-tauri · 2 matches · truncated')
+
+    expect(
+      getToolSummaryContext(
+        makeToolItem({
+          toolName: 'git_diff',
+          toolSummary: {
+            kind: 'git',
+            scope: 'worktree',
+            changedFiles: 3,
+            truncated: true,
+            baseRevision: 'HEAD~1',
+          },
+        }),
+      ),
+    ).toBe('Git · worktree · 3 changed files · base HEAD~1 · truncated')
+
+    expect(
+      getToolSummaryContext(
+        makeToolItem({
+          toolName: 'web_fetch',
+          toolSummary: {
+            kind: 'web',
+            target: 'https://example.com',
+            resultCount: null,
+            finalUrl: 'https://www.example.com/',
+            contentKind: 'html',
+            contentType: 'text/html',
+            truncated: false,
+          },
+        }),
+      ),
+    ).toBe('Web · https://example.com · final https://www.example.com/ · HTML · text/html')
+  })
+
+  it('builds compact action-target titles for common tool cards', () => {
+    expect(
+      getToolCardTitle(
+        makeToolItem({
+          toolName: 'read',
+          detail: 'path: client/components/xero/agent-runtime.tsx, startLine: 12, lineCount: 40',
+        }),
+      ),
+    ).toBe('read agent-runtime.tsx')
+
+    expect(
+      getToolCardTitle(
+        makeToolItem({
+          toolName: 'find',
+          detail: 'pattern: appendTranscriptDelta, path: client/components/xero',
+        }),
+      ),
+    ).toBe('find appendTranscriptDelta')
+
+    expect(
+      getToolCardTitle(
+        makeToolItem({
+          toolName: 'list',
+          detail: 'path: client/components/xero, maxDepth: 2',
+        }),
+      ),
+    ).toBe('list client/components/xero')
   })
 
   it('uses generic blocked copy when no credentials are configured for the chosen provider', () => {
