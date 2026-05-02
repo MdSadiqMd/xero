@@ -1,8 +1,9 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronRight, Loader2, Plus } from 'lucide-react'
+import { ArrowDown, ChevronRight, Loader2, Plus } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type {
   AgentPaneView,
@@ -103,6 +104,18 @@ interface AgentRuntimeProps {
 
 const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItems']> = []
 const MAX_VISIBLE_RUNTIME_FEED_ITEMS = 24
+const CONVERSATION_NEAR_BOTTOM_THRESHOLD_PX = 96
+
+export function isRuntimeConversationNearBottom(
+  viewport: Pick<HTMLElement, 'scrollTop' | 'scrollHeight' | 'clientHeight'>,
+  thresholdPx = CONVERSATION_NEAR_BOTTOM_THRESHOLD_PX,
+): boolean {
+  if (viewport.scrollHeight <= viewport.clientHeight) {
+    return true
+  }
+
+  return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= thresholdPx
+}
 
 function appendTranscriptDelta(current: string, delta: string): string {
   return `${current}${delta}`
@@ -582,9 +595,77 @@ export function AgentRuntime({
   const showEmptySessionState = Boolean(
     !showAgentSetupEmptyState && !agentRuntimeBlocked && isProviderLoggedIn && !hasSessionActivity,
   )
+  const hasConversationViewportContent = Boolean(
+    !showAgentSetupEmptyState && !showEmptySessionState && hasSessionActivity,
+  )
   const projectLabel =
     agent.project.repository?.displayName ?? agent.project.name ?? 'this project'
   const sessionLabel = agent.project.selectedAgentSession?.title?.trim() || 'New Chat'
+  const scrollViewportRef = useRef<HTMLDivElement | null>(null)
+  const bottomSentinelRef = useRef<HTMLDivElement | null>(null)
+  const shouldAutoFollowRef = useRef(true)
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  const latestVisibleTurn = visibleTurns.at(-1)
+  const conversationScrollKey = [
+    latestVisibleTurn?.id ?? 'none',
+    latestVisibleTurn?.sequence ?? 'none',
+    latestVisibleTurn?.kind === 'message'
+      ? latestVisibleTurn.text.length
+      : latestVisibleTurn?.kind === 'action'
+        ? `${latestVisibleTurn.state ?? 'unknown'}:${latestVisibleTurn.detail.length}`
+        : latestVisibleTurn?.kind === 'failure'
+          ? latestVisibleTurn.message.length
+          : 'none',
+    runtimeStream?.completion?.id ?? 'no-completion',
+    runtimeStream?.failure?.id ?? 'no-failure',
+    streamIssue?.code ?? 'no-issue',
+  ].join(':')
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = 'auto') => {
+    bottomSentinelRef.current?.scrollIntoView({
+      block: 'end',
+      inline: 'nearest',
+      behavior,
+    })
+  }, [])
+  const handleConversationScroll = useCallback(() => {
+    const viewport = scrollViewportRef.current
+    if (!viewport) {
+      return
+    }
+
+    const isNearBottom = isRuntimeConversationNearBottom(viewport)
+    shouldAutoFollowRef.current = isNearBottom
+    setShowJumpToLatest(hasConversationViewportContent && !isNearBottom)
+  }, [hasConversationViewportContent])
+  const handleJumpToLatest = useCallback(() => {
+    shouldAutoFollowRef.current = true
+    setShowJumpToLatest(false)
+    scrollToLatest('smooth')
+  }, [scrollToLatest])
+  const handleSubmitDraftPrompt = useCallback(() => {
+    shouldAutoFollowRef.current = true
+    setShowJumpToLatest(false)
+    scrollToLatest('auto')
+    void controller.handleSubmitDraftPrompt().finally(() => {
+      scrollToLatest('auto')
+    })
+  }, [controller, scrollToLatest])
+
+  useEffect(() => {
+    if (!hasConversationViewportContent) {
+      shouldAutoFollowRef.current = true
+      setShowJumpToLatest(false)
+      return
+    }
+
+    if (shouldAutoFollowRef.current) {
+      scrollToLatest('auto')
+      setShowJumpToLatest(false)
+      return
+    }
+
+    setShowJumpToLatest(true)
+  }, [conversationScrollKey, hasConversationViewportContent, scrollToLatest])
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -616,43 +697,65 @@ export function AgentRuntime({
             </button>
           ) : null}
         </div>
-        <div
-          className={
-            showAgentSetupEmptyState || showEmptySessionState
-              ? 'flex flex-1 items-center justify-center overflow-y-auto scrollbar-thin px-6 py-5'
-              : 'flex-1 overflow-y-auto scrollbar-thin px-4 pt-14 pb-4'
-          }
-        >
-          {showAgentSetupEmptyState ? (
-            <SetupEmptyState onOpenSettings={onOpenSettings} />
-          ) : showEmptySessionState ? (
-            <EmptySessionState
-              projectLabel={projectLabel}
-              onSelectSuggestion={(prompt) => {
-                controller.handleDraftPromptChange(prompt)
-                controller.promptInputRef.current?.focus()
-              }}
-            />
-          ) : (
-            <div className="mx-auto flex max-w-4xl flex-col gap-4">
-              <ConversationSection
-                runtimeRun={renderableRuntimeRun}
-                visibleTurns={visibleTurns}
-                streamIssue={streamIssue}
-                streamFailure={runtimeStream?.failure ?? null}
-                streamCompletion={runtimeStream?.completion ?? null}
-                accountAvatarUrl={accountAvatarUrl}
-                accountLogin={accountLogin}
+        <div className="relative min-h-0 flex-1">
+          <div
+            aria-label="Agent conversation viewport"
+            ref={scrollViewportRef}
+            onScroll={handleConversationScroll}
+            className={
+              showAgentSetupEmptyState || showEmptySessionState
+                ? 'flex h-full items-center justify-center overflow-y-auto scrollbar-thin px-6 py-5'
+                : 'flex h-full overflow-y-auto scrollbar-thin px-4 pt-14 pb-24'
+            }
+          >
+            {showAgentSetupEmptyState ? (
+              <SetupEmptyState onOpenSettings={onOpenSettings} />
+            ) : showEmptySessionState ? (
+              <EmptySessionState
+                projectLabel={projectLabel}
+                onSelectSuggestion={(prompt) => {
+                  controller.handleDraftPromptChange(prompt)
+                  controller.promptInputRef.current?.focus()
+                }}
               />
-              {controller.composerRuntimeAgentId === 'agent_create' ? (
-                <AgentCreateDraftSection
-                  runtimeStreamItems={runtimeStreamItems}
-                  pendingApprovalCount={agent.pendingApprovalCount ?? 0}
-                  onOpenAgentManagement={onOpenAgentManagement}
+            ) : (
+              <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col justify-end gap-4">
+                <ConversationSection
+                  runtimeRun={renderableRuntimeRun}
+                  visibleTurns={visibleTurns}
+                  streamIssue={streamIssue}
+                  streamFailure={runtimeStream?.failure ?? null}
+                  streamCompletion={runtimeStream?.completion ?? null}
+                  accountAvatarUrl={accountAvatarUrl}
+                  accountLogin={accountLogin}
                 />
-              ) : null}
-            </div>
-          )}
+                {controller.composerRuntimeAgentId === 'agent_create' ? (
+                  <AgentCreateDraftSection
+                    runtimeStreamItems={runtimeStreamItems}
+                    pendingApprovalCount={agent.pendingApprovalCount ?? 0}
+                    onOpenAgentManagement={onOpenAgentManagement}
+                  />
+                ) : null}
+                <div ref={bottomSentinelRef} aria-hidden="true" className="h-px scroll-mb-8" />
+              </div>
+            )}
+          </div>
+          {showJumpToLatest ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={handleJumpToLatest}
+              className={cn(
+                'absolute bottom-4 left-1/2 z-30 -translate-x-1/2 gap-1.5 rounded-full',
+                'border border-border/60 bg-card/95 px-3 shadow-lg backdrop-blur',
+                'supports-[backdrop-filter]:bg-card/80',
+              )}
+            >
+              <ArrowDown className="h-3.5 w-3.5" />
+              Jump to latest
+            </Button>
+          ) : null}
         </div>
 
         <ComposerDock
@@ -683,7 +786,7 @@ export function AgentRuntime({
           onComposerModelChange={controller.handleComposerModelChange}
           onComposerThinkingLevelChange={controller.handleComposerThinkingLevelChange}
           onDraftPromptChange={controller.handleDraftPromptChange}
-          onSubmitDraftPrompt={() => void controller.handleSubmitDraftPrompt()}
+          onSubmitDraftPrompt={handleSubmitDraftPrompt}
           pendingRuntimeRunAction={agent.pendingRuntimeRunAction ?? null}
           placeholder={composerPlaceholder}
           promptInputRef={controller.promptInputRef}

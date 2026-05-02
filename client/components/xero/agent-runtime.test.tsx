@@ -17,7 +17,10 @@ if (!HTMLElement.prototype.releasePointerCapture) {
   HTMLElement.prototype.releasePointerCapture = () => {}
 }
 
-import { AgentRuntime } from '@/components/xero/agent-runtime'
+import {
+  AgentRuntime,
+  isRuntimeConversationNearBottom,
+} from '@/components/xero/agent-runtime'
 import type { SpeechDictationAdapter } from '@/components/xero/agent-runtime/use-speech-dictation'
 import type { AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
 import type { DictationEventDto, DictationStatusDto } from '@/src/lib/xero-model/dictation'
@@ -482,6 +485,25 @@ function makeToolItem(
   }
 }
 
+function setScrollMetrics(
+  element: HTMLElement,
+  metrics: { scrollTop: number; scrollHeight: number; clientHeight: number },
+) {
+  Object.defineProperty(element, 'scrollTop', {
+    configurable: true,
+    writable: true,
+    value: metrics.scrollTop,
+  })
+  Object.defineProperty(element, 'scrollHeight', {
+    configurable: true,
+    value: metrics.scrollHeight,
+  })
+  Object.defineProperty(element, 'clientHeight', {
+    configurable: true,
+    value: metrics.clientHeight,
+  })
+}
+
 function renderRuntimeStreamItems(runtimeStreamItems: NonNullable<AgentPaneView['runtimeStreamItems']>) {
   return render(
     <AgentRuntime
@@ -497,6 +519,30 @@ function renderRuntimeStreamItems(runtimeStreamItems: NonNullable<AgentPaneView[
 }
 
 describe('AgentRuntime current UI', () => {
+  it('classifies conversation scroll positions near the bottom', () => {
+    expect(
+      isRuntimeConversationNearBottom({
+        scrollTop: 500,
+        scrollHeight: 1_000,
+        clientHeight: 420,
+      }),
+    ).toBe(true)
+    expect(
+      isRuntimeConversationNearBottom({
+        scrollTop: 300,
+        scrollHeight: 1_000,
+        clientHeight: 420,
+      }),
+    ).toBe(false)
+    expect(
+      isRuntimeConversationNearBottom({
+        scrollTop: 0,
+        scrollHeight: 320,
+        clientHeight: 420,
+      }),
+    ).toBe(true)
+  })
+
   it('hides the autonomous ledger and remote-escalation debug panels', () => {
     render(
       <AgentRuntime
@@ -766,6 +812,64 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('2')).toBeVisible()
     expect(screen.queryByText('Agent feed')).not.toBeInTheDocument()
     expect(screen.queryByText('Validation started')).not.toBeInTheDocument()
+  })
+
+  it('pauses auto-follow when the user scrolls away and resumes from the latest button', () => {
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView)
+    const initialItems: NonNullable<AgentPaneView['runtimeStreamItems']> = [
+      makeTranscriptItem({ sequence: 2, role: 'user', text: 'Walk me through the runtime.' }),
+      makeTranscriptItem({ sequence: 3, text: 'Working' }),
+    ]
+
+    const { rerender } = render(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: initialItems,
+        })}
+      />,
+    )
+
+    const viewport = screen.getByLabelText('Agent conversation viewport')
+    setScrollMetrics(viewport, {
+      scrollTop: 0,
+      scrollHeight: 1_000,
+      clientHeight: 360,
+    })
+    fireEvent.scroll(viewport)
+
+    expect(screen.getByRole('button', { name: 'Jump to latest' })).toBeVisible()
+
+    scrollIntoView.mockClear()
+    rerender(
+      <AgentRuntime
+        agent={makeAgent({
+          runtimeSession: makeRuntimeSession({ sessionId: 'session-1', isSignedOut: false }),
+          runtimeRun: makeRuntimeRun(),
+          runtimeStreamStatus: 'live',
+          runtimeStreamStatusLabel: 'Live stream',
+          runtimeStreamItems: [
+            ...initialItems,
+            makeTranscriptItem({ sequence: 4, text: ' through the runtime.' }),
+          ],
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Working through the runtime.')).toBeVisible()
+    expect(scrollIntoView).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest' }))
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: 'end',
+      inline: 'nearest',
+      behavior: 'smooth',
+    })
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument()
   })
 
   it('preserves subword streamed assistant transcript deltas exactly', () => {
