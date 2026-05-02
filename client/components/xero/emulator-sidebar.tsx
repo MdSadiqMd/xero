@@ -29,7 +29,9 @@ import {
   type EmulatorPlatform,
 } from "@/src/features/emulator/use-emulator-session"
 import { EmulatorHardwareStrip } from "./emulator-hardware-strip"
+import { InspectorOverlay, InspectModeButton } from "./emulator-inspector-overlay"
 import { EmulatorMissingSdk } from "./emulator-missing-sdk"
+import { useInspector } from "@/src/features/emulator/use-inspector"
 
 interface EmulatorSidebarProps {
   open: boolean
@@ -110,6 +112,20 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
 
   const session = useEmulatorSession({ platform, active: sessionActive })
+  const inspector = useInspector()
+
+  // Auto-connect Metro inspector when streaming an iOS session.
+  useEffect(() => {
+    if (session.status.phase === "streaming" && platform === "ios" && !inspector.metroConnected) {
+      inspector.connect().catch(() => {
+        // Metro not running — silent, inspect button stays available.
+      })
+    }
+    if (session.status.phase !== "streaming" && inspector.metroConnected) {
+      inspector.disconnect()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.status.phase, platform])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -349,6 +365,12 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
               >
                 <RotateCcw className="h-3 w-3" />
               </button>
+              <InspectModeButton
+                active={inspector.inspectMode}
+                connected={inspector.metroConnected}
+                disabled={!isStreaming}
+                onClick={inspector.toggleInspect}
+              />
               <button
                 aria-label="Stop device"
                 className="flex h-6 items-center gap-1 rounded-md border border-border/70 bg-background/60 px-2 text-[11px] text-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:opacity-60"
@@ -390,6 +412,7 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
         error={session.error}
         frameSeq={session.frame?.seq ?? null}
         inputError={session.inputError}
+        inspector={inspector}
         isStreaming={isStreaming}
         onDismissInputError={session.dismissInputError}
         onInput={(payload) => void session.sendInput(payload)}
@@ -415,6 +438,7 @@ interface ViewportProps {
   error: string | null
   frameSeq: number | null
   inputError: string | null
+  inspector: ReturnType<typeof useInspector>
   isStreaming: boolean
   onDismissInputError: () => void
   onInput: (input: { kind: EmulatorInputKind; x?: number; y?: number }) => void
@@ -430,6 +454,7 @@ function EmulatorViewport({
   error,
   frameSeq,
   inputError,
+  inspector,
   isStreaming,
   onDismissInputError,
   onInput,
@@ -577,6 +602,13 @@ function EmulatorViewport({
             draggable={false}
             src={frameSrc}
           />
+          {inspector.inspectMode && currentDevice && (
+            <InspectorOverlay
+              deviceWidth={currentDevice.width}
+              deviceHeight={currentDevice.height}
+              inspector={inspector}
+            />
+          )}
           {isIos && !isTablet ? <DynamicIsland /> : null}
           {isIos && !isTablet ? <HomeIndicator /> : null}
         </div>

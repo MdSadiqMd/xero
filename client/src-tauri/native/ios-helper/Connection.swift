@@ -92,7 +92,7 @@ class Connection {
             fputs("socket path too long\n", stderr)
             exit(1)
         }
-        withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
+        _ = withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
             pathBytes.withUnsafeBufferPointer { buf in
                 memcpy(sunPath, buf.baseAddress!, buf.count)
             }
@@ -266,14 +266,17 @@ class Connection {
 private extension Data {
     mutating func appendBE(_ value: UInt32) {
         var be = value.bigEndian
-        append(UnsafeBufferPointer(start: &be, count: 1))
+        Swift.withUnsafeBytes(of: &be) { ptr in
+            self.append(contentsOf: ptr)
+        }
     }
 
     func readBE(at offset: Int) -> UInt32 {
-        var value: UInt32 = 0
-        _ = withUnsafeMutableBytes(of: &value) { dst in
-            copyBytes(to: dst, from: offset..<(offset + 4))
-        }
-        return UInt32(bigEndian: value)
+        guard self.count >= offset + 4 else { return 0 }
+        let b0 = self[self.startIndex + offset]
+        let b1 = self[self.startIndex + offset + 1]
+        let b2 = self[self.startIndex + offset + 2]
+        let b3 = self[self.startIndex + offset + 3]
+        return (UInt32(b0) << 24) | (UInt32(b1) << 16) | (UInt32(b2) << 8) | UInt32(b3)
     }
 }

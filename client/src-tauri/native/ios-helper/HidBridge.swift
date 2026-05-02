@@ -11,6 +11,18 @@
 // the caller falls back to AppleScript-based input via cg_input.rs.
 
 import Foundation
+import Darwin.Mach
+
+// kNullPort is Int32 on macOS 26 but mach_port_t is UInt32.
+private let kNullPort: mach_port_t = 0
+
+// bootstrap_look_up is in bootstrap.h but not always bridged to Swift.
+@_silgen_name("bootstrap_look_up")
+private func _bootstrap_look_up(
+    _ bp: mach_port_t,
+    _ serviceName: UnsafePointer<CChar>,
+    _ sp: UnsafeMutablePointer<mach_port_t>
+) -> kern_return_t
 
 class HidBridge {
 
@@ -29,7 +41,7 @@ class HidBridge {
     }
 
     let udid: String
-    private var indigoPort: mach_port_t = MACH_PORT_NULL
+    private var indigoPort: mach_port_t = kNullPort
     private var portLookupAttempted = false
     private let portLock = NSLock()
 
@@ -43,14 +55,14 @@ class HidBridge {
         portLock.lock()
         defer { portLock.unlock() }
 
-        if indigoPort != MACH_PORT_NULL { return indigoPort }
-        if portLookupAttempted { return MACH_PORT_NULL }
+        if indigoPort != kNullPort { return indigoPort }
+        if portLookupAttempted { return kNullPort }
 
         portLookupAttempted = true
         let serviceName = "com.apple.CoreSimulator.SimDevice.\(udid).IndigoHID"
 
-        var port: mach_port_t = MACH_PORT_NULL
-        let kr = bootstrap_look_up(bootstrap_port, serviceName, &port)
+        var port: mach_port_t = kNullPort
+        let kr = _bootstrap_look_up(bootstrap_port, serviceName, &port)
 
         if kr == KERN_SUCCESS {
             indigoPort = port
@@ -66,7 +78,7 @@ class HidBridge {
 
     func sendTouch(phase: TouchPhase, x: Int, y: Int, completion: @escaping (Result<Void, HelperError>) -> Void) {
         let port = ensurePort()
-        guard port != MACH_PORT_NULL else {
+        guard port != kNullPort else {
             completion(.failure(.hidError("indigo_unavailable")))
             return
         }
@@ -116,7 +128,7 @@ class HidBridge {
         completion: @escaping (Result<Void, HelperError>) -> Void
     ) {
         let port = ensurePort()
-        guard port != MACH_PORT_NULL else {
+        guard port != kNullPort else {
             completion(.failure(.hidError("indigo_unavailable")))
             return
         }
@@ -183,7 +195,7 @@ class HidBridge {
 
     func sendButton(_ button: String, completion: @escaping (Result<Void, HelperError>) -> Void) {
         let port = ensurePort()
-        guard port != MACH_PORT_NULL else {
+        guard port != kNullPort else {
             // Fall back to simctl for buttons when IndigoHID unavailable.
             sendButtonViaSimctl(button, completion: completion)
             return
@@ -317,11 +329,11 @@ class HidBridge {
             headerPtr.pointee.msgh_bits = UInt32(MACH_MSG_TYPE_COPY_SEND)
             headerPtr.pointee.msgh_size = mach_msg_size_t(totalSize)
             headerPtr.pointee.msgh_remote_port = port
-            headerPtr.pointee.msgh_local_port = MACH_PORT_NULL
+            headerPtr.pointee.msgh_local_port = kNullPort
             headerPtr.pointee.msgh_id = 0
 
             // Copy body after header.
-            body.withUnsafeBytes { bodyPtr in
+            _ = body.withUnsafeBytes { bodyPtr in
                 memcpy(ptr.baseAddress! + headerSize, bodyPtr.baseAddress!, body.count)
             }
 
@@ -330,9 +342,9 @@ class HidBridge {
                 MACH_SEND_MSG | MACH_SEND_TIMEOUT,
                 mach_msg_size_t(totalSize),
                 0,
-                MACH_PORT_NULL,
+                kNullPort,
                 500,  // 500ms timeout
-                MACH_PORT_NULL
+                kNullPort
             )
         }
     }

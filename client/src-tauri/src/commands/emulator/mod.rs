@@ -43,6 +43,9 @@ use automation::{
     LocationRequest, LogSubscribeRequest, PushNotificationRequest, ScreenshotResponse, Selector,
     SubscriptionToken, SwipeRequest, TapTarget, TypeRequest, UiTree,
 };
+use automation::metro_inspector::{
+    ElementInfo, MetroInspector, MetroStatus, METRO_PORT_RANGE,
+};
 
 /// Process-wide emulator state. Holds the FrameBus (shared with the URI
 /// scheme handler) and the single active device session, if any.
@@ -51,6 +54,8 @@ pub struct EmulatorState {
     active: Mutex<Option<ActiveDevice>>,
     log_collector: automation::logs::LogCollector,
     log_stream: Mutex<Option<LogStreamHandle>>,
+    /// Metro inspector bridge (React Native / Expo).
+    metro_inspector: Mutex<Option<MetroInspector>>,
 }
 
 enum LogStreamHandle {
@@ -65,6 +70,7 @@ impl Default for EmulatorState {
             active: Mutex::new(None),
             log_collector: automation::logs::LogCollector::new(),
             log_stream: Mutex::new(None),
+            metro_inspector: Mutex::new(None),
         }
     }
 }
@@ -1277,6 +1283,81 @@ impl ActiveDevice {
             }
         }
     }
+}
+
+// ---------- Metro Inspector commands (Phase 2) ----------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InspectorConnectRequest {
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InspectorElementAtRequest {
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Connect to the Metro inspector. Auto-discovers Metro on common ports
+/// unless an explicit port is provided.
+#[tauri::command]
+pub fn emulator_inspector_connect(
+    state: State<'_, EmulatorState>,
+    request: InspectorConnectRequest,
+) -> CommandResult<MetroStatus> {
+    // Disconnect any existing connection first.
+    let _ = state.metro_inspector.lock().unwrap().take();
+
+    let (inspector, status) = if let Some(port) = request.port {
+        MetroInspector::connect(port)?
+    } else {
+        MetroInspector::connect_auto(METRO_PORT_RANGE)?
+    };
+
+    *state.metro_inspector.lock().unwrap() = Some(inspector);
+    Ok(status)
+}
+
+/// Disconnect from the Metro inspector.
+#[tauri::command]
+pub fn emulator_inspector_disconnect(
+    state: State<'_, EmulatorState>,
+) -> CommandResult<()> {
+    let _ = state.metro_inspector.lock().unwrap().take();
+    Ok(())
+}
+
+/// Query the element at a device-pixel coordinate via the Metro inspector.
+#[tauri::command]
+pub fn emulator_inspector_element_at(
+    state: State<'_, EmulatorState>,
+    request: InspectorElementAtRequest,
+) -> CommandResult<ElementInfo> {
+    let mut guard = state.metro_inspector.lock().unwrap();
+    let inspector = guard.as_mut().ok_or_else(|| {
+        CommandError::user_fixable(
+            "metro_not_connected",
+            "Metro inspector is not connected. Click 'Inspect' to connect.".to_string(),
+        )
+    })?;
+    inspector.element_at_point(request.x, request.y)
+}
+
+/// Get the full React component tree via the Metro inspector.
+#[tauri::command]
+pub fn emulator_inspector_component_tree(
+    state: State<'_, EmulatorState>,
+) -> CommandResult<serde_json::Value> {
+    let mut guard = state.metro_inspector.lock().unwrap();
+    let inspector = guard.as_mut().ok_or_else(|| {
+        CommandError::user_fixable(
+            "metro_not_connected",
+            "Metro inspector is not connected.".to_string(),
+        )
+    })?;
+    inspector.component_tree()
 }
 
 fn uuid_like() -> String {

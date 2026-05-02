@@ -142,29 +142,45 @@ impl IosSession {
     }
 
     fn send_touch(&self, phase: TouchPhase, nx: f32, ny: f32) -> Result<(), CommandError> {
-        // Prefer Swift helper (IndigoHID) — supports Moved/Ended phases
-        // unlike the CG/AppleScript path which is click-only.
-        if let Some(hc) = self.helper_client.as_ref() {
-            let (x, y) = input::denormalize(nx, ny, self.width.max(1), self.height.max(1));
-            if let Ok(()) = hc.send_touch(phase, x, y) {
-                return Ok(());
+        let (px, py) = input::denormalize(nx, ny, self.width.max(1), self.height.max(1));
+
+        match phase {
+            TouchPhase::Began => {
+                // Taps: CG/AppleScript click is the proven path on macOS 26.
+                // idb_companion 1.1.8 HID is broken on Xcode 26 (returns Ok
+                // but silently drops the event). Try CG first, then helper/idb.
+                let cg = cg_input::send_touch(&self.device_name, phase, nx, ny);
+                if cg.is_ok() {
+                    return cg;
+                }
+                // CG failed (AX denied, window not found) — try helper, then idb.
+                if let Some(hc) = self.helper_client.as_ref() {
+                    if hc.send_touch(phase, px, py).is_ok() {
+                        return Ok(());
+                    }
+                }
+                if let Some(client) = self.client.as_ref() {
+                    if client.send_hid(HidEvent::Touch { phase, x: px, y: py }).is_ok() {
+                        return Ok(());
+                    }
+                }
+                cg
             }
-            // Fall through to CG/idb on helper failure.
+            TouchPhase::Moved | TouchPhase::Ended | TouchPhase::Cancelled => {
+                // Drags/swipes: CG is a no-op for these phases.
+                // Helper (IndigoHID) and idb are the only paths that work.
+                if let Some(hc) = self.helper_client.as_ref() {
+                    if hc.send_touch(phase, px, py).is_ok() {
+                        return Ok(());
+                    }
+                }
+                if let Some(client) = self.client.as_ref() {
+                    return client.send_hid(HidEvent::Touch { phase, x: px, y: py });
+                }
+                // No helper or idb available — silent no-op (same as before).
+                Ok(())
+            }
         }
-
-        // CG path: on macOS 26 dispatches via AppleScript's AX `click at`.
-        // Only fires on TouchDown (Moved/Ended are no-ops).
-        let cg_result = cg_input::send_touch(&self.device_name, phase, nx, ny);
-        if cg_result.is_ok() || !should_try_idb_after_cg(cg_result.as_ref().unwrap_err()) {
-            return cg_result;
-        }
-
-        if let Some(client) = self.client.as_ref() {
-            let (x, y) = input::denormalize(nx, ny, self.width.max(1), self.height.max(1));
-            return client.send_hid(HidEvent::Touch { phase, x, y });
-        }
-
-        cg_result
     }
 
     fn send_swipe(
@@ -175,38 +191,37 @@ impl IosSession {
         to_y: f32,
         duration_ms: u32,
     ) -> Result<(), CommandError> {
-        // Prefer Swift helper (IndigoHID) for reliable swipe.
+        let width = self.width.max(1);
+        let height = self.height.max(1);
+        let (fx, fy) = input::denormalize(from_x, from_y, width, height);
+        let (tx, ty) = input::denormalize(to_x, to_y, width, height);
+
+        // 1. Swift helper (IndigoHID) — most reliable.
         if let Some(hc) = self.helper_client.as_ref() {
-            let width = self.width.max(1);
-            let height = self.height.max(1);
-            let (fx, fy) = input::denormalize(from_x, from_y, width, height);
-            let (tx, ty) = input::denormalize(to_x, to_y, width, height);
-            if let Ok(()) = hc.send_swipe(fx, fy, tx, ty, duration_ms) {
+            if hc.send_swipe(fx, fy, tx, ty, duration_ms).is_ok() {
                 return Ok(());
             }
         }
 
-        let cg_result =
-            cg_input::send_swipe(&self.device_name, from_x, from_y, to_x, to_y, duration_ms);
-        if cg_result.is_ok() || !should_try_idb_after_cg(cg_result.as_ref().unwrap_err()) {
-            return cg_result;
+        // 2. CG/AppleScript drag — proven working path, try before idb
+        //    because idb HID is broken on Xcode 26.
+        let cg = cg_input::send_swipe(&self.device_name, from_x, from_y, to_x, to_y, duration_ms);
+        if cg.is_ok() {
+            return cg;
         }
 
+        // 3. idb gRPC HID — last resort.
         if let Some(client) = self.client.as_ref() {
-            let width = self.width.max(1);
-            let height = self.height.max(1);
-            let (from_x_px, from_y_px) = input::denormalize(from_x, from_y, width, height);
-            let (to_x_px, to_y_px) = input::denormalize(to_x, to_y, width, height);
             return client.send_hid(HidEvent::Swipe {
-                from_x: from_x_px,
-                from_y: from_y_px,
-                to_x: to_x_px,
-                to_y: to_y_px,
+                from_x: fx,
+                from_y: fy,
+                to_x: tx,
+                to_y: ty,
                 duration_ms,
             });
         }
 
-        cg_result
+        cg
     }
 
     fn send_hid_or_cg(
@@ -336,17 +351,6 @@ fn should_try_cg_fallback(err: &CommandError) -> bool {
     matches!(
         err.code.as_str(),
         "ios_input_unsupported" | "ios_idb_proto_missing"
-    )
-}
-
-/// After a CGEvent send fails, only fall through to idb's HID path for
-/// errors that mean "CG can't reach the Simulator window" — missing AX
-/// permission or the Simulator window being absent. Other errors are bugs
-/// in the CG path itself and retrying via idb won't help.
-fn should_try_idb_after_cg(err: &CommandError) -> bool {
-    matches!(
-        err.code.as_str(),
-        "ios_ax_permission_denied" | "ios_simulator_window_not_found"
     )
 }
 

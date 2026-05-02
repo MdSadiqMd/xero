@@ -94,7 +94,6 @@ pub enum RuntimeRunApprovalModeDto {
 pub enum RuntimeAgentIdDto {
     Ask,
     Engineer,
-    Debug,
 }
 
 impl RuntimeAgentIdDto {
@@ -102,7 +101,6 @@ impl RuntimeAgentIdDto {
         match self {
             Self::Ask => "ask",
             Self::Engineer => "engineer",
-            Self::Debug => "debug",
         }
     }
 
@@ -110,20 +108,15 @@ impl RuntimeAgentIdDto {
         match self {
             Self::Ask => "Ask",
             Self::Engineer => "Engineer",
-            Self::Debug => "Debug",
         }
     }
 
     pub fn allows_plan_gate(&self) -> bool {
-        matches!(self, Self::Engineer | Self::Debug)
+        matches!(self, Self::Engineer)
     }
 
     pub fn allows_verification_gate(&self) -> bool {
-        matches!(self, Self::Engineer | Self::Debug)
-    }
-
-    pub fn allows_engineering_tools(&self) -> bool {
-        matches!(self, Self::Engineer | Self::Debug)
+        matches!(self, Self::Engineer)
     }
 }
 
@@ -137,7 +130,6 @@ pub fn default_runtime_agent_approval_mode(
     match agent_id {
         RuntimeAgentIdDto::Ask => RuntimeRunApprovalModeDto::Suggest,
         RuntimeAgentIdDto::Engineer => RuntimeRunApprovalModeDto::Suggest,
-        RuntimeAgentIdDto::Debug => RuntimeRunApprovalModeDto::Suggest,
     }
 }
 
@@ -147,7 +139,7 @@ pub fn runtime_agent_allows_approval_mode(
 ) -> bool {
     match agent_id {
         RuntimeAgentIdDto::Ask => matches!(approval_mode, RuntimeRunApprovalModeDto::Suggest),
-        RuntimeAgentIdDto::Engineer | RuntimeAgentIdDto::Debug => true,
+        RuntimeAgentIdDto::Engineer => true,
     }
 }
 

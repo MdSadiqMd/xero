@@ -22,7 +22,6 @@ import { SolanaWorkbenchSidebar } from '@/components/xero/solana-workbench-sideb
 import { SettingsDialog, type SettingsSection } from '@/components/xero/settings-dialog'
 import { UsageStatsSidebar } from '@/components/xero/usage-stats-sidebar'
 import { VcsSidebar, type VcsCommitMessageModel } from '@/components/xero/vcs-sidebar'
-import { WorkflowsSidebar } from '@/components/xero/workflows-sidebar'
 import { XeroDesktopAdapter as DefaultXeroDesktopAdapter, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import { mapAgentSession, type RuntimeRunControlInputDto } from '@/src/lib/xero-model/runtime'
 import type {
@@ -240,7 +239,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [androidOpen, setAndroidOpen] = useState(false)
   const [solanaOpen, setSolanaOpen] = useState(false)
   const [vcsOpen, setVcsOpen] = useState(false)
-  const [workflowsOpen, setWorkflowsOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
   const [environmentDiscoveryStatus, setEnvironmentDiscoveryStatus] =
     useState<EnvironmentDiscoveryStatusDto | null>(null)
@@ -318,7 +316,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setAndroidOpen(false)
         setSolanaOpen(false)
         setVcsOpen(false)
-        setWorkflowsOpen(false)
       }
       return next
     })
@@ -333,7 +330,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setAndroidOpen(false)
         setSolanaOpen(false)
         setVcsOpen(false)
-        setWorkflowsOpen(false)
       }
       return next
     })
@@ -348,7 +344,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setAndroidOpen(false)
         setSolanaOpen(false)
         setVcsOpen(false)
-        setWorkflowsOpen(false)
       }
       return next
     })
@@ -363,7 +358,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setIosOpen(false)
         setSolanaOpen(false)
         setVcsOpen(false)
-        setWorkflowsOpen(false)
       }
       return next
     })
@@ -378,7 +372,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setIosOpen(false)
         setAndroidOpen(false)
         setVcsOpen(false)
-        setWorkflowsOpen(false)
       }
       return next
     })
@@ -393,22 +386,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setIosOpen(false)
         setAndroidOpen(false)
         setSolanaOpen(false)
-        setWorkflowsOpen(false)
-      }
-      return next
-    })
-  }
-
-  const toggleWorkflows = () => {
-    setWorkflowsOpen((current) => {
-      const next = !current
-      if (next) {
-        setGamesOpen(false)
-        setBrowserOpen(false)
-        setIosOpen(false)
-        setAndroidOpen(false)
-        setSolanaOpen(false)
-        setVcsOpen(false)
       }
       return next
     })
@@ -440,10 +417,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const shouldRestoreSidebarFromAutoCollapseRef = useRef(false)
   const shouldRestoreExplorerFromAutoCollapseRef = useRef(false)
-  const shouldRestoreSidebarFromWorkflowsRef = useRef(false)
   const previousViewRef = useRef<View>(activeView)
   const previousBrowserOpenRef = useRef<boolean>(browserOpen)
-  const previousWorkflowsOpenRef = useRef<boolean>(workflowsOpen)
 
   useEffect(() => {
     const wasBrowserOpen = previousBrowserOpenRef.current
@@ -527,28 +502,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
 
     previousViewRef.current = activeView
   }, [activeView, sidebarCollapsed])
-
-  useEffect(() => {
-    const wasOpen = previousWorkflowsOpenRef.current
-
-    if (workflowsOpen && !wasOpen) {
-      shouldRestoreSidebarFromWorkflowsRef.current = !sidebarCollapsed
-      if (!sidebarCollapsed) {
-        setSidebarCollapsed(true)
-      }
-    } else if (
-      !workflowsOpen &&
-      wasOpen &&
-      shouldRestoreSidebarFromWorkflowsRef.current
-    ) {
-      shouldRestoreSidebarFromWorkflowsRef.current = false
-      if (sidebarCollapsed) {
-        setSidebarCollapsed(false)
-      }
-    }
-
-    previousWorkflowsOpenRef.current = workflowsOpen
-  }, [workflowsOpen, sidebarCollapsed])
 
   useEffect(() => {
     if (!onboardingDismissed && !isLoading && projects.length === 0) {
@@ -706,11 +659,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 isStartingRun={agentView?.runtimeRunActionStatus === 'running'}
                 onOpenSettings={() => openSettings('providers')}
                 onStartRun={() => startRuntimeRun()}
-                onToggleWorkflows={toggleWorkflows}
-                workflowsOpen={workflowsOpen}
-                onCreateWorkflow={() => {
-                  if (!workflowsOpen) toggleWorkflows()
-                }}
               />
             </div>
           ) : null}
@@ -844,8 +792,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
         solanaOpen={solanaOpen}
         onToggleVcs={toggleVcs}
         vcsOpen={vcsOpen}
-        onToggleWorkflows={toggleWorkflows}
-        workflowsOpen={workflowsOpen}
         vcsChangeCount={repositoryStatus?.statusCount ?? 0}
         vcsAdditions={repositoryStatus?.additions ?? 0}
         vcsDeletions={repositoryStatus?.deletions ?? 0}
@@ -919,8 +865,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
       solanaOpen={solanaOpen}
       onToggleVcs={toggleVcs}
       vcsOpen={vcsOpen}
-      onToggleWorkflows={toggleWorkflows}
-      workflowsOpen={workflowsOpen}
       vcsChangeCount={repositoryStatus?.statusCount ?? 0}
       vcsAdditions={repositoryStatus?.additions ?? 0}
       vcsDeletions={repositoryStatus?.deletions ?? 0}
@@ -966,7 +910,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
       <IosEmulatorSidebar open={iosOpen} />
       <AndroidEmulatorSidebar open={androidOpen} />
       <SolanaWorkbenchSidebar open={solanaOpen} />
-      <WorkflowsSidebar open={workflowsOpen} />
       <VcsSidebar
         open={vcsOpen}
         projectId={activeProjectId}
