@@ -48,8 +48,15 @@ export default defineConfig({
             return 'react-vendor'
           }
 
-          if (/[\\/]node_modules[\\/]@codemirror[\\/](?:lang-|legacy-modes)/.test(id)) {
-            return 'codemirror-languages'
+          const codeMirrorLanguageMatch = id.match(/[\\/]node_modules[\\/]@codemirror[\\/](lang-[^\\/]+|legacy-modes)(?:[\\/]|$)/)
+          if (codeMirrorLanguageMatch) {
+            const packageName = codeMirrorLanguageMatch[1]
+            if (packageName === 'legacy-modes') {
+              const legacyModeMatch = id.match(/[\\/]legacy-modes[\\/]mode[\\/]([^\\/]+)(?:\.|$)/)
+              return legacyModeMatch ? `codemirror-legacy-${legacyModeMatch[1]}` : 'codemirror-legacy-modes'
+            }
+
+            return `codemirror-${packageName}`
           }
 
           if (/[\\/]node_modules[\\/]@codemirror[\\/]view[\\/]/.test(id)) {

@@ -4,23 +4,66 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ExecutionPaneView } from '@/src/features/xero/use-xero-desktop-state'
 import type { ListProjectFilesResponseDto, ReadProjectFileResponseDto } from '@/src/lib/xero-model'
 
-vi.mock('./code-editor', () => ({
-  CodeEditor: ({ filePath, onChange, onSave, value }: any) => (
-    <div>
-      <label>
-        <span className="sr-only">Editor for {filePath}</span>
-        <textarea
-          aria-label={`Editor for ${filePath}`}
-          onChange={(event) => onChange(event.target.value)}
-          value={value}
-        />
-      </label>
-      <button onClick={onSave} type="button">
-        Trigger save
-      </button>
-    </div>
-  ),
-}))
+vi.mock('./code-editor', async () => {
+  const React = await import('react')
+
+  function MockCodeEditor({
+    documentVersion,
+    filePath,
+    onDirtyChange,
+    onDocumentStatsChange,
+    onSave,
+    onSnapshotChange,
+    onViewReady,
+    savedValue = '',
+    value,
+  }: any) {
+    const [draft, setDraft] = React.useState(value)
+    const draftRef = React.useRef(value)
+
+    React.useEffect(() => {
+      setDraft(value)
+      draftRef.current = value
+    }, [documentVersion, filePath, value])
+
+    React.useEffect(() => {
+      const view = {
+        state: {
+          doc: {
+            toString: () => draftRef.current,
+          },
+        },
+      }
+      onViewReady?.(view)
+      return () => onViewReady?.(null)
+    }, [onViewReady])
+
+    return (
+      <div>
+        <label>
+          <span className="sr-only">Editor for {filePath}</span>
+          <textarea
+            aria-label={`Editor for ${filePath}`}
+            onChange={(event) => {
+              const next = event.target.value
+              draftRef.current = next
+              setDraft(next)
+              onDirtyChange?.(next !== savedValue)
+              onDocumentStatsChange?.({ lineCount: next.length === 0 ? 1 : next.split('\n').length })
+            }}
+            onBlur={() => onSnapshotChange?.(draftRef.current)}
+            value={draft}
+          />
+        </label>
+        <button onClick={() => onSave?.(draftRef.current)} type="button">
+          Trigger save
+        </button>
+      </div>
+    )
+  }
+
+  return { CodeEditor: MockCodeEditor }
+})
 
 vi.mock('./file-tree', () => {
   function flatten(node: any): any[] {

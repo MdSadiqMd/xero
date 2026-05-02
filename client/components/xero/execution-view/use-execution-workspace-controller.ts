@@ -104,6 +104,10 @@ function splitEntryPath(value: string): string[] {
     .filter(Boolean)
 }
 
+function countLines(value: string): number {
+  return value.length === 0 ? 1 : value.split('\n').length
+}
+
 export function useExecutionWorkspaceController({
   projectId,
   active = true,
@@ -121,6 +125,8 @@ export function useExecutionWorkspaceController({
   const [tree, setTree] = useState<FileSystemNode>(createEmptyFileSystem)
   const [savedContents, setSavedContents] = useState<Record<string, string>>({})
   const [fileContents, setFileContents] = useState<Record<string, string>>({})
+  const [documentVersions, setDocumentVersions] = useState<Record<string, number>>({})
+  const [lineCounts, setLineCounts] = useState<Record<string, number>>({})
   const [openTabs, setOpenTabs] = useState<string[]>([])
   const [activePath, setActivePath] = useState<string | null>(null)
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['/']))
@@ -194,6 +200,8 @@ export function useExecutionWorkspaceController({
     setTree(createEmptyFileSystem())
     setSavedContents({})
     setFileContents({})
+    setDocumentVersions({})
+    setLineCounts({})
     setOpenTabs([])
     setActivePath(null)
     setExpandedFolders(new Set(['/']))
@@ -262,6 +270,7 @@ export function useExecutionWorkspaceController({
 
         setSavedContents((current) => ({ ...current, [path]: response.content }))
         setFileContents((current) => ({ ...current, [path]: response.content }))
+        setLineCounts((current) => ({ ...current, [path]: countLines(response.content) }))
         openFile(path)
       } catch (error) {
         if (requestEpoch !== loadEpochRef.current) {
@@ -287,7 +296,7 @@ export function useExecutionWorkspaceController({
     })
   }, [])
 
-  const handleChange = useCallback(
+  const handleSnapshotChange = useCallback(
     (value: string) => {
       if (!activePath) {
         return
@@ -298,6 +307,13 @@ export function useExecutionWorkspaceController({
           return current
         }
         return { ...current, [activePath]: value }
+      })
+      setLineCounts((current) => {
+        const nextLineCount = countLines(value)
+        if (current[activePath] === nextLineCount) {
+          return current
+        }
+        return { ...current, [activePath]: nextLineCount }
       })
 
       setDirtyPaths((current) => {
@@ -316,14 +332,67 @@ export function useExecutionWorkspaceController({
     [activePath, savedContents],
   )
 
-  const saveActive = useCallback(async () => {
+  const handleDirtyChange = useCallback(
+    (isDirty: boolean) => {
+      if (!activePath) {
+        return
+      }
+
+      setDirtyPaths((current) => {
+        if (isDirty === current.has(activePath)) {
+          return current
+        }
+
+        const next = new Set(current)
+        if (isDirty) next.add(activePath)
+        else next.delete(activePath)
+        return next
+      })
+    },
+    [activePath],
+  )
+
+  const handleDocumentStatsChange = useCallback(
+    ({ lineCount }: { lineCount: number }) => {
+      if (!activePath) {
+        return
+      }
+
+      setLineCounts((current) => {
+        if (current[activePath] === lineCount) {
+          return current
+        }
+        return { ...current, [activePath]: lineCount }
+      })
+    },
+    [activePath],
+  )
+
+  const bumpDocumentVersion = useCallback((path: string) => {
+    setDocumentVersions((current) => ({ ...current, [path]: (current[path] ?? 0) + 1 }))
+  }, [])
+
+  const saveActive = useCallback(async (snapshot?: string) => {
     if (!activePath) {
       return
     }
 
     const requestEpoch = loadEpochRef.current
     const path = activePath
-    const content = fileContents[path] ?? ''
+    const content = snapshot ?? fileContents[path] ?? ''
+    setFileContents((current) => {
+      if (current[path] === content) {
+        return current
+      }
+      return { ...current, [path]: content }
+    })
+    setLineCounts((current) => {
+      const nextLineCount = countLines(content)
+      if (current[path] === nextLineCount) {
+        return current
+      }
+      return { ...current, [path]: nextLineCount }
+    })
     setSavingPath(path)
     setWorkspaceError(null)
 
@@ -360,13 +429,15 @@ export function useExecutionWorkspaceController({
 
     const savedValue = savedContents[activePath] ?? ''
     setFileContents((current) => ({ ...current, [activePath]: savedValue }))
+    setLineCounts((current) => ({ ...current, [activePath]: countLines(savedValue) }))
+    bumpDocumentVersion(activePath)
     setDirtyPaths((current) => {
       if (!current.has(activePath)) return current
       const next = new Set(current)
       next.delete(activePath)
       return next
     })
-  }, [activePath, savedContents])
+  }, [activePath, bumpDocumentVersion, savedContents])
 
   const reloadProjectTree = useCallback(() => {
     void refreshTree({ preserveExpandedFolders: true })
@@ -425,6 +496,8 @@ export function useExecutionWorkspaceController({
 
         setSavedContents((current) => remapKeys(current, oldPath, newPath))
         setFileContents((current) => remapKeys(current, oldPath, newPath))
+        setDocumentVersions((current) => remapKeys(current, oldPath, newPath))
+        setLineCounts((current) => remapKeys(current, oldPath, newPath))
         setOpenTabs((current) => current.map((path) => remapPath(path, oldPath, newPath)))
         setDirtyPaths((current) => new Set(Array.from(current).map((path) => remapPath(path, oldPath, newPath))))
         setExpandedFolders((current) => new Set(Array.from(current).map((path) => remapPath(path, oldPath, newPath))))
@@ -451,6 +524,8 @@ export function useExecutionWorkspaceController({
       await deleteProjectEntry(projectId, deletedPath)
       setSavedContents((current) => filterByPathNotWithin(current, deletedPath, deletedPrefix))
       setFileContents((current) => filterByPathNotWithin(current, deletedPath, deletedPrefix))
+      setDocumentVersions((current) => filterByPathNotWithin(current, deletedPath, deletedPrefix))
+      setLineCounts((current) => filterByPathNotWithin(current, deletedPath, deletedPrefix))
       setOpenTabs((current) => current.filter((path) => path !== deletedPath && !path.startsWith(deletedPrefix)))
       setDirtyPaths((current) => {
         const next = new Set<string>()
@@ -526,6 +601,7 @@ export function useExecutionWorkspaceController({
 
           setSavedContents((current) => ({ ...current, [response.path]: '' }))
           setFileContents((current) => ({ ...current, [response.path]: '' }))
+          setLineCounts((current) => ({ ...current, [response.path]: 1 }))
           openFile(response.path)
         }
 
@@ -564,6 +640,8 @@ export function useExecutionWorkspaceController({
 
         setSavedContents((current) => remapKeys(current, path, newPath))
         setFileContents((current) => remapKeys(current, path, newPath))
+        setDocumentVersions((current) => remapKeys(current, path, newPath))
+        setLineCounts((current) => remapKeys(current, path, newPath))
         setOpenTabs((current) => current.map((candidate) => remapPath(candidate, path, newPath)))
         setDirtyPaths((current) => new Set(Array.from(current).map((candidate) => remapPath(candidate, path, newPath))))
         setExpandedFolders((current) => {
@@ -583,8 +661,10 @@ export function useExecutionWorkspaceController({
 
   const activeNode = useMemo(() => (activePath ? findNode(tree, activePath) : null), [activePath, tree])
   const activeContent = activePath ? fileContents[activePath] ?? '' : ''
+  const activeSavedContent = activePath ? savedContents[activePath] ?? '' : ''
+  const activeDocumentVersion = activePath ? documentVersions[activePath] ?? 0 : 0
   const activeLang = activePath ? getLangFromPath(activePath) ?? 'plaintext' : 'plaintext'
-  const activeLineCount = activePath ? (fileContents[activePath]?.split('\n').length ?? 0) : 0
+  const activeLineCount = activePath ? lineCounts[activePath] ?? countLines(fileContents[activePath] ?? '') : 0
   const isActiveDirty = activePath ? dirtyPaths.has(activePath) : false
   const isActiveSaving = activePath ? savingPath === activePath : false
   const isActiveLoading = activePath ? pendingFilePath === activePath : false
@@ -612,6 +692,8 @@ export function useExecutionWorkspaceController({
     setNewChildTarget,
     activeNode,
     activeContent,
+    activeSavedContent,
+    activeDocumentVersion,
     activeLang,
     activeLineCount,
     isActiveDirty,
@@ -620,7 +702,9 @@ export function useExecutionWorkspaceController({
     closeTab,
     handleSelectFile,
     handleToggleFolder,
-    handleChange,
+    handleSnapshotChange,
+    handleDirtyChange,
+    handleDocumentStatsChange,
     saveActive,
     revertActive,
     reloadProjectTree,

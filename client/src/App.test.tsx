@@ -34,23 +34,66 @@ vi.mock('../components/xero/agent-runtime', () => ({
   AgentRuntime: () => <section aria-label="Agent runtime" />,
 }))
 
-vi.mock('../components/xero/code-editor', () => ({
-  CodeEditor: ({ filePath, onChange, onSave, value }: any) => (
-    <div>
-      <label>
-        <span className="sr-only">Editor for {filePath}</span>
-        <textarea
-          aria-label={`Editor for ${filePath}`}
-          onChange={(event) => onChange(event.target.value)}
-          value={value}
-        />
-      </label>
-      <button onClick={onSave} type="button">
-        Trigger save
-      </button>
-    </div>
-  ),
-}))
+vi.mock('../components/xero/code-editor', async () => {
+  const React = await import('react')
+
+  function MockCodeEditor({
+    documentVersion,
+    filePath,
+    onDirtyChange,
+    onDocumentStatsChange,
+    onSave,
+    onSnapshotChange,
+    onViewReady,
+    savedValue = '',
+    value,
+  }: any) {
+    const [draft, setDraft] = React.useState(value)
+    const draftRef = React.useRef(value)
+
+    React.useEffect(() => {
+      setDraft(value)
+      draftRef.current = value
+    }, [documentVersion, filePath, value])
+
+    React.useEffect(() => {
+      const view = {
+        state: {
+          doc: {
+            toString: () => draftRef.current,
+          },
+        },
+      }
+      onViewReady?.(view)
+      return () => onViewReady?.(null)
+    }, [onViewReady])
+
+    return (
+      <div>
+        <label>
+          <span className="sr-only">Editor for {filePath}</span>
+          <textarea
+            aria-label={`Editor for ${filePath}`}
+            onChange={(event) => {
+              const next = event.target.value
+              draftRef.current = next
+              setDraft(next)
+              onDirtyChange?.(next !== savedValue)
+              onDocumentStatsChange?.({ lineCount: next.length === 0 ? 1 : next.split('\n').length })
+            }}
+            onBlur={() => onSnapshotChange?.(draftRef.current)}
+            value={draft}
+          />
+        </label>
+        <button onClick={() => onSave?.(draftRef.current)} type="button">
+          Trigger save
+        </button>
+      </div>
+    )
+  }
+
+  return { CodeEditor: MockCodeEditor }
+})
 
 afterEach(() => {
   githubLoginMock.mockClear()
