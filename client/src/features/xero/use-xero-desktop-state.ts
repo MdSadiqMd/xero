@@ -53,6 +53,7 @@ import {
   removeProjectRecord,
   type ProjectLoadSource,
 } from './use-xero-desktop-state/project-loaders'
+import { createRepositoryStatusSyncKey } from './use-xero-desktop-state/repository-status'
 import {
   attachDesktopRuntimeListeners,
   attachRuntimeStreamSubscription,
@@ -269,29 +270,6 @@ function selectAgentSessionInProject(
     selectedAgentSession,
     selectedAgentSessionId: selectedAgentSession.agentSessionId,
   }
-}
-
-function createRepositoryStatusSyncKey(status: RepositoryStatusView | null): string {
-  if (!status) {
-    return 'none'
-  }
-
-  return JSON.stringify({
-    projectId: status.projectId,
-    repositoryId: status.repositoryId,
-    branchLabel: status.branchLabel,
-    headShaLabel: status.headShaLabel,
-    upstream: status.upstream ?? null,
-    lastCommit: status.lastCommit,
-    stagedCount: status.stagedCount,
-    unstagedCount: status.unstagedCount,
-    untrackedCount: status.untrackedCount,
-    statusCount: status.statusCount,
-    additions: status.additions,
-    deletions: status.deletions,
-    hasChanges: status.hasChanges,
-    entries: status.entries,
-  })
 }
 
 function createEmptyRepositoryDiffState(): RepositoryDiffState {
@@ -1663,6 +1641,7 @@ export function useXeroDesktopState(
         activeProjectIdRef,
         runtimeSessionsRef,
         runtimeRunRefreshKeyRef,
+        repositoryStatusSyncKeyRef,
       },
       setters: {
         setProjects,

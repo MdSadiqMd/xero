@@ -20,6 +20,7 @@ import {
   createRuntimeStreamFromSubscription,
   createRuntimeStreamView,
   mergeRuntimeStreamEvent,
+  type RuntimeStreamEventDto,
   type RuntimeStreamItemKindDto,
   type RuntimeStreamView,
 } from '@/src/lib/xero-model/runtime-stream'
@@ -34,7 +35,11 @@ import {
   removeProjectRecord,
   type ProjectLoadSource,
 } from './project-loaders'
+import { createRepositoryStatusSyncKey } from './repository-status'
 import type { RefreshSource } from './types'
+
+export const RUNTIME_STREAM_BATCH_WINDOW_MS = 6
+export const REPOSITORY_STATUS_BATCH_WINDOW_MS = 6
 
 export const ACTIVE_RUNTIME_STREAM_ITEM_KINDS: RuntimeStreamItemKindDto[] = [
   'transcript',
@@ -80,6 +85,7 @@ interface AttachDesktopRuntimeListenersRefs {
   activeProjectIdRef: MutableRefObject<string | null>
   runtimeSessionsRef: MutableRefObject<RuntimeSessionRecords>
   runtimeRunRefreshKeyRef: MutableRefObject<Record<string, string>>
+  repositoryStatusSyncKeyRef: MutableRefObject<string>
 }
 
 interface AttachDesktopRuntimeListenersSetters {
@@ -119,6 +125,30 @@ interface AttachRuntimeStreamSubscriptionArgs {
   scheduleRuntimeMetadataRefresh: (projectId: string, source: RuntimeMetadataRefreshSource) => void
 }
 
+type ScheduledFlushCancel = () => void
+type FlushScheduler = (callback: () => void) => ScheduledFlushCancel
+
+interface RuntimeStreamEventBufferArgs {
+  projectId: string
+  agentSessionId: string
+  runtimeKind: string
+  runId: string
+  sessionId: string | null
+  flowId: string | null
+  subscribedItemKinds: RuntimeStreamItemKindDto[]
+  runtimeActionRefreshKeysRef: MutableRefObject<Record<string, Set<string>>>
+  updateRuntimeStream: UpdateRuntimeStream
+  scheduleRuntimeMetadataRefresh: (projectId: string, source: RuntimeMetadataRefreshSource) => void
+  scheduleFlush?: FlushScheduler
+}
+
+export interface RuntimeStreamEventBuffer {
+  enqueue: (payload: RuntimeStreamEventDto) => void
+  reportIssue: (issue: { code: string; message: string; retryable: boolean }) => void
+  flush: () => void
+  dispose: () => void
+}
+
 function getRuntimeStreamIssue(
   error: unknown,
   fallback: { code: string; message: string; retryable: boolean },
@@ -140,6 +170,267 @@ function getRuntimeStreamIssue(
   }
 
   return fallback
+}
+
+function scheduleFrameOrTimeout(callback: () => void, windowMs: number): ScheduledFlushCancel {
+  let didRun = false
+  let frameId: number | null = null
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+
+  const run = () => {
+    if (didRun) {
+      return
+    }
+
+    didRun = true
+    if (frameId !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(frameId)
+    }
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId)
+    }
+    frameId = null
+    timeoutId = null
+    callback()
+  }
+
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    frameId = window.requestAnimationFrame(run)
+  }
+  timeoutId = setTimeout(run, windowMs)
+
+  return () => {
+    if (didRun) {
+      return
+    }
+
+    didRun = true
+    if (frameId !== null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(frameId)
+    }
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId)
+    }
+    frameId = null
+    timeoutId = null
+  }
+}
+
+function scheduleRuntimeStreamFlush(callback: () => void): ScheduledFlushCancel {
+  return scheduleFrameOrTimeout(callback, RUNTIME_STREAM_BATCH_WINDOW_MS)
+}
+
+function scheduleRepositoryStatusFlush(callback: () => void): ScheduledFlushCancel {
+  return scheduleFrameOrTimeout(callback, REPOSITORY_STATUS_BATCH_WINDOW_MS)
+}
+
+export function isUrgentRuntimeStreamEvent(event: RuntimeStreamEventDto): boolean {
+  return (
+    event.item.kind === 'action_required' ||
+    event.item.kind === 'complete' ||
+    event.item.kind === 'failure'
+  )
+}
+
+function applyRuntimeStreamEventIssue(
+  currentStream: RuntimeStreamView | null,
+  event: RuntimeStreamEventDto,
+  issue: { code: string; message: string; retryable: boolean },
+): RuntimeStreamView {
+  return applyRuntimeStreamIssue(currentStream, {
+    projectId: event.projectId,
+    agentSessionId: event.agentSessionId,
+    runtimeKind: event.runtimeKind,
+    runId: event.runId,
+    sessionId: event.sessionId,
+    flowId: event.flowId,
+    subscribedItemKinds: event.subscribedItemKinds,
+    code: issue.code,
+    message: issue.message,
+    retryable: issue.retryable,
+  })
+}
+
+export function mergeRuntimeStreamEvents(
+  currentStream: RuntimeStreamView | null,
+  events: RuntimeStreamEventDto[],
+): RuntimeStreamView | null {
+  let nextStream = currentStream
+  let sequenceGapIssue: {
+    event: RuntimeStreamEventDto
+    expectedSequence: number
+    observedSequence: number
+  } | null = null
+
+  for (const event of events) {
+    const previousSequence = nextStream?.lastSequence ?? null
+    if (
+      previousSequence !== null &&
+      event.item.sequence > previousSequence + 1 &&
+      !sequenceGapIssue
+    ) {
+      sequenceGapIssue = {
+        event,
+        expectedSequence: previousSequence + 1,
+        observedSequence: event.item.sequence,
+      }
+    }
+
+    try {
+      nextStream = mergeRuntimeStreamEvent(nextStream, event)
+    } catch (error) {
+      const issue = getRuntimeStreamIssue(error, {
+        code: 'runtime_stream_contract_mismatch',
+        message: 'Xero ignored a malformed runtime stream item to preserve the last truthful stream state.',
+        retryable: false,
+      })
+
+      nextStream = applyRuntimeStreamEventIssue(nextStream, event, issue)
+    }
+  }
+
+  if (sequenceGapIssue && nextStream && !nextStream.failure && !nextStream.completion) {
+    nextStream = applyRuntimeStreamEventIssue(nextStream, sequenceGapIssue.event, {
+      code: 'runtime_stream_sequence_gap',
+      message: `Xero detected a runtime stream sequence gap for run ${sequenceGapIssue.event.runId}: expected ${sequenceGapIssue.expectedSequence}, received ${sequenceGapIssue.observedSequence}.`,
+      retryable: true,
+    })
+  }
+
+  return nextStream
+}
+
+function scheduleRuntimeActionRefreshes(
+  projectId: string,
+  events: RuntimeStreamEventDto[],
+  runtimeActionRefreshKeysRef: MutableRefObject<Record<string, Set<string>>>,
+  scheduleRuntimeMetadataRefresh: (projectId: string, source: RuntimeMetadataRefreshSource) => void,
+) {
+  for (const event of events) {
+    if (event.item.kind !== 'action_required') {
+      continue
+    }
+
+    const actionId = event.item.actionId?.trim()
+    if (!actionId) {
+      continue
+    }
+
+    const refreshKey = `${event.agentSessionId}:${event.runId}:${actionId}`
+    const knownKeys = runtimeActionRefreshKeysRef.current[projectId] ?? new Set<string>()
+    runtimeActionRefreshKeysRef.current[projectId] = knownKeys
+
+    if (!knownKeys.has(refreshKey)) {
+      knownKeys.add(refreshKey)
+      scheduleRuntimeMetadataRefresh(projectId, 'runtime_stream:action_required')
+    }
+  }
+}
+
+export function createRuntimeStreamEventBuffer({
+  projectId,
+  agentSessionId,
+  runtimeKind,
+  runId,
+  sessionId,
+  flowId,
+  subscribedItemKinds,
+  runtimeActionRefreshKeysRef,
+  updateRuntimeStream,
+  scheduleRuntimeMetadataRefresh,
+  scheduleFlush = scheduleRuntimeStreamFlush,
+}: RuntimeStreamEventBufferArgs): RuntimeStreamEventBuffer {
+  const pendingEvents: RuntimeStreamEventDto[] = []
+  let cancelScheduledFlush: ScheduledFlushCancel | null = null
+  let disposed = false
+
+  const cancelFlush = () => {
+    if (!cancelScheduledFlush) {
+      return
+    }
+
+    const cancel = cancelScheduledFlush
+    cancelScheduledFlush = null
+    cancel()
+  }
+
+  const flush = () => {
+    if (disposed) {
+      return
+    }
+
+    cancelFlush()
+    if (pendingEvents.length === 0) {
+      return
+    }
+
+    const events = pendingEvents.splice(0, pendingEvents.length)
+    updateRuntimeStream(projectId, (currentStream) => mergeRuntimeStreamEvents(currentStream, events))
+    scheduleRuntimeActionRefreshes(
+      projectId,
+      events,
+      runtimeActionRefreshKeysRef,
+      scheduleRuntimeMetadataRefresh,
+    )
+  }
+
+  const schedule = () => {
+    if (cancelScheduledFlush) {
+      return
+    }
+
+    cancelScheduledFlush = scheduleFlush(flush)
+  }
+
+  const reportIssue = (issue: { code: string; message: string; retryable: boolean }) => {
+    flush()
+    updateRuntimeStream(projectId, (currentStream) =>
+      applyRuntimeStreamIssue(currentStream, {
+        projectId,
+        agentSessionId,
+        runtimeKind,
+        runId,
+        sessionId,
+        flowId,
+        subscribedItemKinds,
+        code: issue.code,
+        message: issue.message,
+        retryable: issue.retryable,
+      }),
+    )
+  }
+
+  return {
+    enqueue: (payload) => {
+      if (disposed) {
+        return
+      }
+
+      if (payload.projectId !== projectId) {
+        reportIssue({
+          code: 'runtime_stream_project_mismatch',
+          message: `Xero received a runtime stream item for ${payload.projectId} while ${projectId} is active.`,
+          retryable: false,
+        })
+        return
+      }
+
+      pendingEvents.push(payload)
+      if (isUrgentRuntimeStreamEvent(payload)) {
+        flush()
+        return
+      }
+
+      schedule()
+    },
+    reportIssue,
+    flush,
+    dispose: () => {
+      disposed = true
+      cancelFlush()
+      pendingEvents.length = 0
+    },
+  }
 }
 
 
@@ -253,7 +544,99 @@ export async function attachDesktopRuntimeListeners({
   let repositoryUnlisten: (() => void) | null = null
   let runtimeUnlisten: (() => void) | null = null
   let runtimeRunUnlisten: (() => void) | null = null
+  const pendingRepositoryStatuses = new Map<string, RepositoryStatusView>()
+  const pendingRepositoryStatusKeys = new Map<string, string>()
+  let cancelRepositoryStatusFlush: ScheduledFlushCancel | null = null
   let disposed = false
+
+  const applyRepositoryStatusUpdate = (nextStatus: RepositoryStatusView) => {
+    const nextStatusKey = createRepositoryStatusSyncKey(nextStatus)
+    if (refs.repositoryStatusSyncKeyRef.current === nextStatusKey) {
+      return
+    }
+
+    refs.repositoryStatusSyncKeyRef.current = nextStatusKey
+    setters.setRefreshSource('repository:status_changed')
+    setters.setProjects((currentProjects) => {
+      const projectIndex = currentProjects.findIndex((project) => project.id === nextStatus.projectId)
+      if (projectIndex < 0) {
+        return currentProjects
+      }
+
+      const project = currentProjects[projectIndex]
+      if (project.branch === nextStatus.branchLabel && project.branchLabel === nextStatus.branchLabel) {
+        return currentProjects
+      }
+
+      const nextProjects = currentProjects.slice()
+      nextProjects[projectIndex] = {
+        ...project,
+        branch: nextStatus.branchLabel,
+        branchLabel: nextStatus.branchLabel,
+      }
+      return nextProjects
+    })
+    setters.setRepositoryStatus(nextStatus)
+    setters.setActiveProject((currentProject) => {
+      if (!currentProject) {
+        return currentProject
+      }
+
+      const nextProject = applyRepositoryStatus(currentProject, nextStatus)
+      const withRuntime = currentProject.runtimeSession
+        ? applyRuntimeSession(nextProject, currentProject.runtimeSession)
+        : nextProject
+      return applyRuntimeRun(withRuntime, currentProject.runtimeRun ?? null)
+    })
+    resetRepositoryDiffs(nextStatus)
+  }
+
+  const flushRepositoryStatus = () => {
+    if (disposed) {
+      return
+    }
+
+    if (cancelRepositoryStatusFlush) {
+      const cancel = cancelRepositoryStatusFlush
+      cancelRepositoryStatusFlush = null
+      cancel()
+    }
+
+    const activeProjectId = refs.activeProjectIdRef.current
+    if (!activeProjectId) {
+      pendingRepositoryStatuses.clear()
+      pendingRepositoryStatusKeys.clear()
+      return
+    }
+
+    const nextStatus = pendingRepositoryStatuses.get(activeProjectId) ?? null
+    pendingRepositoryStatuses.clear()
+    pendingRepositoryStatusKeys.clear()
+    if (!nextStatus) {
+      return
+    }
+
+    applyRepositoryStatusUpdate(nextStatus)
+  }
+
+  const scheduleRepositoryStatus = (nextStatus: RepositoryStatusView) => {
+    const nextStatusKey = createRepositoryStatusSyncKey(nextStatus)
+    if (refs.repositoryStatusSyncKeyRef.current === nextStatusKey) {
+      pendingRepositoryStatuses.delete(nextStatus.projectId)
+      pendingRepositoryStatusKeys.delete(nextStatus.projectId)
+      return
+    }
+
+    if (pendingRepositoryStatusKeys.get(nextStatus.projectId) === nextStatusKey) {
+      return
+    }
+
+    pendingRepositoryStatuses.set(nextStatus.projectId, nextStatus)
+    pendingRepositoryStatusKeys.set(nextStatus.projectId, nextStatusKey)
+    if (!cancelRepositoryStatusFlush) {
+      cancelRepositoryStatusFlush = scheduleRepositoryStatusFlush(flushRepositoryStatus)
+    }
+  }
 
   projectUnlisten = await adapter.onProjectUpdated(
     (payload) => {
@@ -286,31 +669,7 @@ export async function attachDesktopRuntimeListeners({
       }
 
       const nextStatus = mapRepositoryStatus(payload.status)
-      setters.setRefreshSource('repository:status_changed')
-      setters.setProjects((currentProjects) =>
-        currentProjects.map((project) =>
-          project.id === payload.projectId
-            ? {
-                ...project,
-                branch: nextStatus.branchLabel,
-                branchLabel: nextStatus.branchLabel,
-              }
-            : project,
-        ),
-      )
-      setters.setRepositoryStatus(nextStatus)
-      setters.setActiveProject((currentProject) => {
-        if (!currentProject) {
-          return currentProject
-        }
-
-        const nextProject = applyRepositoryStatus(currentProject, nextStatus)
-        const withRuntime = currentProject.runtimeSession
-          ? applyRuntimeSession(nextProject, currentProject.runtimeSession)
-          : nextProject
-        return applyRuntimeRun(withRuntime, currentProject.runtimeRun ?? null)
-      })
-      resetRepositoryDiffs(nextStatus)
+      scheduleRepositoryStatus(nextStatus)
     },
     handleAdapterEventError,
   )
@@ -332,11 +691,21 @@ export async function attachDesktopRuntimeListeners({
         ...currentErrors,
         [payload.projectId]: null,
       }))
-      setters.setProjects((currentProjects) =>
-        currentProjects.map((project) =>
-          project.id === payload.projectId ? applyRuntimeToProjectList(project, nextRuntime) : project,
-        ),
-      )
+      setters.setProjects((currentProjects) => {
+        const projectIndex = currentProjects.findIndex((project) => project.id === payload.projectId)
+        if (projectIndex < 0) {
+          return currentProjects
+        }
+
+        const project = currentProjects[projectIndex]
+        if (project.runtime === nextRuntime.runtimeLabel && project.runtimeLabel === nextRuntime.runtimeLabel) {
+          return currentProjects
+        }
+
+        const nextProjects = currentProjects.slice()
+        nextProjects[projectIndex] = applyRuntimeToProjectList(project, nextRuntime)
+        return nextProjects
+      })
 
       if (!nextRuntime.isAuthenticated) {
         setters.setRuntimeStreams((currentStreams) => removeProjectRecord(currentStreams, payload.projectId))
@@ -384,6 +753,10 @@ export async function attachDesktopRuntimeListeners({
 
   return () => {
     disposed = true
+    pendingRepositoryStatuses.clear()
+    pendingRepositoryStatusKeys.clear()
+    cancelRepositoryStatusFlush?.()
+    cancelRepositoryStatusFlush = null
     projectUnlisten?.()
     repositoryUnlisten?.()
     runtimeUnlisten?.()
@@ -470,6 +843,19 @@ export function attachRuntimeStreamSubscription({
     })
   })
 
+  const streamEventBuffer = createRuntimeStreamEventBuffer({
+    projectId,
+    agentSessionId,
+    runtimeKind: runtimeSession.runtimeKind,
+    runId,
+    sessionId: runtimeSession.sessionId,
+    flowId: runtimeSession.flowId,
+    subscribedItemKinds: ACTIVE_RUNTIME_STREAM_ITEM_KINDS,
+    runtimeActionRefreshKeysRef,
+    updateRuntimeStream,
+    scheduleRuntimeMetadataRefresh,
+  })
+
   void adapter
     .subscribeRuntimeStream(
       projectId,
@@ -480,82 +866,18 @@ export function attachRuntimeStreamSubscription({
           return
         }
 
-        if (payload.projectId !== projectId) {
-          updateRuntimeStream(projectId, (currentStream) =>
-            applyRuntimeStreamIssue(currentStream, {
-              projectId,
-              agentSessionId,
-              runtimeKind: runtimeSession.runtimeKind,
-              runId,
-              sessionId: runtimeSession.sessionId,
-              flowId: runtimeSession.flowId,
-              subscribedItemKinds: ACTIVE_RUNTIME_STREAM_ITEM_KINDS,
-              code: 'runtime_stream_project_mismatch',
-              message: `Xero received a runtime stream item for ${payload.projectId} while ${projectId} is active.`,
-              retryable: false,
-            }),
-          )
-          return
-        }
-
-        updateRuntimeStream(projectId, (currentStream) => {
-          try {
-            return mergeRuntimeStreamEvent(currentStream, payload)
-          } catch (error) {
-            const issue = getRuntimeStreamIssue(error, {
-              code: 'runtime_stream_contract_mismatch',
-              message: 'Xero ignored a malformed runtime stream item to preserve the last truthful stream state.',
-              retryable: false,
-            })
-
-            return applyRuntimeStreamIssue(currentStream, {
-              projectId,
-              agentSessionId: payload.agentSessionId,
-              runtimeKind: payload.runtimeKind,
-              runId: payload.runId,
-              sessionId: payload.sessionId,
-              flowId: payload.flowId,
-              subscribedItemKinds: payload.subscribedItemKinds,
-              code: issue.code,
-              message: issue.message,
-              retryable: issue.retryable,
-            })
-          }
-        })
-
-        if (payload.item.kind === 'action_required') {
-          const actionId = payload.item.actionId?.trim()
-          if (actionId) {
-            const refreshKey = `${payload.agentSessionId}:${payload.runId}:${actionId}`
-            const knownKeys = runtimeActionRefreshKeysRef.current[projectId] ?? new Set<string>()
-            runtimeActionRefreshKeysRef.current[projectId] = knownKeys
-
-            if (!knownKeys.has(refreshKey)) {
-              knownKeys.add(refreshKey)
-              scheduleRuntimeMetadataRefresh(projectId, 'runtime_stream:action_required')
-            }
-          }
-        }
+        streamEventBuffer?.enqueue(payload)
       },
       (error) => {
         if (disposed) {
           return
         }
 
-        updateRuntimeStream(projectId, (currentStream) =>
-          applyRuntimeStreamIssue(currentStream, {
-            projectId,
-            agentSessionId,
-            runtimeKind: runtimeSession.runtimeKind,
-            runId,
-            sessionId: runtimeSession.sessionId,
-            flowId: runtimeSession.flowId,
-            subscribedItemKinds: ACTIVE_RUNTIME_STREAM_ITEM_KINDS,
-            code: error.code,
-            message: error.message,
-            retryable: error.retryable,
-          }),
-        )
+        streamEventBuffer?.reportIssue({
+          code: error.code,
+          message: error.message,
+          retryable: error.retryable,
+        })
       },
     )
     .then((subscription) => {
@@ -613,6 +935,7 @@ export function attachRuntimeStreamSubscription({
 
   return () => {
     disposed = true
+    streamEventBuffer?.dispose()
     unsubscribe()
   }
 }

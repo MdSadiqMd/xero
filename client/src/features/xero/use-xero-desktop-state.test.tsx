@@ -32,6 +32,7 @@ import {
 import { type ProviderProfilesDto } from '@/src/test/legacy-provider-profiles'
 import { XeroDesktopError, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import { useXeroDesktopState } from '@/src/features/xero/use-xero-desktop-state'
+import { REPOSITORY_STATUS_BATCH_WINDOW_MS } from './use-xero-desktop-state/runtime-stream'
 
 type SetSkillEnabledRequest = Parameters<XeroDesktopAdapter['setSkillEnabled']>[0]
 type RemoveSkillRequest = Parameters<XeroDesktopAdapter['removeSkill']>[0]
@@ -3312,6 +3313,44 @@ describe('useXeroDesktopState', () => {
 
     await waitFor(() => expect(screen.getByTestId('diff-status')).toHaveTextContent('ready'))
     expect(screen.getByTestId('diff-patch')).toHaveTextContent('+change')
+  })
+
+  it('coalesces repeated repository status events without resetting loaded diffs', async () => {
+    const setup = createMockAdapter()
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(screen.getByTestId('status-count')).toHaveTextContent('1'))
+    fireEvent.click(screen.getByRole('button', { name: 'Load unstaged diff' }))
+    await waitFor(() => expect(screen.getByTestId('diff-status')).toHaveTextContent('ready'))
+    expect(screen.getByTestId('diff-patch')).toHaveTextContent('+change')
+
+    act(() => {
+      setup.emitRepositoryStatusChanged({
+        projectId: 'project-1',
+        repositoryId: 'repo-project-1',
+        status: makeStatus('project-1', 'main'),
+      })
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, REPOSITORY_STATUS_BATCH_WINDOW_MS + 5))
+
+    expect(screen.getByTestId('refresh-source')).toHaveTextContent('startup')
+    expect(screen.getByTestId('diff-status')).toHaveTextContent('ready')
+    expect(screen.getByTestId('diff-patch')).toHaveTextContent('+change')
+
+    act(() => {
+      setup.emitRepositoryStatusChanged({
+        projectId: 'project-1',
+        repositoryId: 'repo-project-1',
+        status: makeStatus('project-1', 'feature/coalesced-status'),
+      })
+    })
+
+    await waitFor(() => expect(screen.getByTestId('branch')).toHaveTextContent('feature/coalesced-status'))
+    expect(screen.getByTestId('refresh-source')).toHaveTextContent('repository:status_changed')
+    expect(screen.getByTestId('diff-status')).toHaveTextContent('idle')
+    expect(screen.getByTestId('diff-patch')).toHaveTextContent('none')
   })
 
 

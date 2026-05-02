@@ -249,11 +249,13 @@ import {
   type RunDoctorReportRequestDto,
 } from '@/src/lib/xero-model/diagnostics'
 import {
+  runtimeStreamItemKindSchema,
   runtimeStreamItemSchema,
   subscribeRuntimeStreamRequestSchema,
   subscribeRuntimeStreamResponseSchema,
   type RuntimeStreamEventDto,
   type RuntimeStreamItemKindDto,
+  type RuntimeStreamItemDto,
   type SubscribeRuntimeStreamResponseDto,
 } from '@/src/lib/xero-model/runtime-stream'
 import {
@@ -1045,6 +1047,40 @@ function createSafeUnlisten(unlisten: UnlistenFn): UnlistenFn {
   }
 }
 
+function hasCheapRuntimeStreamItemShape(payload: unknown): payload is RuntimeStreamItemDto {
+  if (!payload || typeof payload !== 'object') {
+    return false
+  }
+
+  const item = payload as Record<string, unknown>
+  return (
+    runtimeStreamItemKindSchema.safeParse(item.kind).success &&
+    typeof item.runId === 'string' &&
+    item.runId.trim().length > 0 &&
+    typeof item.sequence === 'number' &&
+    Number.isInteger(item.sequence) &&
+    item.sequence > 0 &&
+    typeof item.createdAt === 'string' &&
+    item.createdAt.trim().length > 0
+  )
+}
+
+function parseRuntimeStreamChannelItem(payload: unknown): RuntimeStreamItemDto {
+  if (import.meta.env.DEV || import.meta.env.MODE === 'test') {
+    return runtimeStreamItemSchema.parse(payload)
+  }
+
+  if (hasCheapRuntimeStreamItemShape(payload)) {
+    return payload
+  }
+
+  throw new XeroDesktopError({
+    code: 'adapter_contract_mismatch',
+    errorClass: 'adapter_contract_mismatch',
+    message: `Command ${COMMANDS.subscribeRuntimeStream} channel returned a malformed stream item envelope.`,
+  })
+}
+
 async function createRuntimeStreamSubscription(
   projectId: string,
   agentSessionId: string,
@@ -1073,7 +1109,7 @@ async function createRuntimeStreamSubscription(
     }
 
     try {
-      const item = runtimeStreamItemSchema.parse(payload)
+      const item = parseRuntimeStreamChannelItem(payload)
       if (item.runId !== activeResponse.runId) {
         throw new XeroDesktopError({
           code: 'adapter_contract_mismatch',
