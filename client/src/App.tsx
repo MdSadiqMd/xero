@@ -25,6 +25,7 @@ import { VcsSidebar, type VcsCommitMessageModel } from '@/components/xero/vcs-si
 import { WorkflowsSidebar } from '@/components/xero/workflows-sidebar'
 import { XeroDesktopAdapter as DefaultXeroDesktopAdapter, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import { mapAgentSession, type RuntimeRunControlInputDto } from '@/src/lib/xero-model/runtime'
+import type { AgentDefinitionSummaryDto } from '@/src/lib/xero-model/agent-definition'
 import type {
   SessionTranscriptSearchResultSnippetDto,
 } from '@/src/lib/xero-model/session-context'
@@ -247,10 +248,41 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [environmentProfileSummary, setEnvironmentProfileSummary] =
     useState<EnvironmentProfileSummaryDto>(null)
   const environmentDiscoveryCheckedRef = useRef(false)
+  const [customAgentDefinitions, setCustomAgentDefinitions] = useState<
+    readonly AgentDefinitionSummaryDto[]
+  >([])
+  const [customAgentDefinitionsRevision, setCustomAgentDefinitionsRevision] = useState(0)
+  const refreshCustomAgentDefinitions = useCallback(() => {
+    setCustomAgentDefinitionsRevision((current) => current + 1)
+  }, [])
 
   useEffect(() => {
     setAgentComposerControls(null)
   }, [activeProjectId])
+
+  useEffect(() => {
+    if (!activeProjectId) {
+      setCustomAgentDefinitions([])
+      return
+    }
+
+    let cancelled = false
+    void resolvedAdapter
+      .listAgentDefinitions({ projectId: activeProjectId, includeArchived: false })
+      .then((response) => {
+        if (cancelled) return
+        const customs = response.definitions.filter((definition) => !definition.isBuiltIn)
+        setCustomAgentDefinitions(customs)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setCustomAgentDefinitions([])
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeProjectId, customAgentDefinitionsRevision, resolvedAdapter])
 
   const openSettings = (section: SettingsSection = 'providers') => {
     setSettingsInitialSection(section)
@@ -726,14 +758,22 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 desktopAdapter={resolvedAdapter}
                 accountAvatarUrl={githubSession?.user.avatarUrl ?? null}
                 accountLogin={githubSession?.user.login ?? null}
+                customAgentDefinitions={customAgentDefinitions}
+                onOpenAgentManagement={() => openSettings('agents')}
                 onCreateSession={handleCreateAgentSession}
                 isCreatingSession={isCreatingAgentSession}
                 onLogout={() => logoutRuntimeSession()}
                 onOpenSettings={() => openSettings('providers')}
                 onOpenDiagnostics={() => openSettings('diagnostics')}
-                onResolveOperatorAction={(actionId, decision, options) =>
-                  resolveOperatorAction(actionId, decision, { userAnswer: options?.userAnswer ?? null })
-                }
+                onResolveOperatorAction={async (actionId, decision, options) => {
+                  const result = await resolveOperatorAction(actionId, decision, {
+                    userAnswer: options?.userAnswer ?? null,
+                  })
+                  if (decision === 'approve') {
+                    refreshCustomAgentDefinitions()
+                  }
+                  return result
+                }}
                 onResumeOperatorRun={(actionId, options) =>
                   resumeOperatorRun(actionId, { userAnswer: options?.userAnswer ?? null })
                 }
@@ -1088,6 +1128,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
         githubAuthError={githubAuthError}
         onGithubLogin={() => void loginWithGithub()}
         onGithubLogout={() => void logoutGithub()}
+        onListAgentDefinitions={(request) => resolvedAdapter.listAgentDefinitions(request)}
+        onArchiveAgentDefinition={(request) => resolvedAdapter.archiveAgentDefinition(request)}
+        onGetAgentDefinitionVersion={(request) => resolvedAdapter.getAgentDefinitionVersion(request)}
+        onAgentRegistryChanged={refreshCustomAgentDefinitions}
       />
       <ProjectAddDialog
         open={projectAddOpen}

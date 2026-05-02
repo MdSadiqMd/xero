@@ -7,6 +7,8 @@ import type {
 } from '@/src/features/xero/use-xero-desktop-state/types'
 import type { AgentPaneView } from '@/src/features/xero/use-xero-desktop-state'
 import type {
+  AgentDefinitionBaseCapabilityProfileDto,
+  AgentDefinitionSummaryDto,
   ProviderModelThinkingEffortDto,
   RuntimeAgentIdDto,
   RuntimeRunApprovalModeDto,
@@ -154,6 +156,76 @@ export function getComposerApprovalOptions(runtimeAgentId: RuntimeAgentIdDto): C
   }))
 }
 
+export function runtimeAgentIdForCustomBaseCapability(
+  profile: AgentDefinitionBaseCapabilityProfileDto,
+): RuntimeAgentIdDto {
+  switch (profile) {
+    case 'engineering':
+      return 'engineer'
+    case 'debugging':
+      return 'debug'
+    case 'agent_builder':
+      return 'agent_create'
+    case 'observe_only':
+      return 'ask'
+  }
+}
+
+export interface ComposerAgentSelection {
+  selectionKey: string
+  runtimeAgentId: RuntimeAgentIdDto
+  agentDefinitionId: string | null
+  label: string
+  isCustom: boolean
+  scope: AgentDefinitionSummaryDto['scope'] | null
+}
+
+const BUILTIN_SELECTION_PREFIX = 'builtin:'
+const CUSTOM_SELECTION_PREFIX = 'custom:'
+
+export function buildComposerAgentSelectionKey(
+  runtimeAgentId: RuntimeAgentIdDto,
+  agentDefinitionId: string | null | undefined,
+): string {
+  const trimmed = agentDefinitionId?.trim() ?? ''
+  if (trimmed.length === 0) {
+    return `${BUILTIN_SELECTION_PREFIX}${runtimeAgentId}`
+  }
+  return `${CUSTOM_SELECTION_PREFIX}${trimmed}`
+}
+
+export function parseComposerAgentSelectionKey(
+  key: string,
+  customAgents: readonly AgentDefinitionSummaryDto[],
+): ComposerAgentSelection | null {
+  if (key.startsWith(BUILTIN_SELECTION_PREFIX)) {
+    const runtimeAgentId = key.slice(BUILTIN_SELECTION_PREFIX.length) as RuntimeAgentIdDto
+    const descriptor = getRuntimeAgentDescriptor(runtimeAgentId)
+    return {
+      selectionKey: key,
+      runtimeAgentId,
+      agentDefinitionId: null,
+      label: descriptor.label,
+      isCustom: false,
+      scope: null,
+    }
+  }
+  if (key.startsWith(CUSTOM_SELECTION_PREFIX)) {
+    const definitionId = key.slice(CUSTOM_SELECTION_PREFIX.length)
+    const definition = customAgents.find((agent) => agent.definitionId === definitionId)
+    if (!definition) return null
+    return {
+      selectionKey: key,
+      runtimeAgentId: runtimeAgentIdForCustomBaseCapability(definition.baseCapabilityProfile),
+      agentDefinitionId: definition.definitionId,
+      label: definition.displayName,
+      isCustom: true,
+      scope: definition.scope,
+    }
+  }
+  return null
+}
+
 export function resolveRuntimeAgentApprovalMode(
   runtimeAgentId: RuntimeAgentIdDto,
   currentApprovalMode: RuntimeRunApprovalModeDto,
@@ -185,6 +257,7 @@ export function resolveComposerThinkingSelection(
 
 export function getComposerControlInput(options: {
   runtimeAgentId: RuntimeAgentIdDto
+  agentDefinitionId?: string | null
   models: AgentPaneView['providerModelCatalog']['models']
   selectionKey: string | null | undefined
   thinkingEffort: ProviderModelThinkingEffortDto | null | undefined
@@ -195,8 +268,10 @@ export function getComposerControlInput(options: {
     return null
   }
 
+  const trimmedDefinitionId = options.agentDefinitionId?.trim() ?? ''
   return {
     runtimeAgentId: options.runtimeAgentId,
+    agentDefinitionId: trimmedDefinitionId.length > 0 ? trimmedDefinitionId : null,
     providerProfileId: model.profileId,
     modelId: model.modelId,
     thinkingEffort: resolveComposerThinkingSelection(model, options.thinkingEffort),

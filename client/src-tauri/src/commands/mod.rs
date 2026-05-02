@@ -1,3 +1,4 @@
+pub mod agent_definition;
 pub mod agent_session;
 pub mod agent_task;
 pub mod browser;
@@ -59,6 +60,9 @@ pub mod upsert_notification_route_credentials;
 mod contracts;
 pub(crate) mod runtime_support;
 
+pub use agent_definition::{
+    archive_agent_definition, get_agent_definition_version, list_agent_definitions,
+};
 pub use agent_session::{
     archive_agent_session, create_agent_session, delete_agent_session, get_agent_session,
     list_agent_sessions, restore_agent_session, update_agent_session,

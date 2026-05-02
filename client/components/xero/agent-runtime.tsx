@@ -10,6 +10,7 @@ import type {
 } from '@/src/features/xero/use-xero-desktop-state'
 import type { XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import type {
+  AgentDefinitionSummaryDto,
   AgentSessionView,
   RuntimeRunView,
   RuntimeAutoCompactPreferenceDto,
@@ -55,6 +56,7 @@ import {
   getComposerThinkingOptions,
 } from './agent-runtime/composer-helpers'
 import { ComposerDock } from './agent-runtime/composer-dock'
+import { AgentCreateDraftSection } from './agent-runtime/agent-create-draft-section'
 import { ConversationSection, type ConversationTurn } from './agent-runtime/conversation-section'
 import { EmptySessionState } from './agent-runtime/empty-session-state'
 import { MemoryReviewSection } from './agent-runtime/memory-review-section'
@@ -118,6 +120,10 @@ interface AgentRuntimeProps {
   accountLogin?: string | null
   onCreateSession?: () => void
   isCreatingSession?: boolean
+  /** Active and known custom agent definitions visible to the composer selector. */
+  customAgentDefinitions?: readonly AgentDefinitionSummaryDto[]
+  /** Open the Settings → Agents tab so the user can manage custom agents. */
+  onOpenAgentManagement?: () => void
 }
 
 const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItems']> = []
@@ -341,6 +347,8 @@ export function AgentRuntime({
   accountLogin = null,
   onCreateSession,
   isCreatingSession = false,
+  customAgentDefinitions = [],
+  onOpenAgentManagement,
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
   const runtimeRun = agent.runtimeRun ?? null
@@ -411,6 +419,8 @@ export function AgentRuntime({
     projectId: agent.project.id,
     selectedModelSelectionKey: agent.selectedModelSelectionKey ?? agent.selectedModelOption?.selectionKey ?? selectedModelId,
     selectedRuntimeAgentId: agent.selectedRuntimeAgentId,
+    selectedAgentDefinitionId: agent.runtimeRunActiveControls?.agentDefinitionId ?? null,
+    customAgentDefinitions,
     selectedThinkingEffort: agent.selectedThinkingEffort,
     selectedApprovalMode: agent.selectedApprovalMode,
     selectedPrompt: agent.selectedPrompt,
@@ -619,6 +629,13 @@ export function AgentRuntime({
                 accountAvatarUrl={accountAvatarUrl}
                 accountLogin={accountLogin}
               />
+              {controller.composerRuntimeAgentId === 'agent_create' ? (
+                <AgentCreateDraftSection
+                  runtimeStreamItems={runtimeStreamItems}
+                  pendingApprovalCount={agent.pendingApprovalCount ?? 0}
+                  onOpenAgentManagement={onOpenAgentManagement}
+                />
+              ) : null}
               {showCheckpointControlLoopSection ? (
                 <CheckpointControlLoopSection
                   checkpointControlLoop={checkpointControlLoop}
@@ -653,6 +670,9 @@ export function AgentRuntime({
         <ComposerDock
           composerRuntimeAgentId={controller.composerRuntimeAgentId}
           composerRuntimeAgentLabel={getRuntimeAgentLabel(controller.composerRuntimeAgentId)}
+          composerAgentDefinitionId={controller.composerAgentDefinitionId}
+          composerAgentSelectionKey={controller.composerAgentSelectionKey}
+          customAgentDefinitions={customAgentDefinitions}
           composerApprovalMode={controller.composerApprovalMode}
           composerApprovalOptions={composerApprovalOptions}
           autoCompactEnabled={controller.autoCompactEnabled}
@@ -670,6 +690,7 @@ export function AgentRuntime({
           isSendDisabled={!controller.canSubmitPrompt}
           onComposerApprovalModeChange={controller.handleComposerApprovalModeChange}
           onComposerRuntimeAgentChange={controller.handleComposerRuntimeAgentChange}
+          onComposerAgentSelectionChange={controller.handleComposerAgentSelectionChange}
           onAutoCompactEnabledChange={controller.handleAutoCompactEnabledChange}
           onComposerModelChange={controller.handleComposerModelChange}
           onComposerThinkingLevelChange={controller.handleComposerThinkingLevelChange}

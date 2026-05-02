@@ -813,6 +813,7 @@ describe('AgentRuntime current UI', () => {
         controls: {
           providerProfileId: 'unscoped',
           runtimeAgentId: 'ask',
+          agentDefinitionId: null,
           modelId: 'openai_codex',
           thinkingEffort: null,
           approvalMode: 'suggest',

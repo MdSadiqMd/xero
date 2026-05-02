@@ -1,4 +1,4 @@
-import { Activity, ArrowUp, Brain, Bug, CheckIcon, ChevronDownIcon, Cpu, LoaderCircle, MessageCircle, Mic, ShieldCheck, Sparkles, Wrench } from 'lucide-react'
+import { Activity, ArrowUp, Brain, Bug, CheckIcon, ChevronDownIcon, Cpu, LoaderCircle, MessageCircle, Mic, ShieldCheck, Sparkles, Users, Wrench } from 'lucide-react'
 import * as SelectPrimitive from '@radix-ui/react-select'
 import { forwardRef, Fragment, useMemo, useState, type ComponentPropsWithoutRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 
@@ -10,11 +10,16 @@ import type {
 import {
   getRuntimeAgentDescriptor,
   RUNTIME_AGENT_DESCRIPTORS,
-  runtimeAgentIdSchema,
+  type AgentDefinitionSummaryDto,
   type ProviderModelThinkingEffortDto,
   type RuntimeAgentIdDto,
   type RuntimeRunApprovalModeDto,
 } from '@/src/lib/xero-model'
+
+import {
+  buildComposerAgentSelectionKey,
+  runtimeAgentIdForCustomBaseCapability,
+} from './composer-helpers'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -66,6 +71,9 @@ interface ComposerDockProps {
   isSendDisabled: boolean
   composerRuntimeAgentId: RuntimeAgentIdDto
   composerRuntimeAgentLabel: string
+  composerAgentDefinitionId?: string | null
+  composerAgentSelectionKey?: string
+  customAgentDefinitions?: readonly AgentDefinitionSummaryDto[]
   composerModelId: string | null
   composerModelGroups: ComposerModelGroup[]
   composerThinkingLevel: ProviderModelThinkingEffortDto | null
@@ -88,6 +96,7 @@ interface ComposerDockProps {
   onSubmitDraftPrompt: () => void
   onAutoCompactEnabledChange: (value: boolean) => void
   onComposerRuntimeAgentChange: (value: RuntimeAgentIdDto) => void
+  onComposerAgentSelectionChange?: (selectionKey: string) => void
   onComposerModelChange: (value: string) => void
   onComposerThinkingLevelChange: (value: ProviderModelThinkingEffortDto) => void
   onComposerApprovalModeChange: (value: RuntimeRunApprovalModeDto) => void
@@ -131,6 +140,9 @@ export function ComposerDock({
   isSendDisabled,
   composerRuntimeAgentId,
   composerRuntimeAgentLabel,
+  composerAgentDefinitionId = null,
+  composerAgentSelectionKey,
+  customAgentDefinitions = [],
   composerModelId,
   composerModelGroups,
   composerThinkingLevel,
@@ -153,6 +165,7 @@ export function ComposerDock({
   onSubmitDraftPrompt,
   onAutoCompactEnabledChange,
   onComposerRuntimeAgentChange,
+  onComposerAgentSelectionChange,
   onComposerModelChange,
   onComposerThinkingLevelChange,
   onComposerApprovalModeChange,
@@ -169,8 +182,33 @@ export function ComposerDock({
     composerThinkingOptions.find((option) => option.value === composerThinkingLevel)?.label ?? composerThinkingPlaceholder
   const approvalTriggerLabel =
     composerApprovalOptions.find((option) => option.value === composerApprovalMode)?.label ?? 'Approval unavailable'
-  const AgentTriggerIcon =
-    composerRuntimeAgentId === 'ask'
+  const activeCustomAgent = useMemo(() => {
+    if (!composerAgentDefinitionId) return null
+    return customAgentDefinitions.find((agent) => agent.definitionId === composerAgentDefinitionId) ?? null
+  }, [composerAgentDefinitionId, customAgentDefinitions])
+  const isCustomAgent = Boolean(activeCustomAgent)
+  const agentTriggerLabel = activeCustomAgent?.displayName ?? composerRuntimeAgentLabel
+  const agentSelectorValue =
+    composerAgentSelectionKey ??
+    buildComposerAgentSelectionKey(composerRuntimeAgentId, composerAgentDefinitionId)
+  const visibleCustomAgents = useMemo(
+    () =>
+      customAgentDefinitions.filter(
+        (agent) => agent.lifecycleState === 'active' || agent.definitionId === composerAgentDefinitionId,
+      ),
+    [composerAgentDefinitionId, customAgentDefinitions],
+  )
+  const projectCustomAgents = useMemo(
+    () => visibleCustomAgents.filter((agent) => agent.scope === 'project_custom'),
+    [visibleCustomAgents],
+  )
+  const globalCustomAgents = useMemo(
+    () => visibleCustomAgents.filter((agent) => agent.scope === 'global_custom'),
+    [visibleCustomAgents],
+  )
+  const AgentTriggerIcon = isCustomAgent
+    ? Users
+    : composerRuntimeAgentId === 'ask'
       ? MessageCircle
       : composerRuntimeAgentId === 'debug'
         ? Bug
@@ -215,11 +253,17 @@ export function ComposerDock({
                 <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto pb-0.5">
                   <Select
                     disabled={isAgentSelectorDisabled}
-                    value={composerRuntimeAgentId}
+                    value={agentSelectorValue}
                     onValueChange={(value) => {
-                      const parsed = runtimeAgentIdSchema.safeParse(value)
-                      if (parsed.success) {
-                        onComposerRuntimeAgentChange(parsed.data)
+                      if (onComposerAgentSelectionChange) {
+                        onComposerAgentSelectionChange(value)
+                        return
+                      }
+                      if (value.startsWith('builtin:')) {
+                        const builtinId = value.slice('builtin:'.length) as RuntimeAgentIdDto
+                        if (RUNTIME_AGENT_DESCRIPTORS.some((agent) => agent.id === builtinId)) {
+                          onComposerRuntimeAgentChange(builtinId)
+                        }
                       }
                     }}
                   >
@@ -229,20 +273,81 @@ export function ComposerDock({
                           <ComposerInlineTrigger
                             aria-label="Agent selector"
                             icon={<AgentTriggerIcon aria-hidden="true" className="size-3" />}
-                            label={composerRuntimeAgentLabel}
+                            label={agentTriggerLabel}
                           />
                         </SelectPrimitive.Trigger>
                       </TooltipTrigger>
                       <TooltipContent side="top">
-                        {runtimeAgentSwitchDisabled ? 'Selected agent is fixed for the current run.' : `${composerRuntimeAgentLabel} agent`}
+                        {runtimeAgentSwitchDisabled
+                          ? 'Selected agent is fixed for the current run.'
+                          : isCustomAgent
+                            ? `${agentTriggerLabel} (${activeCustomAgent?.scope === 'project_custom' ? 'project' : 'global'} custom agent)`
+                            : `${agentTriggerLabel} agent`}
                       </TooltipContent>
                     </Tooltip>
                     <SelectContent className={composerInlineSelectContentClassName}>
                       {RUNTIME_AGENT_DESCRIPTORS.map((agent) => (
-                        <SelectItem key={agent.id} value={agent.id}>
+                        <SelectItem
+                          key={agent.id}
+                          value={buildComposerAgentSelectionKey(agent.id, null)}
+                        >
                           {agent.label}
                         </SelectItem>
                       ))}
+                      {projectCustomAgents.length > 0 ? (
+                        <>
+                          <SelectPrimitive.Separator className="my-1 h-px bg-border/60" />
+                          <SelectPrimitive.Label className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                            Project agents
+                          </SelectPrimitive.Label>
+                          {projectCustomAgents.map((agent) => (
+                            <SelectItem
+                              key={`project-${agent.definitionId}`}
+                              value={buildComposerAgentSelectionKey(
+                                runtimeAgentIdForCustomBaseCapability(agent.baseCapabilityProfile),
+                                agent.definitionId,
+                              )}
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <Users aria-hidden="true" className="size-3 text-primary" />
+                                {agent.displayName}
+                                {agent.lifecycleState !== 'active' ? (
+                                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                    · {agent.lifecycleState}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </>
+                      ) : null}
+                      {globalCustomAgents.length > 0 ? (
+                        <>
+                          <SelectPrimitive.Separator className="my-1 h-px bg-border/60" />
+                          <SelectPrimitive.Label className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                            Global agents
+                          </SelectPrimitive.Label>
+                          {globalCustomAgents.map((agent) => (
+                            <SelectItem
+                              key={`global-${agent.definitionId}`}
+                              value={buildComposerAgentSelectionKey(
+                                runtimeAgentIdForCustomBaseCapability(agent.baseCapabilityProfile),
+                                agent.definitionId,
+                              )}
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <Users aria-hidden="true" className="size-3 text-muted-foreground" />
+                                {agent.displayName}
+                                {agent.lifecycleState !== 'active' ? (
+                                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                    · {agent.lifecycleState}
+                                  </span>
+                                ) : null}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </>
+                      ) : null}
                     </SelectContent>
                   </Select>
                   <ModelSelectorCombobox

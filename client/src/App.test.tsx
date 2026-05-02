@@ -1485,6 +1485,11 @@ function createAdapter(options?: {
       filesChanged: 0,
       totalReplacements: 0,
     }),
+    listAgentDefinitions: async () => ({ definitions: [] }),
+    archiveAgentDefinition: async () => {
+      throw new Error('archiveAgentDefinition not stubbed in test adapter')
+    },
+    getAgentDefinitionVersion: async () => null,
     createAgentSession: async (request) => {
       const now = '2026-04-23T12:00:00Z'
       const selected = request.selected ?? true

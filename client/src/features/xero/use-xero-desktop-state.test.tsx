@@ -834,6 +834,11 @@ function createMockAdapter(options?: {
     summary: request.summary ?? '',
     selected: request.selected ?? true,
   }))
+  const listAgentDefinitions = vi.fn(async () => ({ definitions: [] }))
+  const archiveAgentDefinition = vi.fn(async () => {
+    throw new Error('archiveAgentDefinition not stubbed in test adapter')
+  })
+  const getAgentDefinitionVersion = vi.fn(async () => null)
   const updateAgentSession = vi.fn(async (request: {
     projectId: string
     agentSessionId: string
@@ -1721,6 +1726,9 @@ function createMockAdapter(options?: {
     searchProject,
     replaceInProject,
     createAgentSession,
+    listAgentDefinitions,
+    archiveAgentDefinition,
+    getAgentDefinitionVersion,
     listAgentSessions,
     getAgentSession,
     updateAgentSession,

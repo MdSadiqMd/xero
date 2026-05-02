@@ -4,8 +4,8 @@ use serde_json::Value as JsonValue;
 use crate::db::project_store::{
     agent_event_kind_sql_value, agent_message_role_sql_value, agent_run_status_sql_value,
     agent_tool_call_state_sql_value, AgentActionRequestRecord, AgentCheckpointRecord,
-    AgentEventRecord, AgentFileChangeRecord, AgentMessageRecord, AgentRunRecord,
-    AgentRunSnapshotRecord, AgentToolCallRecord,
+    AgentDefinitionRecord, AgentDefinitionVersionRecord, AgentEventRecord, AgentFileChangeRecord,
+    AgentMessageRecord, AgentRunRecord, AgentRunSnapshotRecord, AgentToolCallRecord,
 };
 
 use super::runtime::{RuntimeAgentIdDto, RuntimeRunControlInputDto, RuntimeRunDiagnosticDto};
@@ -456,4 +456,162 @@ fn agent_action_request_dto(action_request: AgentActionRequestRecord) -> AgentAc
 fn agent_run_status_dto(run: &AgentRunRecord) -> AgentRunStatusDto {
     serde_json::from_str(&format!("\"{}\"", agent_run_status_sql_value(&run.status)))
         .expect("agent run status should serialize to dto enum")
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDefinitionScopeDto {
+    BuiltIn,
+    GlobalCustom,
+    ProjectCustom,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDefinitionLifecycleStateDto {
+    Draft,
+    Active,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDefinitionBaseCapabilityProfileDto {
+    ObserveOnly,
+    Engineering,
+    Debugging,
+    AgentBuilder,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentDefinitionSummaryDto {
+    pub definition_id: String,
+    pub current_version: u32,
+    pub display_name: String,
+    pub short_label: String,
+    pub description: String,
+    pub scope: AgentDefinitionScopeDto,
+    pub lifecycle_state: AgentDefinitionLifecycleStateDto,
+    pub base_capability_profile: AgentDefinitionBaseCapabilityProfileDto,
+    pub created_at: String,
+    pub updated_at: String,
+    pub is_built_in: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentDefinitionVersionSummaryDto {
+    pub definition_id: String,
+    pub version: u32,
+    pub created_at: String,
+    pub validation_status: Option<String>,
+    pub validation_diagnostic_count: u32,
+    pub snapshot: JsonValue,
+    pub validation_report: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListAgentDefinitionsRequestDto {
+    pub project_id: String,
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListAgentDefinitionsResponseDto {
+    pub definitions: Vec<AgentDefinitionSummaryDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArchiveAgentDefinitionRequestDto {
+    pub project_id: String,
+    pub definition_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GetAgentDefinitionVersionRequestDto {
+    pub project_id: String,
+    pub definition_id: String,
+    pub version: u32,
+}
+
+pub fn agent_definition_summary_dto(record: AgentDefinitionRecord) -> AgentDefinitionSummaryDto {
+    let is_built_in = record.scope == "built_in";
+    AgentDefinitionSummaryDto {
+        definition_id: record.definition_id,
+        current_version: record.current_version,
+        display_name: record.display_name,
+        short_label: record.short_label,
+        description: record.description,
+        scope: parse_agent_definition_scope(&record.scope),
+        lifecycle_state: parse_agent_definition_lifecycle_state(&record.lifecycle_state),
+        base_capability_profile: parse_agent_definition_base_capability_profile(
+            &record.base_capability_profile,
+        ),
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+        is_built_in,
+    }
+}
+
+pub fn agent_definition_version_summary_dto(
+    record: AgentDefinitionVersionRecord,
+) -> AgentDefinitionVersionSummaryDto {
+    let validation_report = record.validation_report;
+    let (validation_status, validation_diagnostic_count) = match validation_report.as_ref() {
+        Some(report) => {
+            let status = report
+                .get("status")
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned);
+            let count = report
+                .get("diagnostics")
+                .and_then(JsonValue::as_array)
+                .map(|items| items.len() as u32)
+                .unwrap_or(0);
+            (status, count)
+        }
+        None => (None, 0),
+    };
+    AgentDefinitionVersionSummaryDto {
+        definition_id: record.definition_id,
+        version: record.version,
+        created_at: record.created_at,
+        validation_status,
+        validation_diagnostic_count,
+        snapshot: record.snapshot,
+        validation_report,
+    }
+}
+
+fn parse_agent_definition_scope(value: &str) -> AgentDefinitionScopeDto {
+    match value {
+        "global_custom" => AgentDefinitionScopeDto::GlobalCustom,
+        "project_custom" => AgentDefinitionScopeDto::ProjectCustom,
+        _ => AgentDefinitionScopeDto::BuiltIn,
+    }
+}
+
+fn parse_agent_definition_lifecycle_state(value: &str) -> AgentDefinitionLifecycleStateDto {
+    match value {
+        "draft" => AgentDefinitionLifecycleStateDto::Draft,
+        "archived" => AgentDefinitionLifecycleStateDto::Archived,
+        _ => AgentDefinitionLifecycleStateDto::Active,
+    }
+}
+
+fn parse_agent_definition_base_capability_profile(
+    value: &str,
+) -> AgentDefinitionBaseCapabilityProfileDto {
+    match value {
+        "engineering" => AgentDefinitionBaseCapabilityProfileDto::Engineering,
+        "debugging" => AgentDefinitionBaseCapabilityProfileDto::Debugging,
+        "agent_builder" => AgentDefinitionBaseCapabilityProfileDto::AgentBuilder,
+        _ => AgentDefinitionBaseCapabilityProfileDto::ObserveOnly,
+    }
 }

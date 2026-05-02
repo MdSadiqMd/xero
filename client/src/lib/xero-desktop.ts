@@ -13,6 +13,20 @@ import {
   type StartAutonomousRunRequestDto,
 } from '@/src/lib/xero-model/autonomous'
 import {
+  agentDefinitionSummarySchema,
+  agentDefinitionVersionSummarySchema,
+  archiveAgentDefinitionRequestSchema,
+  getAgentDefinitionVersionRequestSchema,
+  listAgentDefinitionsRequestSchema,
+  listAgentDefinitionsResponseSchema,
+  type AgentDefinitionSummaryDto,
+  type AgentDefinitionVersionSummaryDto,
+  type ArchiveAgentDefinitionRequestDto,
+  type GetAgentDefinitionVersionRequestDto,
+  type ListAgentDefinitionsRequestDto,
+  type ListAgentDefinitionsResponseDto,
+} from '@/src/lib/xero-model/agent-definition'
+import {
   agentRunEventSchema,
   agentRunSchema,
   cancelAgentRunRequestSchema,
@@ -353,6 +367,9 @@ const COMMANDS = {
   searchProject: 'search_project',
   replaceInProject: 'replace_in_project',
   createAgentSession: 'create_agent_session',
+  listAgentDefinitions: 'list_agent_definitions',
+  archiveAgentDefinition: 'archive_agent_definition',
+  getAgentDefinitionVersion: 'get_agent_definition_version',
   listAgentSessions: 'list_agent_sessions',
   getAgentSession: 'get_agent_session',
   updateAgentSession: 'update_agent_session',
@@ -650,6 +667,15 @@ export interface XeroDesktopAdapter {
   searchProject(request: SearchProjectRequestDto): Promise<SearchProjectResponseDto>
   replaceInProject(request: ReplaceInProjectRequestDto): Promise<ReplaceInProjectResponseDto>
   createAgentSession(request: CreateAgentSessionRequestDto): Promise<AgentSessionDto>
+  listAgentDefinitions(
+    request: ListAgentDefinitionsRequestDto,
+  ): Promise<ListAgentDefinitionsResponseDto>
+  archiveAgentDefinition(
+    request: ArchiveAgentDefinitionRequestDto,
+  ): Promise<AgentDefinitionSummaryDto>
+  getAgentDefinitionVersion(
+    request: GetAgentDefinitionVersionRequestDto,
+  ): Promise<AgentDefinitionVersionSummaryDto | null>
   listAgentSessions(request: ListAgentSessionsRequestDto): Promise<ListAgentSessionsResponseDto>
   getAgentSession(request: GetAgentSessionRequestDto): Promise<AgentSessionDto | null>
   updateAgentSession(request: UpdateAgentSessionRequestDto): Promise<AgentSessionDto>
@@ -1469,6 +1495,32 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
         selected: parsed.selected ?? false,
       },
     })
+  },
+
+  listAgentDefinitions(request) {
+    const parsed = listAgentDefinitionsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.listAgentDefinitions, listAgentDefinitionsResponseSchema, {
+      request: {
+        projectId: parsed.projectId,
+        includeArchived: parsed.includeArchived,
+      },
+    })
+  },
+
+  archiveAgentDefinition(request) {
+    const parsed = archiveAgentDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.archiveAgentDefinition, agentDefinitionSummarySchema, {
+      request: parsed,
+    })
+  },
+
+  getAgentDefinitionVersion(request) {
+    const parsed = getAgentDefinitionVersionRequestSchema.parse(request)
+    return invokeTyped(
+      COMMANDS.getAgentDefinitionVersion,
+      agentDefinitionVersionSummarySchema.nullable(),
+      { request: parsed },
+    )
   },
 
   listAgentSessions(request) {
