@@ -100,7 +100,8 @@ describe('runtime stream event coalescing', () => {
     buffer.enqueue(makeRuntimeStreamEvent(2))
 
     expect(updateRuntimeStream).not.toHaveBeenCalled()
-    scheduledFlush?.()
+    const flush = scheduledFlush as (() => void) | null
+    flush?.()
 
     expect(updateRuntimeStream).toHaveBeenCalledTimes(1)
     expect(stream?.lastSequence).toBe(2)

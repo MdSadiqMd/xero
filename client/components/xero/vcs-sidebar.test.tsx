@@ -20,7 +20,7 @@ const repository = {
 
 function makeStatus(overrides: Partial<RepositoryStatusView> = {}): RepositoryStatusView {
   const { diffRevision, ...statusOverrides } = overrides
-  const status = {
+  const status: Omit<RepositoryStatusView, 'diffRevision'> = {
     projectId: 'project-1',
     repositoryId: repository.id,
     branchLabel: 'main',

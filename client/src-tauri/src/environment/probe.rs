@@ -326,7 +326,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("openssl", BaseDeveloperTool, "openssl", &["version"]),
         entry("curl", BaseDeveloperTool, "curl", &["--version"]),
         entry("wget", BaseDeveloperTool, "wget", &["--version"]),
-
         // Package managers (cross-language)
         entry("pnpm", PackageManager, "pnpm", &["--version"]),
         entry("npm", PackageManager, "npm", &["--version"]),
@@ -346,7 +345,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("composer", PackageManager, "composer", &["--version"]),
         entry("cocoapods", PackageManager, "pod", &["--version"]),
         entry("nuget", PackageManager, "nuget", &["help"]),
-
         // Language runtimes
         entry("node", LanguageRuntime, "node", &["--version"]),
         entry("python", LanguageRuntime, "python", &["--version"]),
@@ -377,7 +375,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("nim", LanguageRuntime, "nim", &["--version"]),
         entry("clojure", LanguageRuntime, "clojure", &["--version"]),
         entry("r", LanguageRuntime, "R", &["--version"]),
-
         // Editors
         entry("vim", Editor, "vim", &["--version"]),
         entry("nvim", Editor, "nvim", &["--version"]),
@@ -390,7 +387,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("hx", Editor, "hx", &["--version"]),
         entry("micro", Editor, "micro", &["--version"]),
         entry("zed", Editor, "zed", &["--version"]),
-
         // Build tools
         entry("gradle", BuildTool, "gradle", &["--version"]),
         entry("maven", BuildTool, "mvn", &["--version"]),
@@ -403,7 +399,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("buck2", BuildTool, "buck2", &["--version"]),
         entry("just", BuildTool, "just", &["--version"]),
         entry("task", BuildTool, "task", &["--version"]),
-
         // Linters / formatters
         entry("rustfmt", Linter, "rustfmt", &["--version"]),
         entry("clippy", Linter, "cargo-clippy", &["--version"]),
@@ -421,7 +416,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("shfmt", Linter, "shfmt", &["--version"]),
         entry("hadolint", Linter, "hadolint", &["--version"]),
         entry("tsc", Linter, "tsc", &["--version"]),
-
         // Version managers
         entry("asdf", VersionManager, "asdf", &["--version"]),
         entry("mise", VersionManager, "mise", &["--version"]),
@@ -433,7 +427,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("jenv", VersionManager, "jenv", &["--version"]),
         entry("sdkman", VersionManager, "sdk", &["version"]),
         entry("nodenv", VersionManager, "nodenv", &["--version"]),
-
         // Infrastructure / IaC
         entry("terraform", IacTool, "terraform", &["--version"]),
         entry("tofu", IacTool, "tofu", &["--version"]),
@@ -445,7 +438,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("nomad", IacTool, "nomad", &["--version"]),
         entry("helmfile", IacTool, "helmfile", &["--version"]),
         entry("terragrunt", IacTool, "terragrunt", &["--version"]),
-
         // Shell utilities
         entry("jq", ShellUtility, "jq", &["--version"]),
         entry("yq", ShellUtility, "yq", &["--version"]),
@@ -465,7 +457,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("tldr", ShellUtility, "tldr", &["--version"]),
         entry("entr", ShellUtility, "entr", &["-h"]),
         entry("delta", ShellUtility, "delta", &["--version"]),
-
         // Container / orchestration
         entry("docker", ContainerOrchestration, "docker", &["--version"]),
         entry(
@@ -494,8 +485,12 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("k3d", ContainerOrchestration, "k3d", &["version"]),
         entry("k9s", ContainerOrchestration, "k9s", &["version"]),
         entry("skaffold", ContainerOrchestration, "skaffold", &["version"]),
-        entry("lazydocker", ContainerOrchestration, "lazydocker", &["--version"]),
-
+        entry(
+            "lazydocker",
+            ContainerOrchestration,
+            "lazydocker",
+            &["--version"],
+        ),
         // Mobile tooling
         entry("xcodebuild", MobileTooling, "xcodebuild", &["-version"]),
         entry("xcrun", MobileTooling, "xcrun", &["--version"]),
@@ -505,7 +500,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("fastlane", MobileTooling, "fastlane", &["--version"]),
         entry("expo", MobileTooling, "expo", &["--version"]),
         entry("eas", MobileTooling, "eas", &["--version"]),
-
         // Cloud deployment
         entry("aws", CloudDeployment, "aws", &["--version"]),
         entry("gcloud", CloudDeployment, "gcloud", &["--version"]),
@@ -519,8 +513,12 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("render", CloudDeployment, "render", &["--version"]),
         entry("supabase", CloudDeployment, "supabase", &["--version"]),
         entry("firebase", CloudDeployment, "firebase", &["--version"]),
-        entry("cloudflare_wrangler", CloudDeployment, "wrangler", &["--version"]),
-
+        entry(
+            "cloudflare_wrangler",
+            CloudDeployment,
+            "wrangler",
+            &["--version"],
+        ),
         // Database CLIs
         entry("sqlite3", DatabaseCli, "sqlite3", &["--version"]),
         entry("psql", DatabaseCli, "psql", &["--version"]),
@@ -530,9 +528,13 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("mongo", DatabaseCli, "mongo", &["--version"]),
         entry("redis_cli", DatabaseCli, "redis-cli", &["--version"]),
         entry("influx", DatabaseCli, "influx", &["version"]),
-        entry("clickhouse_client", DatabaseCli, "clickhouse-client", &["--version"]),
+        entry(
+            "clickhouse_client",
+            DatabaseCli,
+            "clickhouse-client",
+            &["--version"],
+        ),
         entry("duckdb", DatabaseCli, "duckdb", &["--version"]),
-
         // Solana tooling
         entry("solana", SolanaTooling, "solana", &["--version"]),
         entry("anchor", SolanaTooling, "anchor", &["--version"]),
@@ -552,7 +554,6 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
             "solana-verify",
             &["--version"],
         ),
-
         // AI / agent CLIs
         entry("codex", AgentAiCli, "codex", &["--version"]),
         entry("claude", AgentAiCli, "claude", &["--version"]),

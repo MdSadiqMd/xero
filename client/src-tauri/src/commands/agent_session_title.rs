@@ -198,7 +198,7 @@ fn sanitize_provider_session_title(message: &str) -> Option<String> {
 
 fn fallback_title_from_prompt(prompt: &str) -> Option<String> {
     let cleaned = collapse_title_whitespace(
-        &prompt
+        prompt
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())

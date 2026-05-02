@@ -123,7 +123,7 @@ function makeRuntimeStream(): RuntimeStreamView {
 
 function makeRepositoryStatus(overrides: Partial<RepositoryStatusView> = {}): RepositoryStatusView {
   const { diffRevision, ...statusOverrides } = overrides
-  const status = {
+  const status: Omit<RepositoryStatusView, 'diffRevision'> = {
     projectId: 'project-1',
     repositoryId: 'repo-project-1',
     branchLabel: 'main',
@@ -357,7 +357,8 @@ describe('UI latency performance smoke replays', () => {
       expect(scheduledFlushCount).toBe(1)
       expect(updateRuntimeStream).not.toHaveBeenCalled()
 
-      flushCallback?.()
+      const flush = flushCallback as (() => void) | null
+      flush?.()
 
       expect(updateRuntimeStream).toHaveBeenCalledTimes(1)
       expect(stream?.lastSequence).toBe(1_000)

@@ -549,7 +549,7 @@ fn validate_known_agent_definition_value(
     value: &str,
     allowed: &[&str],
 ) -> Result<(), CommandError> {
-    if allowed.iter().any(|allowed_value| value == *allowed_value) {
+    if allowed.contains(&value) {
         return Ok(());
     }
     Err(CommandError::invalid_request(field))
@@ -593,14 +593,9 @@ fn definition_allowed_approval_modes(
         })
         .unwrap_or_default();
     if modes.is_empty() {
-        modes.push(crate::commands::default_runtime_agent_approval_mode(
-            &runtime_agent_id,
-        ));
+        modes = crate::commands::runtime_agent_allowed_approval_modes(&runtime_agent_id);
     }
-    if !modes
-        .iter()
-        .any(|mode| *mode == RuntimeRunApprovalModeDto::Suggest)
-    {
+    if !modes.contains(&RuntimeRunApprovalModeDto::Suggest) {
         modes.insert(0, RuntimeRunApprovalModeDto::Suggest);
     }
     modes.sort_by_key(|mode| match mode {
@@ -626,6 +621,20 @@ fn parse_runtime_approval_mode(value: &str) -> Option<RuntimeRunApprovalModeDto>
         "yolo" => Some(RuntimeRunApprovalModeDto::Yolo),
         _ => None,
     }
+}
+
+fn map_agent_definition_write_error(code: &'static str, error: rusqlite::Error) -> CommandError {
+    CommandError::retryable(
+        code,
+        format!("Xero could not write the agent-definition registry: {error}"),
+    )
+}
+
+fn map_agent_definition_read_error(code: &'static str, error: rusqlite::Error) -> CommandError {
+    CommandError::retryable(
+        code,
+        format!("Xero could not read the agent-definition registry: {error}"),
+    )
 }
 
 #[cfg(test)]
@@ -789,18 +798,4 @@ mod tests {
             .to_string()
             .contains("agent definition versions are immutable"));
     }
-}
-
-fn map_agent_definition_write_error(code: &'static str, error: rusqlite::Error) -> CommandError {
-    CommandError::retryable(
-        code,
-        format!("Xero could not write the agent-definition registry: {error}"),
-    )
-}
-
-fn map_agent_definition_read_error(code: &'static str, error: rusqlite::Error) -> CommandError {
-    CommandError::retryable(
-        code,
-        format!("Xero could not read the agent-definition registry: {error}"),
-    )
 }

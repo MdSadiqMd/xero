@@ -59,10 +59,21 @@ export interface MarkdownProps {
   muted?: boolean
   /** When true, renders at a smaller text size — used for collapsed previews. */
   compact?: boolean
+  /** Optional inline node appended to the very last text paragraph, in line.
+   * Used to anchor the streaming caret to the trailing character without
+   * dropping it onto a new line. */
+  trailing?: React.ReactNode
 }
 
-export function Markdown({ text, muted = false, compact = false }: MarkdownProps) {
+export function Markdown({ text, muted = false, compact = false, trailing }: MarkdownProps) {
   const segments = splitFencedSegments(text)
+  const lastTextSegmentIndex = (() => {
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      if (segments[i].kind === 'text') return i
+    }
+    return -1
+  })()
+
   return (
     <div
       className={cn(
@@ -76,15 +87,18 @@ export function Markdown({ text, muted = false, compact = false }: MarkdownProps
           <CodeBlock key={index} code={segment.code} lang={segment.lang} />
         ) : (
           <Fragment key={index}>
-            {renderTextBlock(segment.text)}
+            {renderTextBlock(segment.text, index === lastTextSegmentIndex ? trailing : null)}
           </Fragment>
         ),
       )}
+      {/* If there are no text segments, anchor any trailing inline node so it
+       * still renders (e.g. an empty stream that hasn't produced text yet). */}
+      {trailing && lastTextSegmentIndex === -1 ? <p className="m-0">{trailing}</p> : null}
     </div>
   )
 }
 
-function renderTextBlock(text: string): React.ReactNode {
+function renderTextBlock(text: string, trailing: React.ReactNode = null): React.ReactNode {
   const lines = text.split('\n')
   const blocks: React.ReactNode[] = []
   let buffer: string[] = []
@@ -218,6 +232,34 @@ function renderTextBlock(text: string): React.ReactNode {
   }
 
   flushAll()
+
+  if (trailing && blocks.length > 0) {
+    const last = blocks[blocks.length - 1]
+    // Append the trailing node into the final block so it sits inline with
+    // the trailing word rather than dropping onto a new line. We only know
+    // how to do this for paragraphs and headings; for lists/blockquotes/hr
+    // we fall back to appending after the block.
+    if (
+      last &&
+      typeof last === 'object' &&
+      'type' in last &&
+      (last as { type?: unknown }).type === 'p'
+    ) {
+      const original = last as React.ReactElement<{ children?: React.ReactNode; className?: string }>
+      const merged = (
+        <p key={original.key ?? blocks.length} className={original.props.className}>
+          {original.props.children}
+          {trailing}
+        </p>
+      )
+      blocks[blocks.length - 1] = merged
+    } else {
+      blocks.push(<p key={blocks.length} className="m-0">{trailing}</p>)
+    }
+  } else if (trailing && blocks.length === 0) {
+    blocks.push(<p key={blocks.length} className="m-0">{trailing}</p>)
+  }
+
   return <>{blocks}</>
 }
 

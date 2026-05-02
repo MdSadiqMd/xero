@@ -2878,7 +2878,7 @@ describe('XeroApp current UI', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: 'Editor' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'README.md' }))
+    fireEvent.click(await screen.findByRole('treeitem', { name: 'README.md' }))
 
     const editor = await screen.findByLabelText('Editor for /README.md')
     const executionPane = editor.closest('[aria-hidden]')

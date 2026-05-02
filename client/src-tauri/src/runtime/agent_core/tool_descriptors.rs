@@ -166,6 +166,10 @@ impl<'a> PromptCompiler<'a> {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "System prompt assembly is a narrow compatibility wrapper over the prompt compiler boundary."
+)]
 pub(crate) fn assemble_system_prompt_for_session(
     repo_root: &Path,
     project_id: Option<&str>,
@@ -2763,12 +2767,9 @@ pub(crate) fn agent_definition_approval_modes_from_snapshot(
         })
         .unwrap_or_default();
     if allowed.is_empty() {
-        allowed.push(default.clone());
+        allowed = crate::commands::runtime_agent_allowed_approval_modes(&runtime_agent_id);
     }
-    if !allowed
-        .iter()
-        .any(|mode| *mode == RuntimeRunApprovalModeDto::Suggest)
-    {
+    if !allowed.contains(&RuntimeRunApprovalModeDto::Suggest) {
         allowed.insert(0, RuntimeRunApprovalModeDto::Suggest);
     }
     allowed.sort_by_key(|mode| match mode {

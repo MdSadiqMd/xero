@@ -218,6 +218,21 @@ pub fn default_runtime_agent_approval_mode(
     }
 }
 
+pub fn runtime_agent_allowed_approval_modes(
+    agent_id: &RuntimeAgentIdDto,
+) -> Vec<RuntimeRunApprovalModeDto> {
+    match agent_id {
+        RuntimeAgentIdDto::Ask | RuntimeAgentIdDto::AgentCreate => {
+            vec![RuntimeRunApprovalModeDto::Suggest]
+        }
+        RuntimeAgentIdDto::Engineer | RuntimeAgentIdDto::Debug => vec![
+            RuntimeRunApprovalModeDto::Suggest,
+            RuntimeRunApprovalModeDto::AutoEdit,
+            RuntimeRunApprovalModeDto::Yolo,
+        ],
+    }
+}
+
 pub fn runtime_agent_allows_approval_mode(
     agent_id: &RuntimeAgentIdDto,
     approval_mode: &RuntimeRunApprovalModeDto,
@@ -254,7 +269,7 @@ pub fn runtime_agent_descriptor(agent_id: RuntimeAgentIdDto) -> RuntimeAgentDesc
             lifecycle_state: RuntimeAgentLifecycleStateDto::Active,
             base_capability_profile: RuntimeAgentBaseCapabilityProfileDto::ObserveOnly,
             default_approval_mode: RuntimeRunApprovalModeDto::Suggest,
-            allowed_approval_modes: vec![RuntimeRunApprovalModeDto::Suggest],
+            allowed_approval_modes: runtime_agent_allowed_approval_modes(&agent_id),
             prompt_policy: RuntimeAgentPromptPolicyDto::Ask,
             tool_policy: RuntimeAgentToolPolicyDto::ObserveOnly,
             output_contract: RuntimeAgentOutputContractDto::Answer,
@@ -273,11 +288,7 @@ pub fn runtime_agent_descriptor(agent_id: RuntimeAgentIdDto) -> RuntimeAgentDesc
             lifecycle_state: RuntimeAgentLifecycleStateDto::Active,
             base_capability_profile: RuntimeAgentBaseCapabilityProfileDto::Engineering,
             default_approval_mode: RuntimeRunApprovalModeDto::Suggest,
-            allowed_approval_modes: vec![
-                RuntimeRunApprovalModeDto::Suggest,
-                RuntimeRunApprovalModeDto::AutoEdit,
-                RuntimeRunApprovalModeDto::Yolo,
-            ],
+            allowed_approval_modes: runtime_agent_allowed_approval_modes(&agent_id),
             prompt_policy: RuntimeAgentPromptPolicyDto::Engineer,
             tool_policy: RuntimeAgentToolPolicyDto::Engineering,
             output_contract: RuntimeAgentOutputContractDto::EngineeringSummary,
@@ -296,11 +307,7 @@ pub fn runtime_agent_descriptor(agent_id: RuntimeAgentIdDto) -> RuntimeAgentDesc
             lifecycle_state: RuntimeAgentLifecycleStateDto::Active,
             base_capability_profile: RuntimeAgentBaseCapabilityProfileDto::Debugging,
             default_approval_mode: RuntimeRunApprovalModeDto::Suggest,
-            allowed_approval_modes: vec![
-                RuntimeRunApprovalModeDto::Suggest,
-                RuntimeRunApprovalModeDto::AutoEdit,
-                RuntimeRunApprovalModeDto::Yolo,
-            ],
+            allowed_approval_modes: runtime_agent_allowed_approval_modes(&agent_id),
             prompt_policy: RuntimeAgentPromptPolicyDto::Debug,
             tool_policy: RuntimeAgentToolPolicyDto::Engineering,
             output_contract: RuntimeAgentOutputContractDto::DebugSummary,
@@ -319,7 +326,7 @@ pub fn runtime_agent_descriptor(agent_id: RuntimeAgentIdDto) -> RuntimeAgentDesc
             lifecycle_state: RuntimeAgentLifecycleStateDto::Active,
             base_capability_profile: RuntimeAgentBaseCapabilityProfileDto::AgentBuilder,
             default_approval_mode: RuntimeRunApprovalModeDto::Suggest,
-            allowed_approval_modes: vec![RuntimeRunApprovalModeDto::Suggest],
+            allowed_approval_modes: runtime_agent_allowed_approval_modes(&agent_id),
             prompt_policy: RuntimeAgentPromptPolicyDto::AgentCreate,
             tool_policy: RuntimeAgentToolPolicyDto::AgentBuilder,
             output_contract: RuntimeAgentOutputContractDto::AgentDefinitionDraft,
@@ -915,6 +922,26 @@ mod tests {
             &RuntimeAgentIdDto::AgentCreate,
             &RuntimeRunApprovalModeDto::AutoEdit
         ));
+    }
+
+    #[test]
+    fn engineering_agents_allow_all_approval_modes() {
+        assert_eq!(
+            runtime_agent_allowed_approval_modes(&RuntimeAgentIdDto::Engineer),
+            vec![
+                RuntimeRunApprovalModeDto::Suggest,
+                RuntimeRunApprovalModeDto::AutoEdit,
+                RuntimeRunApprovalModeDto::Yolo
+            ]
+        );
+        assert_eq!(
+            runtime_agent_allowed_approval_modes(&RuntimeAgentIdDto::Debug),
+            vec![
+                RuntimeRunApprovalModeDto::Suggest,
+                RuntimeRunApprovalModeDto::AutoEdit,
+                RuntimeRunApprovalModeDto::Yolo
+            ]
+        );
     }
 }
 

@@ -1214,6 +1214,116 @@
     }
   }
 
+  /* Blinking caret rendered at the tail of the assistant's streaming response.
+   * Uses opacity steps (no transform) so it stays on its own composite layer
+   * without forcing a repaint of the surrounding markdown each frame. */
+  .agent-stream-caret {
+    animation: agent-stream-caret-blink 900ms steps(2, end) infinite;
+    will-change: opacity;
+  }
+
+  @keyframes agent-stream-caret-blink {
+    0%,
+    50% {
+      opacity: 0.95;
+    }
+    50.01%,
+    100% {
+      opacity: 0.15;
+    }
+  }
+
+  /* Soft halo around the agent avatar while the agent is mid-stream — gives
+   * the icon a quiet "alive" feel without flashing or distracting the eye. */
+  .agent-avatar-pulse::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 9999px;
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 45%, transparent);
+    animation: agent-avatar-pulse 1800ms ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  @keyframes agent-avatar-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 0%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 4px color-mix(in oklab, var(--primary) 18%, transparent);
+    }
+  }
+
+  /* Thinking dots — staggered vertical bob with a softened curve so they read
+   * as a wave rather than three independently pulsing blobs. */
+  .agent-thinking-dot {
+    animation: agent-thinking-dot 1100ms ease-in-out infinite;
+    will-change: transform, opacity;
+  }
+
+  @keyframes agent-thinking-dot {
+    0%,
+    80%,
+    100% {
+      transform: translateY(0);
+      opacity: 0.45;
+    }
+    40% {
+      transform: translateY(-2px);
+      opacity: 1;
+    }
+  }
+
+  /* Tool status icon "pop" — used when the icon transitions to a terminal
+   * state (succeeded or failed). A small overshoot makes the success/failure
+   * land with a tactile beat without being disruptive. Skipped under
+   * prefers-reduced-motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    .tool-status-icon-pop {
+      animation: tool-status-icon-pop 320ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+  }
+
+  @keyframes tool-status-icon-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.55);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.15);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Activity indicator pill — a slow shimmer from the leading edge accentuates
+   * the streaming state without being noisy. */
+  .agent-activity-indicator {
+    background-image: linear-gradient(
+      120deg,
+      transparent 0%,
+      color-mix(in oklab, var(--primary) 6%, transparent) 50%,
+      transparent 100%
+    );
+    background-repeat: no-repeat;
+    background-size: 220% 100%;
+    background-position: 200% 0;
+    animation: agent-activity-shimmer 2400ms linear infinite;
+  }
+
+  @keyframes agent-activity-shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -120% 0;
+    }
+  }
+
   /* When `<html>` carries `data-layout-shifting`, the harness is in the
    * middle of a tab switch (or another change that shifts multiple sidebars
    * + the main content at once). Snap sidebar widths instead of animating

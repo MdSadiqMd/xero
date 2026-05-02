@@ -149,70 +149,85 @@ export function ConversationSection({
   const showAnyNotice = showRunFailure || showStreamFailure || showStreamIssue || showHandoffNotice
   const showAnyTurn = visibleTurns.length > 0
 
+  const lastTurn = visibleTurns.length > 0 ? visibleTurns[visibleTurns.length - 1] : null
+  const isLastTurnStreamingAssistant = Boolean(
+    showActivityIndicator &&
+      lastTurn &&
+      lastTurn.kind === 'message' &&
+      lastTurn.role === 'assistant' &&
+      lastTurn.text.trim().length > 0,
+  )
+
   return (
     <section aria-label="Agent conversation" className="flex flex-col gap-6">
       {showAnyTurn ? (
         <ol aria-label="Agent conversation turns" className="flex flex-col gap-6">
-          {visibleTurns.map((turn) => (
-            <li key={turn.id}>
-              <ConversationTurnRow
-                turn={turn}
-                accountAvatarUrl={accountAvatarUrl}
-                accountLogin={accountLogin}
-              />
-            </li>
+          {visibleTurns.map((turn, index) => (
+            <ConversationTurnItem
+              key={turn.id}
+              turn={turn}
+              accountAvatarUrl={accountAvatarUrl}
+              accountLogin={accountLogin}
+              isStreaming={index === visibleTurns.length - 1 && isLastTurnStreamingAssistant}
+            />
           ))}
         </ol>
       ) : null}
 
-      {showActivityIndicator ? <AgentActivityIndicator /> : null}
+      {showActivityIndicator && !isLastTurnStreamingAssistant ? (
+        <AgentActivityIndicator />
+      ) : null}
 
       {showAnyNotice ? (
         <ul aria-label="Agent run notices" className="flex flex-col gap-3">
           {showHandoffNotice ? (
-            <li>
+            <NoticeListItem>
               <NoticeRow
                 tone="info"
                 title="Run continued in a fresh session"
                 message="Xero handed this conversation off to a new same-type run because the context budget was full. Your task, prior decisions, and important context carried over — keep replying as normal."
                 code={null}
               />
-            </li>
+            </NoticeListItem>
           ) : null}
           {showRunFailure ? (
-            <li>
+            <NoticeListItem>
               <NoticeRow
                 tone="destructive"
                 title={runtimeRun?.isTerminal ? 'Latest saved run failed' : 'Agent run failed'}
                 message={runFailureMessage ?? ''}
                 code={runFailureCode}
               />
-            </li>
+            </NoticeListItem>
           ) : null}
           {showStreamFailure && streamFailure ? (
-            <li>
+            <NoticeListItem>
               <NoticeRow
                 tone="destructive"
                 title="Live stream failed"
                 message={describeStreamMessage(streamFailure.code, streamFailure.message)}
                 code={streamFailure.code}
               />
-            </li>
+            </NoticeListItem>
           ) : null}
           {showStreamIssue && streamIssue ? (
-            <li>
+            <NoticeListItem>
               <NoticeRow
                 tone={streamIssue.retryable ? 'info' : 'warning'}
                 title={describeStreamTitle(streamIssue.code, 'Live stream issue')}
                 message={describeStreamMessage(streamIssue.code, streamIssue.message)}
                 code={streamIssue.code}
               />
-            </li>
+            </NoticeListItem>
           ) : null}
         </ul>
       ) : null}
     </section>
   )
+}
+
+function NoticeListItem({ children }: { children: React.ReactNode }) {
+  return <li className={TURN_ENTRY_CLASS}>{children}</li>
 }
 
 /**
@@ -246,25 +261,61 @@ function describeStreamMessage(code: string, fallback: string): string {
   }
 }
 
+interface ConversationTurnItemProps {
+  turn: ConversationTurn
+  accountAvatarUrl: string | null
+  accountLogin: string | null
+  isStreaming: boolean
+}
+
+const TURN_ENTRY_CLASS = cn(
+  'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1',
+  'motion-safe:duration-200 motion-safe:ease-out',
+)
+
+function ConversationTurnItem({
+  turn,
+  accountAvatarUrl,
+  accountLogin,
+  isStreaming,
+}: ConversationTurnItemProps) {
+  return (
+    <li className={TURN_ENTRY_CLASS}>
+      <ConversationTurnRow
+        turn={turn}
+        accountAvatarUrl={accountAvatarUrl}
+        accountLogin={accountLogin}
+        isStreaming={isStreaming}
+      />
+    </li>
+  )
+}
+
 interface ConversationTurnRowProps {
   turn: ConversationTurn
   accountAvatarUrl: string | null
   accountLogin: string | null
+  isStreaming: boolean
 }
 
-function ConversationTurnRow({ turn, accountAvatarUrl, accountLogin }: ConversationTurnRowProps) {
+function ConversationTurnRow({
+  turn,
+  accountAvatarUrl,
+  accountLogin,
+  isStreaming,
+}: ConversationTurnRowProps) {
   if (turn.kind === 'message') {
     return turn.role === 'user' ? (
       <UserMessage text={turn.text} accountAvatarUrl={accountAvatarUrl} accountLogin={accountLogin} />
     ) : (
-      <AssistantMessage text={turn.text} />
+      <AssistantMessage text={turn.text} isStreaming={isStreaming} />
     )
   }
 
   if (turn.kind === 'thinking') {
     return (
       <div className="flex gap-3">
-        <AgentAvatar />
+        <AgentAvatar pulse={isStreaming} />
         <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
           <span className="px-0.5 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground/80">
             Agent
@@ -330,16 +381,7 @@ function ActionCard({ title, detail, detailRows, state }: ActionCardProps) {
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground" title={title}>
                 {title}
               </span>
-              {state ? (
-                <span
-                  className={cn(
-                    'shrink-0 text-[11px] font-medium tabular-nums',
-                    getToolStateTextClass(state),
-                  )}
-                >
-                  {getToolStateLabel(state)}
-                </span>
-              ) : null}
+              <ToolStateLabel state={state} size="sm" />
               {hasDetails ? (
                 <CollapsibleTrigger asChild>
                   <button
@@ -352,7 +394,7 @@ function ActionCard({ title, detail, detailRows, state }: ActionCardProps) {
                   >
                     <ChevronDown
                       className={cn(
-                        'h-3.5 w-3.5 transition-transform duration-150',
+                        'h-3.5 w-3.5 transition-transform duration-200 ease-out',
                         open ? 'rotate-180' : 'rotate-0',
                       )}
                     />
@@ -367,7 +409,14 @@ function ActionCard({ title, detail, detailRows, state }: ActionCardProps) {
               {detail}
             </p>
             {hasDetails ? (
-              <CollapsibleContent>
+              <CollapsibleContent
+                className={cn(
+                  'overflow-hidden',
+                  'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1',
+                  'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1',
+                  'data-[state=open]:duration-200 data-[state=closed]:duration-150',
+                )}
+              >
                 <dl className="mt-2.5 grid gap-2 border-t border-border/40 pt-2.5">
                   {detailRows.map((row, index) => (
                     <div key={`${row.label}:${index}`} className="grid gap-0.5">
@@ -389,6 +438,29 @@ function ActionCard({ title, detail, detailRows, state }: ActionCardProps) {
         </div>
       </Collapsible>
     </div>
+  )
+}
+
+interface ToolStateLabelProps {
+  state: RuntimeStreamToolItemView['toolState'] | null
+  size?: 'sm' | 'xs'
+}
+
+function ToolStateLabel({ state, size = 'sm' }: ToolStateLabelProps) {
+  if (!state) return null
+  const sizeClass = size === 'sm' ? 'text-[11px]' : 'text-[10.5px]'
+  return (
+    <span
+      key={state}
+      className={cn(
+        'shrink-0 font-medium tabular-nums',
+        sizeClass,
+        getToolStateTextClass(state),
+        'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200',
+      )}
+    >
+      {getToolStateLabel(state)}
+    </span>
   )
 }
 
@@ -434,7 +506,7 @@ function ActionGroupCard({ title, detail, state, actions }: ActionGroupCardProps
               </span>
               <ChevronDown
                 className={cn(
-                  'h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150',
+                  'h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-200 ease-out',
                   open ? 'rotate-180' : 'rotate-0',
                 )}
               />
@@ -448,26 +520,30 @@ function ActionGroupCard({ title, detail, state, actions }: ActionGroupCardProps
           </div>
         </button>
       </CollapsibleTrigger>
-      <CollapsibleContent>
+      <CollapsibleContent
+        className={cn(
+          'overflow-hidden',
+          'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1',
+          'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1',
+          'data-[state=open]:duration-200 data-[state=closed]:duration-150',
+        )}
+      >
         <ol className="divide-y divide-border/30 border-t border-border/30">
           {actions.map((action) => (
-            <li key={action.id} className="flex items-start gap-2.5 px-3.5 py-2">
+            <li
+              key={action.id}
+              className={cn(
+                'flex items-start gap-2.5 px-3.5 py-2',
+                'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150 motion-safe:ease-out',
+              )}
+            >
               <ToolStatusIcon state={action.state} className="mt-[3px]" />
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground" title={action.title}>
                     {action.title}
                   </span>
-                  {action.state ? (
-                    <span
-                      className={cn(
-                        'shrink-0 text-[10.5px] font-medium tabular-nums',
-                        getToolStateTextClass(action.state),
-                      )}
-                    >
-                      {getToolStateLabel(action.state)}
-                    </span>
-                  ) : null}
+                  <ToolStateLabel state={action.state} size="xs" />
                 </div>
                 <p
                   className="mt-0.5 truncate text-[11.5px] leading-relaxed text-muted-foreground/90"
@@ -562,11 +638,18 @@ function splitAssistantText(text: string): AssistantSegment[] {
   return segments
 }
 
-function AssistantMessage({ text }: { text: string }) {
+function AssistantMessage({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   const segments = splitAssistantText(text)
+  const lastResponseIndex = (() => {
+    for (let i = segments.length - 1; i >= 0; i -= 1) {
+      if (segments[i].kind === 'response') return i
+    }
+    return -1
+  })()
+
   return (
     <div className="flex gap-3">
-      <AgentAvatar />
+      <AgentAvatar pulse={isStreaming} />
       <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
         <span className="px-0.5 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground/80">
           Agent
@@ -576,7 +659,11 @@ function AssistantMessage({ text }: { text: string }) {
             segment.kind === 'thinking' ? (
               <ThinkingBlock key={index} text={segment.text} />
             ) : (
-              <ResponseBlock key={index} text={segment.text} />
+              <ResponseBlock
+                key={index}
+                text={segment.text}
+                showCaret={isStreaming && index === lastResponseIndex}
+              />
             ),
           )}
         </div>
@@ -585,11 +672,22 @@ function AssistantMessage({ text }: { text: string }) {
   )
 }
 
-function ResponseBlock({ text }: { text: string }) {
+function ResponseBlock({ text, showCaret = false }: { text: string; showCaret?: boolean }) {
   return (
     <div className="w-full min-w-0 px-0.5 text-foreground">
-      <Markdown text={text} />
+      <Markdown text={text} trailing={showCaret ? <StreamingCaret /> : null} />
     </div>
+  )
+}
+
+function StreamingCaret() {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'agent-stream-caret ml-0.5 inline-block h-[0.95em] w-[2px] translate-y-[2px] rounded-sm bg-primary/80 align-text-bottom',
+      )}
+    />
   )
 }
 
@@ -614,23 +712,41 @@ function ThinkingBlock({ text }: { text: string }) {
         <Brain className="h-3.5 w-3.5 text-primary/80" />
         <span>Thoughts</span>
         {!open && hiddenLineCount > 0 ? (
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-muted-foreground/80">
+          <span
+            key={hiddenLineCount}
+            className={cn(
+              'rounded-full bg-muted px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-muted-foreground/80',
+              'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-90 motion-safe:duration-150',
+            )}
+          >
             +{hiddenLineCount}
           </span>
         ) : null}
         <ChevronDown
           className={cn(
-            'ml-auto h-3.5 w-3.5 transition-transform duration-150',
+            'ml-auto h-3.5 w-3.5 transition-transform duration-200 ease-out',
             open ? 'rotate-180' : 'rotate-0',
           )}
         />
       </button>
       {open ? (
-        <div className="mt-2 border-t border-border/30 pt-2">
+        <div
+          key="open"
+          className={cn(
+            'mt-2 border-t border-border/30 pt-2',
+            'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-1 motion-safe:duration-200',
+          )}
+        >
           <Markdown text={text} muted />
         </div>
       ) : previewText.length > 0 ? (
-        <div className="mt-2">
+        <div
+          key={`preview:${previewText.length}`}
+          className={cn(
+            'mt-2',
+            'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150',
+          )}
+        >
           <Markdown text={previewText} muted compact />
         </div>
       ) : null}
@@ -640,15 +756,27 @@ function ThinkingBlock({ text }: { text: string }) {
 
 function AgentActivityIndicator() {
   return (
-    <div className="flex items-start gap-3" role="status" aria-label="Agent is thinking">
-      <AgentAvatar />
-      <div className="mt-0.5 flex min-w-0 items-center gap-2 rounded-full border border-border/40 bg-card/35 px-3 py-1.5 text-[12.5px] font-medium text-muted-foreground shadow-sm">
+    <div
+      className={cn(
+        'flex items-start gap-3',
+        'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-out',
+      )}
+      role="status"
+      aria-label="Agent is thinking"
+    >
+      <AgentAvatar pulse />
+      <div
+        className={cn(
+          'mt-0.5 flex min-w-0 items-center gap-2 rounded-full border border-border/40 bg-card/35 px-3 py-1.5 text-[12.5px] font-medium text-muted-foreground shadow-sm',
+          'agent-activity-indicator',
+        )}
+      >
         <Loader2 className="h-3.5 w-3.5 animate-spin text-primary/80" aria-hidden="true" />
         <span>Thinking</span>
         <span className="flex items-center gap-0.5" aria-hidden="true">
-          <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/70 [animation-delay:0ms]" />
-          <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/70 [animation-delay:120ms]" />
-          <span className="h-1 w-1 animate-pulse rounded-full bg-muted-foreground/70 [animation-delay:240ms]" />
+          <span className="agent-thinking-dot h-1 w-1 rounded-full bg-muted-foreground/70 [animation-delay:0ms]" />
+          <span className="agent-thinking-dot h-1 w-1 rounded-full bg-muted-foreground/70 [animation-delay:160ms]" />
+          <span className="agent-thinking-dot h-1 w-1 rounded-full bg-muted-foreground/70 [animation-delay:320ms]" />
         </span>
       </div>
     </div>
@@ -770,11 +898,14 @@ function UserAvatar({ avatarUrl, login }: UserAvatarProps) {
   )
 }
 
-function AgentAvatar() {
+function AgentAvatar({ pulse = false }: { pulse?: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className="mt-[2px] flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-card/80 ring-1 ring-border/50"
+      className={cn(
+        'mt-[2px] relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-card/80 ring-1 ring-border/50',
+        pulse && 'agent-avatar-pulse',
+      )}
     >
       <AppLogo className="h-3.5 w-3.5" />
     </span>
@@ -787,6 +918,7 @@ interface ToolStatusIconProps {
 }
 
 function ToolStatusIcon({ state, className }: ToolStatusIconProps) {
+  const key = state ?? 'pending'
   const Icon =
     state === 'running'
       ? Loader2
@@ -805,10 +937,20 @@ function ToolStatusIcon({ state, className }: ToolStatusIconProps) {
           ? 'text-success'
           : 'text-muted-foreground/60'
 
+  const pop = state === 'succeeded' || state === 'failed'
+
   return (
     <Icon
+      key={key}
       aria-hidden="true"
-      className={cn('h-3.5 w-3.5 shrink-0', tone, state === 'running' && 'animate-spin', className)}
+      className={cn(
+        'h-3.5 w-3.5 shrink-0',
+        tone,
+        state === 'running' && 'animate-spin',
+        'motion-safe:animate-in motion-safe:fade-in-0',
+        pop ? 'tool-status-icon-pop' : 'motion-safe:zoom-in-95 motion-safe:duration-150',
+        className,
+      )}
     />
   )
 }
