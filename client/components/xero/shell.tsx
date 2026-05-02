@@ -81,6 +81,7 @@ function useDesktopPlatform(desktopRuntime: boolean): PlatformVariant {
 interface XeroShellProps {
   activeView: View
   onViewChange: (view: View) => void
+  onViewPreload?: (view: View) => void
   children: React.ReactNode
   projectName?: string
   onOpenSettings?: () => void
@@ -224,6 +225,7 @@ function useEmulatorSdkSignal(desktopRuntime: boolean): EmulatorSdkSignal {
 export function XeroShell({
   activeView,
   onViewChange,
+  onViewPreload,
   children,
   onOpenSettings,
   onOpenAccount,
@@ -309,6 +311,8 @@ export function XeroShell({
               : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
           )}
           onClick={() => onViewChange(id)}
+          onFocus={() => onViewPreload?.(id)}
+          onPointerEnter={() => onViewPreload?.(id)}
           type="button"
         >
           {label}

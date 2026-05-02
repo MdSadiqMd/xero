@@ -2,17 +2,11 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const {
-  agentRuntimeMountMock,
-  agentRuntimeRenderMock,
-  agentRuntimeUnmountMock,
   githubLoginMock,
   githubLogoutMock,
   githubRefreshMock,
   openUrlMock,
 } = vi.hoisted(() => ({
-  agentRuntimeMountMock: vi.fn(),
-  agentRuntimeRenderMock: vi.fn(),
-  agentRuntimeUnmountMock: vi.fn(),
   githubLoginMock: vi.fn(async () => undefined),
   githubLogoutMock: vi.fn(async () => undefined),
   githubRefreshMock: vi.fn(async () => undefined),
@@ -40,23 +34,6 @@ vi.mock('@/components/ui/tooltip', () => ({
   TooltipProvider: ({ children }: any) => <>{children}</>,
   TooltipTrigger: ({ children }: any) => <>{children}</>,
 }))
-
-vi.mock('../components/xero/agent-runtime', async () => {
-  const React = await import('react')
-
-  return {
-    AgentRuntime: (props: any) => {
-      agentRuntimeRenderMock(props.agent?.project?.id ?? null)
-
-      React.useEffect(() => {
-        agentRuntimeMountMock()
-        return () => agentRuntimeUnmountMock()
-      }, [])
-
-      return <section aria-label="Agent runtime" />
-    },
-  }
-})
 
 vi.mock('../components/xero/code-editor', async () => {
   const React = await import('react')
@@ -123,9 +100,6 @@ afterEach(() => {
   githubLoginMock.mockClear()
   githubLogoutMock.mockClear()
   githubRefreshMock.mockClear()
-  agentRuntimeMountMock.mockClear()
-  agentRuntimeRenderMock.mockClear()
-  agentRuntimeUnmountMock.mockClear()
   openUrlMock.mockReset()
   if (typeof window.localStorage?.clear === 'function') {
     window.localStorage.clear()
@@ -2396,20 +2370,70 @@ describe('XeroApp current UI', () => {
       expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
     )
 
-    expect(agentRuntimeRenderMock).not.toHaveBeenCalled()
-    expect(screen.queryByRole('region', { name: 'Agent runtime', hidden: true })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Agent conversation viewport')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
 
-    expect(await screen.findByRole('region', { name: 'Agent runtime' })).toBeVisible()
-    expect(agentRuntimeMountMock).toHaveBeenCalledTimes(1)
+    expect(await screen.findByLabelText('Agent conversation viewport')).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Workflow' }))
 
     await waitFor(() =>
-      expect(screen.queryByRole('region', { name: 'Agent runtime' })).not.toBeInTheDocument(),
+      expect(screen.getByLabelText('Agent conversation viewport')).not.toBeVisible(),
     )
-    expect(screen.getByRole('region', { name: 'Agent runtime', hidden: true })).toBeInTheDocument()
+  })
+
+  it('hides the collapsed sessions strip outside the Agent view', async () => {
+    window.localStorage.setItem('xero.explorer.collapsed', 'collapsed')
+    const { adapter } = createAdapter()
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    expect(screen.queryByRole('button', { name: 'Show sessions sidebar' })).not.toBeInTheDocument()
+
+    fireEvent.pointerEnter(screen.getByRole('complementary'))
+    expect(screen.queryByRole('button', { name: 'Show sessions sidebar' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+    expect(await screen.findByRole('button', { name: 'Show sessions sidebar' })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Workflow' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Show sessions sidebar' })).not.toBeInTheDocument(),
+    )
+  })
+
+  it('opens the sessions peek from the project rail in compact and expanded states', async () => {
+    window.localStorage.setItem('xero.explorer.collapsed', 'collapsed')
+    const { adapter } = createAdapter()
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+    expect(await screen.findByRole('button', { name: 'Show sessions sidebar' })).toBeVisible()
+
+    const getProjectRail = () => document.querySelector('aside[data-collapsed]') as HTMLElement
+
+    await waitFor(() => expect(getProjectRail()).toHaveAttribute('data-collapsed', 'true'))
+    fireEvent.pointerEnter(getProjectRail())
+    expect(await screen.findByRole('button', { name: 'Main session' })).toBeVisible()
+    fireEvent.pointerLeave(getProjectRail())
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Main session' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand project sidebar' }))
+    await waitFor(() => expect(getProjectRail()).toHaveAttribute('data-collapsed', 'false'))
+    fireEvent.pointerEnter(getProjectRail())
+    expect(await screen.findByRole('button', { name: 'Main session' })).toBeVisible()
   })
 
   it('lazy-mounts the workflows sidebar and preserves its local search state while hidden', async () => {
@@ -2606,7 +2630,7 @@ describe('XeroApp current UI', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Open Solana workbench' }))
 
     expect(screen.getByRole('button', { name: 'Tools' })).toHaveAttribute('aria-pressed', 'true')
-    const breadcrumb = screen.getByRole('navigation', {
+    const breadcrumb = await screen.findByRole('navigation', {
       name: 'Solana Workbench breadcrumb',
     })
 

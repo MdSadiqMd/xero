@@ -251,7 +251,7 @@ function ThemeRow({ theme, active, onSelect }: ThemeRowProps) {
       onClick={onSelect}
       aria-pressed={active}
       className={cn(
-        "group relative flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all motion-fast",
+        "group relative flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-[background-color,border-color,box-shadow,transform] motion-fast",
         active
           ? "border-primary/50 bg-primary/[0.06] shadow-[0_0_0_1px_var(--tw-ring-color,transparent)]"
           : "border-border/60 bg-card/30 hover:-translate-y-px hover:border-primary/40 hover:bg-card/60 hover:shadow-sm",
@@ -359,7 +359,7 @@ function CustomThemeRow({
   return (
     <div
       className={cn(
-        "group relative flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all motion-fast",
+        "group relative flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-[background-color,border-color] motion-fast",
         active
           ? "border-primary/50 bg-primary/[0.06]"
           : "border-border/60 bg-card/30 hover:border-primary/40 hover:bg-card/60",
@@ -681,4 +681,3 @@ function AppearancePill({
     </span>
   )
 }
-

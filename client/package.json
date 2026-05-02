@@ -11,6 +11,7 @@
     "test": "vitest run",
     "vitest": "vitest",
     "test:watch": "vitest",
+    "performance:smoke": "node ./scripts/performance-smoke.mjs",
     "rust:test": "node ./scripts/rust-test.mjs",
     "rust:target:prune": "node ./scripts/prune-rust-target.mjs",
     "rust:target:prune:dry-run": "node ./scripts/prune-rust-target.mjs --dry-run",

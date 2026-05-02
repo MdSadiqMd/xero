@@ -1126,6 +1126,18 @@
     contain: layout style;
   }
 
+  .sidebar-layout-island {
+    contain: layout paint style;
+    isolation: isolate;
+  }
+
+  .rail-content-reveal {
+    transition-duration: var(--motion-duration-fast);
+    transition-property: opacity, transform;
+    transition-timing-function: var(--motion-ease-out);
+    will-change: opacity, transform;
+  }
+
   /* Sidebar islands are flex siblings of the main content; when their width
    * animates, the browser would normally reflow + repaint everything in the
    * row. `contain: layout paint style` isolates layout/paint to the sidebar
@@ -1139,6 +1151,15 @@
    * handles timing in C++ and skips the React reconciliation pass per frame. */
   .sidebar-motion-island {
     contain: layout paint style;
+    transform: translateZ(0);
+    will-change: width;
+    isolation: isolate;
+  }
+
+  /* Peek overlays render outside the 6px collapsed strip, so this keeps
+   * layout isolation without paint containment clipping the flyout. */
+  .sidebar-peek-island {
+    contain: layout style;
     transform: translateZ(0);
     will-change: width;
     isolation: isolate;
@@ -1199,7 +1220,14 @@
    * them — the smooth pane cross-fade is enough visual feedback, and the
    * extra simultaneous layout work was causing visible jitter on slower
    * hosts. User-initiated toggles still animate normally. */
-  html[data-layout-shifting='true'] .sidebar-motion-island {
+  html[data-layout-shifting='true'] .sidebar-motion-island,
+  html[data-layout-shifting='true'] .sidebar-peek-island {
+    transition: none !important;
+  }
+
+  html[data-layout-shifting='true'] .sidebar-layout-island,
+  html[data-layout-shifting='true'] .rail-content-reveal,
+  html[data-layout-shifting='true'] .motion-panel {
     transition: none !important;
   }
 

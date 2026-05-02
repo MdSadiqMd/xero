@@ -58,7 +58,7 @@ import type { SpeechDictationAdapter } from './agent-runtime/use-speech-dictatio
 
 type AgentRuntimeDesktopAdapter = SpeechDictationAdapter & Partial<Pick<XeroDesktopAdapter, 'getSessionContextSnapshot'>>
 
-interface AgentRuntimeProps {
+export interface AgentRuntimeProps {
   agent: AgentPaneView
   onOpenSettings?: () => void
   onOpenDiagnostics?: () => void
@@ -861,10 +861,10 @@ export const AgentRuntime = memo(function AgentRuntime({
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="relative flex min-w-0 flex-1 flex-col">
         <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
-          <div className="flex items-center justify-between gap-2 bg-background px-4 pt-2.5 pb-2.5">
-            <div className="pointer-events-auto flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground">
+          <div className="flex items-center justify-between gap-1.5 bg-background px-3.5 py-2">
+            <div className="pointer-events-auto flex min-w-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
               <span className="truncate font-semibold text-foreground">{projectLabel}</span>
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+              <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/70" />
               <span className="truncate font-medium">{sessionLabel}</span>
             </div>
             {onCreateSession ? (
@@ -874,15 +874,15 @@ export const AgentRuntime = memo(function AgentRuntime({
                 onClick={onCreateSession}
                 disabled={isCreatingSession}
                 className={cn(
-                  'pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-semibold text-muted-foreground transition-colors',
+                  'pointer-events-auto inline-flex h-[30px] items-center gap-1.5 rounded-md px-2 text-[12.5px] font-semibold text-muted-foreground transition-colors',
                   'hover:bg-primary/10 hover:text-primary',
                   'disabled:cursor-not-allowed disabled:opacity-50',
                 )}
               >
                 {isCreatingSession ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Plus className="h-4 w-4" />
+                  <Plus className="h-3.5 w-3.5" />
                 )}
                 <span>New Session</span>
               </button>
@@ -890,7 +890,7 @@ export const AgentRuntime = memo(function AgentRuntime({
           </div>
           <div
             aria-hidden="true"
-            className="h-8 bg-gradient-to-b from-background to-background/0"
+            className="h-7 bg-gradient-to-b from-background to-background/0"
           />
         </div>
         <div className="relative min-h-0 flex-1">

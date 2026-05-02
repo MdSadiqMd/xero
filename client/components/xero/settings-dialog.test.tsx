@@ -42,6 +42,11 @@ type RemovePluginRootRequest = Parameters<NonNullable<SettingsDialogProps['onRem
 type SetPluginEnabledRequest = Parameters<NonNullable<SettingsDialogProps['onSetPluginEnabled']>>[0]
 type RemovePluginRequest = Parameters<NonNullable<SettingsDialogProps['onRemovePlugin']>>[0]
 
+async function openSettingsSection(buttonName: string, headingName = buttonName) {
+  fireEvent.click(screen.getByRole('button', { name: buttonName }))
+  await screen.findByRole('heading', { name: headingName })
+}
+
 function makeDictationStatus(overrides: Partial<DictationStatusDto> = {}): DictationStatusDto {
   return {
     platform: 'macos',
@@ -728,7 +733,7 @@ describe('SettingsDialog', () => {
     )
 
     expect(await screen.findByText('Local storage')).toBeVisible()
-    expect(screen.getByText('provider_credentials')).toBeVisible()
+    expect(await screen.findByText('provider_credentials')).toBeVisible()
     expect(await screen.findByText('[redacted]')).toBeVisible()
     expect(screen.queryByText('sk-test')).not.toBeInTheDocument()
 
@@ -762,9 +767,10 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    expect(screen.getByText('Report summary')).toBeVisible()
-    expect(screen.getByText('Runtime startup failed because provider credentials are missing.')).toBeVisible()
-    expect(screen.getByText('provider_credential_missing')).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'Diagnostics' })).toBeVisible()
+    expect(await screen.findByText('Quick · local checks')).toBeVisible()
+    expect(await screen.findByText('Runtime startup failed because provider credentials are missing.')).toBeVisible()
+    expect(screen.getByText('Open Providers settings, repair credentials, then restart the runtime session.')).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: 'Extended' }))
 
@@ -786,10 +792,12 @@ describe('SettingsDialog', () => {
     )
 
     expect(await screen.findByText('System availability')).toBeVisible()
-    expect(screen.getByText('Modern sdk unavailable')).toBeVisible()
-    expect(screen.getByText('Open System Settings > Privacy & Security and allow Xero.')).toBeVisible()
+    expect(await screen.findByText('Modern sdk unavailable')).toBeVisible()
+    expect(
+      await screen.findByText('macOS is blocking microphone or speech recognition for Xero. Open System Settings to allow access.'),
+    ).toBeVisible()
 
-    fireEvent.click(screen.getByRole('combobox', { name: 'Engine preference' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Engine' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Legacy only' }))
 
     await waitFor(() =>
@@ -868,7 +876,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
+    await openSettingsSection('Notifications')
     fireEvent.click(screen.getAllByRole('button', { name: 'Add route' })[0])
 
     fireEvent.change(screen.getByLabelText('Route name'), { target: { value: 'ops-alerts' } })
@@ -913,7 +921,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
+    await openSettingsSection('Notifications')
 
     expect(screen.getByText('ops-room')).toBeVisible()
 
@@ -982,7 +990,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
+    await openSettingsSection('MCP', 'MCP Servers')
 
     expect(screen.getByText('Memory Server')).toBeVisible()
 
@@ -1038,7 +1046,7 @@ describe('SettingsDialog', () => {
     await waitFor(() => expect(onRemoveMcpServer).toHaveBeenCalledWith('memory'))
   })
 
-  it('keeps the last truthful MCP snapshot visible when typed load or mutation errors are projected', () => {
+  it('keeps the last truthful MCP snapshot visible when typed load or mutation errors are projected', async () => {
     render(
       <SettingsDialog
         {...makeSettingsDialogProps({
@@ -1072,7 +1080,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
+    await openSettingsSection('MCP', 'MCP Servers')
 
     expect(screen.getByText('Xero timed out while loading app-local MCP registry.')).toBeVisible()
     expect(screen.getByText('Xero could not refresh MCP server statuses.')).toBeVisible()
@@ -1098,7 +1106,7 @@ describe('SettingsDialog', () => {
 
     await waitFor(() => expect(onRefreshSkillRegistry).toHaveBeenCalledWith({ force: true }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    await openSettingsSection('Skills')
 
     expect(screen.getByText('Reviewer')).toBeVisible()
     expect(screen.getByText('Release Notes')).toBeVisible()
@@ -1152,7 +1160,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    await openSettingsSection('Skills')
 
     fireEvent.change(screen.getByLabelText('Local root path'), {
       target: { value: 'relative/skills' },
@@ -1247,7 +1255,7 @@ describe('SettingsDialog', () => {
 
     await waitFor(() => expect(onRefreshSkillRegistry).toHaveBeenCalledWith({ force: true }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Plugins' }))
+    await openSettingsSection('Plugins')
 
     expect(screen.getByText('Acme Tools')).toBeVisible()
     expect(screen.getAllByText('Open Panel').length).toBeGreaterThan(0)
@@ -1321,7 +1329,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Plugins' }))
+    await openSettingsSection('Plugins')
 
     expect(screen.getByText('Xero rejected this plugin because its manifest declared unsupported fields.')).toBeVisible()
     expect(screen.getByLabelText('Enable plugin Acme Tools')).toBeDisabled()
@@ -1351,7 +1359,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Plugins' }))
+    await openSettingsSection('Plugins')
 
     fireEvent.change(screen.getByLabelText('Plugin root path'), {
       target: { value: 'relative/plugins' },
@@ -1396,7 +1404,7 @@ describe('SettingsDialog', () => {
     )
   })
 
-  it('keeps the last truthful skill registry visible when typed load or mutation errors are projected', () => {
+  it('keeps the last truthful skill registry visible when typed load or mutation errors are projected', async () => {
     render(
       <SettingsDialog
         {...makeSettingsDialogProps({
@@ -1413,7 +1421,7 @@ describe('SettingsDialog', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    await openSettingsSection('Skills')
 
     expect(screen.getByText('Xero could not load app-local skill sources.')).toBeVisible()
     expect(screen.getByText('Xero requires local skill directories to use absolute paths.')).toBeVisible()

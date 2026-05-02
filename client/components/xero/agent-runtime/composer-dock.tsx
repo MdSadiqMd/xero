@@ -236,7 +236,7 @@ export function ComposerDock({
             <div className="pb-1.5 pt-2.5">
               <Textarea
                 aria-label={promptInputLabel}
-                className="min-h-[24px] max-h-[68px] resize-none overflow-y-auto border-0 bg-transparent dark:bg-transparent px-3 py-0 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/50 shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-100"
+                className="min-h-[24px] max-h-[68px] resize-none overflow-y-auto border-0 bg-transparent dark:bg-transparent px-3 py-0 text-[13px] leading-relaxed text-foreground placeholder:text-muted-foreground/50 shadow-none outline-none focus-visible:border-transparent focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-100 md:text-[13px]"
                 disabled={isPromptDisabled}
                 onChange={(event) => onDraftPromptChange(event.target.value)}
                 onKeyDown={handlePromptKeyDown}

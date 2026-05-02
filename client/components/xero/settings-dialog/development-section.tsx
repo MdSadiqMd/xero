@@ -110,7 +110,7 @@ export function DevelopmentSection({
                 key={option.label}
                 type="button"
                 className={cn(
-                  "flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-[12.5px] font-medium transition-all motion-fast",
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-md py-1.5 text-[12.5px] font-medium transition-[background-color,color,box-shadow] motion-fast",
                   active
                     ? "bg-background text-foreground shadow-sm ring-1 ring-border/40"
                     : "text-muted-foreground hover:text-foreground",

@@ -18,7 +18,7 @@ import {
   mapProjectFileTree,
   type FileSystemNode,
 } from '@/src/lib/file-system-tree'
-import { getLangFromPath } from '@/lib/shiki'
+import { getLangFromPath } from '@/lib/language-detection'
 
 interface CursorPosition {
   line: number

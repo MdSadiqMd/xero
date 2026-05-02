@@ -374,6 +374,13 @@ Verification:
 - Run any scoped Rust tests for changed Tauri commands or event projection.
 - Run the scoped frontend build.
 
+Implementation note (2026-05-02):
+
+- Browser-free smoke path: `pnpm run performance:smoke`.
+- Replay fixture: `client/src/performance/performance-smoke.test.tsx`.
+- Companion procedure: `docs/ui-ux-performance-smoke.md`.
+- The smoke path reports runtime stream flush counts, repository shell commit counts, editor cursor coalescing counts, sidebar resize scheduling counts, VCS diff cache invalidation counts, slowest replay task timings, and production bundle chunk sizes.
+
 ## Suggested Implementation Order
 
 1. Phase 0: baseline measurement.
@@ -472,7 +479,7 @@ Verification focus: build output, first-use preload behavior, Tauri startup.
 - [ ] VCS diff loading depends on stable keys.
 - [ ] Hot animations avoid uncontained intrinsic layout properties.
 - [ ] Build output shows improved chunking.
-- [ ] Performance smoke checks exist for the highest-risk flows.
+- [x] Performance smoke checks exist for the highest-risk flows.
 - [ ] All verification avoids normal-browser app execution.
 
 ## Rollout Notes

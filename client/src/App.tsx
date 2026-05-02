@@ -2,19 +2,19 @@ import {
   Activity,
   useCallback,
   useEffect,
+  lazy,
   useMemo,
   useRef,
   useState,
-  type ComponentProps,
+  Suspense,
   type ReactNode,
 } from 'react'
-import { AgentRuntime } from '@/components/xero/agent-runtime'
+import type { AgentRuntimeProps } from '@/components/xero/agent-runtime'
 import { SetupEmptyState } from '@/components/xero/agent-runtime/setup-empty-state'
 import { AgentSessionsSidebar } from '@/components/xero/agent-sessions-sidebar'
 import { ArchivedSessionsDialog } from '@/components/xero/archived-sessions-dialog'
 import { type View } from '@/components/xero/data'
 import { LoadingScreen } from '@/components/xero/loading-screen'
-import { ExecutionView } from '@/components/xero/execution-view'
 import { NoProjectEmptyState } from '@/components/xero/no-project-empty-state'
 import { OnboardingFlow } from '@/components/xero/onboarding/onboarding-flow'
 import { ProjectLoadErrorState } from '@/components/xero/project-load-error-state'
@@ -23,15 +23,8 @@ import { ProjectAddDialog } from '@/components/xero/project-add-dialog'
 import { ProjectRail } from '@/components/xero/project-rail'
 import { XeroShell, type PlatformVariant } from '@/components/xero/shell'
 import type { StatusFooterProps } from '@/components/xero/status-footer'
-import { GamesSidebar } from '@/components/xero/games-sidebar'
-import { BrowserSidebar } from '@/components/xero/browser-sidebar'
-import { IosEmulatorSidebar } from '@/components/xero/ios-emulator-sidebar'
-import { AndroidEmulatorSidebar } from '@/components/xero/android-emulator-sidebar'
-import { SolanaWorkbenchSidebar } from '@/components/xero/solana-workbench-sidebar'
-import { SettingsDialog, type SettingsSection } from '@/components/xero/settings-dialog'
-import { UsageStatsSidebar } from '@/components/xero/usage-stats-sidebar'
-import { VcsSidebar, type VcsCommitMessageModel } from '@/components/xero/vcs-sidebar'
-import { WorkflowsSidebar } from '@/components/xero/workflows-sidebar'
+import type { SettingsSection } from '@/components/xero/settings-dialog'
+import type { VcsCommitMessageModel } from '@/components/xero/vcs-sidebar'
 import { XeroDesktopAdapter as DefaultXeroDesktopAdapter, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
 import { mapAgentSession, type RuntimeRunControlInputDto } from '@/src/lib/xero-model/runtime'
 import type { AgentDefinitionSummaryDto } from '@/src/lib/xero-model/agent-definition'
@@ -55,10 +48,68 @@ import { getAgentMessagesUnavailableCredentialReason } from '@/src/features/xero
 import { useGitHubAuth } from '@/src/lib/github-auth'
 import { getCloudProviderDefaultProfileId } from '@/src/lib/xero-model/provider-presets'
 import { getRuntimeStreamStatusLabel } from '@/src/lib/xero-model/runtime-stream'
+import { startLayoutShiftGuard } from '@/lib/layout-shift-guard'
 import { cn } from '@/lib/utils'
 
 export interface XeroAppProps {
   adapter?: XeroDesktopAdapter
+}
+
+const loadAgentRuntime = () => import('@/components/xero/agent-runtime')
+const loadExecutionView = () => import('@/components/xero/execution-view')
+const loadGamesSidebar = () => import('@/components/xero/games-sidebar')
+const loadBrowserSidebar = () => import('@/components/xero/browser-sidebar')
+const loadIosEmulatorSidebar = () => import('@/components/xero/ios-emulator-sidebar')
+const loadAndroidEmulatorSidebar = () => import('@/components/xero/android-emulator-sidebar')
+const loadSolanaWorkbenchSidebar = () => import('@/components/xero/solana-workbench-sidebar')
+const loadSettingsDialog = () => import('@/components/xero/settings-dialog')
+const loadUsageStatsSidebar = () => import('@/components/xero/usage-stats-sidebar')
+const loadVcsSidebar = () => import('@/components/xero/vcs-sidebar')
+const loadWorkflowsSidebar = () => import('@/components/xero/workflows-sidebar')
+
+const LazyAgentRuntime = lazy(() =>
+  loadAgentRuntime().then((module) => ({ default: module.AgentRuntime })),
+)
+const LazyExecutionView = lazy(() =>
+  loadExecutionView().then((module) => ({ default: module.ExecutionView })),
+)
+const LazyGamesSidebar = lazy(() =>
+  loadGamesSidebar().then((module) => ({ default: module.GamesSidebar })),
+)
+const LazyBrowserSidebar = lazy(() =>
+  loadBrowserSidebar().then((module) => ({ default: module.BrowserSidebar })),
+)
+const LazyIosEmulatorSidebar = lazy(() =>
+  loadIosEmulatorSidebar().then((module) => ({ default: module.IosEmulatorSidebar })),
+)
+const LazyAndroidEmulatorSidebar = lazy(() =>
+  loadAndroidEmulatorSidebar().then((module) => ({ default: module.AndroidEmulatorSidebar })),
+)
+const LazySolanaWorkbenchSidebar = lazy(() =>
+  loadSolanaWorkbenchSidebar().then((module) => ({ default: module.SolanaWorkbenchSidebar })),
+)
+const LazySettingsDialog = lazy(() =>
+  loadSettingsDialog().then((module) => ({ default: module.SettingsDialog })),
+)
+const LazyUsageStatsSidebar = lazy(() =>
+  loadUsageStatsSidebar().then((module) => ({ default: module.UsageStatsSidebar })),
+)
+const LazyVcsSidebar = lazy(() =>
+  loadVcsSidebar().then((module) => ({ default: module.VcsSidebar })),
+)
+const LazyWorkflowsSidebar = lazy(() =>
+  loadWorkflowsSidebar().then((module) => ({ default: module.WorkflowsSidebar })),
+)
+
+function preloadViewChunk(view: View): void {
+  if (view === 'agent') {
+    void loadAgentRuntime()
+    return
+  }
+
+  if (view === 'execution') {
+    void loadExecutionView()
+  }
 }
 
 function getVcsCommitMessageModel(
@@ -138,7 +189,7 @@ function useAgentViewWithLiveRuntimeStream(
   }, [agent, runtimeStream])
 }
 
-type LiveAgentRuntimeProps = Omit<ComponentProps<typeof AgentRuntime>, 'agent'> & {
+type LiveAgentRuntimeProps = Omit<AgentRuntimeProps, 'agent'> & {
   agent: AgentPaneView
   highChurnStore: XeroHighChurnStore
 }
@@ -153,7 +204,11 @@ function LiveAgentRuntime({
     return null
   }
 
-  return <AgentRuntime {...props} agent={liveAgent} />
+  return (
+    <Suspense fallback={<LoadingScreen />}>
+      <LazyAgentRuntime {...props} agent={liveAgent} />
+    </Suspense>
+  )
 }
 
 function useActivatedSurface(active: boolean) {
@@ -256,30 +311,23 @@ export function XeroApp({ adapter }: XeroAppProps) {
   // sidebars snap to their new widths instantly, leaving only the cheap
   // GPU-driven pane cross-fade animating on the main thread. User-initiated
   // toggles (e.g. clicking the rail collapse button) still animate normally.
-  const layoutShiftFrameRef = useRef<number | null>(null)
+  const activeViewRef = useRef(activeView)
+  const cancelLayoutShiftGuardRef = useRef<(() => void) | null>(null)
   const setActiveView = useCallback((view: View) => {
-    setActiveViewRaw((current) => {
-      if (current === view) return current
-      if (typeof window !== 'undefined') {
-        document.documentElement.dataset.layoutShifting = 'true'
-        if (layoutShiftFrameRef.current !== null) {
-          window.cancelAnimationFrame(layoutShiftFrameRef.current)
-        }
-        layoutShiftFrameRef.current = window.requestAnimationFrame(() => {
-          layoutShiftFrameRef.current = window.requestAnimationFrame(() => {
-            delete document.documentElement.dataset.layoutShifting
-            layoutShiftFrameRef.current = null
-          })
-        })
-      }
-      return view
-    })
+    if (activeViewRef.current === view) {
+      return
+    }
+
+    preloadViewChunk(view)
+    activeViewRef.current = view
+    cancelLayoutShiftGuardRef.current?.()
+    cancelLayoutShiftGuardRef.current = startLayoutShiftGuard()
+    setActiveViewRaw(view)
   }, [])
   useEffect(() => {
     return () => {
-      if (typeof window !== 'undefined' && layoutShiftFrameRef.current !== null) {
-        window.cancelAnimationFrame(layoutShiftFrameRef.current)
-      }
+      cancelLayoutShiftGuardRef.current?.()
+      cancelLayoutShiftGuardRef.current = null
     }
   }, [])
   const {
@@ -446,6 +494,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
   }, [activeProjectId, customAgentDefinitionsRevision, resolvedAdapter])
 
   const openSettings = useCallback((section: SettingsSection = 'providers') => {
+    void loadSettingsDialog()
     setSettingsInitialSection(section)
     setSettingsOpen(true)
   }, [])
@@ -506,6 +555,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setGamesOpen((current) => {
       const next = !current
       if (next) {
+        void loadGamesSidebar()
         setBrowserOpen(false)
         setIosOpen(false)
         setAndroidOpen(false)
@@ -521,6 +571,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setBrowserOpen((current) => {
       const next = !current
       if (next) {
+        void loadBrowserSidebar()
         setGamesOpen(false)
         setIosOpen(false)
         setAndroidOpen(false)
@@ -536,6 +587,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setIosOpen((current) => {
       const next = !current
       if (next) {
+        void loadIosEmulatorSidebar()
         setGamesOpen(false)
         setBrowserOpen(false)
         setAndroidOpen(false)
@@ -551,6 +603,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setAndroidOpen((current) => {
       const next = !current
       if (next) {
+        void loadAndroidEmulatorSidebar()
         setGamesOpen(false)
         setBrowserOpen(false)
         setIosOpen(false)
@@ -566,6 +619,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setSolanaOpen((current) => {
       const next = !current
       if (next) {
+        void loadSolanaWorkbenchSidebar()
         setGamesOpen(false)
         setBrowserOpen(false)
         setIosOpen(false)
@@ -581,6 +635,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setVcsOpen((current) => {
       const next = !current
       if (next) {
+        void loadVcsSidebar()
         setGamesOpen(false)
         setBrowserOpen(false)
         setIosOpen(false)
@@ -596,6 +651,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setWorkflowsOpen((current) => {
       const next = !current
       if (next) {
+        void loadWorkflowsSidebar()
         setGamesOpen(false)
         setBrowserOpen(false)
         setIosOpen(false)
@@ -610,26 +666,58 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const toggleSidebarCollapsed = useCallback(() => {
     setSidebarCollapsed((current) => !current)
   }, [])
-  const [explorerCollapsed, setExplorerCollapsed] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
+  const [explorerMode, setExplorerMode] = useState<'pinned' | 'collapsed'>(() => {
+    if (typeof window === 'undefined') return 'pinned'
     try {
-      return window.localStorage.getItem('xero.explorer.collapsed') === '1'
+      const raw = window.localStorage.getItem('xero.explorer.collapsed')
+      if (raw === '1' || raw === 'collapsed') return 'collapsed'
+      return 'pinned'
     } catch {
-      return false
+      return 'pinned'
     }
   })
+  const explorerCollapsed = explorerMode === 'collapsed'
+  const setExplorerCollapsed = useCallback((next: boolean) => {
+    setExplorerMode(next ? 'collapsed' : 'pinned')
+  }, [])
+  const [explorerPeeking, setExplorerPeeking] = useState(false)
+  const peekTimerRef = useRef<number | null>(null)
+  const clearPeekTimer = useCallback(() => {
+    if (peekTimerRef.current !== null) {
+      window.clearTimeout(peekTimerRef.current)
+      peekTimerRef.current = null
+    }
+  }, [])
+  const requestExplorerPeek = useCallback(() => {
+    clearPeekTimer()
+    setExplorerPeeking(true)
+  }, [clearPeekTimer])
+  const releaseExplorerPeek = useCallback(() => {
+    clearPeekTimer()
+    peekTimerRef.current = window.setTimeout(() => {
+      peekTimerRef.current = null
+      setExplorerPeeking(false)
+    }, 150)
+  }, [clearPeekTimer])
+  useEffect(() => () => clearPeekTimer(), [clearPeekTimer])
+  useEffect(() => {
+    if ((activeView !== 'agent' || explorerMode === 'pinned') && explorerPeeking) {
+      clearPeekTimer()
+      setExplorerPeeking(false)
+    }
+  }, [activeView, clearPeekTimer, explorerMode, explorerPeeking])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
       window.localStorage.setItem(
         'xero.explorer.collapsed',
-        explorerCollapsed ? '1' : '0',
+        explorerMode === 'collapsed' ? 'collapsed' : 'pinned',
       )
     } catch {
       /* storage unavailable — revert silently */
     }
-  }, [explorerCollapsed])
+  }, [explorerMode])
 
   const [platformOverride, setPlatformOverride] = useState<PlatformVariant | null>(null)
   const [onboardingDismissed, setOnboardingDismissed] = useState(false)
@@ -693,7 +781,10 @@ export function XeroApp({ adapter }: XeroAppProps) {
       : null,
     spendActive: usageOpen,
     onSpendClick: activeProjectId
-      ? () => setUsageOpen((current) => !current)
+      ? () => {
+          void loadUsageStatsSidebar()
+          setUsageOpen((current) => !current)
+        }
       : undefined,
   }
   const vcsCommitMessageModel = useMemo(
@@ -900,6 +991,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           ? 'z-10 translate-x-0 opacity-100'
           : 'pointer-events-none z-0 translate-x-2 opacity-0',
       )
+    const sessionsPeekAvailable = activeView === 'agent' && explorerMode === 'collapsed'
 
     return (
       <>
@@ -929,7 +1021,16 @@ export function XeroApp({ adapter }: XeroAppProps) {
           pendingSessionId={pendingAgentSessionId}
           isCreating={isCreatingAgentSession}
           collapsed={activeView !== 'agent' || explorerCollapsed}
+          mode={activeView === 'agent' ? explorerMode : 'pinned'}
+          peeking={sessionsPeekAvailable ? explorerPeeking : false}
           onCollapse={() => setExplorerCollapsed(true)}
+          onPin={() => {
+            clearPeekTimer()
+            setExplorerPeeking(false)
+            setExplorerMode('pinned')
+          }}
+          onRequestPeek={sessionsPeekAvailable ? requestExplorerPeek : undefined}
+          onReleasePeek={sessionsPeekAvailable ? releaseExplorerPeek : undefined}
         />
         <ArchivedSessionsDialog
           open={archivedSessionsOpen}
@@ -1034,19 +1135,21 @@ export function XeroApp({ adapter }: XeroAppProps) {
               active={isExecutionVisible}
               className={getViewPaneClassName(isExecutionVisible)}
             >
-              <ExecutionView
-                active={isExecutionVisible}
-                execution={executionView}
-                listProjectFiles={listProjectFiles}
-                readProjectFile={readProjectFile}
-                writeProjectFile={writeProjectFile}
-                createProjectEntry={createProjectEntry}
-                renameProjectEntry={renameProjectEntry}
-                moveProjectEntry={moveProjectEntry}
-                deleteProjectEntry={deleteProjectEntry}
-                searchProject={searchProject}
-                replaceInProject={replaceInProject}
-              />
+              <Suspense fallback={<LoadingScreen />}>
+                <LazyExecutionView
+                  active={isExecutionVisible}
+                  execution={executionView}
+                  listProjectFiles={listProjectFiles}
+                  readProjectFile={readProjectFile}
+                  writeProjectFile={writeProjectFile}
+                  createProjectEntry={createProjectEntry}
+                  renameProjectEntry={renameProjectEntry}
+                  moveProjectEntry={moveProjectEntry}
+                  deleteProjectEntry={deleteProjectEntry}
+                  searchProject={searchProject}
+                  replaceInProject={replaceInProject}
+                />
+              </Suspense>
             </LazyMountedPane>
           ) : null}
         </div>
@@ -1096,6 +1199,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
       <XeroShell
         activeView={activeView}
         onViewChange={setActiveView}
+        onViewPreload={preloadViewChunk}
         projectName={activeProject?.name}
         onOpenSettings={() => openSettings('providers')}
         onOpenAccount={() => openSettings('account')}
@@ -1171,6 +1275,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     <XeroShell
       activeView={activeView}
       onViewChange={setActiveView}
+      onViewPreload={preloadViewChunk}
       projectName={activeProject?.name}
       onOpenSettings={() => openSettings('providers')}
       onOpenAccount={() => openSettings('account')}
@@ -1215,135 +1320,159 @@ export function XeroApp({ adapter }: XeroAppProps) {
         pendingProjectRemovalId={pendingProjectRemovalId}
         projectRemovalStatus={projectRemovalStatus}
         projects={projects}
-        explorerCollapsed={activeView === 'agent' && explorerCollapsed && Boolean(activeProject)}
-        onExpandExplorer={() => setExplorerCollapsed(false)}
-        sessions={activeProject?.agentSessions}
-        selectedSessionId={activeProject?.selectedAgentSessionId ?? null}
-        pendingSessionId={pendingAgentSessionId}
-        isCreatingSession={isCreatingAgentSession}
-        onSelectSession={handleSelectAgentSession}
-        onCreateSession={handleCreateAgentSession}
-        onArchiveSession={handleArchiveAgentSession}
-        onOpenArchivedSessions={() => setArchivedSessionsOpen(true)}
+        onSessionsHoverEnter={
+          activeView === 'agent' && explorerCollapsed && Boolean(activeProject)
+            ? requestExplorerPeek
+            : undefined
+        }
+        onSessionsHoverLeave={
+          activeView === 'agent' && explorerCollapsed && Boolean(activeProject)
+            ? releaseExplorerPeek
+            : undefined
+        }
       />
       {renderBody()}
       <LazyActivitySurface name="games-sidebar" open={gamesOpen}>
-        <GamesSidebar accountLogin={githubSession?.user.login ?? null} open={gamesOpen} />
+        <Suspense fallback={null}>
+          <LazyGamesSidebar accountLogin={githubSession?.user.login ?? null} open={gamesOpen} />
+        </Suspense>
       </LazyActivitySurface>
-      <BrowserSidebar open={browserOpen} />
+      <LazyActivitySurface name="browser-sidebar" open={browserOpen}>
+        <Suspense fallback={null}>
+          <LazyBrowserSidebar open={browserOpen} />
+        </Suspense>
+      </LazyActivitySurface>
       <LazyActivitySurface name="usage-sidebar" open={usageOpen}>
-        <UsageStatsSidebar
-          open={usageOpen}
-          projectId={activeProjectId}
-          projectName={activeProject?.name ?? null}
-          summary={activeUsageSummary}
-          onClose={() => setUsageOpen(false)}
-          onRefresh={refreshUsageSummary}
-        />
+        <Suspense fallback={null}>
+          <LazyUsageStatsSidebar
+            open={usageOpen}
+            projectId={activeProjectId}
+            projectName={activeProject?.name ?? null}
+            summary={activeUsageSummary}
+            onClose={() => setUsageOpen(false)}
+            onRefresh={refreshUsageSummary}
+          />
+        </Suspense>
       </LazyActivitySurface>
       <LazyActivitySurface name="ios-emulator-sidebar" open={iosOpen}>
-        <IosEmulatorSidebar open={iosOpen} />
+        <Suspense fallback={null}>
+          <LazyIosEmulatorSidebar open={iosOpen} />
+        </Suspense>
       </LazyActivitySurface>
       <LazyActivitySurface name="android-emulator-sidebar" open={androidOpen}>
-        <AndroidEmulatorSidebar open={androidOpen} />
+        <Suspense fallback={null}>
+          <LazyAndroidEmulatorSidebar open={androidOpen} />
+        </Suspense>
       </LazyActivitySurface>
       <LazyActivitySurface name="solana-workbench-sidebar" open={solanaOpen}>
-        <SolanaWorkbenchSidebar open={solanaOpen} />
+        <Suspense fallback={null}>
+          <LazySolanaWorkbenchSidebar open={solanaOpen} />
+        </Suspense>
       </LazyActivitySurface>
       <LazyActivitySurface name="workflows-sidebar" open={workflowsOpen}>
-        <WorkflowsSidebar open={workflowsOpen} />
+        <Suspense fallback={null}>
+          <LazyWorkflowsSidebar open={workflowsOpen} />
+        </Suspense>
       </LazyActivitySurface>
-      <VcsSidebar
-        open={vcsOpen}
-        projectId={activeProjectId}
-        status={repositoryStatus}
-        branchLabel={repositoryStatus?.branchLabel ?? activeProject?.branchLabel ?? null}
-        onClose={closeVcs}
-        onRefreshStatus={refreshVcsStatus}
-        onLoadDiff={loadRepositoryDiff}
-        commitMessageModel={vcsCommitMessageModel}
-        onGenerateCommitMessage={generateCommitMessage}
-        onStage={stagePaths}
-        onUnstage={unstagePaths}
-        onDiscard={discardChanges}
-        onCommit={commitChanges}
-        onFetch={fetchRepository}
-        onPull={pullRepository}
-        onPush={pushRepository}
-      />
-      <SettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        initialSection={settingsInitialSection}
-        agent={agentView}
-        providerCredentials={providerCredentials}
-        providerCredentialsLoadStatus={providerCredentialsLoadStatus}
-        providerCredentialsLoadError={providerCredentialsLoadError}
-        providerCredentialsSaveStatus={providerCredentialsSaveStatus}
-        providerCredentialsSaveError={providerCredentialsSaveError}
-        onRefreshProviderCredentials={(options) => refreshProviderCredentials(options)}
-        onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
-        onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
-        onStartOAuthLogin={(request) => startOAuthLogin(request)}
-        doctorReport={doctorReport}
-        doctorReportStatus={doctorReportStatus}
-        doctorReportError={doctorReportError}
-        environmentDiscoveryStatus={environmentDiscoveryStatus}
-        environmentProfileSummary={environmentProfileSummary}
-        onRefreshEnvironmentDiscovery={(options) => refreshEnvironmentDiscovery(options)}
-        onRunDoctorReport={(request) => runDoctorReport(request)}
-        dictationAdapter={resolvedAdapter}
-        soulAdapter={resolvedAdapter}
-        onUpsertNotificationRoute={(request) =>
-          upsertNotificationRoute({ ...request, updatedAt: new Date().toISOString() })
-        }
-        mcpRegistry={mcpRegistry}
-        mcpImportDiagnostics={mcpImportDiagnostics}
-        mcpRegistryLoadStatus={mcpRegistryLoadStatus}
-        mcpRegistryLoadError={mcpRegistryLoadError}
-        mcpRegistryMutationStatus={mcpRegistryMutationStatus}
-        pendingMcpServerId={pendingMcpServerId}
-        mcpRegistryMutationError={mcpRegistryMutationError}
-        onRefreshMcpRegistry={(options) => refreshMcpRegistry(options)}
-        onUpsertMcpServer={(request) => upsertMcpServer(request)}
-        onRemoveMcpServer={(serverId) => removeMcpServer(serverId)}
-        onImportMcpServers={(path) => importMcpServers(path)}
-        onRefreshMcpServerStatuses={(options) => refreshMcpServerStatuses(options)}
-        skillRegistry={skillRegistry}
-        skillRegistryLoadStatus={skillRegistryLoadStatus}
-        skillRegistryLoadError={skillRegistryLoadError}
-        skillRegistryMutationStatus={skillRegistryMutationStatus}
-        pendingSkillSourceId={pendingSkillSourceId}
-        skillRegistryMutationError={skillRegistryMutationError}
-        onRefreshSkillRegistry={(options) => refreshSkillRegistry(options)}
-        onReloadSkillRegistry={(options) => reloadSkillRegistry(options)}
-        onSetSkillEnabled={(request) => setSkillEnabled(request)}
-        onRemoveSkill={(request) => removeSkill(request)}
-        onUpsertSkillLocalRoot={(request) => upsertSkillLocalRoot(request)}
-        onRemoveSkillLocalRoot={(request) => removeSkillLocalRoot(request)}
-        onUpdateProjectSkillSource={(request) => updateProjectSkillSource(request)}
-        onUpdateGithubSkillSource={(request) => updateGithubSkillSource(request)}
-        onUpsertPluginRoot={(request) => upsertPluginRoot(request)}
-        onRemovePluginRoot={(request) => removePluginRoot(request)}
-        onSetPluginEnabled={(request) => setPluginEnabled(request)}
-        onRemovePlugin={(request) => removePlugin(request)}
-        platformOverride={platformOverride}
-        onPlatformOverrideChange={setPlatformOverride}
-        onStartOnboarding={() => {
-          setSettingsOpen(false)
-          setOnboardingDismissed(false)
-          setOnboardingOpen(true)
-        }}
-        githubSession={githubSession}
-        githubAuthStatus={githubAuthStatus}
-        githubAuthError={githubAuthError}
-        onGithubLogin={() => void loginWithGithub()}
-        onGithubLogout={() => void logoutGithub()}
-        onListAgentDefinitions={(request) => resolvedAdapter.listAgentDefinitions(request)}
-        onArchiveAgentDefinition={(request) => resolvedAdapter.archiveAgentDefinition(request)}
-        onGetAgentDefinitionVersion={(request) => resolvedAdapter.getAgentDefinitionVersion(request)}
-        onAgentRegistryChanged={refreshCustomAgentDefinitions}
-      />
+      <LazyActivitySurface name="vcs-sidebar" open={vcsOpen}>
+        <Suspense fallback={null}>
+          <LazyVcsSidebar
+            open={vcsOpen}
+            projectId={activeProjectId}
+            status={repositoryStatus}
+            branchLabel={repositoryStatus?.branchLabel ?? activeProject?.branchLabel ?? null}
+            onClose={closeVcs}
+            onRefreshStatus={refreshVcsStatus}
+            onLoadDiff={loadRepositoryDiff}
+            commitMessageModel={vcsCommitMessageModel}
+            onGenerateCommitMessage={generateCommitMessage}
+            onStage={stagePaths}
+            onUnstage={unstagePaths}
+            onDiscard={discardChanges}
+            onCommit={commitChanges}
+            onFetch={fetchRepository}
+            onPull={pullRepository}
+            onPush={pushRepository}
+          />
+        </Suspense>
+      </LazyActivitySurface>
+      <LazyActivitySurface name="settings-dialog" open={settingsOpen}>
+        <Suspense fallback={null}>
+          <LazySettingsDialog
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
+            initialSection={settingsInitialSection}
+            agent={agentView}
+            providerCredentials={providerCredentials}
+            providerCredentialsLoadStatus={providerCredentialsLoadStatus}
+            providerCredentialsLoadError={providerCredentialsLoadError}
+            providerCredentialsSaveStatus={providerCredentialsSaveStatus}
+            providerCredentialsSaveError={providerCredentialsSaveError}
+            onRefreshProviderCredentials={(options) => refreshProviderCredentials(options)}
+            onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
+            onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
+            onStartOAuthLogin={(request) => startOAuthLogin(request)}
+            doctorReport={doctorReport}
+            doctorReportStatus={doctorReportStatus}
+            doctorReportError={doctorReportError}
+            environmentDiscoveryStatus={environmentDiscoveryStatus}
+            environmentProfileSummary={environmentProfileSummary}
+            onRefreshEnvironmentDiscovery={(options) => refreshEnvironmentDiscovery(options)}
+            onRunDoctorReport={(request) => runDoctorReport(request)}
+            dictationAdapter={resolvedAdapter}
+            soulAdapter={resolvedAdapter}
+            onUpsertNotificationRoute={(request) =>
+              upsertNotificationRoute({ ...request, updatedAt: new Date().toISOString() })
+            }
+            mcpRegistry={mcpRegistry}
+            mcpImportDiagnostics={mcpImportDiagnostics}
+            mcpRegistryLoadStatus={mcpRegistryLoadStatus}
+            mcpRegistryLoadError={mcpRegistryLoadError}
+            mcpRegistryMutationStatus={mcpRegistryMutationStatus}
+            pendingMcpServerId={pendingMcpServerId}
+            mcpRegistryMutationError={mcpRegistryMutationError}
+            onRefreshMcpRegistry={(options) => refreshMcpRegistry(options)}
+            onUpsertMcpServer={(request) => upsertMcpServer(request)}
+            onRemoveMcpServer={(serverId) => removeMcpServer(serverId)}
+            onImportMcpServers={(path) => importMcpServers(path)}
+            onRefreshMcpServerStatuses={(options) => refreshMcpServerStatuses(options)}
+            skillRegistry={skillRegistry}
+            skillRegistryLoadStatus={skillRegistryLoadStatus}
+            skillRegistryLoadError={skillRegistryLoadError}
+            skillRegistryMutationStatus={skillRegistryMutationStatus}
+            pendingSkillSourceId={pendingSkillSourceId}
+            skillRegistryMutationError={skillRegistryMutationError}
+            onRefreshSkillRegistry={(options) => refreshSkillRegistry(options)}
+            onReloadSkillRegistry={(options) => reloadSkillRegistry(options)}
+            onSetSkillEnabled={(request) => setSkillEnabled(request)}
+            onRemoveSkill={(request) => removeSkill(request)}
+            onUpsertSkillLocalRoot={(request) => upsertSkillLocalRoot(request)}
+            onRemoveSkillLocalRoot={(request) => removeSkillLocalRoot(request)}
+            onUpdateProjectSkillSource={(request) => updateProjectSkillSource(request)}
+            onUpdateGithubSkillSource={(request) => updateGithubSkillSource(request)}
+            onUpsertPluginRoot={(request) => upsertPluginRoot(request)}
+            onRemovePluginRoot={(request) => removePluginRoot(request)}
+            onSetPluginEnabled={(request) => setPluginEnabled(request)}
+            onRemovePlugin={(request) => removePlugin(request)}
+            platformOverride={platformOverride}
+            onPlatformOverrideChange={setPlatformOverride}
+            onStartOnboarding={() => {
+              setSettingsOpen(false)
+              setOnboardingDismissed(false)
+              setOnboardingOpen(true)
+            }}
+            githubSession={githubSession}
+            githubAuthStatus={githubAuthStatus}
+            githubAuthError={githubAuthError}
+            onGithubLogin={() => void loginWithGithub()}
+            onGithubLogout={() => void logoutGithub()}
+            onListAgentDefinitions={(request) => resolvedAdapter.listAgentDefinitions(request)}
+            onArchiveAgentDefinition={(request) => resolvedAdapter.archiveAgentDefinition(request)}
+            onGetAgentDefinitionVersion={(request) => resolvedAdapter.getAgentDefinitionVersion(request)}
+            onAgentRegistryChanged={refreshCustomAgentDefinitions}
+          />
+        </Suspense>
+      </LazyActivitySurface>
       <ProjectAddDialog
         open={projectAddOpen}
         onOpenChange={setProjectAddOpen}

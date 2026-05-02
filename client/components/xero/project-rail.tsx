@@ -2,21 +2,15 @@ import {
   memo,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
   type PointerEvent,
 } from 'react'
-import { Archive, Loader2, PanelLeftOpen, Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { motion, type Transition } from 'motion/react'
+import { Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { useSidebarMotion, useSidebarWidthMotion } from '@/lib/sidebar-motion'
-import {
-  AgentSessionsSidebarItem,
-  readPinnedSessionIds,
-} from '@/components/xero/agent-sessions-sidebar'
+import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,7 +22,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { buttonVariants } from '@/components/ui/button'
-import type { AgentSessionView, ProjectListItem } from '@/src/lib/xero-model'
+import type { ProjectListItem } from '@/src/lib/xero-model'
 
 const COLLAPSED_WIDTH = 44
 const MIN_WIDTH = 180
@@ -50,16 +44,8 @@ interface ProjectRailProps {
   onSelectProject: (projectId: string) => void
   onImportProject: () => void
   onRemoveProject: (projectId: string) => void
-  explorerCollapsed?: boolean
-  onExpandExplorer?: () => void
-  sessions?: readonly AgentSessionView[]
-  selectedSessionId?: string | null
-  pendingSessionId?: string | null
-  isCreatingSession?: boolean
-  onSelectSession?: (agentSessionId: string) => void
-  onCreateSession?: () => void
-  onArchiveSession?: (agentSessionId: string) => void
-  onOpenArchivedSessions?: () => void
+  onSessionsHoverEnter?: () => void
+  onSessionsHoverLeave?: () => void
 }
 
 function viewportMaxWidth() {
@@ -106,16 +92,8 @@ export function ProjectRail({
   onSelectProject,
   onImportProject,
   onRemoveProject,
-  explorerCollapsed = false,
-  onExpandExplorer,
-  sessions,
-  selectedSessionId = null,
-  pendingSessionId = null,
-  isCreatingSession = false,
-  onSelectSession,
-  onCreateSession,
-  onArchiveSession,
-  onOpenArchivedSessions,
+  onSessionsHoverEnter,
+  onSessionsHoverLeave,
 }: ProjectRailProps) {
   const isRemovingProject = projectRemovalStatus === 'running'
   const isBusy = isLoading || isImporting || isRemovingProject
@@ -125,10 +103,6 @@ export function ProjectRail({
   const [optimisticProjectId, setOptimisticProjectId] = useState<string | null>(null)
   const targetWidth = collapsed ? COLLAPSED_WIDTH : width
   const displayedActiveProjectId = optimisticProjectId ?? pendingProjectSelectionId ?? activeProjectId
-  const {
-    contentTransition: railContentTransition,
-    layoutTransition: railLayoutTransition,
-  } = useSidebarMotion(isResizing)
   const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
   const widthRef = useRef(width)
   widthRef.current = width
@@ -236,6 +210,8 @@ export function ProjectRail({
         collapsed && 'w-11',
       )}
       data-collapsed={collapsed ? 'true' : 'false'}
+      onPointerEnter={onSessionsHoverEnter}
+      onPointerLeave={onSessionsHoverLeave}
       style={widthMotion.style}
     >
       {!collapsed ? (
@@ -257,55 +233,35 @@ export function ProjectRail({
         />
       ) : null}
 
-      <motion.div
-        className={cn(
-          'flex h-10 items-center border-b border-border/70 transition-[padding] motion-panel',
-          collapsed ? 'justify-center px-1' : 'justify-between px-3',
-        )}
-        layout="position"
-        transition={railLayoutTransition}
-      >
-        <motion.div
-          animate={{
-            maxWidth: collapsed ? 0 : 160,
-            opacity: collapsed ? 0 : 1,
-            x: collapsed ? -4 : 0,
-          }}
-          aria-hidden={collapsed ? true : undefined}
-          className="flex items-center gap-1.5 overflow-hidden will-change-[max-width,opacity,transform]"
-          initial={false}
-          transition={railContentTransition}
-        >
-          <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Projects
-          </span>
-          {projects.length > 0 ? (
-            <span className="rounded-full bg-muted/80 px-1.5 py-[1px] font-mono text-[10px] leading-none tabular-nums text-muted-foreground">
-              {projects.length}
+      {!collapsed ? (
+        <div className="flex h-10 items-center justify-between border-b border-border/70 px-3">
+          <div className="rail-content-reveal flex w-40 translate-x-0 items-center gap-1.5 overflow-hidden opacity-100">
+            <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+              Projects
             </span>
-          ) : null}
-        </motion.div>
-        <button
-          aria-label="Import repository"
-          className={cn(
-            'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors',
-            'hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50',
-          )}
-          disabled={isImporting || isRemovingProject}
-          onClick={onImportProject}
-          type="button"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </motion.div>
+            {projects.length > 0 ? (
+              <span className="rounded-full bg-muted/80 px-1.5 py-[1px] font-mono text-[10px] leading-none tabular-nums text-muted-foreground">
+                {projects.length}
+              </span>
+            ) : null}
+          </div>
+          <button
+            aria-label="Import repository"
+            className={cn(
+              'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors',
+              'hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50',
+            )}
+            disabled={isImporting || isRemovingProject}
+            onClick={onImportProject}
+            type="button"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
 
-      {errorMessage ? (
-        <div
-          className={cn(
-            'border-b border-border/70 bg-destructive/5 text-[11px] leading-snug text-destructive transition-[padding,opacity,max-height] motion-standard',
-            collapsed ? 'max-h-0 px-0 py-0 opacity-0' : 'max-h-20 px-3 py-2 opacity-100',
-          )}
-        >
+      {errorMessage && !collapsed ? (
+        <div className="border-b border-border/70 bg-destructive/5 px-3 py-2 text-[11px] leading-snug text-destructive">
           {errorMessage}
         </div>
       ) : null}
@@ -316,14 +272,8 @@ export function ProjectRail({
           collapsed ? 'py-2' : '',
         )}
       >
-        {projects.length === 0 ? (
-          <div
-            aria-hidden={collapsed ? true : undefined}
-            className={cn(
-              'px-3 py-5 text-center text-[11px] leading-relaxed text-muted-foreground/80 transition-[max-height,opacity] motion-standard',
-              collapsed ? 'max-h-0 opacity-0' : 'max-h-24 opacity-100',
-            )}
-          >
+        {projects.length === 0 && !collapsed ? (
+          <div className="px-3 py-5 text-center text-[11px] leading-relaxed text-muted-foreground/80">
             No projects imported yet.
           </div>
         ) : (
@@ -334,7 +284,6 @@ export function ProjectRail({
               <li key={project.id}>
                 <ProjectRailItem
                   collapsed={collapsed}
-                  contentTransition={railContentTransition}
                   project={project}
                   isActive={project.id === displayedActiveProjectId}
                   isRemovalPending={project.id === pendingProjectRemovalId}
@@ -349,48 +298,19 @@ export function ProjectRail({
         )}
       </div>
 
-      {explorerCollapsed && onSelectSession ? (
-        <ProjectRailSessionsSection
-          railCollapsed={collapsed}
-          activeProjectId={activeProjectId}
-          sessions={sessions ?? []}
-          selectedSessionId={selectedSessionId}
-          pendingSessionId={pendingSessionId}
-          isCreatingSession={isCreatingSession}
-          onSelectSession={onSelectSession}
-          onCreateSession={onCreateSession}
-          onArchiveSession={onArchiveSession}
-          onOpenArchivedSessions={onOpenArchivedSessions}
-          onExpandExplorer={onExpandExplorer}
-          contentTransition={railContentTransition}
-          layoutTransition={railLayoutTransition}
-        />
-      ) : null}
-
-      {isBusy && (
-        <motion.div
+      {isBusy && !collapsed ? (
+        <div
           className={cn(
-            'flex items-center border-t border-border/70 bg-sidebar text-[11px] text-muted-foreground transition-[padding,gap] motion-panel',
-            collapsed ? 'justify-center gap-0 px-1.5 py-2.5' : 'gap-2 px-3 py-2.5',
+            'flex items-center border-t border-border/70 bg-sidebar text-[11px] text-muted-foreground',
+            'gap-2 px-3 py-2.5',
           )}
-          layout="position"
-          transition={railLayoutTransition}
         >
           <RefreshCw className="h-3 w-3 animate-spin text-primary/80" />
-          <motion.span
-            animate={{
-              maxWidth: collapsed ? 0 : 96,
-              opacity: collapsed ? 0 : 1,
-              x: collapsed ? -4 : 0,
-            }}
-            className="overflow-hidden whitespace-nowrap will-change-[max-width,opacity,transform]"
-            initial={false}
-            transition={railContentTransition}
-          >
+          <span className="rail-content-reveal w-24 translate-x-0 overflow-hidden whitespace-nowrap opacity-100">
             {isImporting ? 'Importing…' : isRemovingProject ? 'Removing…' : 'Refreshing…'}
-          </motion.span>
-        </motion.div>
-      )}
+          </span>
+        </div>
+      ) : null}
     </aside>
   )
 }
@@ -401,7 +321,6 @@ interface ProjectRailItemProps {
   isActive: boolean
   isRemovalPending: boolean
   isRemovalLocked: boolean
-  contentTransition: Transition
   onSelectProject: (projectId: string) => void
   onPreviewProject: (projectId: string) => void
   onRemoveProject: (projectId: string) => void
@@ -410,7 +329,6 @@ interface ProjectRailItemProps {
 const ProjectRailItem = memo(function ProjectRailItem({
   project,
   collapsed,
-  contentTransition,
   isActive,
   isRemovalPending,
   isRemovalLocked,
@@ -450,7 +368,7 @@ const ProjectRailItem = memo(function ProjectRailItem({
         >
           <div
             className={cn(
-              'flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-semibold leading-none transition-colors duration-150',
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md border text-[11px] font-semibold leading-none transition-colors duration-150',
               isActive
                 ? 'border-primary/45 bg-primary/15 text-primary'
               : 'border-border/70 bg-secondary/70 text-muted-foreground group-hover:border-border group-hover:bg-secondary group-hover:text-foreground',
@@ -460,28 +378,20 @@ const ProjectRailItem = memo(function ProjectRailItem({
             {collapsed ? <span className="sr-only">{project.name}</span> : null}
           </div>
 
-          <motion.div
-            animate={{
-              maxWidth: collapsed ? 0 : 168,
-              opacity: collapsed ? 0 : 1,
-              x: collapsed ? -6 : 0,
-            }}
-            aria-hidden={collapsed ? true : undefined}
-            className="min-w-0 flex-1 overflow-hidden will-change-[max-width,opacity,transform]"
-            initial={false}
-            transition={contentTransition}
-          >
-            <div className="flex items-center pr-6">
-              <span
-                className={cn(
-                  'truncate text-[12.5px] font-medium leading-tight',
-                  isActive ? 'text-foreground' : 'text-foreground/85 group-hover:text-foreground',
-                )}
-              >
-                {project.name}
-              </span>
+          {!collapsed ? (
+            <div className="rail-content-reveal min-w-0 flex-1 translate-x-0 overflow-hidden opacity-100">
+              <div className="flex items-center pr-6">
+                <span
+                  className={cn(
+                    'truncate text-[12.5px] font-medium leading-tight',
+                    isActive ? 'text-foreground' : 'text-foreground/85 group-hover:text-foreground',
+                  )}
+                >
+                  {project.name}
+                </span>
+              </div>
             </div>
-          </motion.div>
+          ) : null}
         </button>
 
         {!collapsed ? (
@@ -532,196 +442,3 @@ const ProjectRailItem = memo(function ProjectRailItem({
     </AlertDialog>
   )
 })
-
-interface ProjectRailSessionsSectionProps {
-  railCollapsed: boolean
-  activeProjectId: string | null
-  sessions: readonly AgentSessionView[]
-  selectedSessionId: string | null
-  pendingSessionId: string | null
-  isCreatingSession: boolean
-  onSelectSession: (agentSessionId: string) => void
-  onCreateSession?: () => void
-  onArchiveSession?: (agentSessionId: string) => void
-  onOpenArchivedSessions?: () => void
-  onExpandExplorer?: () => void
-  contentTransition: Transition
-  layoutTransition: Transition
-}
-
-function ProjectRailSessionsSection({
-  railCollapsed,
-  activeProjectId,
-  sessions,
-  selectedSessionId,
-  pendingSessionId,
-  isCreatingSession,
-  onSelectSession,
-  onCreateSession,
-  onArchiveSession,
-  onOpenArchivedSessions,
-  onExpandExplorer,
-  contentTransition,
-  layoutTransition,
-}: ProjectRailSessionsSectionProps) {
-  const activeSessions = useMemo(
-    () => sessions.filter((session) => session.isActive),
-    [sessions],
-  )
-  const pinnedIds = useMemo(
-    () => readPinnedSessionIds(activeProjectId),
-    [activeProjectId, sessions],
-  )
-  const noopArchive = useCallback(() => {}, [])
-  const noopTogglePin = useCallback(() => {}, [])
-
-  if (railCollapsed) {
-    if (!onExpandExplorer) return null
-
-    return (
-      <motion.section
-        className="flex shrink-0 items-center justify-center border-t border-border/70 px-1 py-1.5"
-        layout="position"
-        transition={layoutTransition}
-      >
-        <button
-          aria-label="Expand sessions sidebar"
-          className={cn(
-            'flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors',
-            'hover:bg-primary/10 hover:text-primary',
-          )}
-          onClick={onExpandExplorer}
-          type="button"
-        >
-          <PanelLeftOpen className="h-3.5 w-3.5" />
-        </button>
-      </motion.section>
-    )
-  }
-
-  return (
-    <motion.section
-      className="flex min-h-0 flex-1 flex-col border-t border-border/70"
-      layout="position"
-      transition={layoutTransition}
-    >
-      <motion.div
-        className={cn(
-          'flex h-9 shrink-0 items-center border-b border-border/60 transition-[padding] motion-panel',
-          railCollapsed ? 'justify-center px-1' : 'justify-between px-3',
-        )}
-        layout="position"
-        transition={layoutTransition}
-      >
-        <motion.div
-          animate={{
-            maxWidth: railCollapsed ? 0 : 160,
-            opacity: railCollapsed ? 0 : 1,
-            x: railCollapsed ? -4 : 0,
-          }}
-          aria-hidden={railCollapsed ? true : undefined}
-          className="flex items-center gap-1.5 overflow-hidden will-change-[max-width,opacity,transform]"
-          initial={false}
-          transition={contentTransition}
-        >
-          <span className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-            Sessions
-          </span>
-          {activeSessions.length > 0 ? (
-            <span className="rounded-full bg-muted/80 px-1.5 py-[1px] font-mono text-[10px] leading-none tabular-nums text-muted-foreground">
-              {activeSessions.length}
-            </span>
-          ) : null}
-        </motion.div>
-        <div className="flex shrink-0 items-center gap-0.5">
-          {!railCollapsed && onOpenArchivedSessions ? (
-            <button
-              aria-label="View archived sessions"
-              className={cn(
-                'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors',
-                'hover:bg-primary/10 hover:text-primary',
-              )}
-              onClick={onOpenArchivedSessions}
-              type="button"
-            >
-              <Archive className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          {onCreateSession ? (
-            <button
-              aria-label="New session"
-              className={cn(
-                'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors',
-                'hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50',
-              )}
-              disabled={isCreatingSession}
-              onClick={onCreateSession}
-              type="button"
-            >
-              {isCreatingSession ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Plus className="h-3.5 w-3.5" />
-              )}
-            </button>
-          ) : null}
-          {!railCollapsed && onExpandExplorer ? (
-            <button
-              aria-label="Expand sessions sidebar"
-              className={cn(
-                'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors',
-                'hover:bg-primary/10 hover:text-primary',
-              )}
-              onClick={onExpandExplorer}
-              type="button"
-            >
-              <PanelLeftOpen className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-        </div>
-      </motion.div>
-
-      <div
-        className={cn(
-          'min-h-0 flex-1 overflow-y-auto scrollbar-thin',
-          railCollapsed ? 'py-2' : '',
-        )}
-      >
-        {activeSessions.length === 0 ? (
-          <div
-            aria-hidden={railCollapsed ? true : undefined}
-            className={cn(
-              'px-3 py-4 text-center text-[11px] leading-relaxed text-muted-foreground/80 transition-[max-height,opacity] motion-standard',
-              railCollapsed ? 'max-h-0 opacity-0' : 'max-h-24 opacity-100',
-            )}
-          >
-            No sessions yet.
-          </div>
-        ) : (
-          <ul
-            className={cn(
-              'flex flex-col',
-              railCollapsed ? 'gap-1.5 px-1.5' : 'gap-0.5 px-1.5 py-1.5',
-            )}
-          >
-            {activeSessions.map((session) => (
-              <li key={session.agentSessionId}>
-                <AgentSessionsSidebarItem
-                  session={session}
-                  isActive={session.agentSessionId === selectedSessionId}
-                  isPending={session.agentSessionId === pendingSessionId}
-                  isPinned={pinnedIds.has(session.agentSessionId)}
-                  canArchive={false}
-                  onSelectSession={onSelectSession}
-                  onArchiveSession={onArchiveSession ?? noopArchive}
-                  onTogglePin={noopTogglePin}
-                  compact={railCollapsed ? 'icon' : 'list'}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </motion.section>
-  )
-}

@@ -15,7 +15,7 @@ import { highlightSelectionMatches, search } from '@codemirror/search'
 import { keymap } from '@codemirror/view'
 import { autocompletion } from '@codemirror/autocomplete'
 import { cn } from '@/lib/utils'
-import { getLangFromPath } from '@/lib/shiki'
+import { getLangFromPath } from '@/lib/language-detection'
 import { useTheme } from '@/src/features/theme/theme-provider'
 import type {
   EditorPalette,
