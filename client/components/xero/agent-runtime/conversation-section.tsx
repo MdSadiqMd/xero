@@ -143,7 +143,7 @@ export function ConversationSection({
               <NoticeRow
                 tone="info"
                 title="Run continued in a fresh session"
-                message="Xero handed this conversation off to a new same-type run because the context budget was full. Your task, prior decisions, and approved memory carried over — keep replying as normal."
+                message="Xero handed this conversation off to a new same-type run because the context budget was full. Your task, prior decisions, and important context carried over — keep replying as normal."
                 code={null}
               />
             </li>

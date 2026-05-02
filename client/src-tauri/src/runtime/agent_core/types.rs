@@ -476,7 +476,7 @@ pub trait ProviderAdapter {
             request.transcript
         );
         let turn = ProviderTurnRequest {
-            system_prompt: "You propose reviewed memory candidates for a coding-agent desktop app. Return strict JSON only, never markdown. Capture stable project facts, user preferences, decisions, session summaries, and troubleshooting facts. Prefer no item over a weak item. Never include secrets.".into(),
+            system_prompt: "You propose durable context candidates for a coding-agent desktop app. Return strict JSON only, never markdown. Capture stable project facts, user preferences, decisions, session summaries, and troubleshooting facts. Prefer no item over a weak item. Never include secrets.".into(),
             messages: vec![ProviderMessage::User { content: prompt }],
             tools: Vec::new(),
             turn_index: 0,

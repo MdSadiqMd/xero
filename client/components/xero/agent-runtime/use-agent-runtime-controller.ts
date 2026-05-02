@@ -448,6 +448,11 @@ export function useAgentRuntimeController({
     }
   }
 
+  function clearSubmittedDraft() {
+    draftPromptRef.current = ''
+    setDraftPrompt('')
+  }
+
   async function handleStartRuntimeRun() {
     if (!onStartRuntimeRun || (!canStartRuntimeRun && !canStartRuntimeSession)) {
       return
@@ -487,6 +492,7 @@ export function useAgentRuntimeController({
         prompt: promptToSubmit.length > 0 ? promptToSubmit : null,
       })
       if (promptToSubmit.length > 0) {
+        clearSubmittedDraft()
         setQueuedDraftAcknowledgement(promptToSubmit)
       }
     } catch (error) {
@@ -526,6 +532,7 @@ export function useAgentRuntimeController({
         prompt: promptToSubmit,
         ...(autoCompactEnabled ? { autoCompact: AUTO_COMPACT_DEFAULT_PREFERENCE } : {}),
       })
+      clearSubmittedDraft()
       setQueuedDraftAcknowledgement(promptToSubmit)
     } catch (error) {
       setQueuedDraftAcknowledgement(null)

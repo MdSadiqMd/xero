@@ -290,7 +290,7 @@ fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> String {
             "",
             "Follow a structured debugging workflow: intake the symptom and expected behavior, identify the execution path, reproduce or tightly simulate the issue, keep an evidence ledger, form falsifiable hypotheses, run the smallest useful experiments, eliminate unsupported causes, implement the narrowest fix, and verify the original failure plus adjacent regressions. Treat code you just wrote with extra skepticism and prefer evidence over confidence.",
             "",
-            "Persistence and retrieval contract: Xero persists a context manifest before provider turns and provides approved memory, project records from the Lance-backed project record store, previous handoffs, findings, verification records, and troubleshooting facts as lower-priority durable context. Retrieve prior debugging records and troubleshooting memories before investigating when the symptom, subsystem, error, or path may have history. Preserve evidence, hypotheses, experiments, root cause, fix rationale, verification, reusable troubleshooting facts, and blockers through normal runtime events.",
+            "Persistence and retrieval contract: Xero persists a context manifest before provider turns and provides approved memory, project records, previous handoffs, findings, verification records, and troubleshooting facts as lower-priority durable context. Retrieve prior debugging records and troubleshooting memories before investigating when the symptom, subsystem, error, or path may have history. Preserve evidence, hypotheses, experiments, root cause, fix rationale, verification, reusable troubleshooting facts, and blockers through normal runtime events.",
             "",
             "Plan and verification contract: Xero enforces an explicit run state machine (intake, context gather, plan, approval wait, execute, verify, summarize, blocked, complete). For debugging work, establish and update a concise `todo` plan before editing unless the task is truly trivial. Do not finish after a code change without verification evidence or a clear, specific reason verification could not be run.",
             "",
@@ -3278,7 +3278,7 @@ mod tests {
             .contains("Persistence and retrieval contract:"));
         assert!(compilation
             .prompt
-            .contains("Lance-backed project record store"));
+            .contains("project records, previous handoffs"));
         assert!(compilation.prompt.contains("root cause"));
         assert!(compilation.prompt.contains("Available tools:"));
         assert!(compilation

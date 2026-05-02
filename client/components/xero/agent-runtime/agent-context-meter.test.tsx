@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { AgentContextMeter } from '@/components/xero/agent-runtime/agent-context-meter'
 import {
@@ -109,7 +109,6 @@ describe('AgentContextMeter', () => {
       <AgentContextMeter
         status="ready"
         snapshot={makeSnapshot()}
-        error={null}
       />,
     )
 
@@ -118,6 +117,23 @@ describe('AgentContextMeter', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute(
       'aria-valuetext',
       '58 percent context remaining for gpt-5.4',
+    )
+  })
+
+  it('masks known system prompt usage until the first user message is sent', () => {
+    render(
+      <AgentContextMeter
+        status="ready"
+        snapshot={makeSnapshot()}
+        hasUserMessage={false}
+      />,
+    )
+
+    expect(screen.getByText('Full')).toHaveClass('hidden', 'sm:inline')
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0')
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'aria-valuetext',
+      '100 percent context remaining for gpt-5.4',
     )
   })
 
@@ -142,7 +158,6 @@ describe('AgentContextMeter', () => {
       <AgentContextMeter
         status="ready"
         snapshot={makeSnapshot({ budget: unknownBudget })}
-        error={null}
       />,
     )
 
@@ -163,7 +178,6 @@ describe('AgentContextMeter', () => {
       <AgentContextMeter
         status="ready"
         snapshot={makeSnapshot({ budget: overBudget })}
-        error={null}
       />,
     )
 
@@ -175,18 +189,11 @@ describe('AgentContextMeter', () => {
     )
   })
 
-  it('renders a retryable unavailable state when refresh fails before a snapshot exists', () => {
-    const onRefresh = vi.fn()
+  it('renders an unavailable state when refresh fails before a snapshot exists', () => {
     render(
       <AgentContextMeter
         status="error"
         snapshot={null}
-        error={{
-          code: 'snapshot_failed',
-          message: 'Could not build the context snapshot.',
-          retryable: true,
-        }}
-        onRefresh={onRefresh}
       />,
     )
 

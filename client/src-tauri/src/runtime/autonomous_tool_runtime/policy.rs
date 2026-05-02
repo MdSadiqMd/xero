@@ -499,14 +499,20 @@ fn repo_path_escape(request: &AutonomousToolRequest) -> Option<String> {
 fn repo_relative_paths(request: &AutonomousToolRequest) -> Vec<&str> {
     match request {
         AutonomousToolRequest::Read(request) if !request.system_path => vec![request.path.as_str()],
-        AutonomousToolRequest::Search(request) => request.path.as_deref().into_iter().collect(),
-        AutonomousToolRequest::Find(request) => request.path.as_deref().into_iter().collect(),
-        AutonomousToolRequest::List(request) => request.path.as_deref().into_iter().collect(),
+        AutonomousToolRequest::Search(request) => {
+            optional_repo_relative_path(request.path.as_deref())
+        }
+        AutonomousToolRequest::Find(request) => {
+            optional_repo_relative_path(request.path.as_deref())
+        }
+        AutonomousToolRequest::List(request) => {
+            optional_repo_relative_path(request.path.as_deref())
+        }
         AutonomousToolRequest::Hash(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Write(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Edit(request) => vec![request.path.as_str()],
         AutonomousToolRequest::Patch(request) => {
-            let mut paths = request.path.as_deref().into_iter().collect::<Vec<_>>();
+            let mut paths = optional_repo_relative_path(request.path.as_deref());
             paths.extend(
                 request
                     .operations
@@ -523,6 +529,13 @@ fn repo_relative_paths(request: &AutonomousToolRequest) -> Vec<&str> {
         AutonomousToolRequest::NotebookEdit(request) => vec![request.path.as_str()],
         _ => Vec::new(),
     }
+}
+
+fn optional_repo_relative_path(path: Option<&str>) -> Vec<&str> {
+    path.map(str::trim)
+        .filter(|path| !path.is_empty())
+        .into_iter()
+        .collect()
 }
 
 fn is_destructive_system_operation(request: &AutonomousToolRequest) -> bool {
@@ -1331,6 +1344,28 @@ mod tests {
 
         assert_eq!(decision.action, AutonomousSafetyPolicyAction::Deny);
         assert_eq!(decision.code, "policy_denied_path_escape");
+    }
+
+    #[test]
+    fn safety_policy_allows_blank_optional_observe_scope_as_repo_root() {
+        let tempdir = tempdir().expect("tempdir");
+        let runtime = test_runtime(tempdir.path(), RuntimeRunApprovalModeDto::Yolo);
+        let request = AutonomousToolRequest::List(super::super::AutonomousListRequest {
+            path: Some("".into()),
+            max_depth: Some(2),
+        });
+
+        let decision = runtime
+            .evaluate_safety_policy(
+                "list",
+                &json!({"path": "", "maxDepth": 2}),
+                &request,
+                false,
+                "input-hash",
+            )
+            .expect("policy");
+
+        assert_eq!(decision.action, AutonomousSafetyPolicyAction::Allow);
     }
 
     #[test]

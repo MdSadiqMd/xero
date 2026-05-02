@@ -1014,7 +1014,7 @@ fn phase6_model_visible_context_tooling_permissions_and_logging() {
 }
 
 #[test]
-fn phase5_auto_capture_records_and_reviewed_memory_candidates() {
+fn phase5_auto_capture_records_and_enabled_memory() {
     let root = tempfile::tempdir().expect("temp dir");
     let (project_id, repo_root) = seed_project(&root);
 
@@ -1024,7 +1024,7 @@ fn phase5_auto_capture_records_and_reviewed_memory_candidates() {
         project_id: project_id.clone(),
         agent_session_id: project_store::DEFAULT_AGENT_SESSION_ID.into(),
         run_id: "phase5-capture-run".into(),
-        prompt: "Decision: Phase 5 automatically captures durable decisions.\nProject fact: Phase 5 creates disabled memory candidates that wait for review."
+        prompt: "Decision: Phase 5 automatically captures durable decisions.\nProject fact: Phase 5 enables safe durable context automatically."
             .into(),
         controls: Some(controls_for_agent(RuntimeAgentIdDto::Ask)),
         tool_runtime,
@@ -1062,37 +1062,20 @@ fn phase5_auto_capture_records_and_reviewed_memory_candidates() {
             include_rejected: false,
         },
     )
-    .expect("list auto memory candidates");
-    let candidate = memories
+    .expect("list auto memory");
+    let memory = memories
         .iter()
         .find(|memory| {
             memory
                 .text
-                .contains("Phase 5 creates disabled memory candidates")
+                .contains("Phase 5 enables safe durable context automatically")
         })
-        .expect("phase5 memory candidate");
+        .expect("phase5 automatic memory");
     assert_eq!(
-        candidate.review_state,
-        project_store::AgentMemoryReviewState::Candidate
-    );
-    assert!(!candidate.enabled);
-
-    let approved = project_store::update_agent_memory(
-        &repo_root,
-        &project_store::AgentMemoryUpdateRecord {
-            project_id: project_id.clone(),
-            memory_id: candidate.memory_id.clone(),
-            review_state: Some(project_store::AgentMemoryReviewState::Approved),
-            enabled: Some(true),
-            diagnostic: None,
-        },
-    )
-    .expect("approve candidate");
-    assert_eq!(
-        approved.review_state,
+        memory.review_state,
         project_store::AgentMemoryReviewState::Approved
     );
-    assert!(approved.enabled);
+    assert!(memory.enabled);
 
     for runtime_agent_id in [
         RuntimeAgentIdDto::Ask,
@@ -1116,8 +1099,8 @@ fn phase5_auto_capture_records_and_reviewed_memory_candidates() {
             created
                 .run
                 .system_prompt
-                .contains("Phase 5 creates disabled memory candidates"),
-            "approved memory should be injected for {:?}",
+                .contains("Phase 5 enables safe durable context automatically"),
+            "automatic memory should be injected for {:?}",
             runtime_agent_id
         );
     }

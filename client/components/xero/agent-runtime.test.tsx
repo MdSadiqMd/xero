@@ -27,8 +27,6 @@ import type {
   RuntimeSessionView,
 } from '@/src/lib/xero-model'
 
-type CheckpointControlLoopCard = NonNullable<AgentPaneView['checkpointControlLoop']>['items'][number]
-
 function makeProject(overrides: Partial<ProjectDetailView> = {}): ProjectDetailView {
   return {
     id: 'project-1',
@@ -252,134 +250,6 @@ function makeProviderModelCatalog(
   }
 }
 
-function makeCheckpointControlLoopCard(
-  overrides: Partial<CheckpointControlLoopCard> = {},
-): CheckpointControlLoopCard {
-  const approval = overrides.approval ?? {
-    actionId: 'flow:flow-1:run:run-1:boundary:boundary-1:terminal_input_required',
-    sessionId: 'session-1',
-    flowId: 'flow-1',
-    actionType: 'terminal_input_required',
-    title: 'Terminal input required',
-    detail: 'Provide terminal input before the run can continue.',
-    userAnswer: 'Looks good to resume.',
-    status: 'approved' as const,
-    statusLabel: 'Approved',
-    decisionNote: 'Ready to resume.',
-    createdAt: '2026-04-16T20:03:00Z',
-    updatedAt: '2026-04-16T20:03:30Z',
-    resolvedAt: '2026-04-16T20:03:30Z',
-    isPending: false,
-    isResolved: true,
-    canResume: true,
-    isRuntimeResumable: true,
-    requiresUserAnswer: true,
-    answerRequirementReason: 'runtime_resumable' as const,
-    answerRequirementLabel: 'Required',
-    answerShapeKind: 'plain_text' as const,
-    answerShapeLabel: 'Required user answer',
-    answerShapeHint: 'Describe the operator decision that justifies approval.',
-    answerPlaceholder: 'Provide operator input for this action.',
-  }
-
-  return {
-    key: 'flow:flow-1:run:run-1:boundary:boundary-1:terminal_input_required::boundary-1',
-    actionId: approval.actionId,
-    boundaryId: 'boundary-1',
-    title: approval.title,
-    detail: approval.detail,
-    truthSource: 'durable_only',
-    truthSourceLabel: 'Durable only',
-    truthSourceDetail: 'The live row has cleared or is unavailable, so this card is anchored to durable approval and resume truth.',
-    liveActionRequired: null,
-    liveStateLabel: 'Live row unavailable',
-    liveStateDetail:
-      'The selected project snapshot still shows this checkpoint as pending even though the live stream no longer has a matching row.',
-    liveUpdatedAt: '2026-04-16T20:03:30Z',
-    approval,
-    durableStateLabel: approval.statusLabel,
-    durableStateDetail: approval.detail,
-    durableUpdatedAt: approval.updatedAt,
-    latestResume: {
-      id: 1,
-      sourceActionId: approval.actionId,
-      sessionId: 'session-1',
-      status: 'started',
-      statusLabel: 'Resume started',
-      summary: 'Operator resumed the selected project runtime session.',
-      createdAt: '2026-04-16T20:04:00Z',
-    },
-    resumeStateLabel: 'Resume started',
-    resumeDetail: 'Operator resumed the selected project runtime session.',
-    resumeUpdatedAt: '2026-04-16T20:04:00Z',
-    resumability: 'resumable',
-    resumabilityLabel: 'Resumable',
-    resumabilityDetail:
-      'Xero has a durable resume path for this action using the existing approve/reject/resume controls.',
-    isResumable: true,
-    advancedFailureClass: null,
-    advancedFailureClassLabel: null,
-    advancedFailureDiagnosticCode: null,
-    recoveryRecommendation: 'approve_resume',
-    recoveryRecommendationLabel: 'Approve / resume',
-    recoveryRecommendationDetail:
-      'Use the existing approve/reject/resume controls for this action. Xero will refresh durable truth after the decision is persisted.',
-    brokerAction: {
-      actionId: approval.actionId,
-      dispatches: [],
-      dispatchCount: 0,
-      pendingCount: 0,
-      sentCount: 0,
-      failedCount: 0,
-      claimedCount: 0,
-      latestUpdatedAt: null,
-      hasFailures: false,
-      hasPending: false,
-      hasClaimed: false,
-    },
-    brokerStateLabel: 'Broker diagnostics unavailable',
-    brokerStateDetail: 'No notification broker fan-out rows were retained for this action in the bounded dispatch window.',
-    brokerLatestUpdatedAt: null,
-    brokerRoutePreviews: [],
-    evidenceCount: 1,
-    evidenceStateLabel: '1 durable evidence row',
-    evidenceSummary: 'Showing the latest durable evidence row linked to this action.',
-    latestEvidenceAt: '2026-04-16T20:04:10Z',
-    evidencePreviews: [
-      {
-        artifactId: 'artifact-checkpoint-1',
-        artifactKindLabel: 'Verification evidence',
-        statusLabel: 'Recorded',
-        summary: 'Captured resume verification evidence for this action.',
-        updatedAt: '2026-04-16T20:04:10Z',
-      },
-    ],
-    sortTimestamp: '2026-04-16T20:04:10Z',
-    ...overrides,
-  }
-}
-
-function makeCheckpointControlLoop(
-  overrides: Partial<NonNullable<AgentPaneView['checkpointControlLoop']>> = {},
-): NonNullable<AgentPaneView['checkpointControlLoop']> {
-  return {
-    items: [makeCheckpointControlLoopCard()],
-    totalCount: 1,
-    visibleCount: 1,
-    hiddenCount: 0,
-    isTruncated: false,
-    windowLabel: 'Showing 1 checkpoint action from the bounded control-loop window.',
-    emptyTitle: 'No checkpoint control loops recorded',
-    emptyBody:
-      'Xero has not observed a live or durable checkpoint boundary for this project yet. Waiting boundaries, resume outcomes, and broker fan-out will appear here once recorded.',
-    missingEvidenceCount: 0,
-    liveHintOnlyCount: 0,
-    durableOnlyCount: 1,
-    recoveredCount: 0,
-    ...overrides,
-  }
-}
-
 function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
   const project = overrides.project ?? makeProject()
   const runtimeSession = overrides.runtimeSession ?? null
@@ -490,7 +360,7 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     trustSnapshot: undefined,
     sessionUnavailableReason: overrides.sessionUnavailableReason ?? 'Current session status for this project.',
     runtimeRunUnavailableReason:
-      overrides.runtimeRunUnavailableReason ?? 'Xero recovered a Xero-owned agent run and its durable checkpoints before the live runtime feed resumed.',
+      overrides.runtimeRunUnavailableReason ?? 'Xero recovered a Xero-owned agent run before the live runtime feed resumed.',
     messagesUnavailableReason:
       overrides.messagesUnavailableReason ?? 'Xero authenticated this project, but the live runtime stream has not started yet.',
     ...overrides,
@@ -596,58 +466,6 @@ describe('AgentRuntime current UI', () => {
   })
 
 
-  it('renders checkpoint control-loop cards and resume controls on the Agent tab', () => {
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession(),
-          runtimeRun: makeRuntimeRun(),
-          checkpointControlLoop: makeCheckpointControlLoop({
-            items: [
-              makeCheckpointControlLoopCard({
-                actionId: 'action-1',
-                key: 'action-1::boundary-1',
-                boundaryId: 'boundary-1',
-                title: 'Review worktree changes',
-                detail: 'Inspect the repository diff before trusting the next operator step.',
-                approval: {
-                  actionId: 'action-1',
-                  sessionId: 'session-1',
-                  flowId: 'flow-1',
-                  actionType: 'review_worktree',
-                  title: 'Review worktree changes',
-                  detail: 'Inspect the repository diff before trusting the next operator step.',
-                  userAnswer: 'Looks good to resume.',
-                  status: 'approved',
-                  statusLabel: 'Approved',
-                  decisionNote: 'Ready to resume.',
-                  createdAt: '2026-04-13T20:01:00Z',
-                  updatedAt: '2026-04-13T20:03:30Z',
-                  resolvedAt: '2026-04-13T20:03:30Z',
-                  isPending: false,
-                  isResolved: true,
-                  canResume: true,
-                  isRuntimeResumable: true,
-                  requiresUserAnswer: true,
-                  answerRequirementReason: 'runtime_resumable',
-                  answerRequirementLabel: 'Required',
-                  answerShapeKind: 'plain_text',
-                  answerShapeLabel: 'Required user answer',
-                  answerShapeHint: 'Describe the operator decision that justifies approval.',
-                  answerPlaceholder: 'Provide operator input for this action.',
-                },
-              }),
-            ],
-          }),
-        })}
-      />,
-    )
-
-    expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible()
-    expect(screen.getByText('Review worktree changes')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Resume run' })).toBeVisible()
-  })
-
   it('does not render worker lifecycle cards on the Agent tab', () => {
     render(
       <AgentRuntime
@@ -683,37 +501,7 @@ describe('AgentRuntime current UI', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('mounts the reviewed memory workflow for the selected agent session', async () => {
-    const candidateMemory = {
-      contractVersion: 1 as const,
-      memoryId: 'memory-candidate-1',
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      scope: 'session' as const,
-      kind: 'decision' as const,
-      text: 'Decision: use Lance-backed reviewed memory for durable context.',
-      reviewState: 'candidate' as const,
-      enabled: false,
-      confidence: 91,
-      sourceRunId: 'run-1',
-      sourceItemIds: ['message:1'],
-      createdAt: '2026-05-01T12:00:00Z',
-      updatedAt: '2026-05-01T12:00:00Z',
-      diagnostic: null,
-      redaction: { redactionClass: 'public' as const, redacted: false, reason: null },
-    }
-    const onListSessionMemories = vi.fn(async () => ({
-      projectId: 'project-1',
-      agentSessionId: 'agent-session-main',
-      memories: [candidateMemory],
-    }))
-    const onUpdateSessionMemory = vi.fn(async () => ({
-      ...candidateMemory,
-      reviewState: 'approved' as const,
-      enabled: true,
-      updatedAt: '2026-05-01T12:01:00Z',
-    }))
-
+  it('keeps memory management hidden for the selected agent session', () => {
     render(
       <AgentRuntime
         agent={makeAgent({
@@ -740,22 +528,12 @@ describe('AgentRuntime current UI', () => {
           runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
           runtimeRun: makeRuntimeRun({ status: 'stopped', isActive: false, isTerminal: true }),
         })}
-        onListSessionMemories={onListSessionMemories}
-        onUpdateSessionMemory={onUpdateSessionMemory}
       />,
     )
 
-    expect(await screen.findByText(candidateMemory.text)).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
-
-    await waitFor(() => {
-      expect(onUpdateSessionMemory).toHaveBeenCalledWith({
-        projectId: 'project-1',
-        memoryId: 'memory-candidate-1',
-        reviewState: 'approved',
-        enabled: true,
-      })
-    })
+    expect(screen.queryByText('Memory')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Extract' })).not.toBeInTheDocument()
   })
 
   it('surfaces failed run diagnostics and starts a replacement run from the composer', async () => {
@@ -822,6 +600,7 @@ describe('AgentRuntime current UI', () => {
         prompt: '1+1',
       }),
     )
+    await waitFor(() => expect(input).toHaveValue(''))
   })
 
   it('shows a handoff notice when the runtime stream completion reports a same-type handoff', () => {
@@ -1000,295 +779,6 @@ describe('AgentRuntime current UI', () => {
     expect(screen.getByText('Hi! What can I')).toBeVisible()
     expect(screen.getAllByText('Agent')).toHaveLength(1)
   })
-
-  it('renders recovered durable denial cards on the Agent tab', () => {
-    const deniedActionId = 'flow:flow-1:run:run-1:boundary:boundary-denied-1:review_command'
-    const deniedCard = makeCheckpointControlLoopCard({
-      actionId: deniedActionId,
-      key: `${deniedActionId}::boundary-denied-1`,
-      boundaryId: 'boundary-denied-1',
-      title: 'Xero denied the autonomous shell command because its cwd escapes the imported repository root.',
-      detail: 'Xero denied the autonomous shell command because its cwd escapes the imported repository root.',
-      truthSource: 'recovered_durable',
-      truthSourceLabel: 'Recovered durable denial',
-      truthSourceDetail:
-        'No resumable live review row remains, so this card is anchored to the durable shell-policy denial that Xero persisted for the command.',
-      liveActionRequired: null,
-      liveStateLabel: 'No live review row',
-      liveStateDetail:
-        'Hard-denied shell-policy outcomes do not create a resumable live action-required row, so Xero is anchoring this card to durable denial evidence.',
-      liveUpdatedAt: null,
-      approval: null,
-      durableStateLabel: 'Policy denied',
-      durableStateDetail: 'Xero denied the autonomous shell command because its cwd escapes the imported repository root.',
-      durableUpdatedAt: '2026-04-16T20:04:10Z',
-      latestResume: null,
-      resumeStateLabel: 'Not resumable',
-      resumeDetail: 'Hard-denied shell-policy outcomes do not create an operator approval or resume path.',
-      resumeUpdatedAt: '2026-04-16T20:04:10Z',
-      resumability: 'not_resumable',
-      resumabilityLabel: 'Not resumable',
-      resumabilityDetail:
-        'Xero recorded a hard denial for this action, so no operator resume path is available for this boundary.',
-      isResumable: false,
-      advancedFailureClass: null,
-      advancedFailureClassLabel: null,
-      advancedFailureDiagnosticCode: null,
-      recoveryRecommendation: 'fix_permissions_policy',
-      recoveryRecommendationLabel: 'Fix permissions / policy',
-      recoveryRecommendationDetail:
-        'Browser/computer-use action was blocked by policy or permissions. Fix access or policy before retrying.',
-      evidenceCount: 2,
-      evidenceStateLabel: '2 durable evidence rows',
-      evidenceSummary: 'Showing the latest durable evidence rows linked to this action.',
-      latestEvidenceAt: '2026-04-16T20:04:10Z',
-      evidencePreviews: [
-        {
-          artifactId: 'artifact-policy-denied',
-          artifactKindLabel: 'Policy denied',
-          statusLabel: 'Recorded',
-          summary: 'Xero denied the autonomous shell command because its cwd escapes the imported repository root.',
-          updatedAt: '2026-04-16T20:04:10Z',
-        },
-      ],
-    })
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          runtimeRun: makeRuntimeRun(),
-          checkpointControlLoop: makeCheckpointControlLoop({
-            items: [deniedCard],
-            durableOnlyCount: 0,
-            recoveredCount: 1,
-          }),
-        })}
-      />,
-    )
-
-    expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible()
-    expect(screen.getByText('Recovered durable denial')).toBeVisible()
-    expect(screen.getAllByText('Policy denied').length).toBeGreaterThan(0)
-    expect(screen.getByText(/Recovery guidance Fix permissions \/ policy/i)).toBeVisible()
-  })
-
-  it('surfaces operator-answer controls and operator-action failures on the Agent tab', () => {
-    const pendingCard = makeCheckpointControlLoopCard({
-      actionId: 'action-pending',
-      key: 'action-pending::boundary-1',
-      boundaryId: 'boundary-1',
-      title: 'Review worktree changes',
-      detail: 'Inspect the repository diff before trusting the next operator step.',
-      approval: {
-        actionId: 'action-pending',
-        sessionId: 'session-1',
-        flowId: 'flow-1',
-        actionType: 'review_worktree',
-        title: 'Review worktree changes',
-        detail: 'Inspect the repository diff before trusting the next operator step.',
-        userAnswer: null,
-        status: 'pending',
-        statusLabel: 'Pending approval',
-        decisionNote: null,
-        createdAt: '2026-04-13T20:02:00Z',
-        updatedAt: '2026-04-13T20:02:00Z',
-        resolvedAt: null,
-        isPending: true,
-        isResolved: false,
-        canResume: false,
-        isRuntimeResumable: true,
-        requiresUserAnswer: true,
-        answerRequirementReason: 'runtime_resumable',
-        answerRequirementLabel: 'Required',
-        answerShapeKind: 'plain_text',
-        answerShapeLabel: 'Required user answer',
-        answerShapeHint: 'Describe the operator decision that justifies approval.',
-        answerPlaceholder: 'Provide operator input for this action.',
-      },
-    })
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          runtimeRun: makeRuntimeRun(),
-          approvalRequests: [pendingCard.approval!],
-          pendingApprovalCount: 1,
-          operatorActionStatus: 'running',
-          pendingOperatorActionId: 'action-pending',
-          operatorActionError: {
-            code: 'operator_action_failed',
-            message: 'Xero could not approve action action-pending for boundary boundary-1.',
-            retryable: true,
-          },
-          checkpointControlLoop: makeCheckpointControlLoop({
-            items: [pendingCard],
-          }),
-        })}
-      />,
-    )
-
-    expect(screen.getByRole('heading', { name: 'Checkpoint control loop' })).toBeVisible()
-    expect(screen.getByLabelText('Operator answer for action-pending')).toBeVisible()
-    expect(screen.getByText('Xero could not approve action action-pending for boundary boundary-1.')).toBeVisible()
-  })
-
-  it('renders checkpoint recovery banners and bounded coverage copy on the Agent tab', () => {
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
-          runtimeRun: makeRuntimeRun(),
-          checkpointControlLoop: makeCheckpointControlLoop({
-            items: [
-              makeCheckpointControlLoopCard({
-                truthSource: 'live_hint_only',
-                truthSourceLabel: 'Live hint only',
-                truthSourceDetail:
-                  'Xero is showing the live action-required row while waiting for durable approval or evidence rows to persist.',
-                liveActionRequired: {
-                  id: 'action-required-1',
-                  kind: 'action_required',
-                  runId: 'run-1',
-                  sequence: 9,
-                  createdAt: '2026-04-16T20:05:00Z',
-                  actionId: 'action-live-only',
-                  boundaryId: 'boundary-live-only',
-                  actionType: 'terminal_input_required',
-                  title: 'Terminal input required',
-                  detail: 'Provide terminal input before the run can continue.',
-                },
-                approval: null,
-                actionId: 'action-live-only',
-                key: 'action-live-only::boundary-live-only',
-                boundaryId: 'boundary-live-only',
-                liveStateLabel: 'Live action required',
-                durableStateLabel: 'Durable approval pending refresh',
-                durableStateDetail:
-                  'The live action-required row arrived before the selected-project snapshot persisted a matching durable approval row.',
-                evidenceCount: 0,
-                evidenceStateLabel: 'No durable evidence in bounded window',
-                evidenceSummary:
-                  'Xero did not retain a matching tool result, verification row, or policy denial for this action in the bounded evidence window.',
-              }),
-            ],
-            totalCount: 3,
-            visibleCount: 1,
-            hiddenCount: 2,
-            isTruncated: true,
-            windowLabel: 'Showing 1 of 3 checkpoint actions in the bounded control-loop window.',
-            missingEvidenceCount: 1,
-            liveHintOnlyCount: 1,
-            durableOnlyCount: 0,
-            recoveredCount: 1,
-          }),
-          notificationSyncError: {
-            code: 'notification_adapter_sync_failed',
-            message: 'Xero could not sync notification adapters for this project.',
-            retryable: true,
-          },
-          notificationSyncPollingActive: true,
-          notificationSyncPollingActionId: 'action-live-only',
-          notificationSyncPollingBoundaryId: 'boundary-live-only',
-        })}
-      />,
-    )
-
-    expect(screen.getByText('Remote escalation is actively polling this checkpoint')).toBeVisible()
-    expect(screen.getByText('Bounded checkpoint coverage')).toBeVisible()
-    expect(screen.getByText('Live hint only')).toBeVisible()
-  })
-
-  it('sends owned-agent live checkpoint responses through runtime run controls', async () => {
-    const onUpdateRuntimeRunControls = vi.fn(async () => makeRuntimeRun())
-    const actionId = 'plan-mode-before-tools'
-
-    render(
-      <AgentRuntime
-        agent={makeAgent({
-          runtimeSession: makeRuntimeSession({ sessionId: 'owned-agent:run-1', runtimeKind: 'owned_agent' }),
-          runtimeRun: makeRuntimeRun({
-            runtimeKind: 'owned_agent',
-            runtimeLabel: 'Owned agent · Running',
-            supervisorKind: 'owned_agent',
-            supervisorLabel: 'Owned agent',
-          }),
-          actionRequiredItems: [
-            {
-              id: 'owned-action-required-1',
-              kind: 'action_required',
-              runId: 'run-1',
-              sequence: 9,
-              createdAt: '2026-04-16T20:05:00Z',
-              actionId,
-              boundaryId: 'owned_agent',
-              actionType: 'plan_mode',
-              title: 'Plan required',
-              detail: 'Plan mode paused before tool execution.',
-            },
-          ],
-          checkpointControlLoop: makeCheckpointControlLoop({
-            items: [
-              makeCheckpointControlLoopCard({
-                actionId,
-                key: `${actionId}::owned_agent`,
-                boundaryId: 'owned_agent',
-                title: 'Plan required',
-                detail: 'Plan mode paused before tool execution.',
-                approval: null,
-                liveActionRequired: {
-                  id: 'owned-action-required-1',
-                  kind: 'action_required',
-                  runId: 'run-1',
-                  sequence: 9,
-                  createdAt: '2026-04-16T20:05:00Z',
-                  actionId,
-                  boundaryId: 'owned_agent',
-                  actionType: 'plan_mode',
-                  title: 'Plan required',
-                  detail: 'Plan mode paused before tool execution.',
-                },
-                liveStateLabel: 'Live action required',
-                durableStateLabel: 'Durable approval pending refresh',
-                truthSource: 'live_hint_only',
-                truthSourceLabel: 'Live hint only',
-                truthSourceDetail:
-                  'Xero is showing the live action-required row while waiting for durable approval or evidence rows to persist.',
-              }),
-            ],
-            liveHintOnlyCount: 1,
-            durableOnlyCount: 0,
-          }),
-        })}
-        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
-      />,
-    )
-
-    const responseInput = screen.getByLabelText(`Owned agent response for ${actionId}`)
-    const sendResponse = screen.getByRole('button', { name: 'Send response' })
-    expect(sendResponse).toBeDisabled()
-
-    fireEvent.change(responseInput, { target: { value: 'Proceed with the approved plan.' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Send response' }))
-
-    await waitFor(() =>
-      expect(onUpdateRuntimeRunControls).toHaveBeenCalledWith({
-        prompt: 'Proceed with the approved plan.',
-      }),
-    )
-    expect(screen.queryByText('Durable approval row not available')).not.toBeInTheDocument()
-  })
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1747,6 +1237,7 @@ describe('AgentRuntime current UI', () => {
         prompt: 'Queue the next prompt.',
       }),
     )
+    await waitFor(() => expect(screen.getByLabelText('Agent input')).toHaveValue(''))
     expect(screen.getByRole('combobox', { name: 'Approval mode selector' })).toHaveTextContent('YOLO')
   })
 

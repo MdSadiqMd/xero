@@ -6,10 +6,8 @@ import {
   parseComposerAgentSelectionKey,
   runtimeAgentIdForCustomBaseCapability,
 } from '@/components/xero/agent-runtime/composer-helpers'
-import type {
-  AgentDefinitionSummaryDto,
-  AgentProviderModelView,
-} from '@/src/lib/xero-model'
+import type { AgentProviderModelView } from '@/src/features/xero/use-xero-desktop-state'
+import type { AgentDefinitionSummaryDto } from '@/src/lib/xero-model'
 
 const baseModel: AgentProviderModelView = {
   selectionKey: 'profile-1::gpt-omega',

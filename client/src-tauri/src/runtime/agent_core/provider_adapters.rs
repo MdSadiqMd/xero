@@ -1336,33 +1336,19 @@ fn parse_openai_responses_sse(
                     arguments_delta: delta,
                 })?;
             }
+            "response.output_item.added" => {
+                apply_openai_response_function_call_item(
+                    &mut partial_calls,
+                    &value,
+                    completed_call_count,
+                );
+            }
             "response.output_item.done" => {
-                let item = value.get("item").cloned().unwrap_or(JsonValue::Null);
-                if item.get("type").and_then(JsonValue::as_str) == Some("function_call") {
-                    let index = item
-                        .get("output_index")
-                        .and_then(JsonValue::as_u64)
-                        .unwrap_or(completed_call_count as u64)
-                        as usize;
-                    let partial = partial_calls.entry(index).or_default();
-                    partial.id = item
-                        .get("call_id")
-                        .or_else(|| item.get("id"))
-                        .and_then(JsonValue::as_str)
-                        .map(ToOwned::to_owned)
-                        .or_else(|| partial.id.clone());
-                    partial.name = item
-                        .get("name")
-                        .and_then(JsonValue::as_str)
-                        .map(ToOwned::to_owned)
-                        .or_else(|| partial.name.clone());
-                    if partial.arguments.trim().is_empty() {
-                        partial.arguments = item
-                            .get("arguments")
-                            .and_then(JsonValue::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                    }
+                if apply_openai_response_function_call_item(
+                    &mut partial_calls,
+                    &value,
+                    completed_call_count,
+                ) {
                     completed_call_count = completed_call_count.saturating_add(1);
                 }
             }
@@ -1381,6 +1367,43 @@ fn parse_openai_responses_sse(
     }
 
     finish_provider_turn(provider_id, message, partial_calls, usage)
+}
+
+fn apply_openai_response_function_call_item(
+    partial_calls: &mut BTreeMap<usize, PartialToolCall>,
+    event: &JsonValue,
+    fallback_index: usize,
+) -> bool {
+    let item = event.get("item").cloned().unwrap_or(JsonValue::Null);
+    if item.get("type").and_then(JsonValue::as_str) != Some("function_call") {
+        return false;
+    }
+
+    let index = event
+        .get("output_index")
+        .or_else(|| item.get("output_index"))
+        .and_then(JsonValue::as_u64)
+        .unwrap_or(fallback_index as u64) as usize;
+    let partial = partial_calls.entry(index).or_default();
+    partial.id = item
+        .get("call_id")
+        .or_else(|| item.get("id"))
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| partial.id.clone());
+    partial.name = item
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| partial.name.clone());
+    if partial.arguments.trim().is_empty() {
+        partial.arguments = item
+            .get("arguments")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string();
+    }
+    true
 }
 
 fn openai_responses_stream_error(provider_id: &str, event: &JsonValue) -> CommandError {
@@ -2493,6 +2516,47 @@ mod tests {
         let error = finish_provider_turn("test-provider", String::new(), malformed, None)
             .expect_err("malformed tool JSON should fail");
         assert_eq!(error.code, "agent_provider_tool_arguments_invalid");
+    }
+
+    #[test]
+    fn openai_responses_tool_item_uses_event_output_index() {
+        let mut partial_calls = BTreeMap::new();
+        partial_calls.insert(
+            3,
+            PartialToolCall {
+                id: None,
+                name: None,
+                arguments: r#"{"path":"src/lib.rs"}"#.into(),
+            },
+        );
+        let event = json!({
+            "type": "response.output_item.done",
+            "output_index": 3,
+            "item": {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "read"
+            }
+        });
+
+        assert!(apply_openai_response_function_call_item(
+            &mut partial_calls,
+            &event,
+            0,
+        ));
+        let outcome =
+            finish_provider_turn(OPENAI_CODEX_PROVIDER_ID, String::new(), partial_calls, None)
+                .expect("provider turn");
+
+        match outcome {
+            ProviderTurnOutcome::ToolCalls { tool_calls, .. } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].tool_call_id, "call-1");
+                assert_eq!(tool_calls[0].tool_name, "read");
+                assert_eq!(tool_calls[0].input["path"], "src/lib.rs");
+            }
+            ProviderTurnOutcome::Complete { .. } => panic!("expected tool call turn"),
+        }
     }
 
     #[test]

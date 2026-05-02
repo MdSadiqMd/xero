@@ -1009,13 +1009,36 @@ async function listenTyped<TPayload>(
     return () => undefined
   }
 
-  return listen(eventName, (event) => {
+  const unlisten = await listen(eventName, (event) => {
     try {
       handler(schema.parse(event.payload))
     } catch (error) {
       onError?.(normalizeError(error, `Event ${eventName}`))
     }
   })
+
+  return createSafeUnlisten(unlisten)
+}
+
+function createSafeUnlisten(unlisten: UnlistenFn): UnlistenFn {
+  let disposed = false
+
+  return () => {
+    if (disposed) {
+      return
+    }
+
+    disposed = true
+
+    try {
+      const maybePromise = unlisten() as unknown
+      if (maybePromise && typeof (maybePromise as PromiseLike<unknown>).then === 'function') {
+        void Promise.resolve(maybePromise).catch(() => undefined)
+      }
+    } catch {
+      // Tauri can drop WebView listener internals during teardown; cleanup is best-effort.
+    }
+  }
 }
 
 async function createRuntimeStreamSubscription(

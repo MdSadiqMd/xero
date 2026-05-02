@@ -497,7 +497,6 @@ function makeAgent(overrides: Partial<AgentPaneView> = {}): AgentPaneView {
     autonomousHistory: [],
     autonomousRecentArtifacts: [],
     recentAutonomousUnits: undefined,
-    checkpointControlLoop: undefined,
     runtimeErrorMessage: null,
     runtimeRunErrorMessage: null,
     autonomousRunErrorMessage: null,

@@ -1489,7 +1489,17 @@ fn load_context_snapshots(
     )>,
 > {
     if let Some(run_id) = run_id {
-        let snapshot = project_store::load_agent_run(repo_root, project_id, run_id)?;
+        let snapshot = match project_store::load_agent_run(repo_root, project_id, run_id) {
+            Ok(snapshot) => snapshot,
+            Err(error) if error.code == "agent_run_not_found" => {
+                return project_store::load_agent_session_run_snapshots(
+                    repo_root,
+                    project_id,
+                    agent_session_id,
+                );
+            }
+            Err(error) => return Err(error),
+        };
         ensure_run_belongs_to_session(&snapshot, project_id, agent_session_id)?;
         let usage = project_store::load_agent_usage(repo_root, project_id, run_id)?;
         return Ok(vec![(snapshot, usage)]);

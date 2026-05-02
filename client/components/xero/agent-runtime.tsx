@@ -16,34 +16,18 @@ import type {
   RuntimeAutoCompactPreferenceDto,
   ProviderAuthSessionView,
   RuntimeSessionView,
-  RuntimeStreamActionRequiredItemView,
   RuntimeStreamFailureItemView,
   RuntimeStreamToolItemView,
   RuntimeStreamViewItem,
   UpsertNotificationRouteRequestDto,
 } from '@/src/lib/xero-model'
-import type {
-  DeleteSessionMemoryRequestDto,
-  ExtractSessionMemoryCandidatesRequestDto,
-  ExtractSessionMemoryCandidatesResponseDto,
-  ListSessionMemoriesRequestDto,
-  ListSessionMemoriesResponseDto,
-  SessionMemoryRecordDto,
-  SessionContextSnapshotDto,
-  UpdateSessionMemoryRequestDto,
-} from '@/src/lib/xero-model/session-context'
+import type { SessionContextSnapshotDto } from '@/src/lib/xero-model/session-context'
 import {
   getRuntimeAgentLabel,
   getRuntimeRunThinkingEffortLabel,
   type RuntimeRunControlInputDto,
 } from '@/src/lib/xero-model'
 
-import {
-  createEmptyCheckpointControlLoop,
-  getCheckpointControlLoopCoverageAlertMeta,
-  getCheckpointControlLoopRecoveryAlertMeta,
-} from './agent-runtime/checkpoint-control-loop-helpers'
-import { CheckpointControlLoopSection } from './agent-runtime/checkpoint-control-loop-section'
 import {
   AgentContextMeter,
   type AgentContextMeterStatus,
@@ -59,7 +43,6 @@ import { ComposerDock } from './agent-runtime/composer-dock'
 import { AgentCreateDraftSection } from './agent-runtime/agent-create-draft-section'
 import { ConversationSection, type ConversationTurn } from './agent-runtime/conversation-section'
 import { EmptySessionState } from './agent-runtime/empty-session-state'
-import { MemoryReviewSection } from './agent-runtime/memory-review-section'
 import {
   getStreamRunId,
   getToolSummaryContext,
@@ -104,15 +87,6 @@ interface AgentRuntimeProps {
   onUpsertNotificationRoute?: (
     request: Omit<UpsertNotificationRouteRequestDto, 'projectId'>,
   ) => Promise<unknown>
-  onListSessionMemories?: (
-    request: ListSessionMemoriesRequestDto,
-  ) => Promise<ListSessionMemoriesResponseDto>
-  onExtractSessionMemoryCandidates?: (
-    request: ExtractSessionMemoryCandidatesRequestDto,
-  ) => Promise<ExtractSessionMemoryCandidatesResponseDto>
-  onUpdateSessionMemory?: (request: UpdateSessionMemoryRequestDto) => Promise<SessionMemoryRecordDto>
-  onDeleteSessionMemory?: (request: DeleteSessionMemoryRequestDto) => Promise<void>
-  onContextRefresh?: () => Promise<void>
   desktopAdapter?: AgentRuntimeDesktopAdapter
   /** GitHub avatar URL for the signed-in account, when available. */
   accountAvatarUrl?: string | null
@@ -145,22 +119,11 @@ function appendTranscriptDelta(current: string, delta: string): string {
   return `${current} ${delta}`
 }
 
-function shouldShowActionItem(item: RuntimeStreamViewItem): item is RuntimeStreamToolItemView | RuntimeStreamActionRequiredItemView | RuntimeStreamFailureItemView {
-  return item.kind === 'tool' || item.kind === 'action_required' || item.kind === 'failure'
+function shouldShowActionItem(item: RuntimeStreamViewItem): item is RuntimeStreamToolItemView | RuntimeStreamFailureItemView {
+  return item.kind === 'tool' || item.kind === 'failure'
 }
 
-function actionTurnFromItem(item: RuntimeStreamToolItemView | RuntimeStreamActionRequiredItemView): ConversationTurn {
-  if (item.kind === 'action_required') {
-    return {
-      id: item.id,
-      kind: 'action',
-      sequence: item.sequence,
-      title: item.title,
-      detail: item.detail,
-      state: null,
-    }
-  }
-
+function actionTurnFromItem(item: RuntimeStreamToolItemView): ConversationTurn {
   const summary = getToolSummaryContext(item)
   return {
     id: item.id,
@@ -337,11 +300,6 @@ export function AgentRuntime({
   onStartRuntimeSession,
   onResolveOperatorAction,
   onResumeOperatorRun,
-  onListSessionMemories,
-  onExtractSessionMemoryCandidates,
-  onUpdateSessionMemory,
-  onDeleteSessionMemory,
-  onContextRefresh,
   desktopAdapter,
   accountAvatarUrl = null,
   accountLogin = null,
@@ -364,6 +322,10 @@ export function AgentRuntime({
   const toolCalls = runtimeStream?.toolCalls ?? []
   const streamIssue = agent.runtimeStreamError ?? runtimeStream?.lastIssue ?? null
   const visibleTurns = useMemo(() => buildConversationTurns(runtimeStreamItems), [runtimeStreamItems])
+  const hasUserMessage = useMemo(
+    () => runtimeStreamItems.some((item) => item.kind === 'transcript' && item.role === 'user'),
+    [runtimeStreamItems],
+  )
   const selectedAgentSession = (agent.project.selectedAgentSession ?? null) as AgentSessionView | null
   const selectedAgentSessionId =
     selectedAgentSession?.agentSessionId ?? agent.project.selectedAgentSessionId ?? null
@@ -486,8 +448,7 @@ export function AgentRuntime({
       <AgentContextMeter
         status={contextMeterState.status}
         snapshot={contextMeterState.snapshot}
-        error={contextMeterState.error}
-        onRefresh={contextMeterState.refresh}
+        hasUserMessage={hasUserMessage}
       />
     )
   const composerThinkingPlaceholder = controller.composerThinkingEffort
@@ -495,25 +456,6 @@ export function AgentRuntime({
     : controller.composerModelId
       ? 'Thinking unavailable'
       : 'Choose model'
-  const checkpointControlLoop = agent.checkpointControlLoop ?? createEmptyCheckpointControlLoop()
-  const checkpointControlLoopRecoveryAlert = getCheckpointControlLoopRecoveryAlertMeta({
-    controlLoop: checkpointControlLoop,
-    trustSnapshot: {
-      syncState: agent.trustSnapshot?.syncState ?? 'unavailable',
-      syncReason:
-        agent.trustSnapshot?.syncReason ??
-        'Xero has not projected notification sync trust for this project yet.',
-    },
-    autonomousRunErrorMessage: agent.autonomousRunErrorMessage,
-    notificationSyncPollingActive: agent.notificationSyncPollingActive ?? false,
-    notificationSyncPollingActionId: agent.notificationSyncPollingActionId ?? null,
-    notificationSyncPollingBoundaryId: agent.notificationSyncPollingBoundaryId ?? null,
-  })
-  const checkpointControlLoopCoverageAlert = getCheckpointControlLoopCoverageAlertMeta(checkpointControlLoop)
-  const showCheckpointControlLoopSection =
-    checkpointControlLoop.items.length > 0 ||
-    Boolean(checkpointControlLoopRecoveryAlert) ||
-    Boolean(checkpointControlLoopCoverageAlert)
   const baseComposerPlaceholder = getComposerPlaceholder(
     runtimeSession,
     streamStatus,
@@ -565,11 +507,6 @@ export function AgentRuntime({
   const projectLabel =
     agent.project.repository?.displayName ?? agent.project.name ?? 'this project'
   const sessionLabel = agent.project.selectedAgentSession?.title?.trim() || 'New Chat'
-  const refreshContextMeter = contextMeterState.refresh
-  const handleContextRefresh = useCallback(async () => {
-    await onContextRefresh?.()
-    refreshContextMeter()
-  }, [onContextRefresh, refreshContextMeter])
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -636,33 +573,6 @@ export function AgentRuntime({
                   onOpenAgentManagement={onOpenAgentManagement}
                 />
               ) : null}
-              {showCheckpointControlLoopSection ? (
-                <CheckpointControlLoopSection
-                  checkpointControlLoop={checkpointControlLoop}
-                  pendingApprovalCount={agent.pendingApprovalCount ?? 0}
-                  operatorActionError={agent.operatorActionError ?? null}
-                  operatorActionStatus={agent.operatorActionStatus}
-                  pendingOperatorActionId={agent.pendingOperatorActionId ?? null}
-                  pendingOperatorIntent={controller.pendingOperatorIntent}
-                  operatorAnswers={controller.operatorAnswers}
-                  checkpointControlLoopRecoveryAlert={checkpointControlLoopRecoveryAlert}
-                  checkpointControlLoopCoverageAlert={checkpointControlLoopCoverageAlert}
-                  onOperatorAnswerChange={controller.handleOperatorAnswerChange}
-                  onResolveOperatorAction={controller.handleResolveOperatorAction}
-                  onResumeOperatorRun={controller.handleResumeOperatorRun}
-                  onResumeLiveActionRequired={controller.handleResumeLiveActionRequired}
-                />
-              ) : null}
-              <MemoryReviewSection
-                projectId={agent.project.id}
-                selectedSession={selectedAgentSession}
-                runId={renderableRuntimeRun?.runId ?? null}
-                onListSessionMemories={onListSessionMemories}
-                onExtractSessionMemoryCandidates={onExtractSessionMemoryCandidates}
-                onUpdateSessionMemory={onUpdateSessionMemory}
-                onDeleteSessionMemory={onDeleteSessionMemory}
-                onContextRefresh={handleContextRefresh}
-              />
             </div>
           )}
         </div>

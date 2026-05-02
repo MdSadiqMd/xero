@@ -792,27 +792,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
                   submitOpenAiCallback(flowId, { manualInput })
                 }
                 onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
-                onListSessionMemories={
-                  resolvedAdapter.listSessionMemories
-                    ? (request) => resolvedAdapter.listSessionMemories!(request)
-                    : undefined
-                }
-                onExtractSessionMemoryCandidates={
-                  resolvedAdapter.extractSessionMemoryCandidates
-                    ? (request) => resolvedAdapter.extractSessionMemoryCandidates!(request)
-                    : undefined
-                }
-                onUpdateSessionMemory={
-                  resolvedAdapter.updateSessionMemory
-                    ? (request) => resolvedAdapter.updateSessionMemory!(request)
-                    : undefined
-                }
-                onDeleteSessionMemory={
-                  resolvedAdapter.deleteSessionMemory
-                    ? (request) => resolvedAdapter.deleteSessionMemory!(request)
-                    : undefined
-                }
-                onContextRefresh={() => retry()}
               />
             </div>
           ) : null}
