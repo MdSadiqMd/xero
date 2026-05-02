@@ -20,9 +20,13 @@ mod tool_dispatch;
 mod types;
 
 pub use evals::{
-    run_agent_harness_eval_suite, AgentHarnessEvalCaseResult, AgentHarnessEvalCoverage,
-    AgentHarnessEvalMetrics, AgentHarnessEvalReport, AgentHarnessEvalThresholds,
-    HarnessEvalFixtureKind,
+    run_agent_definition_quality_eval_suite, run_agent_harness_eval_suite,
+    run_xero_quality_eval_suites, AgentDefinitionEvalFixtureKind, AgentDefinitionQualityCaseResult,
+    AgentDefinitionQualityCoverage, AgentDefinitionQualityEvalReport,
+    AgentDefinitionQualityMetrics, AgentDefinitionQualitySurface, AgentDefinitionQualityThresholds,
+    AgentHarnessEvalCaseResult, AgentHarnessEvalCoverage, AgentHarnessEvalMetrics,
+    AgentHarnessEvalReport, AgentHarnessEvalThresholds, HarnessEvalFixtureKind,
+    XeroQualityEvalReport,
 };
 pub use events::{publish_agent_event, subscribe_agent_events, AgentEventSubscription};
 pub use provider_adapters::{

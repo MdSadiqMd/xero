@@ -109,12 +109,6 @@ impl<'a> PromptCompiler<'a> {
             "xero-runtime",
             base_policy_fragment(self.runtime_agent_id),
         ));
-        if let Some(fragment) = agent_definition_policy_fragment(
-            self.runtime_agent_id,
-            self.agent_definition_snapshot.as_ref(),
-        )? {
-            fragments.push(fragment);
-        }
         fragments.push(prompt_fragment(
             "xero.tool_policy",
             900,
@@ -126,6 +120,12 @@ impl<'a> PromptCompiler<'a> {
                 self.tools,
             ),
         ));
+        if let Some(fragment) = agent_definition_policy_fragment(
+            self.runtime_agent_id,
+            self.agent_definition_snapshot.as_ref(),
+        )? {
+            fragments.push(fragment);
+        }
         fragments.extend(repository_instruction_fragments(self.repo_root));
         fragments.push(prompt_fragment(
             "project.code_map",
@@ -421,7 +421,7 @@ fn agent_definition_policy_fragment(
 
     Ok(Some(prompt_fragment(
         "xero.agent_definition_policy",
-        925,
+        850,
         "Custom agent definition policy",
         &format!("agent-definition:{definition_id}@{definition_version}"),
         body,
