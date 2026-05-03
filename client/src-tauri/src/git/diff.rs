@@ -4,6 +4,10 @@ use git2::{DiffFormat, DiffOptions};
 
 use crate::{
     commands::{
+        payload_budget::{
+            estimate_serialized_payload_bytes, payload_budget_diagnostic,
+            REPOSITORY_DIFF_BUDGET_BYTES,
+        },
         BranchSummaryDto, CommandError, CommandResult, RepositoryDiffResponseDto,
         RepositoryDiffScope,
     },
@@ -78,16 +82,28 @@ fn load_repository_diff_from_handle(
         RepositoryDiffScope::Staged | RepositoryDiffScope::Worktree => repository.head_sha.clone(),
     };
 
+    let mut response = RepositoryDiffResponseDto {
+        repository: repository.repository_summary(),
+        scope,
+        patch: rendered.patch,
+        truncated: rendered.truncated,
+        base_revision,
+        payload_budget: None,
+    };
+    let observed_bytes = estimate_serialized_payload_bytes(&response);
+    response.payload_budget = payload_budget_diagnostic(
+        "repository_diff",
+        "repository diff",
+        REPOSITORY_DIFF_BUDGET_BYTES,
+        observed_bytes,
+        response.truncated,
+        false,
+    );
+
     Ok(RepositoryDiffProjection {
         branch: repository.branch.clone(),
         changed_files: rendered.changed_files,
-        response: RepositoryDiffResponseDto {
-            repository: repository.repository_summary(),
-            scope,
-            patch: rendered.patch,
-            truncated: rendered.truncated,
-            base_revision,
-        },
+        response,
     })
 }
 

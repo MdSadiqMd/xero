@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { EditorView as CodeMirrorView } from '@codemirror/view'
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import type { EditorView as CodeMirrorView } from '@codemirror/view'
 import type {
   CreateProjectEntryRequestDto,
   CreateProjectEntryResponseDto,
@@ -19,20 +19,23 @@ import type {
   WriteProjectFileResponseDto,
 } from '@/src/lib/xero-model'
 import type { ExecutionPaneView } from '@/src/features/xero/use-xero-desktop-state'
-import { CodeEditor } from './code-editor'
 import { DeleteFileDialog } from './delete-file-dialog'
 import { RenameFileDialog } from './rename-file-dialog'
 import { EditorEmptyState, LoadingState } from './execution-view/editor-empty-state'
 import { ExplorerPane } from './execution-view/explorer-pane'
-import { FindReplacePane } from './execution-view/find-replace-pane'
 import { EditorStatusBar, EditorToolbar } from './execution-view/editor-status-bar'
 import { EditorTabs } from './execution-view/editor-tabs'
 import { useExecutionWorkspaceController } from './execution-view/use-execution-workspace-controller'
 
+const LazyCodeEditor = lazy(() => import('./code-editor').then((module) => ({ default: module.CodeEditor })))
+const LazyFindReplacePane = lazy(() =>
+  import('./execution-view/find-replace-pane').then((module) => ({ default: module.FindReplacePane })),
+)
+
 export interface ExecutionViewProps {
   execution: ExecutionPaneView
   active?: boolean
-  listProjectFiles: (projectId: string) => Promise<ListProjectFilesResponseDto>
+  listProjectFiles: (projectId: string, path?: string) => Promise<ListProjectFilesResponseDto>
   readProjectFile: (projectId: string, path: string) => Promise<ReadProjectFileResponseDto>
   writeProjectFile: (projectId: string, path: string, content: string) => Promise<WriteProjectFileResponseDto>
   createProjectEntry: (request: CreateProjectEntryRequestDto) => Promise<CreateProjectEntryResponseDto>
@@ -70,8 +73,10 @@ function EditorView({
     cursor,
     setCursor,
     isTreeLoading,
+    loadingFolders,
     pendingFilePath,
     workspaceError,
+    treeBudgetInfo,
     renameTarget,
     setRenameTarget,
     deleteTarget,
@@ -80,6 +85,8 @@ function EditorView({
     setNewChildTarget,
     activeNode,
     activeContent,
+    activeSavedContent,
+    activeDocumentVersion,
     activeLang,
     activeLineCount,
     isActiveDirty,
@@ -88,7 +95,9 @@ function EditorView({
     closeTab,
     handleSelectFile,
     handleToggleFolder,
-    handleChange,
+    handleSnapshotChange,
+    handleDirtyChange,
+    handleDocumentStatsChange,
     saveActive,
     revertActive,
     reloadProjectTree,
@@ -121,15 +130,86 @@ function EditorView({
   }>({ open: false, query: '', token: 0 })
   const pendingJumpRef = useRef<{ path: string; line: number; column: number } | null>(null)
 
+  const flushEditorSnapshot = useCallback(() => {
+    if (!editorView) {
+      return undefined
+    }
+
+    const snapshot = editorView.state.doc.toString()
+    handleSnapshotChange(snapshot)
+    return snapshot
+  }, [editorView, handleSnapshotChange])
+
+  const handleSaveActive = useCallback(
+    (snapshot?: string) => {
+      void saveActive(snapshot ?? flushEditorSnapshot())
+    },
+    [flushEditorSnapshot, saveActive],
+  )
+
+  const handleSelectTab = useCallback(
+    (path: string) => {
+      flushEditorSnapshot()
+      setActivePath(path)
+    },
+    [flushEditorSnapshot, setActivePath],
+  )
+
+  const handleCloseTab = useCallback(
+    (path: string) => {
+      flushEditorSnapshot()
+      closeTab(path)
+    },
+    [closeTab, flushEditorSnapshot],
+  )
+
+  const handleSelectFileWithSnapshot = useCallback(
+    (path: string) => {
+      flushEditorSnapshot()
+      void handleSelectFile(path)
+    },
+    [flushEditorSnapshot, handleSelectFile],
+  )
+
+  const handleMoveEntryWithSnapshot = useCallback(
+    (path: string, targetParentPath: string) => {
+      flushEditorSnapshot()
+      return handleMoveEntry(path, targetParentPath)
+    },
+    [flushEditorSnapshot, handleMoveEntry],
+  )
+
+  const handleCreateSubmitWithSnapshot = useCallback(
+    (name: string) => {
+      flushEditorSnapshot()
+      return handleCreateSubmit(name)
+    },
+    [flushEditorSnapshot, handleCreateSubmit],
+  )
+
+  const handleRenameSubmitWithSnapshot = useCallback(
+    (newName: string) => {
+      flushEditorSnapshot()
+      return handleRenameSubmit(newName)
+    },
+    [flushEditorSnapshot, handleRenameSubmit],
+  )
+
+  const handleDeleteSubmitWithSnapshot = useCallback(() => {
+    flushEditorSnapshot()
+    return handleDeleteSubmit()
+  }, [flushEditorSnapshot, handleDeleteSubmit])
+
   const handleOpenFind = useCallback(
     ({ initialQuery }: { withReplace: boolean; initialQuery: string }) => {
+      flushEditorSnapshot()
       setFindState((prev) => ({
         open: true,
         query: initialQuery || prev.query,
         token: prev.token + 1,
       }))
     },
-    [],
+    [flushEditorSnapshot],
   )
 
   const handleCloseFind = useCallback(() => {
@@ -147,9 +227,7 @@ function EditorView({
       const pos = Math.min(target.to, target.from + Math.max(0, column - 1))
       view.dispatch({
         selection: { anchor: pos },
-        // Scroll centered so the match isn't hidden behind the top/bottom
-        // chrome on small editor panes.
-        effects: [CodeMirrorView.scrollIntoView(pos, { y: 'center' })],
+        scrollIntoView: true,
       })
       view.focus()
     },
@@ -158,6 +236,7 @@ function EditorView({
 
   const handleOpenAtLine = useCallback(
     (path: string, line: number, column: number) => {
+      flushEditorSnapshot()
       if (activePath === path) {
         jumpEditorToCursor(line, column)
         return
@@ -165,7 +244,7 @@ function EditorView({
       pendingJumpRef.current = { path, line, column }
       void handleSelectFile(path)
     },
-    [activePath, handleSelectFile, jumpEditorToCursor],
+    [activePath, flushEditorSnapshot, handleSelectFile, jumpEditorToCursor],
   )
 
   // After a jump-triggered file open finishes, position the cursor once the
@@ -183,38 +262,49 @@ function EditorView({
   return (
     <div className="flex min-h-0 w-full min-w-0 flex-1">
       {findState.open ? (
-        <FindReplacePane
-          view={editorView}
-          projectId={projectId}
-          activePath={activePath}
-          activeContent={activeContent}
-          onClose={handleCloseFind}
-          onOpenAtLine={handleOpenAtLine}
-          searchProject={searchProject}
-          replaceInProject={replaceInProject}
-          initialQuery={findState.query}
-          openToken={findState.token}
-        />
+        <Suspense
+          fallback={
+            <aside
+              aria-label="Loading find and replace"
+              className="w-[320px] shrink-0 border-r border-border bg-background"
+            />
+          }
+        >
+          <LazyFindReplacePane
+            view={editorView}
+            projectId={projectId}
+            activePath={activePath}
+            activeContent={activeContent}
+            onClose={handleCloseFind}
+            onOpenAtLine={handleOpenAtLine}
+            searchProject={searchProject}
+            replaceInProject={replaceInProject}
+            initialQuery={findState.query}
+            openToken={findState.token}
+          />
+        </Suspense>
       ) : (
         <ExplorerPane
           searchQuery={searchQuery}
           isTreeLoading={isTreeLoading}
           workspaceError={workspaceError}
+          treeBudgetInfo={treeBudgetInfo}
           tree={tree}
           activePath={activePath}
           expandedFolders={expandedFolders}
+          loadingFolders={loadingFolders}
           dirtyPaths={dirtyPaths}
           creatingEntry={newChildTarget}
           onSearchQueryChange={setSearchQuery}
-          onSelectFile={handleSelectFile}
+          onSelectFile={handleSelectFileWithSnapshot}
           onToggleFolder={handleToggleFolder}
           onRequestRename={handleRequestRename}
           onRequestDelete={handleRequestDelete}
           onRequestNewFile={handleRequestNewFile}
           onRequestNewFolder={handleRequestNewFolder}
-          onMoveEntry={handleMoveEntry}
+          onMoveEntry={handleMoveEntryWithSnapshot}
           onCancelCreate={() => setNewChildTarget(null)}
-          onCreateEntry={handleCreateSubmit}
+          onCreateEntry={handleCreateSubmitWithSnapshot}
           onCopyPath={handleCopyPath}
           onOpenFind={() => handleOpenFind({ withReplace: true, initialQuery: '' })}
           onReload={reloadProjectTree}
@@ -227,8 +317,8 @@ function EditorView({
           activePath={activePath}
           dirtyPaths={dirtyPaths}
           pendingFilePath={pendingFilePath}
-          onSelectTab={setActivePath}
-          onCloseTab={closeTab}
+          onSelectTab={handleSelectTab}
+          onCloseTab={handleCloseTab}
         />
 
         {activePath ? (
@@ -238,7 +328,7 @@ function EditorView({
             isSaving={isActiveSaving}
             onRevert={revertActive}
             onSave={() => {
-              void saveActive()
+              handleSaveActive()
             }}
           />
         ) : null}
@@ -250,17 +340,22 @@ function EditorView({
             ) : (
               <>
                 <div className="flex-1 overflow-hidden">
-                  <CodeEditor
-                    value={activeContent}
-                    filePath={activePath}
-                    onChange={handleChange}
-                    onSave={() => {
-                      void saveActive()
-                    }}
-                    onCursorChange={setCursor}
-                    onOpenFind={handleOpenFind}
-                    onViewReady={setEditorView}
-                  />
+                  <Suspense fallback={<LoadingState path={activePath} />}>
+                    <LazyCodeEditor
+                      key={activePath}
+                      value={activeContent}
+                      savedValue={activeSavedContent}
+                      documentVersion={activeDocumentVersion}
+                      filePath={activePath}
+                      onSnapshotChange={handleSnapshotChange}
+                      onDirtyChange={handleDirtyChange}
+                      onDocumentStatsChange={handleDocumentStatsChange}
+                      onSave={handleSaveActive}
+                      onCursorChange={setCursor}
+                      onOpenFind={handleOpenFind}
+                      onViewReady={setEditorView}
+                    />
+                  </Suspense>
                 </div>
                 <EditorStatusBar
                   cursor={cursor}
@@ -284,7 +379,7 @@ function EditorView({
         }}
         currentPath={renameTarget?.path ?? ''}
         type={renameTarget?.type ?? 'file'}
-        onRename={(newName) => handleRenameSubmit(newName)}
+        onRename={(newName) => handleRenameSubmitWithSnapshot(newName)}
       />
       <DeleteFileDialog
         open={!!deleteTarget}
@@ -294,17 +389,17 @@ function EditorView({
         path={deleteTarget?.path ?? ''}
         type={deleteTarget?.type ?? 'file'}
         onDelete={() => {
-          void handleDeleteSubmit()
+          void handleDeleteSubmitWithSnapshot()
         }}
       />
     </div>
   )
 }
 
-export function ExecutionView(props: ExecutionViewProps) {
+export const ExecutionView = memo(function ExecutionView(props: ExecutionViewProps) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <EditorView {...props} />
     </div>
   )
-}
+})

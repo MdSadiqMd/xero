@@ -9,6 +9,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { createFrameCoalescer, type FrameCoalescer } from "@/lib/frame-governance"
 import { cn } from "@/lib/utils"
 
 const RAINBOW_PALETTE = [
@@ -68,66 +69,107 @@ interface PenOverlayProps {
 
 export function PenOverlay({ pageLabel, onSubmit, onExit }: PenOverlayProps) {
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const surfaceRectRef = useRef<DOMRect | null>(null)
+  const activeStrokeRef = useRef<Stroke | null>(null)
+  const pointCoalescerRef = useRef<FrameCoalescer<Point> | null>(null)
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const [activeStroke, setActiveStroke] = useState<Stroke | null>(null)
   const [anchor, setAnchor] = useState<ComposerAnchor | null>(null)
 
   const totalStrokes = strokes.length + (activeStroke ? 1 : 0)
 
+  const measureSurface = useCallback(() => {
+    const rect = surfaceRef.current?.getBoundingClientRect() ?? null
+    surfaceRectRef.current = rect
+    return rect
+  }, [])
+
+  const appendActivePoint = useCallback((next: Point) => {
+    const current = activeStrokeRef.current
+    if (!current) return
+    const last = current.points[current.points.length - 1]
+    if (last && Math.hypot(next.x - last.x, next.y - last.y) < 1.5) {
+      return
+    }
+    const updated = { ...current, points: [...current.points, next] }
+    activeStrokeRef.current = updated
+    setActiveStroke(updated)
+  }, [])
+
+  useEffect(() => {
+    const coalescer = createFrameCoalescer<Point>({
+      onFlush: appendActivePoint,
+    })
+    pointCoalescerRef.current = coalescer
+    return () => {
+      coalescer.dispose()
+      pointCoalescerRef.current = null
+    }
+  }, [appendActivePoint])
+
+  const pointFromEvent = useCallback((event: React.PointerEvent<HTMLDivElement>): Point | null => {
+    const rect = surfaceRectRef.current ?? measureSurface()
+    if (!rect) return null
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+  }, [measureSurface])
+
   const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
-    const rect = surfaceRef.current?.getBoundingClientRect()
+    const rect = measureSurface()
     if (!rect) return
     event.currentTarget.setPointerCapture(event.pointerId)
     setAnchor(null)
-    setActiveStroke({
+    pointCoalescerRef.current?.cancel()
+    const stroke = {
       id: `stroke-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
       points: [{ x: event.clientX - rect.left, y: event.clientY - rect.top }],
-    })
-  }, [])
+    }
+    activeStrokeRef.current = stroke
+    setActiveStroke(stroke)
+  }, [measureSurface])
 
   const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    setActiveStroke((current) => {
-      if (!current) return current
-      const rect = surfaceRef.current?.getBoundingClientRect()
-      if (!rect) return current
-      const next = { x: event.clientX - rect.left, y: event.clientY - rect.top }
-      const last = current.points[current.points.length - 1]
-      if (last && Math.hypot(next.x - last.x, next.y - last.y) < 1.5) {
-        return current
-      }
-      return { ...current, points: [...current.points, next] }
-    })
-  }, [])
+    const next = pointFromEvent(event)
+    if (!next) return
+    pointCoalescerRef.current?.schedule(next)
+  }, [pointFromEvent])
 
   const handlePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
-    setActiveStroke((current) => {
-      if (!current) return null
-      if (current.points.length < 2) return null
-      setStrokes((existing) => [...existing, current])
-      const xs = current.points.map((p) => p.x)
-      const ys = current.points.map((p) => p.y)
-      const maxX = Math.max(...xs)
-      const minY = Math.min(...ys)
-      const surface = surfaceRef.current?.getBoundingClientRect()
-      if (surface) {
-        setAnchor({
-          surfaceWidth: surface.width,
-          surfaceHeight: surface.height,
-          x: maxX,
-          y: minY,
-          contextLabel: `Sketch · ${current.points.length} pts`,
-        })
-      }
-      return null
-    })
-  }, [])
+    const finalPoint = pointFromEvent(event)
+    if (finalPoint) {
+      pointCoalescerRef.current?.schedule(finalPoint)
+    }
+    pointCoalescerRef.current?.flush()
+
+    const current = activeStrokeRef.current
+    activeStrokeRef.current = null
+    setActiveStroke(null)
+    if (!current || current.points.length < 2) return
+
+    setStrokes((existing) => [...existing, current])
+    const xs = current.points.map((p) => p.x)
+    const ys = current.points.map((p) => p.y)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const surface = surfaceRectRef.current ?? measureSurface()
+    if (surface) {
+      setAnchor({
+        surfaceWidth: surface.width,
+        surfaceHeight: surface.height,
+        x: maxX,
+        y: minY,
+        contextLabel: `Sketch · ${current.points.length} pts`,
+      })
+    }
+  }, [measureSurface, pointFromEvent])
 
   const handleClear = useCallback(() => {
+    pointCoalescerRef.current?.cancel()
     setStrokes([])
+    activeStrokeRef.current = null
     setActiveStroke(null)
     setAnchor(null)
   }, [])

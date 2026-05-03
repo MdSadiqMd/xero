@@ -50,7 +50,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }))
 
-import { BrowserSidebar } from "./browser-sidebar"
+import { BrowserSidebar, createBrowserEventCoalescer } from "./browser-sidebar"
 
 // jsdom in this project ships a localStorage object whose methods aren't
 // functions; install a minimal in-memory shim so the component's first-run
@@ -97,6 +97,71 @@ afterEach(() => {
 })
 
 describe("BrowserSidebar", () => {
+  it("coalesces repeated browser events by tab before applying them", () => {
+    let flush: () => void = () => undefined
+    const urlUpdates: string[] = []
+    const loadUpdates: boolean[] = []
+    const tabUpdates: number[] = []
+    const coalescer = createBrowserEventCoalescer({
+      onUrlChanged: (payload) => urlUpdates.push(payload.url),
+      onLoadState: (payload) => loadUpdates.push(payload.loading),
+      onTabUpdated: (payload) => tabUpdates.push(payload.tabs.length),
+      schedule: (callback) => {
+        flush = callback
+        return () => {
+          flush = () => undefined
+        }
+      },
+    })
+
+    coalescer.enqueueUrlChanged({
+      tabId: "tab-1",
+      url: "https://example.com/old",
+      title: null,
+      canGoBack: false,
+      canGoForward: false,
+    })
+    coalescer.enqueueUrlChanged({
+      tabId: "tab-1",
+      url: "https://example.com/new",
+      title: "New",
+      canGoBack: true,
+      canGoForward: false,
+    })
+    coalescer.enqueueLoadState({
+      tabId: "tab-1",
+      loading: true,
+      url: "https://example.com/new",
+      error: null,
+    })
+    coalescer.enqueueLoadState({
+      tabId: "tab-1",
+      loading: false,
+      url: "https://example.com/new",
+      error: null,
+    })
+    coalescer.enqueueTabUpdated({
+      tabs: [
+        {
+          id: "tab-1",
+          label: "xero-browser-tab-1",
+          title: "New",
+          url: "https://example.com/new",
+          loading: false,
+          canGoBack: true,
+          canGoForward: false,
+          active: true,
+        },
+      ],
+    })
+
+    flush()
+
+    expect(urlUpdates).toEqual(["https://example.com/new"])
+    expect(loadUpdates).toEqual([false])
+    expect(tabUpdates).toEqual([1])
+  })
+
   it("hydrates existing tabs when opened", async () => {
     registerInvoke("browser_tab_list", async () => [
       {

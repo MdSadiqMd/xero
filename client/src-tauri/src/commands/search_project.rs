@@ -7,9 +7,15 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::{
     commands::{
-        project_files::resolve_project_root, validate_non_empty, CommandError, CommandResult,
-        ReplaceInProjectRequestDto, ReplaceInProjectResponseDto, SearchFileResultDto,
-        SearchMatchDto, SearchProjectRequestDto, SearchProjectResponseDto,
+        backend_jobs::BackendCancellationToken,
+        payload_budget::{
+            estimate_serialized_payload_bytes, payload_budget_diagnostic,
+            PROJECT_SEARCH_RESULTS_BUDGET_BYTES,
+        },
+        project_files::{is_skipped_project_directory_entry, resolve_project_root},
+        validate_non_empty, CommandError, CommandResult, ReplaceInProjectRequestDto,
+        ReplaceInProjectResponseDto, SearchFileResultDto, SearchMatchDto, SearchProjectRequestDto,
+        SearchProjectResponseDto,
     },
     state::DesktopState,
 };
@@ -20,6 +26,10 @@ use crate::{
 const DEFAULT_MAX_RESULTS: u32 = 5000;
 /// Hard cap so even explicit client-requested higher limits don't uncap us.
 const HARD_MAX_RESULTS: u32 = 20_000;
+/// Page search responses by files so the UI can render reviewed result sets
+/// without waiting for an unbounded match payload.
+const DEFAULT_MAX_RESULT_FILES: u32 = 40;
+const HARD_MAX_RESULT_FILES: u32 = 250;
 /// Per-file size cutoff — skip anything larger to keep worst-case grep fast
 /// and avoid loading minified bundles into memory.
 const MAX_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
@@ -28,7 +38,7 @@ const MAX_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
 const PREVIEW_MAX_LEN: usize = 240;
 
 #[tauri::command]
-pub fn search_project<R: Runtime>(
+pub async fn search_project<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: SearchProjectRequestDto,
@@ -45,27 +55,62 @@ pub fn search_project<R: Runtime>(
     )?;
     let include = build_globset(&request.include_globs, "includeGlobs")?;
     let exclude = build_globset(&request.exclude_globs, "excludeGlobs")?;
+    let cursor = validate_search_cursor(request.cursor.as_deref())?;
 
     let cap = request
         .max_results
         .map(|v| v.min(HARD_MAX_RESULTS))
         .unwrap_or(DEFAULT_MAX_RESULTS);
+    let file_cap = request
+        .max_files
+        .map(|v| v.clamp(1, HARD_MAX_RESULT_FILES))
+        .unwrap_or(DEFAULT_MAX_RESULT_FILES);
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id;
+    drop(state);
+    drop(app);
 
+    jobs.run_blocking_latest(
+        "project-search:visible",
+        "project search",
+        move |cancellation| {
+            search_project_at_root(
+                project_root,
+                project_id,
+                pattern,
+                include,
+                exclude,
+                cap,
+                file_cap,
+                cursor,
+                cancellation,
+            )
+        },
+    )
+    .await
+}
+
+fn search_project_at_root(
+    project_root: std::path::PathBuf,
+    project_id: String,
+    pattern: Regex,
+    include: Option<GlobSet>,
+    exclude: Option<GlobSet>,
+    cap: u32,
+    file_cap: u32,
+    cursor: Option<String>,
+    cancellation: BackendCancellationToken,
+) -> CommandResult<SearchProjectResponseDto> {
     let mut total_matches: u32 = 0;
     let mut total_files: u32 = 0;
     let mut truncated = false;
     let mut files: Vec<SearchFileResultDto> = Vec::new();
 
-    let walker = WalkBuilder::new(&project_root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .parents(true)
-        .follow_links(false)
-        .build();
+    let mut next_cursor: Option<String> = None;
+    let walker = project_walk_builder(&project_root).build();
 
     'walk: for entry in walker {
+        cancellation.check_cancelled("project search")?;
         let Ok(entry) = entry else { continue };
         let Some(ft) = entry.file_type() else {
             continue;
@@ -78,6 +123,11 @@ pub fn search_project<R: Runtime>(
         let Some(virtual_path) = to_virtual_path(&project_root, abs_path) else {
             continue;
         };
+        if let Some(ref cursor) = cursor {
+            if virtual_path <= *cursor {
+                continue;
+            }
+        }
 
         if let Some(ref set) = include {
             if !set.is_match(virtual_path.trim_start_matches('/')) {
@@ -100,9 +150,13 @@ pub fn search_project<R: Runtime>(
             // Non-UTF-8 / binary — skip silently.
             continue;
         };
+        cancellation.check_cancelled("project search")?;
 
         let mut matches_in_file: Vec<SearchMatchDto> = Vec::new();
         for (line_idx, line) in contents.lines().enumerate() {
+            if line_idx % 128 == 0 {
+                cancellation.check_cancelled("project search")?;
+            }
             if total_matches >= cap {
                 truncated = true;
                 if !matches_in_file.is_empty() {
@@ -135,26 +189,48 @@ pub fn search_project<R: Runtime>(
 
         if !matches_in_file.is_empty() {
             files.push(SearchFileResultDto {
-                path: virtual_path,
+                path: virtual_path.clone(),
                 matches: matches_in_file,
             });
             total_files += 1;
+            if total_files >= file_cap {
+                truncated = true;
+                next_cursor = Some(virtual_path);
+                break;
+            }
+            if total_matches >= cap {
+                truncated = true;
+                break;
+            }
         }
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));
 
-    Ok(SearchProjectResponseDto {
-        project_id: request.project_id,
+    let mut response = SearchProjectResponseDto {
+        project_id,
         total_matches,
         total_files,
         truncated,
+        next_cursor,
+        payload_budget: None,
         files,
-    })
+    };
+    let observed_bytes = estimate_serialized_payload_bytes(&response);
+    response.payload_budget = payload_budget_diagnostic(
+        "project_search_results",
+        "project search results",
+        PROJECT_SEARCH_RESULTS_BUDGET_BYTES,
+        observed_bytes,
+        response.truncated,
+        false,
+    );
+
+    Ok(response)
 }
 
 #[tauri::command]
-pub fn replace_in_project<R: Runtime>(
+pub async fn replace_in_project<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: ReplaceInProjectRequestDto,
@@ -171,7 +247,24 @@ pub fn replace_in_project<R: Runtime>(
     )?;
     let include = build_globset(&request.include_globs, "includeGlobs")?;
     let exclude = build_globset(&request.exclude_globs, "excludeGlobs")?;
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id.clone();
+    drop(state);
+    drop(app);
 
+    jobs.run_blocking_project_lane(project_id, "file", "project replace", move || {
+        replace_in_project_at_root(project_root, request, pattern, include, exclude)
+    })
+    .await
+}
+
+fn replace_in_project_at_root(
+    project_root: std::path::PathBuf,
+    request: ReplaceInProjectRequestDto,
+    pattern: Regex,
+    include: Option<GlobSet>,
+    exclude: Option<GlobSet>,
+) -> CommandResult<ReplaceInProjectResponseDto> {
     // Explicit target set wins over globs for scoping — the UI uses this to
     // apply replacements to the exact files the user previewed.
     let targets: Option<std::collections::HashSet<String>> = request
@@ -182,14 +275,7 @@ pub fn replace_in_project<R: Runtime>(
     let mut files_changed: u32 = 0;
     let mut total_replacements: u32 = 0;
 
-    let walker = WalkBuilder::new(&project_root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .parents(true)
-        .follow_links(false)
-        .build();
+    let walker = project_walk_builder(&project_root).build();
 
     for entry in walker {
         let Ok(entry) = entry else { continue };
@@ -329,6 +415,44 @@ fn build_globset(globs: &[String], field: &'static str) -> CommandResult<Option<
     }
 }
 
+fn project_walk_builder(project_root: &Path) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(project_root);
+    builder
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .parents(true)
+        .follow_links(false)
+        .filter_entry(|entry| !is_skipped_project_directory_entry(entry))
+        .sort_by_file_path(|left, right| left.cmp(right));
+    builder
+}
+
+fn validate_search_cursor(raw: Option<&str>) -> CommandResult<Option<String>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed == "/" || !trimmed.starts_with('/') || trimmed.contains('\\') {
+        return Err(CommandError::invalid_request("cursor"));
+    }
+
+    let stripped = trimmed.trim_start_matches('/');
+    if stripped.is_empty()
+        || stripped
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err(CommandError::invalid_request("cursor"));
+    }
+
+    Ok(Some(trimmed.into()))
+}
+
 /// Convert an absolute path beneath `root` into the `/relative/path` form the
 /// rest of the app uses. Returns None for paths that aren't inside the root
 /// (shouldn't happen with our walker, but paranoia is free).
@@ -406,7 +530,14 @@ impl regex::Replacer for NoExpand<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_pattern, build_preview, to_virtual_path, utf8_char_col};
+    use std::fs;
+
+    use crate::commands::backend_jobs::BackendCancellationToken;
+
+    use super::{
+        build_pattern, build_preview, search_project_at_root, to_virtual_path, utf8_char_col,
+        validate_search_cursor,
+    };
 
     #[test]
     fn pattern_literal_case_insensitive() {
@@ -449,5 +580,106 @@ mod tests {
         // Byte 3 is the start of space after 'é' (é = bytes 2-3, so byte 4 is 'x').
         let col = utf8_char_col(line, 4);
         assert_eq!(col, 4);
+    }
+
+    #[test]
+    fn project_search_pages_results_by_file_with_stable_cursor() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        fs::write(temp_dir.path().join("a.txt"), "needle\n").expect("a");
+        fs::write(temp_dir.path().join("b.txt"), "needle\n").expect("b");
+        fs::write(temp_dir.path().join("c.txt"), "needle\n").expect("c");
+        let pattern = build_pattern("needle", true, false, false).expect("pattern");
+
+        let first = search_project_at_root(
+            temp_dir.path().to_path_buf(),
+            "project-1".into(),
+            pattern.clone(),
+            None,
+            None,
+            100,
+            2,
+            None,
+            BackendCancellationToken::default(),
+        )
+        .expect("first page");
+        let second = search_project_at_root(
+            temp_dir.path().to_path_buf(),
+            "project-1".into(),
+            pattern,
+            None,
+            None,
+            100,
+            2,
+            first.next_cursor.clone(),
+            BackendCancellationToken::default(),
+        )
+        .expect("second page");
+
+        assert_eq!(
+            first
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/a.txt", "/b.txt"]
+        );
+        assert_eq!(first.next_cursor.as_deref(), Some("/b.txt"));
+        assert!(first.truncated);
+        assert_eq!(
+            second
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/c.txt"]
+        );
+    }
+
+    #[test]
+    fn project_search_uses_same_ignore_rules_as_project_tree() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        fs::write(temp_dir.path().join(".gitignore"), "ignored.txt\n").expect("gitignore");
+        fs::write(temp_dir.path().join("visible.txt"), "needle").expect("visible");
+        fs::write(temp_dir.path().join("ignored.txt"), "needle").expect("ignored");
+        fs::create_dir(temp_dir.path().join("node_modules")).expect("node_modules");
+        fs::write(
+            temp_dir.path().join("node_modules").join("dep.txt"),
+            "needle",
+        )
+        .expect("dep");
+        let pattern = build_pattern("needle", true, false, false).expect("pattern");
+
+        let response = search_project_at_root(
+            temp_dir.path().to_path_buf(),
+            "project-1".into(),
+            pattern,
+            None,
+            None,
+            100,
+            10,
+            None,
+            BackendCancellationToken::default(),
+        )
+        .expect("search");
+
+        assert_eq!(
+            response
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/visible.txt"]
+        );
+    }
+
+    #[test]
+    fn project_search_rejects_unsafe_cursors() {
+        assert_eq!(
+            validate_search_cursor(Some("/src/main.rs")).expect("cursor"),
+            Some("/src/main.rs".into())
+        );
+        assert!(validate_search_cursor(Some("../escape")).is_err());
+        assert!(validate_search_cursor(Some("/src/../escape")).is_err());
+        assert!(validate_search_cursor(Some("/")).is_err());
     }
 }

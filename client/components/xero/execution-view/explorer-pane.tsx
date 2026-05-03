@@ -8,11 +8,13 @@ import {
   type ReactNode,
 } from 'react'
 import { FilePlus, FolderPlus, RotateCcw, Search, X } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { createFrameCoalescer } from '@/lib/frame-governance'
 import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
-import type { FileSystemNode } from '@/src/lib/file-system-tree'
+import type { FileSystemNode, ProjectFileTreeBudgetInfo } from '@/src/lib/file-system-tree'
 import { FileTree } from '../file-tree'
 
 const MIN_WIDTH = 220
@@ -25,9 +27,11 @@ interface ExplorerPaneProps {
   searchQuery: string
   isTreeLoading: boolean
   workspaceError: string | null
+  treeBudgetInfo: ProjectFileTreeBudgetInfo
   tree: FileSystemNode
   activePath: string | null
   expandedFolders: Set<string>
+  loadingFolders: Set<string>
   dirtyPaths: Set<string>
   creatingEntry: { parentPath: string; type: 'file' | 'folder' } | null
   onSearchQueryChange: (value: string) => void
@@ -80,9 +84,11 @@ export function ExplorerPane({
   searchQuery,
   isTreeLoading,
   workspaceError,
+  treeBudgetInfo,
   tree,
   activePath,
   expandedFolders,
+  loadingFolders,
   dirtyPaths,
   creatingEntry,
   onSearchQueryChange,
@@ -117,16 +123,16 @@ export function ExplorerPane({
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  useEffect(() => {
-    writePersistedWidth(width)
-  }, [width])
-
   const handleResizeStart = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
     const startX = event.clientX
     const startWidth = widthRef.current
     const ceiling = viewportMaxWidth()
+    let latestWidth = startWidth
+    const widthUpdates = createFrameCoalescer<number>({
+      onFlush: setWidth,
+    })
     setMaxWidth(ceiling)
     setIsResizing(true)
 
@@ -137,15 +143,18 @@ export function ExplorerPane({
 
     const handleMove = (ev: globalThis.PointerEvent) => {
       const delta = ev.clientX - startX
-      setWidth(clampWidth(startWidth + delta, ceiling))
+      latestWidth = clampWidth(startWidth + delta, ceiling)
+      widthUpdates.schedule(latestWidth)
     }
     const handleUp = () => {
+      widthUpdates.flush()
       window.removeEventListener('pointermove', handleMove)
       window.removeEventListener('pointerup', handleUp)
       window.removeEventListener('pointercancel', handleUp)
       document.body.style.cursor = previousCursor
       document.body.style.userSelect = previousSelect
       setIsResizing(false)
+      writePersistedWidth(latestWidth)
     }
 
     window.addEventListener('pointermove', handleMove)
@@ -161,7 +170,9 @@ export function ExplorerPane({
     setMaxWidth(ceiling)
     setWidth((current) => {
       const delta = event.key === 'ArrowRight' ? step : -step
-      return clampWidth(current + delta, ceiling)
+      const next = clampWidth(current + delta, ceiling)
+      writePersistedWidth(next)
+      return next
     })
   }, [])
 
@@ -241,6 +252,14 @@ export function ExplorerPane({
         </div>
       ) : null}
 
+      {treeBudgetInfo.truncated ? (
+        <Alert className="mx-2 mb-2 rounded-md border-warning/40 bg-warning/10 px-2.5 py-2 text-[11px]">
+          <AlertDescription className="text-[11px] text-warning dark:text-warning">
+            Project tree paused with {treeBudgetInfo.omittedEntryCount.toLocaleString()} entries omitted to keep the workspace responsive.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {isTreeLoading && !tree.children?.length ? (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-[11px] text-muted-foreground">
           Loading selected project files…
@@ -250,6 +269,7 @@ export function ExplorerPane({
           root={tree}
           selectedPath={activePath}
           expandedFolders={expandedFolders}
+          loadingFolders={loadingFolders}
           dirtyPaths={dirtyPaths}
           searchQuery={searchQuery}
           creatingEntry={creatingEntry}

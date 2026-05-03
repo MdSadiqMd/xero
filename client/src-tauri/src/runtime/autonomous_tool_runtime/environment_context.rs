@@ -320,6 +320,12 @@ fn environment_tool_category_id(category: EnvironmentToolCategory) -> &'static s
         EnvironmentToolCategory::DatabaseCli => "database_cli",
         EnvironmentToolCategory::SolanaTooling => "solana_tooling",
         EnvironmentToolCategory::AgentAiCli => "agent_ai_cli",
+        EnvironmentToolCategory::Editor => "editor",
+        EnvironmentToolCategory::BuildTool => "build_tool",
+        EnvironmentToolCategory::Linter => "linter",
+        EnvironmentToolCategory::VersionManager => "version_manager",
+        EnvironmentToolCategory::IacTool => "iac_tool",
+        EnvironmentToolCategory::ShellUtility => "shell_utility",
     }
 }
 
@@ -476,6 +482,7 @@ mod tests {
             tools: vec![EnvironmentToolSummary {
                 id: "node".into(),
                 category: EnvironmentToolCategory::LanguageRuntime,
+                custom: false,
                 present: true,
                 version: Some("v20.11.1".into()),
                 display_path: Some("~/bin/node".into()),

@@ -50,6 +50,7 @@ export {
   browserComputerUseSurfaceSchema,
   gitToolResultScopeSchema,
   mcpCapabilityKindSchema,
+  payloadBudgetDiagnosticSchema,
   safePercent,
   toolResultSummarySchema,
   webToolResultContentKindSchema,
@@ -59,6 +60,7 @@ export type {
   BrowserComputerUseSurfaceDto,
   GitToolResultScopeDto,
   McpCapabilityKindDto,
+  PayloadBudgetDiagnosticDto,
   ToolResultSummaryDto,
   WebToolResultContentKindDto,
 } from './xero-model/shared'

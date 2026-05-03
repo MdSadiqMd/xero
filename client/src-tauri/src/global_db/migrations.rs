@@ -15,10 +15,22 @@ pub fn migrations() -> &'static Migrations<'static> {
             M::up(BROWSER_CONTROL_SETTINGS_SQL),
             M::up(ENVIRONMENT_PROFILE_SQL),
             M::up(SOUL_SETTINGS_SQL),
+            M::up(USER_ADDED_ENVIRONMENT_TOOLS_SQL),
         ])
     });
     &MIGRATIONS
 }
+
+const USER_ADDED_ENVIRONMENT_TOOLS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS user_added_environment_tools (
+        id              TEXT PRIMARY KEY CHECK (id <> ''),
+        category        TEXT NOT NULL CHECK (category <> ''),
+        command         TEXT NOT NULL CHECK (command <> ''),
+        args_json       TEXT NOT NULL CHECK (args_json <> '' AND json_valid(args_json)),
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    ) STRICT;
+"#;
 
 const SOUL_SETTINGS_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS soul_settings (

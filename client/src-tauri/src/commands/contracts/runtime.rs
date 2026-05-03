@@ -191,15 +191,13 @@ impl RuntimeAgentIdDto {
     }
 
     pub fn allows_plan_gate(&self) -> bool {
-        matches!(self, Self::Engineer)
+        matches!(self, Self::Engineer | Self::Debug)
     }
 
     pub fn allows_verification_gate(&self) -> bool {
-        matches!(self, Self::Engineer)
+        matches!(self, Self::Engineer | Self::Debug)
     }
 
-    /// Whether this agent is allowed to use engineering tools (file write,
-    /// shell exec, etc.). Only Engineer and Debug have this capability.
     pub fn allows_engineering_tools(&self) -> bool {
         matches!(self, Self::Engineer | Self::Debug)
     }
@@ -217,6 +215,21 @@ pub fn default_runtime_agent_approval_mode(
         RuntimeAgentIdDto::Engineer => RuntimeRunApprovalModeDto::Suggest,
         RuntimeAgentIdDto::Debug => RuntimeRunApprovalModeDto::Suggest,
         RuntimeAgentIdDto::AgentCreate => RuntimeRunApprovalModeDto::Suggest,
+    }
+}
+
+pub fn runtime_agent_allowed_approval_modes(
+    agent_id: &RuntimeAgentIdDto,
+) -> Vec<RuntimeRunApprovalModeDto> {
+    match agent_id {
+        RuntimeAgentIdDto::Ask | RuntimeAgentIdDto::AgentCreate => {
+            vec![RuntimeRunApprovalModeDto::Suggest]
+        }
+        RuntimeAgentIdDto::Engineer | RuntimeAgentIdDto::Debug => vec![
+            RuntimeRunApprovalModeDto::Suggest,
+            RuntimeRunApprovalModeDto::AutoEdit,
+            RuntimeRunApprovalModeDto::Yolo,
+        ],
     }
 }
 
@@ -256,7 +269,7 @@ pub fn runtime_agent_descriptor(agent_id: RuntimeAgentIdDto) -> RuntimeAgentDesc
             lifecycle_state: RuntimeAgentLifecycleStateDto::Active,
             base_capability_profile: RuntimeAgentBaseCapabilityProfileDto::ObserveOnly,
             default_approval_mode: RuntimeRunApprovalModeDto::Suggest,
-            allowed_approval_modes: vec![RuntimeRunApprovalModeDto::Suggest],
+            allowed_approval_modes: runtime_agent_allowed_approval_modes(&agent_id),
             prompt_policy: RuntimeAgentPromptPolicyDto::Ask,
             tool_policy: RuntimeAgentToolPolicyDto::ObserveOnly,
             output_contract: RuntimeAgentOutputContractDto::Answer,
@@ -275,11 +288,7 @@ pub fn runtime_agent_descriptor(agent_id: RuntimeAgentIdDto) -> RuntimeAgentDesc
             lifecycle_state: RuntimeAgentLifecycleStateDto::Active,
             base_capability_profile: RuntimeAgentBaseCapabilityProfileDto::Engineering,
             default_approval_mode: RuntimeRunApprovalModeDto::Suggest,
-            allowed_approval_modes: vec![
-                RuntimeRunApprovalModeDto::Suggest,
-                RuntimeRunApprovalModeDto::AutoEdit,
-                RuntimeRunApprovalModeDto::Yolo,
-            ],
+            allowed_approval_modes: runtime_agent_allowed_approval_modes(&agent_id),
             prompt_policy: RuntimeAgentPromptPolicyDto::Engineer,
             tool_policy: RuntimeAgentToolPolicyDto::Engineering,
             output_contract: RuntimeAgentOutputContractDto::EngineeringSummary,
@@ -298,11 +307,7 @@ pub fn runtime_agent_descriptor(agent_id: RuntimeAgentIdDto) -> RuntimeAgentDesc
             lifecycle_state: RuntimeAgentLifecycleStateDto::Active,
             base_capability_profile: RuntimeAgentBaseCapabilityProfileDto::Debugging,
             default_approval_mode: RuntimeRunApprovalModeDto::Suggest,
-            allowed_approval_modes: vec![
-                RuntimeRunApprovalModeDto::Suggest,
-                RuntimeRunApprovalModeDto::AutoEdit,
-                RuntimeRunApprovalModeDto::Yolo,
-            ],
+            allowed_approval_modes: runtime_agent_allowed_approval_modes(&agent_id),
             prompt_policy: RuntimeAgentPromptPolicyDto::Debug,
             tool_policy: RuntimeAgentToolPolicyDto::Engineering,
             output_contract: RuntimeAgentOutputContractDto::DebugSummary,
@@ -321,7 +326,7 @@ pub fn runtime_agent_descriptor(agent_id: RuntimeAgentIdDto) -> RuntimeAgentDesc
             lifecycle_state: RuntimeAgentLifecycleStateDto::Active,
             base_capability_profile: RuntimeAgentBaseCapabilityProfileDto::AgentBuilder,
             default_approval_mode: RuntimeRunApprovalModeDto::Suggest,
-            allowed_approval_modes: vec![RuntimeRunApprovalModeDto::Suggest],
+            allowed_approval_modes: runtime_agent_allowed_approval_modes(&agent_id),
             prompt_policy: RuntimeAgentPromptPolicyDto::AgentCreate,
             tool_policy: RuntimeAgentToolPolicyDto::AgentBuilder,
             output_contract: RuntimeAgentOutputContractDto::AgentDefinitionDraft,
@@ -844,6 +849,47 @@ pub struct StartRuntimeRunRequestDto {
     pub initial_controls: Option<RuntimeRunControlInputDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub initial_attachments: Vec<StagedAgentAttachmentDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAttachmentKindDto {
+    Image,
+    Document,
+    Text,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedAgentAttachmentDto {
+    pub kind: AgentAttachmentKindDto,
+    pub absolute_path: String,
+    pub media_type: String,
+    pub original_name: String,
+    pub size_bytes: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StageAgentAttachmentRequestDto {
+    pub project_id: String,
+    pub run_id: String,
+    pub original_name: String,
+    pub media_type: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiscardAgentAttachmentRequestDto {
+    pub project_id: String,
+    pub absolute_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -864,6 +910,8 @@ pub struct UpdateRuntimeRunControlsRequestDto {
     pub controls: Option<RuntimeRunControlInputDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<StagedAgentAttachmentDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<AgentAutoCompactPreferenceDto>,
 }
@@ -917,6 +965,26 @@ mod tests {
             &RuntimeAgentIdDto::AgentCreate,
             &RuntimeRunApprovalModeDto::AutoEdit
         ));
+    }
+
+    #[test]
+    fn engineering_agents_allow_all_approval_modes() {
+        assert_eq!(
+            runtime_agent_allowed_approval_modes(&RuntimeAgentIdDto::Engineer),
+            vec![
+                RuntimeRunApprovalModeDto::Suggest,
+                RuntimeRunApprovalModeDto::AutoEdit,
+                RuntimeRunApprovalModeDto::Yolo
+            ]
+        );
+        assert_eq!(
+            runtime_agent_allowed_approval_modes(&RuntimeAgentIdDto::Debug),
+            vec![
+                RuntimeRunApprovalModeDto::Suggest,
+                RuntimeRunApprovalModeDto::AutoEdit,
+                RuntimeRunApprovalModeDto::Yolo
+            ]
+        );
     }
 }
 

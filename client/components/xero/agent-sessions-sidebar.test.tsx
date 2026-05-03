@@ -130,6 +130,81 @@ describe('AgentSessionsSidebar', () => {
     expect(screen.queryByRole('separator', { name: 'Resize sessions sidebar' })).not.toBeInTheDocument()
   })
 
+  it('requests and releases peek from the collapsed strip', () => {
+    const onRequestPeek = vi.fn()
+    const onReleasePeek = vi.fn()
+    const { container } = renderSidebar({
+      collapsed: true,
+      mode: 'collapsed',
+      onPin: vi.fn(),
+      onRequestPeek,
+      onReleasePeek,
+    })
+
+    const sidebar = container.querySelector('aside') as HTMLElement
+    const strip = screen.getByRole('button', { name: 'Show sessions sidebar' })
+    const chevron = screen.getByRole('button', { name: 'Expand sessions sidebar' })
+
+    expect(chevron).toBeVisible()
+    expect(chevron).toHaveClass('opacity-100', 'pointer-events-auto')
+    expect(sidebar).toHaveClass('z-40')
+
+    fireEvent.pointerEnter(strip)
+    fireEvent.pointerLeave(strip)
+
+    expect(onRequestPeek).toHaveBeenCalledTimes(1)
+    expect(onReleasePeek).toHaveBeenCalledTimes(1)
+  })
+
+  it('expands the collapsed sessions strip when the chevron is pressed without requesting peek', () => {
+    const onPin = vi.fn()
+    const onRequestPeek = vi.fn()
+    renderSidebar({
+      collapsed: true,
+      mode: 'collapsed',
+      onPin,
+      onRequestPeek,
+    })
+
+    const chevron = screen.getByRole('button', { name: 'Expand sessions sidebar' })
+    fireEvent.pointerEnter(chevron)
+    fireEvent.click(chevron)
+
+    expect(onPin).toHaveBeenCalledTimes(1)
+    expect(onRequestPeek).not.toHaveBeenCalled()
+  })
+
+  it('does not paint-contain the collapsed strip while the peek overlay is open', () => {
+    const onRequestPeek = vi.fn()
+    const onReleasePeek = vi.fn()
+    const { container } = renderSidebar({
+      collapsed: true,
+      mode: 'collapsed',
+      peeking: true,
+      onPin: vi.fn(),
+      onRequestPeek,
+      onReleasePeek,
+    })
+
+    const sidebar = container.querySelector('aside') as HTMLElement
+    const overlay = Array.from(container.querySelectorAll('aside > div')).find((element) =>
+      element.className.includes('shadow-2xl'),
+    ) as HTMLElement
+
+    expect(sidebar.style.width).toBe('6px')
+    expect(sidebar).toHaveClass('sidebar-peek-island', 'overflow-visible', 'z-40')
+    expect(sidebar).not.toHaveClass('sidebar-motion-island')
+    expect(screen.getByRole('button', { name: 'Show sessions sidebar' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Main session' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Expand sessions sidebar' })).toHaveClass('z-50')
+
+    fireEvent.pointerEnter(overlay)
+    fireEvent.pointerLeave(overlay)
+
+    expect(onRequestPeek).toHaveBeenCalled()
+    expect(onReleasePeek).toHaveBeenCalled()
+  })
+
   it('validates rename input and recovers after a failed rename', async () => {
     const onRenameSession = vi
       .fn<NonNullable<ComponentProps<typeof AgentSessionsSidebar>['onRenameSession']>>()
@@ -203,5 +278,28 @@ describe('AgentSessionsSidebar', () => {
 
     fireEvent.click(searchToggle)
     expect(screen.getByRole('searchbox', { name: 'Search sessions' })).toHaveValue('')
+  })
+
+  it('renders pane number chips for sessions loaded in non-focused panes', () => {
+    const altSession: AgentSessionView = {
+      ...sessions[0],
+      agentSessionId: 'agent-session-alt',
+      title: 'Side session',
+      selected: false,
+    }
+
+    renderSidebar({
+      sessions: [...sessions, altSession],
+      // Main session is focused (selectedSessionId), alt session is loaded in pane 2.
+      sessionPaneAssignments: {
+        'agent-session-main': 1,
+        'agent-session-alt': 2,
+      },
+    })
+
+    // The focused session should NOT show a pane chip.
+    expect(screen.queryByLabelText('Loaded in pane 1')).not.toBeInTheDocument()
+    // The non-focused loaded session should show a P2 chip.
+    expect(screen.getByLabelText('Loaded in pane 2')).toHaveTextContent('P2')
   })
 })

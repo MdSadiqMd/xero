@@ -15,19 +15,29 @@ use crate::{
 };
 
 #[tauri::command]
-pub fn get_provider_model_catalog<R: Runtime>(
+pub async fn get_provider_model_catalog<R: Runtime + 'static>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: GetProviderModelCatalogRequestDto,
 ) -> CommandResult<ProviderModelCatalogDto> {
     validate_non_empty(&request.profile_id, "profileId")?;
-    let catalog = load_provider_model_catalog(
-        &app,
-        state.inner(),
-        &request.profile_id,
-        request.force_refresh,
-    )?;
-    Ok(map_provider_model_catalog(catalog))
+    let jobs = state.backend_jobs().clone();
+    let desktop_state = state.inner().clone();
+    let profile_id = request.profile_id;
+    let force_refresh = request.force_refresh;
+    drop(state);
+
+    jobs.run_blocking_latest(
+        format!("provider-model-catalog:{profile_id}"),
+        "provider model catalog",
+        move |cancellation| {
+            cancellation.check_cancelled("provider model catalog")?;
+            let catalog =
+                load_provider_model_catalog(&app, &desktop_state, &profile_id, force_refresh)?;
+            Ok(map_provider_model_catalog(catalog))
+        },
+    )
+    .await
 }
 
 pub(crate) fn map_provider_model_catalog(catalog: ProviderModelCatalog) -> ProviderModelCatalogDto {

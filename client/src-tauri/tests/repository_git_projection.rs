@@ -52,13 +52,13 @@ fn get_status_with_app(
     app: &tauri::App<tauri::test::MockRuntime>,
     project_id: &str,
 ) -> Result<xero_desktop_lib::commands::RepositoryStatusResponseDto, CommandError> {
-    get_repository_status(
+    tauri::async_runtime::block_on(get_repository_status(
         app.handle().clone(),
         app.state::<DesktopState>(),
         ProjectIdRequestDto {
             project_id: project_id.to_owned(),
         },
-    )
+    ))
 }
 
 fn get_diff_with_app(
@@ -66,14 +66,14 @@ fn get_diff_with_app(
     project_id: &str,
     scope: RepositoryDiffScope,
 ) -> Result<xero_desktop_lib::commands::RepositoryDiffResponseDto, CommandError> {
-    get_repository_diff(
+    tauri::async_runtime::block_on(get_repository_diff(
         app.handle().clone(),
         app.state::<DesktopState>(),
         RepositoryDiffRequestDto {
             project_id: project_id.to_owned(),
             scope,
         },
-    )
+    ))
 }
 
 fn init_git_repo() -> TempDir {
@@ -454,6 +454,7 @@ fn oversized_diffs_are_truncated_honestly() {
     let diff = get_diff_with_app(&app, &imported.project.id, RepositoryDiffScope::Staged)
         .expect("staged diff succeeds");
     assert!(diff.truncated);
+    assert!(diff.payload_budget.is_some());
     assert!(diff.patch.len() <= MAX_PATCH_BYTES);
     assert!(diff.patch.contains("large.txt"));
     assert_diff_matches_root(repository_root.path(), &diff, RepositoryDiffScope::Staged);

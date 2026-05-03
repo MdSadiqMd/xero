@@ -55,6 +55,7 @@ import type {
   RuntimeStreamStatus,
   RuntimeStreamView,
   RuntimeStreamViewItem,
+  StagedAgentAttachmentDto,
   SyncNotificationAdaptersResponseDto,
   ListSkillRegistryRequestDto,
   RemovePluginRequestDto,
@@ -79,6 +80,7 @@ import type {
   SelectedModelView,
   SelectedRuntimeProviderSource,
 } from './runtime-provider'
+import type { XeroHighChurnStore } from './high-churn-store'
 
 export type RefreshSource =
   | 'startup'
@@ -126,6 +128,7 @@ export type AgentRunControlTruthSource = 'runtime_run' | 'fallback'
 export interface RuntimeRunControlMutationRequest {
   controls?: RuntimeRunControlInputDto | null
   prompt?: string | null
+  attachments?: StagedAgentAttachmentDto[]
   autoCompact?: RuntimeAutoCompactPreferenceDto | null
 }
 
@@ -252,6 +255,18 @@ export interface NotificationChannelHealthView {
 
 export interface UseXeroDesktopStateOptions {
   adapter?: XeroDesktopAdapter
+  /**
+   * Runtime stream items are high-frequency UI data. The full subscription
+   * stays enabled by default for direct hook consumers and tests; app shells
+   * can opt out and subscribe from the visible runtime pane instead.
+   */
+  subscribeRuntimeStreams?: boolean
+  /**
+   * Repository status can be consumed through selectors when only badges need
+   * updates. Defaulting to the legacy full subscription keeps direct callers
+   * straightforward while the app migrates leaf-by-leaf.
+   */
+  subscribeRepositoryStatus?: boolean
 }
 
 export interface RepositoryDiffState {
@@ -368,6 +383,26 @@ export interface AgentPaneView {
   messagesUnavailableReason: string
 }
 
+export interface AgentWorkspacePaneSlot {
+  id: string
+  agentSessionId: string | null
+}
+
+export type AgentWorkspaceSidebarMode = 'pinned' | 'collapsed'
+
+export interface AgentWorkspaceLayoutState {
+  paneSlots: AgentWorkspacePaneSlot[]
+  focusedPaneId: string
+  splitterRatios: Record<string, number[]>
+  preSpawnSidebarMode: AgentWorkspaceSidebarMode | null
+}
+
+export interface AgentWorkspacePaneView {
+  paneId: string
+  agentSessionId: string | null
+  agent: AgentPaneView
+}
+
 export interface ExecutionPaneView {
   project: ProjectDetailView
   activePhase: Phase | null
@@ -391,6 +426,7 @@ export interface NotificationRoutesLoadResult {
 }
 
 export interface UseXeroDesktopStateResult {
+  highChurnStore: XeroHighChurnStore
   projects: ProjectListItem[]
   activeProject: ProjectDetailView | null
   activeProjectId: string | null
@@ -398,6 +434,8 @@ export interface UseXeroDesktopStateResult {
   repositoryStatus: RepositoryStatusView | null
   workflowView: WorkflowPaneView | null
   agentView: AgentPaneView | null
+  agentWorkspaceLayout: AgentWorkspaceLayoutState | null
+  agentWorkspacePanes: AgentWorkspacePaneView[]
   executionView: ExecutionPaneView | null
   repositoryDiffs: Record<RepositoryDiffScope, RepositoryDiffState>
   activeDiffScope: RepositoryDiffScope
@@ -454,7 +492,7 @@ export interface UseXeroDesktopStateResult {
   retry: () => Promise<void>
   showRepositoryDiff: (scope: RepositoryDiffScope, options?: { force?: boolean }) => Promise<void>
   retryActiveRepositoryDiff: () => Promise<void>
-  listProjectFiles: (projectId: string) => Promise<ListProjectFilesResponseDto>
+  listProjectFiles: (projectId: string, path?: string) => Promise<ListProjectFilesResponseDto>
   readProjectFile: (projectId: string, path: string) => Promise<ReadProjectFileResponseDto>
   writeProjectFile: (projectId: string, path: string, content: string) => Promise<WriteProjectFileResponseDto>
   createProjectEntry: (request: CreateProjectEntryRequestDto) => Promise<CreateProjectEntryResponseDto>
@@ -541,6 +579,10 @@ export interface UseXeroDesktopStateResult {
   restoreAgentSession: (agentSessionId: string) => Promise<ProjectDetailView | null>
   deleteAgentSession: (agentSessionId: string) => Promise<ProjectDetailView | null>
   renameAgentSession: (agentSessionId: string, title: string) => Promise<ProjectDetailView | null>
+  spawnPane: () => Promise<AgentWorkspaceLayoutState | null>
+  closePane: (paneId: string) => void
+  focusPane: (paneId: string) => void
+  setSplitterRatios: (arrangementKey: string, ratios: number[]) => void
   usageSummaries: Record<string, ProjectUsageSummaryDto>
   activeUsageSummary: ProjectUsageSummaryDto | null
   activeUsageSummaryLoadError: string | null

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef } from 'react'
 import { EditorView, basicSetup } from 'codemirror'
-import { Compartment, EditorState, Prec, type Extension } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, Prec, type Extension } from '@codemirror/state'
 import {
   HighlightStyle,
   StreamLanguage,
@@ -14,42 +14,114 @@ import { indentWithTab } from '@codemirror/commands'
 import { highlightSelectionMatches, search } from '@codemirror/search'
 import { keymap } from '@codemirror/view'
 import { autocompletion } from '@codemirror/autocomplete'
-import { javascript } from '@codemirror/lang-javascript'
-import { python } from '@codemirror/lang-python'
-import { json } from '@codemirror/lang-json'
-import { markdown } from '@codemirror/lang-markdown'
-import { css } from '@codemirror/lang-css'
-import { html } from '@codemirror/lang-html'
-import { rust } from '@codemirror/lang-rust'
-import { cpp } from '@codemirror/lang-cpp'
-import { java } from '@codemirror/lang-java'
-import { go } from '@codemirror/lang-go'
-import { sql } from '@codemirror/lang-sql'
-import { yaml } from '@codemirror/lang-yaml'
-import { xml } from '@codemirror/lang-xml'
-import { php } from '@codemirror/lang-php'
-import { vue } from '@codemirror/lang-vue'
-import { sass } from '@codemirror/lang-sass'
-import { less } from '@codemirror/lang-less'
-import { angular } from '@codemirror/lang-angular'
 import { cn } from '@/lib/utils'
-import { getLangFromPath } from '@/lib/shiki'
+import { getLangFromPath } from '@/lib/language-detection'
 import { useTheme } from '@/src/features/theme/theme-provider'
 import type {
   EditorPalette,
   ThemeDefinition,
 } from '@/src/features/theme/theme-definitions'
 
-interface CodeEditorProps {
+export const EDITOR_SNAPSHOT_DEBOUNCE_MS = 250
+
+interface ScheduledFrame {
+  id: number
+  type: 'animation-frame' | 'timeout'
+}
+
+interface EditorFrameSchedulerOptions {
+  requestFrame?: (callback: () => void) => ScheduledFrame
+  cancelFrame?: (frame: ScheduledFrame) => void
+}
+
+export interface EditorCursorPosition {
+  line: number
+  column: number
+}
+
+export interface EditorDocumentStats {
+  lineCount: number
+}
+
+export interface CodeEditorProps {
   value: string
-  onChange: (value: string) => void
+  savedValue?: string
+  documentVersion?: number
+  onSnapshotChange?: (value: string) => void
+  onDirtyChange?: (dirty: boolean) => void
   filePath: string
   readOnly?: boolean
-  onSave?: () => void
-  onCursorChange?: (position: { line: number; column: number }) => void
+  onSave?: (snapshot: string) => void
+  onCursorChange?: (position: EditorCursorPosition) => void
+  onDocumentStatsChange?: (stats: EditorDocumentStats) => void
   onOpenFind?: (options: { withReplace: boolean; initialQuery: string }) => void
   onViewReady?: (view: EditorView | null) => void
   className?: string
+}
+
+const externalDocumentSync = Annotation.define<boolean>()
+
+export function countEditorLines(value: string): number {
+  return value.length === 0 ? 1 : value.split('\n').length
+}
+
+export function shouldReplaceEditorDocument(options: {
+  externalValue: string
+  lastSnapshot: string
+  documentVersionChanged: boolean
+}): boolean {
+  return options.documentVersionChanged || options.externalValue !== options.lastSnapshot
+}
+
+function requestEditorFrame(callback: () => void): ScheduledFrame {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    return {
+      id: window.requestAnimationFrame(callback),
+      type: 'animation-frame',
+    }
+  }
+
+  return {
+    id: window.setTimeout(callback, 16),
+    type: 'timeout',
+  }
+}
+
+function cancelEditorFrame(frame: ScheduledFrame): void {
+  if (
+    frame.type === 'animation-frame' &&
+    typeof window !== 'undefined' &&
+    typeof window.cancelAnimationFrame === 'function'
+  ) {
+    window.cancelAnimationFrame(frame.id)
+    return
+  }
+
+  window.clearTimeout(frame.id)
+}
+
+export function createEditorFrameScheduler(options: EditorFrameSchedulerOptions = {}) {
+  const requestFrame = options.requestFrame ?? requestEditorFrame
+  const cancelFrame = options.cancelFrame ?? cancelEditorFrame
+  let pendingFrame: ScheduledFrame | null = null
+
+  return {
+    schedule(callback: () => void): void {
+      if (pendingFrame) return
+      pendingFrame = requestFrame(() => {
+        pendingFrame = null
+        callback()
+      })
+    },
+    cancel(): void {
+      if (!pendingFrame) return
+      cancelFrame(pendingFrame)
+      pendingFrame = null
+    },
+    isPending(): boolean {
+      return pendingFrame !== null
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +278,43 @@ function buildThemeExtension(theme: ThemeDefinition): Extension {
 // Language resolution
 // ---------------------------------------------------------------------------
 
-// Legacy-mode parsers are heavy / numerous — load lazily so the editor's
-// initial chunk only pulls in what the active file actually needs.
+type LanguageLoader = () => Promise<Extension>
+
+// Language packages are loaded on demand. Keeping this table as dynamic
+// imports prevents the app/editor shell from pulling every grammar into the
+// first interaction path.
+const firstPartyLanguageLoaders: Record<string, LanguageLoader> = {
+  typescript: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ typescript: true })),
+  tsx: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true, typescript: true })),
+  jsx: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true })),
+  javascript: () => import('@codemirror/lang-javascript').then((m) => m.javascript()),
+  python: () => import('@codemirror/lang-python').then((m) => m.python()),
+  json: () => import('@codemirror/lang-json').then((m) => m.json()),
+  jsonc: () => import('@codemirror/lang-json').then((m) => m.json()),
+  markdown: () => import('@codemirror/lang-markdown').then((m) => m.markdown()),
+  mdx: () => import('@codemirror/lang-markdown').then((m) => m.markdown()),
+  css: () => import('@codemirror/lang-css').then((m) => m.css()),
+  scss: () => import('@codemirror/lang-sass').then((m) => m.sass({ indented: false })),
+  sass: () => import('@codemirror/lang-sass').then((m) => m.sass({ indented: true })),
+  less: () => import('@codemirror/lang-less').then((m) => m.less()),
+  html: () => import('@codemirror/lang-html').then((m) => m.html()),
+  xml: () => import('@codemirror/lang-xml').then((m) => m.xml()),
+  rust: () => import('@codemirror/lang-rust').then((m) => m.rust()),
+  c: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  cpp: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  java: () => import('@codemirror/lang-java').then((m) => m.java()),
+  go: () => import('@codemirror/lang-go').then((m) => m.go()),
+  sql: () => import('@codemirror/lang-sql').then((m) => m.sql()),
+  yaml: () => import('@codemirror/lang-yaml').then((m) => m.yaml()),
+  php: () => import('@codemirror/lang-php').then((m) => m.php()),
+  vue: () => import('@codemirror/lang-vue').then((m) => m.vue()),
+  angular: () => import('@codemirror/lang-angular').then((m) => m.angular()),
+  // GraphQL has no official CM6 grammar; JS tokenization is a fair approximation.
+  graphql: () => import('@codemirror/lang-javascript').then((m) => m.javascript()),
+}
+
+// Legacy-mode parsers are heavy / numerous; load lazily so the editor only
+// pulls in what the active file actually needs.
 const streamParserLoaders: Record<string, () => Promise<StreamParser<unknown>>> = {
   shell: () => import('@codemirror/legacy-modes/mode/shell').then((m) => m.shell),
   ruby: () => import('@codemirror/legacy-modes/mode/ruby').then((m) => m.ruby),
@@ -240,24 +347,7 @@ const streamParserLoaders: Record<string, () => Promise<StreamParser<unknown>>> 
   cmake: () => import('@codemirror/legacy-modes/mode/cmake').then((m) => m.cmake),
 }
 
-// Cache resolved stream parsers so re-opening the same language is synchronous.
-const resolvedStreamParsers: Record<string, StreamParser<unknown>> = {}
-
-function cachedStreamExtension(key: string): Extension | null {
-  const cached = resolvedStreamParsers[key]
-  return cached ? StreamLanguage.define(cached) : null
-}
-
-function loadStreamExtension(key: string): Promise<Extension | null> {
-  const cached = resolvedStreamParsers[key]
-  if (cached) return Promise.resolve(StreamLanguage.define(cached))
-  const loader = streamParserLoaders[key]
-  if (!loader) return Promise.resolve(null)
-  return loader().then((parser) => {
-    resolvedStreamParsers[key] = parser
-    return StreamLanguage.define(parser)
-  })
-}
+const resolvedLanguageExtensions = new Map<string, Extension>()
 
 function streamKeyForLang(lang: string): string | null {
   switch (lang) {
@@ -268,97 +358,55 @@ function streamKeyForLang(lang: string): string | null {
   }
 }
 
-/**
- * Resolve a first-party (synchronous) CodeMirror grammar for a given lang id.
- * Returns null when the language is served by a legacy StreamLanguage parser,
- * which must be loaded asynchronously via {@link resolveLanguageAsync}.
- */
-function firstPartyExtension(lang: string): Extension | null {
-  switch (lang) {
-    case 'typescript':
-      return javascript({ typescript: true })
-    case 'tsx':
-      return javascript({ jsx: true, typescript: true })
-    case 'jsx':
-      return javascript({ jsx: true })
-    case 'javascript':
-      return javascript()
-    case 'python':
-      return python()
-    case 'json':
-    case 'jsonc':
-      return json()
-    case 'markdown':
-    case 'mdx':
-      return markdown()
-    case 'css':
-      return css()
-    case 'scss':
-      return sass({ indented: false })
-    case 'sass':
-      return sass({ indented: true })
-    case 'less':
-      return less()
-    case 'html':
-      return html()
-    case 'xml':
-      return xml()
-    case 'rust':
-      return rust()
-    case 'c':
-    case 'cpp':
-      return cpp()
-    case 'java':
-      return java()
-    case 'go':
-      return go()
-    case 'sql':
-      return sql()
-    case 'yaml':
-      return yaml()
-    case 'php':
-      return php()
-    case 'vue':
-      return vue()
-    case 'angular':
-      return angular()
-    // GraphQL has no official CM6 grammar; JS tokenization is a fair approximation.
-    case 'graphql':
-      return javascript()
-    default:
-      return null
+function languageDescriptor(filePath: string): { cacheKey: string; load: LanguageLoader } | null {
+  const lang = getLangFromPath(filePath)
+  if (!lang) return null
+
+  const firstPartyLoader = firstPartyLanguageLoaders[lang]
+  if (firstPartyLoader) {
+    return {
+      cacheKey: `first-party:${lang}`,
+      load: firstPartyLoader,
+    }
   }
+
+  const streamKey = streamKeyForLang(lang)
+  const streamLoader = streamKey ? streamParserLoaders[streamKey] : null
+  if (streamKey && streamLoader) {
+    return {
+      cacheKey: `stream:${streamKey}`,
+      load: () => streamLoader().then((parser) => StreamLanguage.define(parser)),
+    }
+  }
+
+  return null
 }
 
 /**
- * Best-effort synchronous resolution — used for the initial editor state.
- * Falls back to an empty extension for legacy-mode langs that haven't been
- * loaded yet; {@link resolveLanguageAsync} then upgrades the compartment.
+ * Best-effort synchronous resolution used for initial editor state. If a
+ * grammar has been loaded before, re-opening that language is immediate;
+ * otherwise the async resolver upgrades the language compartment shortly after
+ * mount without blocking editor creation.
  */
 function languageExtension(filePath: string): Extension {
-  const lang = getLangFromPath(filePath)
-  if (!lang) return []
-  const firstParty = firstPartyExtension(lang)
-  if (firstParty) return firstParty
-  const streamKey = streamKeyForLang(lang)
-  if (streamKey) {
-    const cached = cachedStreamExtension(streamKey)
-    if (cached) return cached
-  }
-  return []
+  const descriptor = languageDescriptor(filePath)
+  return descriptor ? resolvedLanguageExtensions.get(descriptor.cacheKey) ?? [] : []
 }
 
 /** Full async resolution — resolves the correct grammar for any supported lang. */
 function resolveLanguageAsync(filePath: string): Promise<Extension> {
-  const lang = getLangFromPath(filePath)
-  if (!lang) return Promise.resolve([])
-  const firstParty = firstPartyExtension(lang)
-  if (firstParty) return Promise.resolve(firstParty)
-  const streamKey = streamKeyForLang(lang)
-  if (streamKey) {
-    return loadStreamExtension(streamKey).then((ext) => ext ?? [])
+  const descriptor = languageDescriptor(filePath)
+  if (!descriptor) return Promise.resolve([])
+
+  const cached = resolvedLanguageExtensions.get(descriptor.cacheKey)
+  if (cached) {
+    return Promise.resolve(cached)
   }
-  return Promise.resolve([])
+
+  return descriptor.load().then((extension) => {
+    resolvedLanguageExtensions.set(descriptor.cacheKey, extension)
+    return extension
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -367,20 +415,32 @@ function resolveLanguageAsync(filePath: string): Promise<Extension> {
 
 export function CodeEditor({
   value,
-  onChange,
+  savedValue,
+  documentVersion = 0,
+  onSnapshotChange,
+  onDirtyChange,
   filePath,
   readOnly = false,
   onSave,
   onCursorChange,
+  onDocumentStatsChange,
   onOpenFind,
   onViewReady,
   className,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
-  const onChangeRef = useRef(onChange)
+  const snapshotTimerRef = useRef<number | null>(null)
+  const cursorSchedulerRef = useRef(createEditorFrameScheduler())
+  const lastSnapshotRef = useRef(value)
+  const savedValueRef = useRef(savedValue ?? value)
+  const dirtyRef = useRef(value !== (savedValue ?? value))
+  const documentVersionRef = useRef(documentVersion)
+  const onSnapshotChangeRef = useRef(onSnapshotChange)
+  const onDirtyChangeRef = useRef(onDirtyChange)
   const onSaveRef = useRef(onSave)
   const onCursorChangeRef = useRef(onCursorChange)
+  const onDocumentStatsChangeRef = useRef(onDocumentStatsChange)
   const onOpenFindRef = useRef(onOpenFind)
   const onViewReadyRef = useRef(onViewReady)
   const langCompartment = useMemo(() => new Compartment(), [])
@@ -388,11 +448,62 @@ export function CodeEditor({
   const themeCompartment = useMemo(() => new Compartment(), [])
   const { theme } = useTheme()
 
-  onChangeRef.current = onChange
+  onSnapshotChangeRef.current = onSnapshotChange
+  onDirtyChangeRef.current = onDirtyChange
   onSaveRef.current = onSave
   onCursorChangeRef.current = onCursorChange
+  onDocumentStatsChangeRef.current = onDocumentStatsChange
   onOpenFindRef.current = onOpenFind
   onViewReadyRef.current = onViewReady
+
+  function emitDirtyChange(dirty: boolean): void {
+    if (dirtyRef.current === dirty) return
+    dirtyRef.current = dirty
+    onDirtyChangeRef.current?.(dirty)
+  }
+
+  function clearSnapshotTimer(): void {
+    if (snapshotTimerRef.current === null) return
+    window.clearTimeout(snapshotTimerRef.current)
+    snapshotTimerRef.current = null
+  }
+
+  function cancelCursorFrame(): void {
+    cursorSchedulerRef.current.cancel()
+  }
+
+  function flushSnapshot(): string {
+    const view = viewRef.current
+    if (!view) return lastSnapshotRef.current
+
+    clearSnapshotTimer()
+    const snapshot = view.state.doc.toString()
+    lastSnapshotRef.current = snapshot
+    onSnapshotChangeRef.current?.(snapshot)
+    onDocumentStatsChangeRef.current?.({ lineCount: view.state.doc.lines })
+    emitDirtyChange(snapshot !== savedValueRef.current)
+    return snapshot
+  }
+
+  function scheduleSnapshot(): void {
+    clearSnapshotTimer()
+    snapshotTimerRef.current = window.setTimeout(() => {
+      snapshotTimerRef.current = null
+      flushSnapshot()
+    }, EDITOR_SNAPSHOT_DEBOUNCE_MS)
+  }
+
+  function scheduleCursorReport(): void {
+    cursorSchedulerRef.current.schedule(() => {
+      const view = viewRef.current
+      if (!view) return
+
+      const head = view.state.selection.main.head
+      const line = view.state.doc.lineAt(head)
+      onCursorChangeRef.current?.({ line: line.number, column: head - line.from + 1 })
+      onDocumentStatsChangeRef.current?.({ lineCount: view.state.doc.lines })
+    })
+  }
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -442,7 +553,7 @@ export function CodeEditor({
             key: 'Mod-s',
             preventDefault: true,
             run: () => {
-              onSaveRef.current?.()
+              onSaveRef.current?.(flushSnapshot())
               return true
             },
           },
@@ -451,13 +562,17 @@ export function CodeEditor({
         readOnlyCompartment.of(EditorState.readOnly.of(readOnly)),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
-            onChangeRef.current?.(update.state.doc.toString())
+          const isExternalSync = update.transactions.some((transaction) =>
+            transaction.annotation(externalDocumentSync),
+          )
+
+          if (update.docChanged && !isExternalSync) {
+            emitDirtyChange(true)
+            scheduleSnapshot()
           }
+
           if (update.selectionSet || update.docChanged) {
-            const head = update.state.selection.main.head
-            const line = update.state.doc.lineAt(head)
-            onCursorChangeRef.current?.({ line: line.number, column: head - line.from + 1 })
+            scheduleCursorReport()
           }
         }),
       ],
@@ -466,13 +581,22 @@ export function CodeEditor({
     const view = new EditorView({ state, parent: hostRef.current })
     viewRef.current = view
     onViewReadyRef.current?.(view)
+    onDocumentStatsChangeRef.current?.({ lineCount: view.state.doc.lines })
+    scheduleCursorReport()
 
     return () => {
       onViewReadyRef.current?.(null)
+      clearSnapshotTimer()
+      cancelCursorFrame()
       view.destroy()
       viewRef.current = null
     }
   }, [langCompartment, readOnlyCompartment, themeCompartment])
+
+  useEffect(() => {
+    savedValueRef.current = savedValue ?? value
+    emitDirtyChange(lastSnapshotRef.current !== savedValueRef.current)
+  }, [savedValue, value])
 
   useEffect(() => {
     const view = viewRef.current
@@ -483,11 +607,10 @@ export function CodeEditor({
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
-    // Synchronous best-effort: first-party grammars resolve immediately,
-    // legacy-mode grammars fall back to an empty extension here.
+    // Synchronous best-effort: reuse a previously loaded grammar immediately.
     view.dispatch({ effects: langCompartment.reconfigure(languageExtension(filePath)) })
-    // Async upgrade: resolves the real grammar for legacy-mode languages
-    // (lazy import) and swaps it in if the editor and path are still live.
+    // Async upgrade: load first-party or legacy-mode grammars on demand and
+    // swap them in if the editor and path are still live.
     let cancelled = false
     resolveLanguageAsync(filePath).then((ext) => {
       if (cancelled) return
@@ -509,13 +632,28 @@ export function CodeEditor({
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
-    const current = view.state.doc.toString()
-    if (current !== value) {
-      view.dispatch({
-        changes: { from: 0, to: current.length, insert: value },
+    const documentVersionChanged = documentVersionRef.current !== documentVersion
+    documentVersionRef.current = documentVersion
+
+    if (
+      shouldReplaceEditorDocument({
+        externalValue: value,
+        lastSnapshot: lastSnapshotRef.current,
+        documentVersionChanged,
       })
+    ) {
+      clearSnapshotTimer()
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: value },
+        annotations: externalDocumentSync.of(true),
+      })
+      lastSnapshotRef.current = value
+      savedValueRef.current = savedValue ?? value
+      onDocumentStatsChangeRef.current?.({ lineCount: countEditorLines(value) })
+      emitDirtyChange(value !== savedValueRef.current)
+      scheduleCursorReport()
     }
-  }, [value])
+  }, [documentVersion, savedValue, value])
 
   return <div ref={hostRef} className={cn('h-full w-full overflow-hidden', className)} />
 }

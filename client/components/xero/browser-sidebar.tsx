@@ -15,7 +15,9 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { createFrameCoalescer } from "@/lib/frame-governance"
 import { useSidebarWidthMotion } from "@/lib/sidebar-motion"
+import { recordIpcPayloadSample } from "@/src/lib/ipc-payload-budget"
 import {
   useCookieImport,
   type CookieImportStatus,
@@ -26,6 +28,10 @@ import {
   PenOverlay,
   isDevServerUrl,
 } from "./browser-tool-overlay"
+import {
+  createBrowserResizeScheduler,
+  readBrowserViewportRect,
+} from "./browser-resize-scheduler"
 
 type ToolMode = "pen" | "inspect" | null
 
@@ -42,13 +48,6 @@ const RESIZE_HANDLE_INSET = 6
 
 interface BrowserSidebarProps {
   open: boolean
-}
-
-interface ViewportRect {
-  x: number
-  y: number
-  width: number
-  height: number
 }
 
 interface BrowserTabMeta {
@@ -81,6 +80,83 @@ interface BrowserTabUpdatedPayload {
   tabs: BrowserTabMeta[]
 }
 
+type BrowserCoalescedEvent =
+  | { key: string; payload: BrowserLoadStatePayload; type: "load" }
+  | { key: string; payload: BrowserTabUpdatedPayload; type: "tabs" }
+  | { key: string; payload: BrowserUrlChangedPayload; type: "url" }
+
+interface BrowserEventCoalescerHandlers {
+  onLoadState: (payload: BrowserLoadStatePayload) => void
+  onTabUpdated: (payload: BrowserTabUpdatedPayload) => void
+  onUrlChanged: (payload: BrowserUrlChangedPayload) => void
+  schedule?: (callback: () => void) => () => void
+}
+
+function scheduleBrowserEventFlush(callback: () => void): () => void {
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    const frame = window.requestAnimationFrame(callback)
+    return () => window.cancelAnimationFrame(frame)
+  }
+
+  const timeout = setTimeout(callback, 0)
+  return () => clearTimeout(timeout)
+}
+
+export function createBrowserEventCoalescer({
+  onLoadState,
+  onTabUpdated,
+  onUrlChanged,
+  schedule = scheduleBrowserEventFlush,
+}: BrowserEventCoalescerHandlers) {
+  let pending: BrowserCoalescedEvent[] = []
+  let cancelScheduled: (() => void) | null = null
+  let disposed = false
+
+  const flush = () => {
+    if (disposed) return
+    cancelScheduled = null
+    const events = pending
+    pending = []
+    for (const event of events) {
+      if (event.type === "url") {
+        onUrlChanged(event.payload)
+      } else if (event.type === "load") {
+        onLoadState(event.payload)
+      } else {
+        onTabUpdated(event.payload)
+      }
+    }
+  }
+
+  const enqueue = (event: BrowserCoalescedEvent) => {
+    if (disposed) return
+    pending = pending.filter((candidate) => candidate.key !== event.key)
+    pending.push(event)
+    if (!cancelScheduled) {
+      cancelScheduled = schedule(flush)
+    }
+  }
+
+  return {
+    enqueueLoadState(payload: BrowserLoadStatePayload) {
+      enqueue({ key: `load:${payload.tabId}`, payload, type: "load" })
+    },
+    enqueueTabUpdated(payload: BrowserTabUpdatedPayload) {
+      enqueue({ key: "tabs", payload, type: "tabs" })
+    },
+    enqueueUrlChanged(payload: BrowserUrlChangedPayload) {
+      enqueue({ key: `url:${payload.tabId}`, payload, type: "url" })
+    },
+    dispose() {
+      disposed = true
+      pending = []
+      cancelScheduled?.()
+      cancelScheduled = null
+    },
+    flush,
+  }
+}
+
 function viewportDefaultWidth() {
   if (typeof window === "undefined") return 640
   return Math.round(window.innerWidth * DEFAULT_RATIO)
@@ -98,11 +174,6 @@ function normalizeUrl(input: string): string | null {
   if (/^[\w.-]+\.[a-z]{2,}(\/.*)?$/i.test(trimmed)) return `https://${trimmed}`
   const query = encodeURIComponent(trimmed)
   return `https://www.google.com/search?q=${query}`
-}
-
-function rectsEqual(a: ViewportRect | null, b: ViewportRect): boolean {
-  if (!a) return false
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
 }
 
 function safeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
@@ -157,10 +228,36 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   const widthRef = useRef(width)
   widthRef.current = width
   const viewportRef = useRef<HTMLDivElement | null>(null)
-  const lastSyncedRectRef = useRef<ViewportRect | null>(null)
   const addressFocusedRef = useRef(false)
   const hasWebviewRef = useRef(false)
   const cookieSourcesLoadedRef = useRef(false)
+  const openRef = useRef(open)
+  const activeTabIdRef = useRef(activeTabId)
+  const toolModeRef = useRef(toolMode)
+
+  openRef.current = open
+  activeTabIdRef.current = activeTabId
+  toolModeRef.current = toolMode
+
+  const resizeScheduler = useMemo(
+    () =>
+      createBrowserResizeScheduler({
+        getEnabled: () =>
+          openRef.current &&
+          hasWebviewRef.current &&
+          toolModeRef.current === null &&
+          isTauri(),
+        getNode: () => viewportRef.current,
+        getTabId: () => activeTabIdRef.current,
+        inset: RESIZE_HANDLE_INSET,
+        onResize: (rect, tabId) => {
+          void invoke("browser_resize", { ...rect, tabId }).catch(() => {
+            /* swallow */
+          })
+        },
+      }),
+    [],
+  )
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? null,
@@ -183,58 +280,58 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
     if (!open || !isTauri()) return
     if (!hasWebviewRef.current) return
     // Tool overlays (pen / inspect) sit on top of the viewport in HTML, but the
-    // native child webview always paints on top of HTML — so we have to hide
-    // the webview while a tool is active. The hide is dispatched in the effect
-    // below; here we just bail out so the rAF resize loop doesn't immediately
-    // pull it back to the foreground.
+    // native child webview always paints on top of HTML — so we hide the
+    // webview while a tool is active and avoid scheduling it back on top here.
     if (toolMode !== null) return
 
     // Reset the cache on every effect re-run (sidebar open, active tab change)
-    // so the first tick always fires a browser_resize. Without this, switching
-    // tabs leaves the new active tab parked at HIDDEN_OFFSET because the
-    // viewport rect hasn't changed and rectsEqual short-circuits the call.
-    lastSyncedRectRef.current = null
+    // so the first scheduled sync fires a browser_resize. Without this,
+    // switching tabs leaves the new active tab parked at HIDDEN_OFFSET because
+    // the viewport rect may be unchanged.
+    resizeScheduler.reset()
+    resizeScheduler.schedule({ force: true })
+  }, [activeTabId, open, resizeScheduler, toolMode])
 
-    let rafId = 0
-    const tick = () => {
-      const node = viewportRef.current
-      if (node) {
-        const rect = node.getBoundingClientRect()
-        const next: ViewportRect = {
-          x: Math.round(rect.left) + RESIZE_HANDLE_INSET,
-          y: Math.round(rect.top),
-          width: Math.max(1, Math.round(rect.width) - RESIZE_HANDLE_INSET),
-          height: Math.round(rect.height),
-        }
-        if (next.width > 0 && next.height > 0 && !rectsEqual(lastSyncedRectRef.current, next)) {
-          lastSyncedRectRef.current = next
-          void invoke("browser_resize", { ...next, tabId: activeTabId ?? null }).catch(() => {
-            /* swallow */
-          })
-        }
-      }
-      rafId = requestAnimationFrame(tick)
+  useEffect(() => {
+    if (!open || !isTauri()) return
+    if (!hasWebviewRef.current) return
+    if (toolMode !== null) return
+
+    const node = viewportRef.current
+    if (!node) return
+
+    const ResizeObserverCtor = window.ResizeObserver
+    if (typeof ResizeObserverCtor !== "function") {
+      resizeScheduler.schedule()
+      return
     }
-    rafId = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(rafId)
-  }, [open, activeTabId, toolMode])
+
+    const observer = new ResizeObserverCtor(() => {
+      resizeScheduler.schedule()
+    })
+    observer.observe(node)
+
+    return () => observer.disconnect()
+  }, [activeTabId, open, resizeScheduler, toolMode])
 
   useEffect(() => {
     if (open || !isTauri() || !hasWebviewRef.current) return
-    lastSyncedRectRef.current = null
+    resizeScheduler.cancel()
+    resizeScheduler.reset()
     void invoke("browser_hide").catch(() => {
       /* swallow */
     })
-  }, [open])
+  }, [open, resizeScheduler])
 
   useEffect(() => {
     if (!isTauri() || !hasWebviewRef.current) return
     if (toolMode === null) return
-    lastSyncedRectRef.current = null
+    resizeScheduler.cancel()
+    resizeScheduler.reset()
     void invoke("browser_hide").catch(() => {
       /* swallow */
     })
-  }, [toolMode])
+  }, [resizeScheduler, toolMode])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -242,73 +339,87 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
       const nextMax = viewportMaxWidth()
       setMaxWidth(nextMax)
       setWidth((current) => Math.min(current, nextMax))
+      resizeScheduler.schedule({ force: true })
     }
     window.addEventListener("resize", handleResize)
     return () => window.removeEventListener("resize", handleResize)
-  }, [])
+  }, [resizeScheduler])
+
+  useEffect(() => () => resizeScheduler.cancel(), [resizeScheduler])
 
   // Wire backend events
   useEffect(() => {
     if (!isTauri()) return
     const unsubs: UnlistenFn[] = []
-
-    void listen<BrowserUrlChangedPayload>("browser:url_changed", (event) => {
-      const payload = event.payload
-      setTabs((current) => {
-        const match = current.some((tab) => tab.id === payload.tabId)
-        if (!match) return current
-        return current.map((tab) =>
-          tab.id === payload.tabId
-            ? {
-                ...tab,
-                url: payload.url,
-                title: payload.title ?? tab.title,
-                canGoBack: payload.canGoBack,
-                canGoForward: payload.canGoForward,
-              }
-            : tab,
-        )
-      })
-      if (payload.tabId === activeTabId) {
-        if (!addressFocusedRef.current) {
+    const coalescer = createBrowserEventCoalescer({
+      onUrlChanged: (payload) => {
+        setTabs((current) => {
+          const match = current.some((tab) => tab.id === payload.tabId)
+          if (!match) return current
+          return current.map((tab) =>
+            tab.id === payload.tabId
+              ? {
+                  ...tab,
+                  url: payload.url,
+                  title: payload.title ?? tab.title,
+                  canGoBack: payload.canGoBack,
+                  canGoForward: payload.canGoForward,
+                }
+              : tab,
+          )
+        })
+        if (payload.tabId === activeTabIdRef.current && !addressFocusedRef.current) {
           setAddress(payload.url)
         }
-      }
+      },
+      onLoadState: (payload) => {
+        setTabs((current) =>
+          current.map((tab) =>
+            tab.id === payload.tabId
+              ? {
+                  ...tab,
+                  loading: payload.loading,
+                  url: payload.url ?? tab.url,
+                }
+              : tab,
+          ),
+        )
+        if (payload.tabId === activeTabIdRef.current) {
+          setLoading(payload.loading)
+          if (payload.url && !addressFocusedRef.current) {
+            setAddress(payload.url)
+          }
+        }
+      },
+      onTabUpdated: (payload) => {
+        setTabs(payload.tabs)
+        const active = payload.tabs.find((tab) => tab.active)
+        if (active) {
+          setActiveTabId(active.id)
+        }
+      },
+    })
+
+    void listen<BrowserUrlChangedPayload>("browser:url_changed", (event) => {
+      recordIpcPayloadSample({ boundary: "event", name: "browser:url_changed", payload: event.payload })
+      coalescer.enqueueUrlChanged(event.payload)
     }).then((unsub) => unsubs.push(unsub))
 
     void listen<BrowserLoadStatePayload>("browser:load_state", (event) => {
-      const payload = event.payload
-      setTabs((current) =>
-        current.map((tab) =>
-          tab.id === payload.tabId
-            ? {
-                ...tab,
-                loading: payload.loading,
-                url: payload.url ?? tab.url,
-              }
-            : tab,
-        ),
-      )
-      if (payload.tabId === activeTabId) {
-        setLoading(payload.loading)
-        if (payload.url && !addressFocusedRef.current) {
-          setAddress(payload.url)
-        }
-      }
+      recordIpcPayloadSample({ boundary: "event", name: "browser:load_state", payload: event.payload })
+      coalescer.enqueueLoadState(event.payload)
     }).then((unsub) => unsubs.push(unsub))
 
     void listen<BrowserTabUpdatedPayload>("browser:tab_updated", (event) => {
-      setTabs(event.payload.tabs)
-      const active = event.payload.tabs.find((tab) => tab.active)
-      if (active) {
-        setActiveTabId(active.id)
-      }
+      recordIpcPayloadSample({ boundary: "event", name: "browser:tab_updated", payload: event.payload })
+      coalescer.enqueueTabUpdated(event.payload)
     }).then((unsub) => unsubs.push(unsub))
 
     return () => {
+      coalescer.dispose()
       unsubs.forEach((unsub) => unsub())
     }
-  }, [activeTabId])
+  }, [])
 
   // Hydrate tabs when sidebar opens
   useEffect(() => {
@@ -335,6 +446,13 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
       const startX = event.clientX
       const startWidth = widthRef.current
       const ceiling = viewportMaxWidth()
+      let latestWidth = startWidth
+      const widthUpdates = createFrameCoalescer<number>({
+        onFlush: (next) => {
+          setWidth(next)
+          resizeScheduler.schedule()
+        },
+      })
       setMaxWidth(ceiling)
       setIsResizing(true)
 
@@ -345,23 +463,25 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
 
       const handleMove = (ev: PointerEvent) => {
         const delta = startX - ev.clientX
-        const next = Math.max(MIN_WIDTH, Math.min(ceiling, startWidth + delta))
-        setWidth(next)
+        latestWidth = Math.max(MIN_WIDTH, Math.min(ceiling, startWidth + delta))
+        widthUpdates.schedule(latestWidth)
       }
       const handleUp = () => {
+        widthUpdates.flush()
         window.removeEventListener("pointermove", handleMove)
         window.removeEventListener("pointerup", handleUp)
         window.removeEventListener("pointercancel", handleUp)
         document.body.style.cursor = previousCursor
         document.body.style.userSelect = previousSelect
         setIsResizing(false)
+        resizeScheduler.schedule({ force: true })
       }
 
       window.addEventListener("pointermove", handleMove)
       window.addEventListener("pointerup", handleUp)
       window.addEventListener("pointercancel", handleUp)
     },
-    [],
+    [resizeScheduler],
   )
 
   const handleResizeKey = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -374,7 +494,8 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
       const delta = event.key === "ArrowLeft" ? step : -step
       return Math.max(MIN_WIDTH, Math.min(ceiling, current + delta))
     })
-  }, [])
+    resizeScheduler.schedule({ force: true })
+  }, [resizeScheduler])
 
   const openUrl = useCallback(
     (target: string, options?: { tabId?: string; newTab?: boolean }) => {
@@ -387,23 +508,15 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
 
       const node = viewportRef.current
       if (!node) return
-      const rect = node.getBoundingClientRect()
+      const viewport = readBrowserViewportRect(node, RESIZE_HANDLE_INSET)
       const forceNew = options?.newTab === true
       const payload = {
         url: target,
-        x: Math.round(rect.left) + RESIZE_HANDLE_INSET,
-        y: Math.round(rect.top),
-        width: Math.max(1, Math.round(rect.width) - RESIZE_HANDLE_INSET),
-        height: Math.max(1, Math.round(rect.height)),
+        ...viewport,
         tabId: forceNew ? null : options?.tabId ?? activeTabId ?? null,
         newTab: forceNew,
       }
-      lastSyncedRectRef.current = {
-        x: payload.x,
-        y: payload.y,
-        width: payload.width,
-        height: payload.height,
-      }
+      resizeScheduler.markSynced(viewport)
       hasWebviewRef.current = true
       setLoading(true)
       void invoke<BrowserTabMeta>("browser_show", payload)
@@ -422,7 +535,16 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
           setNavError(message || "Failed to open page")
         })
     },
-    [activeTabId],
+    [activeTabId, resizeScheduler],
+  )
+
+  const handleSidebarTransitionEnd = useCallback(
+    (event: React.TransitionEvent<HTMLElement>) => {
+      if (event.currentTarget !== event.target) return
+      if (event.propertyName !== "width") return
+      resizeScheduler.schedule({ force: true })
+    },
+    [resizeScheduler],
   )
 
   const handleSubmit = useCallback(
@@ -548,6 +670,7 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
         open ? "border-l border-border/80" : "border-l-0",
       )}
       inert={!open ? true : undefined}
+      onTransitionEnd={handleSidebarTransitionEnd}
       style={widthMotion.style}
     >
       <div

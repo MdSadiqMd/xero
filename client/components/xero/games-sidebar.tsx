@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ChevronRight, Play, Search } from "lucide-react"
 import { motion } from "motion/react"
+import { useDeferredFilterQuery } from "@/lib/input-priority"
 import { cn } from "@/lib/utils"
+import { createFrameCoalescer } from "@/lib/frame-governance"
 import { loadGameStats, recordGameRun, type GameStatDto } from "@/src/lib/game-stats"
 import { useSidebarMotion, useSidebarWidthMotion } from "@/lib/sidebar-motion"
 import type { GameRunCompletion } from "./games/use-game-run-completion"
@@ -320,12 +322,17 @@ export function GamesSidebar({ open, accountLogin }: GamesSidebarProps) {
   widthRef.current = width
   const widthBeforeSelectRef = useRef<number | null>(null)
   const viewDirectionRef = useRef<1 | -1>(1)
+  const deferredQuery = useDeferredFilterQuery(query)
 
   const handleResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
     const startX = event.clientX
     const startWidth = widthRef.current
+    let latestWidth = startWidth
+    const widthUpdates = createFrameCoalescer<number>({
+      onFlush: setWidth,
+    })
     setIsResizing(true)
 
     const previousCursor = document.body.style.cursor
@@ -335,10 +342,11 @@ export function GamesSidebar({ open, accountLogin }: GamesSidebarProps) {
 
     const handleMove = (ev: PointerEvent) => {
       const delta = startX - ev.clientX
-      const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + delta))
-      setWidth(next)
+      latestWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + delta))
+      widthUpdates.schedule(latestWidth)
     }
     const handleUp = () => {
+      widthUpdates.flush()
       window.removeEventListener("pointermove", handleMove)
       window.removeEventListener("pointerup", handleUp)
       window.removeEventListener("pointercancel", handleUp)
@@ -446,13 +454,13 @@ export function GamesSidebar({ open, accountLogin }: GamesSidebarProps) {
   }, [])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = deferredQuery
     if (!q) return GAMES
     return GAMES.filter(
       (game) =>
         game.title.toLowerCase().includes(q) || game.tagline.toLowerCase().includes(q),
     )
-  }, [query])
+  }, [deferredQuery])
 
   return (
     <aside
@@ -496,6 +504,7 @@ export function GamesSidebar({ open, accountLogin }: GamesSidebarProps) {
         {selectedGame ? (
           <GameDetail
             accountLogin={accountLogin}
+            active={open}
             game={selectedGame}
             onBack={handleBack}
             onRunComplete={handleRunComplete}
@@ -613,12 +622,14 @@ function GameRow({ game, onSelect }: { game: Game; onSelect: (gameId: string) =>
 
 function GameDetail({
   accountLogin,
+  active,
   game,
   onBack,
   onRunComplete,
   stats,
 }: {
   accountLogin?: string | null
+  active: boolean
   game: Game
   onBack: () => void
   onRunComplete: (gameId: string, run: GameRunCompletion) => void
@@ -649,19 +660,19 @@ function GameDetail({
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
         <div className="flex shrink-0 items-center justify-center border-b border-border/70 bg-background/40 px-6 py-7">
           {game.id === "tetris" ? (
-            <Tetris active onRunComplete={handleRunComplete} />
+            <Tetris active={active} onRunComplete={handleRunComplete} />
           ) : game.id === "space-invaders" ? (
-            <SpaceInvaders active onRunComplete={handleRunComplete} />
+            <SpaceInvaders active={active} onRunComplete={handleRunComplete} />
           ) : game.id === "snake" ? (
-            <Snake active onRunComplete={handleRunComplete} />
+            <Snake active={active} onRunComplete={handleRunComplete} />
           ) : game.id === "pacman" ? (
-            <Pacman active onRunComplete={handleRunComplete} />
+            <Pacman active={active} onRunComplete={handleRunComplete} />
           ) : game.id === "breakout" ? (
-            <Breakout active onRunComplete={handleRunComplete} />
+            <Breakout active={active} onRunComplete={handleRunComplete} />
           ) : game.id === "asteroids" ? (
-            <Asteroids active onRunComplete={handleRunComplete} />
+            <Asteroids active={active} onRunComplete={handleRunComplete} />
           ) : game.id === "galaga" ? (
-            <Galaga active onRunComplete={handleRunComplete} />
+            <Galaga active={active} onRunComplete={handleRunComplete} />
           ) : (
             <GameCanvas glyph={game.glyph} />
           )}

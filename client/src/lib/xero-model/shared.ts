@@ -16,6 +16,17 @@ export const nonEmptyOptionalTextSchema = z.string().trim().min(1).nullable().op
 export const isoTimestampSchema = z.string().datetime({ offset: true })
 export const optionalIsoTimestampSchema = isoTimestampSchema.nullable().optional()
 
+export const payloadBudgetDiagnosticSchema = z
+  .object({
+    key: z.string().trim().min(1),
+    budgetBytes: z.number().int().positive(),
+    observedBytes: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    dropped: z.boolean(),
+    message: z.string().trim().min(1),
+  })
+  .strict()
+
 export const gitToolResultScopeSchema = z.enum(['staged', 'unstaged', 'worktree'])
 export const webToolResultContentKindSchema = z.enum(['html', 'plain_text'])
 export const browserComputerUseSurfaceSchema = z.enum(['browser', 'computer_use'])
@@ -96,6 +107,7 @@ export type WebToolResultContentKindDto = z.infer<typeof webToolResultContentKin
 export type BrowserComputerUseSurfaceDto = z.infer<typeof browserComputerUseSurfaceSchema>
 export type BrowserComputerUseActionStatusDto = z.infer<typeof browserComputerUseActionStatusSchema>
 export type McpCapabilityKindDto = z.infer<typeof mcpCapabilityKindSchema>
+export type PayloadBudgetDiagnosticDto = z.infer<typeof payloadBudgetDiagnosticSchema>
 export type ToolResultSummaryDto = z.infer<typeof toolResultSummarySchema>
 
 export function sortByNewest<T>(

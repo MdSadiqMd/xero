@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     env,
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     thread,
     time::Duration,
 };
@@ -19,13 +19,24 @@ use crate::{
             EnvironmentDiagnostic, EnvironmentDiagnosticSeverity, EnvironmentPathProfile,
             EnvironmentPermissionRequest, EnvironmentPermissionStatus, EnvironmentPlatform,
             EnvironmentProfilePayload, EnvironmentProfileRow, EnvironmentProfileStatus,
-            EnvironmentProfileSummary, ENVIRONMENT_PROFILE_SCHEMA_VERSION,
+            EnvironmentProfileSummary, EnvironmentToolCategory, EnvironmentToolProbeStatus,
+            EnvironmentToolSummary, ENVIRONMENT_PROFILE_SCHEMA_VERSION,
         },
         open_global_database,
+        user_added_tools::{
+            delete_user_added_environment_tool, insert_user_added_environment_tool,
+            list_user_added_environment_tools, user_added_environment_tool_exists,
+            NewUserAddedToolRow,
+        },
     },
 };
 
-use super::probe::{probe_environment_profile, EnvironmentProbeReport};
+use super::probe::{
+    built_in_environment_probe_catalog, probe_environment_profile_with,
+    probe_environment_profile_with_user_tools, EnvironmentBinaryResolver,
+    EnvironmentCommandExecutor, EnvironmentProbeCatalogEntry, EnvironmentProbeOptions,
+    EnvironmentProbeReport, SystemEnvironmentBinaryResolver, SystemEnvironmentCommandExecutor,
+};
 
 const PROFILE_STALE_AFTER: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
@@ -51,6 +62,24 @@ pub struct EnvironmentDiscoveryStatus {
 pub struct EnvironmentPermissionDecision {
     pub id: String,
     pub status: EnvironmentPermissionStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VerifyUserToolRequest {
+    pub id: String,
+    pub category: EnvironmentToolCategory,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VerifyUserToolResponse {
+    pub record: EnvironmentToolSummary,
+    #[serde(default)]
+    pub diagnostics: Vec<EnvironmentDiagnostic>,
 }
 
 pub fn environment_discovery_status(
@@ -186,6 +215,76 @@ pub fn resolve_environment_permission_requests(
     environment_discovery_status(database_path)
 }
 
+pub fn verify_user_environment_tool(
+    request: VerifyUserToolRequest,
+) -> CommandResult<VerifyUserToolResponse> {
+    verify_user_environment_tool_with(
+        request,
+        Arc::new(SystemEnvironmentBinaryResolver::from_process()),
+        Arc::new(SystemEnvironmentCommandExecutor),
+        EnvironmentProbeOptions::default(),
+    )
+}
+
+pub fn save_user_environment_tool(
+    database_path: &Path,
+    request: VerifyUserToolRequest,
+) -> CommandResult<EnvironmentProbeReport> {
+    let row = validate_user_tool_request(&request)?;
+    reject_builtin_tool_id(&row.id)?;
+
+    let verification = verify_user_environment_tool(request)?;
+    if verification.record.probe_status != EnvironmentToolProbeStatus::Ok
+        || !verification.record.present
+    {
+        return Err(CommandError::user_fixable(
+            "environment_user_tool_not_verified",
+            format!(
+                "Xero could not save `{}` because its version probe did not verify successfully.",
+                row.id
+            ),
+        ));
+    }
+
+    let mut connection = open_global_database(database_path)?;
+    if user_added_environment_tool_exists(&connection, &row.id)? {
+        return Err(CommandError::user_fixable(
+            "environment_user_tool_exists",
+            format!(
+                "A custom environment tool named `{}` already exists. Choose a different tool name.",
+                row.id
+            ),
+        ));
+    }
+
+    let timestamp = now_timestamp();
+    let tx = connection.transaction().map_err(|error| {
+        CommandError::system_fault(
+            "environment_user_tool_save_failed",
+            format!("Xero could not start a transaction for the custom environment tool: {error}"),
+        )
+    })?;
+    insert_user_added_environment_tool(&tx, &row, &timestamp)?;
+    tx.commit().map_err(|error| {
+        CommandError::system_fault(
+            "environment_user_tool_save_failed",
+            format!("Xero could not save the custom environment tool: {error}"),
+        )
+    })?;
+
+    refresh_environment_profile_report(&mut connection)
+}
+
+pub fn remove_user_environment_tool(
+    database_path: &Path,
+    id: String,
+) -> CommandResult<EnvironmentProbeReport> {
+    let id = validate_user_tool_id(&id)?;
+    let mut connection = open_global_database(database_path)?;
+    delete_user_added_environment_tool(&connection, &id)?;
+    refresh_environment_profile_report(&mut connection)
+}
+
 fn start_environment_discovery_with_policy(
     database_path: PathBuf,
     force: bool,
@@ -205,7 +304,7 @@ fn start_environment_discovery_with_policy(
     let started_status = status_from_row(load_environment_profile_row(&connection)?.as_ref(), true);
     let worker_database_path = database_path.clone();
     thread::spawn(move || {
-        let report = probe_environment_profile();
+        let report = probe_environment_profile_for_database(&worker_database_path);
         match open_global_database(&worker_database_path) {
             Ok(mut connection) => {
                 let result = match report {
@@ -213,7 +312,7 @@ fn start_environment_discovery_with_policy(
                     Err(error) => persist_failed_profile(
                         &mut connection,
                         "environment_probe_failed",
-                        format!("Environment discovery could not build a valid profile: {error}"),
+                        error.message,
                     ),
                 };
                 if let Err(error) = result {
@@ -228,6 +327,190 @@ fn start_environment_discovery_with_policy(
     });
 
     Ok(started_status)
+}
+
+fn verify_user_environment_tool_with(
+    request: VerifyUserToolRequest,
+    resolver: Arc<dyn EnvironmentBinaryResolver>,
+    executor: Arc<dyn EnvironmentCommandExecutor>,
+    options: EnvironmentProbeOptions,
+) -> CommandResult<VerifyUserToolResponse> {
+    let row = validate_user_tool_request(&request)?;
+    let report = probe_environment_profile_with(
+        vec![EnvironmentProbeCatalogEntry {
+            id: row.id,
+            category: row.category,
+            command: row.command,
+            args: row.args,
+            custom: true,
+        }],
+        resolver,
+        executor,
+        options,
+    )
+    .map_err(environment_probe_validation_error)?;
+
+    let record = report.summary.tools.into_iter().next().ok_or_else(|| {
+        CommandError::system_fault(
+            "environment_user_tool_verify_failed",
+            "Xero could not read the verification result for the custom environment tool.",
+        )
+    })?;
+
+    Ok(VerifyUserToolResponse {
+        record,
+        diagnostics: report.summary.diagnostics,
+    })
+}
+
+fn probe_environment_profile_for_database(
+    database_path: &Path,
+) -> CommandResult<EnvironmentProbeReport> {
+    let connection = open_global_database(database_path)?;
+    let user_tools = list_user_added_environment_tools(&connection)?;
+    probe_environment_profile_with_user_tools(user_tools)
+        .map_err(environment_probe_validation_error)
+}
+
+fn refresh_environment_profile_report(
+    connection: &mut Connection,
+) -> CommandResult<EnvironmentProbeReport> {
+    let user_tools = list_user_added_environment_tools(connection)?;
+    let report = probe_environment_profile_with_user_tools(user_tools)
+        .map_err(environment_probe_validation_error)?;
+    persist_probe_report(connection, &report)?;
+    Ok(report)
+}
+
+fn validate_user_tool_request(
+    request: &VerifyUserToolRequest,
+) -> CommandResult<NewUserAddedToolRow> {
+    let id = validate_user_tool_id(&request.id)?;
+    let command = validate_user_tool_command(&request.command)?;
+    let mut args = Vec::with_capacity(request.args.len());
+    if request.args.len() > 8 {
+        return Err(CommandError::user_fixable(
+            "environment_user_tool_args_invalid",
+            "Version arguments must include at most 8 items.",
+        ));
+    }
+
+    for arg in &request.args {
+        let trimmed = arg.trim();
+        if trimmed.is_empty()
+            || trimmed.len() > 128
+            || contains_control_character(trimmed)
+            || crate::runtime::redaction::find_prohibited_persistence_content(trimmed).is_some()
+        {
+            return Err(CommandError::user_fixable(
+                "environment_user_tool_args_invalid",
+                "Each version argument must be a non-empty string under 128 characters without secret-like content.",
+            ));
+        }
+        args.push(trimmed.to_string());
+    }
+
+    Ok(NewUserAddedToolRow {
+        id,
+        category: request.category,
+        command,
+        args,
+    })
+}
+
+fn validate_user_tool_id(id: &str) -> CommandResult<String> {
+    let id = id.trim();
+    if id.is_empty()
+        || id.len() > 32
+        || id != id.to_ascii_lowercase()
+        || !is_slug_safe_tool_id(id)
+        || crate::runtime::redaction::find_prohibited_persistence_content(id).is_some()
+    {
+        return Err(CommandError::user_fixable(
+            "environment_user_tool_id_invalid",
+            "Tool name must be 1-32 lowercase characters and use only a-z, 0-9, underscore, or dash.",
+        ));
+    }
+    Ok(id.to_string())
+}
+
+fn validate_user_tool_command(command: &str) -> CommandResult<String> {
+    let command = command.trim();
+    if command.is_empty()
+        || command.len() > 256
+        || contains_control_character(command)
+        || crate::runtime::redaction::find_prohibited_persistence_content(command).is_some()
+    {
+        return Err(CommandError::invalid_request("command"));
+    }
+    if contains_shell_metacharacter(command) {
+        return Err(CommandError::user_fixable(
+            "environment_user_tool_command_invalid",
+            "Command must be an executable name or absolute path without shell metacharacters.",
+        ));
+    }
+
+    let looks_like_path = command.contains('/') || command.contains('\\');
+    if looks_like_path && !Path::new(command).is_absolute() {
+        return Err(CommandError::user_fixable(
+            "environment_user_tool_command_invalid",
+            "Command paths must be absolute. Use a plain executable name for PATH resolution.",
+        ));
+    }
+    if !looks_like_path && command.chars().any(char::is_whitespace) {
+        return Err(CommandError::user_fixable(
+            "environment_user_tool_command_invalid",
+            "Plain executable names must not contain whitespace.",
+        ));
+    }
+
+    Ok(command.to_string())
+}
+
+fn reject_builtin_tool_id(id: &str) -> CommandResult<()> {
+    if built_in_environment_probe_catalog()
+        .iter()
+        .any(|entry| entry.id == id)
+    {
+        return Err(CommandError::user_fixable(
+            "environment_user_tool_conflict_with_builtin",
+            format!("`{id}` is already part of Xero's built-in environment catalog."),
+        ));
+    }
+    Ok(())
+}
+
+fn is_slug_safe_tool_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return false;
+    }
+    chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
+}
+
+fn contains_control_character(value: &str) -> bool {
+    value.chars().any(|ch| ch.is_control())
+}
+
+fn contains_shell_metacharacter(value: &str) -> bool {
+    value.chars().any(|ch| {
+        matches!(
+            ch,
+            ';' | '&' | '|' | '`' | '$' | '<' | '>' | '*' | '?' | '!'
+        )
+    })
+}
+
+fn environment_probe_validation_error(
+    error: crate::global_db::environment_profile::EnvironmentProfileValidationError,
+) -> CommandError {
+    CommandError::system_fault(
+        "environment_probe_invalid",
+        format!("Xero could not build a valid environment profile: {error}"),
+    )
 }
 
 fn status_from_row(
@@ -584,11 +867,15 @@ fn validation_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment::probe::{EnvironmentCommandExecution, ResolvedEnvironmentBinary};
     use crate::global_db::{
         configure_connection,
-        environment_profile::{EnvironmentPermissionKind, EnvironmentPermissionStatus},
+        environment_profile::{
+            EnvironmentPermissionKind, EnvironmentPermissionStatus, EnvironmentToolSource,
+        },
         migrations, open_global_database,
     };
+    use std::{collections::HashMap, ffi::OsString};
 
     fn connection() -> Connection {
         let mut connection = Connection::open_in_memory().expect("open db");
@@ -597,6 +884,46 @@ mod tests {
             .to_latest(&mut connection)
             .expect("migrate db");
         connection
+    }
+
+    #[derive(Debug, Clone)]
+    struct FakeResolver {
+        binaries: HashMap<String, ResolvedEnvironmentBinary>,
+    }
+
+    impl EnvironmentBinaryResolver for FakeResolver {
+        fn resolve(&self, command: &str) -> Option<ResolvedEnvironmentBinary> {
+            self.binaries.get(command).cloned()
+        }
+
+        fn path_profile(&self) -> EnvironmentPathProfile {
+            EnvironmentPathProfile {
+                entry_count: 1,
+                fingerprint: Some("sha256-test".into()),
+                sources: vec!["tauri-process-path".into()],
+            }
+        }
+
+        fn child_envs(&self) -> Vec<(OsString, OsString)> {
+            vec![]
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct FakeExecutor {
+        execution: EnvironmentCommandExecution,
+    }
+
+    impl EnvironmentCommandExecutor for FakeExecutor {
+        fn run(
+            &self,
+            _binary: &Path,
+            _args: &[String],
+            _timeout: Duration,
+            _child_envs: &[(OsString, OsString)],
+        ) -> EnvironmentCommandExecution {
+            self.execution.clone()
+        }
     }
 
     #[test]
@@ -691,6 +1018,131 @@ mod tests {
         .expect_err("required access cannot be skipped");
 
         assert_eq!(error.code, "environment_permission_required");
+    }
+
+    #[test]
+    fn saving_user_tool_rejects_builtin_id_before_insert() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let database_path = dir.path().join("xero.db");
+
+        let error = save_user_environment_tool(
+            &database_path,
+            VerifyUserToolRequest {
+                id: "git".into(),
+                category: EnvironmentToolCategory::BaseDeveloperTool,
+                command: "git".into(),
+                args: vec!["--version".into()],
+            },
+        )
+        .expect_err("built-in ids are rejected");
+
+        assert_eq!(error.code, "environment_user_tool_conflict_with_builtin");
+        let connection = open_global_database(&database_path).expect("open db");
+        assert!(
+            !user_added_environment_tool_exists(&connection, "git").expect("exists query"),
+            "built-in conflict must not insert a custom row"
+        );
+    }
+
+    #[test]
+    fn verify_user_tool_drops_sensitive_output() {
+        let mut binaries = HashMap::new();
+        binaries.insert(
+            "opaque-cli".into(),
+            ResolvedEnvironmentBinary {
+                path: std::env::temp_dir().join("opaque-cli"),
+                source: EnvironmentToolSource::Path,
+            },
+        );
+
+        let response = verify_user_environment_tool_with(
+            VerifyUserToolRequest {
+                id: "opaque_cli".into(),
+                category: EnvironmentToolCategory::ShellUtility,
+                command: "opaque-cli".into(),
+                args: vec!["--version".into()],
+            },
+            Arc::new(FakeResolver { binaries }),
+            Arc::new(FakeExecutor {
+                execution: EnvironmentCommandExecution::Completed {
+                    success: true,
+                    stdout: b"opaque-cli sk-demo-token\n".to_vec(),
+                    stderr: vec![],
+                },
+            }),
+            EnvironmentProbeOptions {
+                timeout: Duration::from_millis(25),
+                concurrency: 1,
+            },
+        )
+        .expect("verify response");
+
+        assert_eq!(
+            response.record.probe_status,
+            EnvironmentToolProbeStatus::Failed
+        );
+        assert!(response.record.version.is_none());
+        assert!(response
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "environment_probe_failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_tool_save_round_trips_and_remove_is_idempotent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let database_path = dir.path().join("xero.db");
+        let script = dir.path().join("custom-version");
+        std::fs::write(&script, "#!/bin/sh\necho custom-version 4.5.6\n").expect("write fixture");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("fixture metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).expect("chmod fixture");
+
+        let report = save_user_environment_tool(
+            &database_path,
+            VerifyUserToolRequest {
+                id: "custom_version".into(),
+                category: EnvironmentToolCategory::ShellUtility,
+                command: script.to_string_lossy().into_owned(),
+                args: vec!["--version".into()],
+            },
+        )
+        .expect("save custom tool");
+
+        assert!(report.summary.tools.iter().any(|tool| {
+            tool.id == "custom_version"
+                && tool.custom
+                && tool.version.as_deref() == Some("custom-version 4.5.6")
+        }));
+
+        let summary = environment_profile_summary(&database_path)
+            .expect("load summary")
+            .expect("profile summary");
+        assert!(summary
+            .tools
+            .iter()
+            .any(|tool| tool.id == "custom_version" && tool.custom));
+
+        let report = remove_user_environment_tool(&database_path, "missing_custom".into())
+            .expect("missing remove is no-op");
+        assert!(report
+            .summary
+            .tools
+            .iter()
+            .any(|tool| tool.id == "custom_version"));
+
+        let report = remove_user_environment_tool(&database_path, "custom_version".into())
+            .expect("remove custom tool");
+        assert!(!report
+            .summary
+            .tools
+            .iter()
+            .any(|tool| tool.id == "custom_version"));
     }
 
     fn seed_permission_profile(database_path: &Path) {

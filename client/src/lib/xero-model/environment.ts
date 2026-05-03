@@ -35,6 +35,12 @@ export const environmentToolCategorySchema = z.enum([
   'database_cli',
   'solana_tooling',
   'agent_ai_cli',
+  'editor',
+  'build_tool',
+  'linter',
+  'version_manager',
+  'iac_tool',
+  'shell_utility',
 ])
 export const environmentToolProbeStatusSchema = z.enum([
   'ok',
@@ -106,6 +112,7 @@ export const environmentToolSummarySchema = z
   .object({
     id: z.string().trim().min(1),
     category: environmentToolCategorySchema,
+    custom: z.boolean().default(false),
     present: z.boolean(),
     version: z.string().trim().min(1).nullable().optional(),
     displayPath: z.string().trim().min(1).nullable().optional(),
@@ -131,7 +138,7 @@ export const environmentPlatformSchema = z
   })
   .strict()
 
-export const environmentProfileSummarySchema = z
+export const environmentProfileSummaryValueSchema = z
   .object({
     schemaVersion: z.literal(1),
     status: environmentProfileStatusSchema,
@@ -143,7 +150,44 @@ export const environmentProfileSummarySchema = z
     diagnostics: z.array(environmentDiagnosticSchema).default([]),
   })
   .strict()
-  .nullable()
+
+export const environmentProfileSummarySchema = environmentProfileSummaryValueSchema.nullable()
+
+const userToolCommandSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(256)
+  .refine((value) => !/[;&|`$<>*?!\r\n\0]/.test(value), {
+    message: 'Command must not contain shell metacharacters.',
+  })
+
+export const verifyUserToolRequestSchema = z
+  .object({
+    id: z.string().trim().min(1).max(32).regex(/^[a-z0-9][a-z0-9_-]*$/),
+    category: environmentToolCategorySchema,
+    command: userToolCommandSchema,
+    args: z.array(z.string().trim().min(1).max(128)).max(8).default([]),
+  })
+  .strict()
+
+export const verifyUserToolResponseSchema = z
+  .object({
+    record: environmentToolSummarySchema,
+    diagnostics: z.array(environmentDiagnosticSchema).default([]),
+  })
+  .strict()
+
+export const saveUserToolRequestSchema = verifyUserToolRequestSchema
+
+export const environmentProbeReportSchema = z
+  .object({
+    status: environmentProfileStatusSchema,
+    summary: environmentProfileSummaryValueSchema,
+    startedAt: optionalIsoTimestampSchema,
+    completedAt: optionalIsoTimestampSchema,
+  })
+  .passthrough()
 
 export type EnvironmentProfileStatusDto = z.infer<typeof environmentProfileStatusSchema>
 export type EnvironmentPermissionKindDto = z.infer<typeof environmentPermissionKindSchema>
@@ -161,4 +205,9 @@ export type EnvironmentDiscoveryStatusDto = z.infer<typeof environmentDiscoveryS
 export type EnvironmentToolSummaryDto = z.infer<typeof environmentToolSummarySchema>
 export type EnvironmentCapabilityDto = z.infer<typeof environmentCapabilitySchema>
 export type EnvironmentPlatformDto = z.infer<typeof environmentPlatformSchema>
+export type EnvironmentProfileSummaryValueDto = z.infer<typeof environmentProfileSummaryValueSchema>
 export type EnvironmentProfileSummaryDto = z.infer<typeof environmentProfileSummarySchema>
+export type VerifyUserToolRequestDto = z.infer<typeof verifyUserToolRequestSchema>
+export type VerifyUserToolResponseDto = z.infer<typeof verifyUserToolResponseSchema>
+export type SaveUserToolRequestDto = z.infer<typeof saveUserToolRequestSchema>
+export type EnvironmentProbeReportDto = z.infer<typeof environmentProbeReportSchema>

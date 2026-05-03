@@ -226,6 +226,14 @@ pub struct ProjectIdRequestDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListProjectFilesRequestDto {
+    pub project_id: String,
+    #[serde(default = "default_project_tree_path")]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RepositoryDiffRequestDto {
     pub project_id: String,
     pub scope: RepositoryDiffScope,
@@ -286,6 +294,23 @@ pub struct ProjectFileNodeDto {
     pub r#type: ProjectEntryKindDto,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<ProjectFileNodeDto>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub children_loaded: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted_entry_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PayloadBudgetDiagnosticDto {
+    pub key: String,
+    pub budget_bytes: u32,
+    pub observed_bytes: u32,
+    pub truncated: bool,
+    pub dropped: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -392,6 +417,8 @@ pub struct RepositoryStatusResponseDto {
     pub additions: u32,
     #[serde(default)]
     pub deletions: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_budget: Option<PayloadBudgetDiagnosticDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -402,6 +429,8 @@ pub struct RepositoryDiffResponseDto {
     pub patch: String,
     pub truncated: bool,
     pub base_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_budget: Option<PayloadBudgetDiagnosticDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -501,7 +530,14 @@ pub struct GitPushResponseDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListProjectFilesResponseDto {
     pub project_id: String,
+    pub path: String,
     pub root: ProjectFileNodeDto,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub omitted_entry_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_budget: Option<PayloadBudgetDiagnosticDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -552,6 +588,8 @@ pub struct DeleteProjectEntryResponseDto {
 pub struct SearchProjectRequestDto {
     pub project_id: String,
     pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
     #[serde(default)]
     pub case_sensitive: bool,
     #[serde(default)]
@@ -564,6 +602,8 @@ pub struct SearchProjectRequestDto {
     pub exclude_globs: Vec<String>,
     #[serde(default)]
     pub max_results: Option<u32>,
+    #[serde(default)]
+    pub max_files: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -590,7 +630,23 @@ pub struct SearchProjectResponseDto {
     pub total_matches: u32,
     pub total_files: u32,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_budget: Option<PayloadBudgetDiagnosticDto>,
     pub files: Vec<SearchFileResultDto>,
+}
+
+fn default_project_tree_path() -> String {
+    "/".into()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

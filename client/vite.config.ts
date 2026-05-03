@@ -24,63 +24,79 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (/[\\/]src[\\/]features[\\/]solana[\\/]/.test(id)) {
-            return 'solana-workbench'
+          const normalizedId = id.replace(/\\/g, '/')
+
+          if (
+            normalizedId.includes('/node_modules/') &&
+            (
+              normalizedId.includes('/@tauri-apps/') ||
+              normalizedId.includes('/@tauri-apps+') ||
+              normalizedId.includes('@tauri-apps_')
+            )
+          ) {
+            return 'tauri-api'
           }
 
-          if (/[\\/]src[\\/]features[\\/]xero[\\/]use-xero-desktop-state(?:[\\/]|\.ts$)/.test(id)) {
+          if (/[/]src[/]features[/]xero[/]use-xero-desktop-state(?:[/]|\.ts$)/.test(normalizedId)) {
             return 'xero-state'
           }
 
-          if (/[\\/]src[\\/]lib[\\/]xero-model(?:[\\/]|\.ts$)/.test(id)) {
+          if (/[/]src[/]lib[/]xero-model(?:[/]|\.ts$)/.test(normalizedId)) {
             return 'xero-model'
           }
 
-          if (/[\\/]src[\\/]lib[\\/]xero-desktop\.ts$/.test(id)) {
+          if (/[/]src[/]lib[/]xero-desktop\.ts$/.test(normalizedId)) {
             return 'xero-desktop-adapter'
           }
 
-          if (!/[\\/]node_modules[\\/]/.test(id)) {
+          if (!normalizedId.includes('/node_modules/')) {
             return undefined
           }
 
-          if (/[\\/]node_modules[\\/](?:react|react-dom|scheduler)[\\/]/.test(id)) {
+          if (/[/]node_modules[/](?:react|react-dom|scheduler)[/]/.test(normalizedId)) {
             return 'react-vendor'
           }
 
-          if (/[\\/]node_modules[\\/]@codemirror[\\/](?:lang-|legacy-modes)/.test(id)) {
-            return 'codemirror-languages'
+          const codeMirrorLanguageMatch = normalizedId.match(/[/]node_modules[/]@codemirror[/](lang-[^/]+|legacy-modes)(?:[/]|$)/)
+          if (codeMirrorLanguageMatch) {
+            const packageName = codeMirrorLanguageMatch[1]
+            if (packageName === 'legacy-modes') {
+              const legacyModeMatch = normalizedId.match(/[/]legacy-modes[/]mode[/]([^/]+)(?:\.|$)/)
+              return legacyModeMatch ? `codemirror-legacy-${legacyModeMatch[1]}` : 'codemirror-legacy-modes'
+            }
+
+            return `codemirror-${packageName}`
           }
 
-          if (/[\\/]node_modules[\\/]@codemirror[\\/]view[\\/]/.test(id)) {
+          if (/[/]node_modules[/]@codemirror[/]view[/]/.test(normalizedId)) {
             return 'codemirror-view'
           }
 
-          if (/[\\/]node_modules[\\/]@codemirror[\\/]state[\\/]/.test(id)) {
+          if (/[/]node_modules[/]@codemirror[/]state[/]/.test(normalizedId)) {
             return 'codemirror-state'
           }
 
-          if (/[\\/]node_modules[\\/]@lezer[\\/]/.test(id)) {
+          if (/[/]node_modules[/]@lezer[/]/.test(normalizedId)) {
             return 'codemirror-parser'
           }
 
-          if (/[\\/]node_modules[\\/](?:@codemirror|codemirror)[\\/]/.test(id)) {
+          if (/[/]node_modules[/](?:@codemirror|codemirror)[/]/.test(normalizedId)) {
             return 'codemirror-core'
           }
 
-          if (/[\\/]node_modules[\\/](?:@radix-ui|cmdk|vaul|sonner|react-day-picker|embla-carousel-react|input-otp|react-resizable-panels)[\\/]/.test(id)) {
+          if (/[/]node_modules[/](?:@radix-ui|cmdk|vaul|sonner|react-day-picker|embla-carousel-react|input-otp|react-resizable-panels)[/]/.test(normalizedId)) {
             return 'ui-vendor'
           }
 
-          if (/[\\/]node_modules[\\/](?:lucide-react|motion|recharts|date-fns)[\\/]/.test(id)) {
+          if (/[/]node_modules[/](?:lucide-react|motion|recharts|date-fns)[/]/.test(normalizedId)) {
             return 'visual-vendor'
           }
 
-          if (/[\\/]node_modules[\\/](?:zod|react-hook-form|@hookform)[\\/]/.test(id)) {
+          if (/[/]node_modules[/](?:zod|react-hook-form|@hookform)[/]/.test(normalizedId)) {
             return 'form-schema-vendor'
           }
 
-          if (/[\\/]node_modules[\\/](?:shiki|@shikijs|vscode-textmate|vscode-oniguruma)[\\/]/.test(id)) {
+          if (/[/]node_modules[/](?:shiki|@shikijs|vscode-textmate|vscode-oniguruma)[/]/.test(normalizedId)) {
             return undefined
           }
 

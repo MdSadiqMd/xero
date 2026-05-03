@@ -7,7 +7,7 @@ use crate::{
         ActiveAuthFlowRegistry, AnthropicAuthConfig, OpenAiCodexAuthConfig,
         OpenAiCompatibleAuthConfig, OpenRouterAuthConfig,
     },
-    commands::CommandError,
+    commands::{backend_jobs::BackendJobRegistry, CommandError},
     global_db::global_database_path,
     provider_models::ProviderModelCatalogRefreshRegistry,
     runtime::{AgentProviderConfig, AgentRunSupervisor, AutonomousWebConfig},
@@ -41,6 +41,7 @@ pub struct DesktopState {
     import_failpoints: ImportFailpoints,
     runtime_stream_failpoints: RuntimeStreamFailpoints,
     agent_run_supervisor: AgentRunSupervisor,
+    backend_jobs: BackendJobRegistry,
     provider_model_catalog_refresh_registry: ProviderModelCatalogRefreshRegistry,
     active_auth_flows: ActiveAuthFlowRegistry,
 }
@@ -112,6 +113,10 @@ impl DesktopState {
 
     pub fn agent_run_supervisor(&self) -> &AgentRunSupervisor {
         &self.agent_run_supervisor
+    }
+
+    pub fn backend_jobs(&self) -> &BackendJobRegistry {
+        &self.backend_jobs
     }
 
     pub fn provider_model_catalog_refresh_registry(&self) -> &ProviderModelCatalogRefreshRegistry {

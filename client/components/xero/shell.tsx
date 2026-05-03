@@ -16,6 +16,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
+  Workflow as WorkflowIcon,
   Wrench,
   X,
 } from "lucide-react"
@@ -36,6 +37,18 @@ import { StatusFooter, type StatusFooterProps } from "./status-footer"
 // ---------------------------------------------------------------------------
 
 export type PlatformVariant = "macos" | "windows" | "linux"
+
+export type SurfacePreloadTarget =
+  | "browser"
+  | "games"
+  | "android"
+  | "ios"
+  | "settings"
+  | "solana"
+  | "tools"
+  | "usage"
+  | "vcs"
+  | "workflows"
 
 export function detectPlatform(): PlatformVariant {
   if (typeof navigator === "undefined") return "linux"
@@ -80,6 +93,8 @@ function useDesktopPlatform(desktopRuntime: boolean): PlatformVariant {
 interface XeroShellProps {
   activeView: View
   onViewChange: (view: View) => void
+  onViewPreload?: (view: View) => void
+  onSurfacePreload?: (target: SurfacePreloadTarget) => void
   children: React.ReactNode
   projectName?: string
   onOpenSettings?: () => void
@@ -104,6 +119,8 @@ interface XeroShellProps {
   solanaOpen?: boolean
   onToggleVcs?: () => void
   vcsOpen?: boolean
+  onToggleWorkflows?: () => void
+  workflowsOpen?: boolean
   /** Number of changed files in the working tree — surfaced as a badge on the diff button. */
   vcsChangeCount?: number
   /** Lines added across the working tree (for the +/- badge). */
@@ -221,6 +238,8 @@ function useEmulatorSdkSignal(desktopRuntime: boolean): EmulatorSdkSignal {
 export function XeroShell({
   activeView,
   onViewChange,
+  onViewPreload,
+  onSurfacePreload,
   children,
   onOpenSettings,
   onOpenAccount,
@@ -240,6 +259,8 @@ export function XeroShell({
   solanaOpen = false,
   onToggleVcs,
   vcsOpen = false,
+  onToggleWorkflows,
+  workflowsOpen = false,
   vcsChangeCount = 0,
   vcsAdditions = 0,
   vcsDeletions = 0,
@@ -276,6 +297,23 @@ export function XeroShell({
     e.stopPropagation()
   }
 
+  const runAfterMenuClosePaint = (action?: () => void) => {
+    if (!action) return
+    if (typeof window === "undefined") {
+      action()
+      return
+    }
+
+    if (typeof window.requestAnimationFrame !== "function") {
+      window.setTimeout(action, 0)
+      return
+    }
+
+    window.requestAnimationFrame(() => {
+      window.setTimeout(action, 0)
+    })
+  }
+
   // ------------------------------------------------------------------
   // Shared pieces
   // ------------------------------------------------------------------
@@ -304,6 +342,8 @@ export function XeroShell({
               : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
           )}
           onClick={() => onViewChange(id)}
+          onFocus={() => onViewPreload?.(id)}
+          onPointerEnter={() => onViewPreload?.(id)}
           type="button"
         >
           {label}
@@ -365,7 +405,9 @@ export function XeroShell({
     <button
       aria-label="Settings"
       className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+      onFocus={() => onSurfacePreload?.("settings")}
       onClick={onOpenSettings}
+      onPointerEnter={() => onSurfacePreload?.("settings")}
       type="button"
     >
       <Settings className="h-4 w-4" />
@@ -382,7 +424,9 @@ export function XeroShell({
           ? "bg-primary/15 text-primary"
           : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
       )}
+      onFocus={() => onSurfacePreload?.("games")}
       onClick={onToggleGames}
+      onPointerEnter={() => onSurfacePreload?.("games")}
       type="button"
     >
       <Gamepad2 className="h-4 w-4" />
@@ -441,6 +485,9 @@ export function XeroShell({
               ? "bg-primary/15 text-primary"
               : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
           )}
+          onFocus={() => onSurfacePreload?.("tools")}
+          onPointerDown={() => onSurfacePreload?.("tools")}
+          onPointerEnter={() => onSurfacePreload?.("tools")}
           title="Tools"
           type="button"
         >
@@ -457,7 +504,9 @@ export function XeroShell({
                 toolItemClassName,
                 "text-warning/90 focus:bg-warning/15 focus:text-warning",
               )}
-              onSelect={handleInstallXcode}
+              onFocus={() => onSurfacePreload?.("ios")}
+              onPointerEnter={() => onSurfacePreload?.("ios")}
+              onSelect={() => runAfterMenuClosePaint(handleInstallXcode)}
               title="iOS Simulator needs Xcode. Click to install."
             >
               <AppleLogoIcon className="h-4 w-4" />
@@ -467,7 +516,9 @@ export function XeroShell({
             <DropdownMenuItem
               aria-label={iosOpen ? "Close iOS simulator" : "Open iOS simulator"}
               className={cn(toolItemClassName, iosOpen && activeToolItemClassName)}
-              onSelect={() => onToggleIos?.()}
+              onFocus={() => onSurfacePreload?.("ios")}
+              onPointerEnter={() => onSurfacePreload?.("ios")}
+              onSelect={() => runAfterMenuClosePaint(onToggleIos)}
             >
               <AppleLogoIcon className="h-4 w-4" />
               <span>iOS Simulator</span>
@@ -478,7 +529,9 @@ export function XeroShell({
         <DropdownMenuItem
           aria-label={androidOpen ? "Close Android emulator" : "Open Android emulator"}
           className={cn(toolItemClassName, androidOpen && activeToolItemClassName)}
-          onSelect={() => onToggleAndroid?.()}
+          onFocus={() => onSurfacePreload?.("android")}
+          onPointerEnter={() => onSurfacePreload?.("android")}
+          onSelect={() => runAfterMenuClosePaint(onToggleAndroid)}
           title={
             androidSetupNeeded
               ? "Android SDK not installed - click to set it up"
@@ -492,7 +545,9 @@ export function XeroShell({
         <DropdownMenuItem
           aria-label={browserOpen ? "Close browser" : "Open browser"}
           className={cn(toolItemClassName, browserOpen && activeToolItemClassName)}
-          onSelect={() => onToggleBrowser?.()}
+          onFocus={() => onSurfacePreload?.("browser")}
+          onPointerEnter={() => onSurfacePreload?.("browser")}
+          onSelect={() => runAfterMenuClosePaint(onToggleBrowser)}
         >
           <Globe className="h-4 w-4" />
           <span>Browser</span>
@@ -501,7 +556,9 @@ export function XeroShell({
         <DropdownMenuItem
           aria-label={solanaOpen ? "Close Solana workbench" : "Open Solana workbench"}
           className={cn(toolItemClassName, solanaOpen && activeToolItemClassName)}
-          onSelect={() => onToggleSolana?.()}
+          onFocus={() => onSurfacePreload?.("solana")}
+          onPointerEnter={() => onSurfacePreload?.("solana")}
+          onSelect={() => runAfterMenuClosePaint(onToggleSolana)}
         >
           <SolanaLogoIcon className="h-4 w-4" mono />
           <span>Solana Workbench</span>
@@ -522,7 +579,9 @@ export function XeroShell({
           ? "bg-primary/15 text-primary"
           : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
       )}
+      onFocus={() => onSurfacePreload?.("vcs")}
       onClick={onToggleVcs}
+      onPointerEnter={() => onSurfacePreload?.("vcs")}
       title={
         vcsChangeCount > 0
           ? `${vcsChangeCount} file${vcsChangeCount === 1 ? "" : "s"} changed · +${vcsAdditions} −${vcsDeletions}`
@@ -547,6 +606,26 @@ export function XeroShell({
           {vcsChangeCount > 99 ? "99+" : vcsChangeCount}
         </span>
       ) : null}
+    </button>
+  )
+
+  const WorkflowsBtn = (
+    <button
+      aria-label={workflowsOpen ? "Close workflows" : "Open workflows"}
+      aria-pressed={workflowsOpen}
+      className={cn(
+        "rounded-md p-1.5 transition-colors",
+        workflowsOpen
+          ? "bg-primary/15 text-primary"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+      )}
+      onFocus={() => onSurfacePreload?.("workflows")}
+      onClick={onToggleWorkflows}
+      onPointerEnter={() => onSurfacePreload?.("workflows")}
+      title="Workflows"
+      type="button"
+    >
+      <WorkflowIcon className="h-4 w-4" />
     </button>
   )
 
@@ -694,6 +773,7 @@ export function XeroShell({
             onDoubleClick={stopTitlebarMouseEventPropagation}
             onMouseDown={stopTitlebarMouseEventPropagation}
           >
+            {WorkflowsBtn}
             {VcsBtn}
             {ToolsMenu}
             {GamesBtn}

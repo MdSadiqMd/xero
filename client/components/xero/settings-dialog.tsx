@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import type {
   AgentPaneView,
   DoctorReportRunStatus,
@@ -16,7 +16,10 @@ import type { DictationSettingsAdapter } from "@/components/xero/settings-dialog
 import type { SoulSettingsAdapter } from "@/components/xero/settings-dialog/soul-section"
 import type {
   EnvironmentDiscoveryStatusDto,
+  EnvironmentProbeReportDto,
   EnvironmentProfileSummaryDto,
+  VerifyUserToolRequestDto,
+  VerifyUserToolResponseDto,
   ImportMcpServersResponseDto,
   XeroDoctorReportDto,
   McpImportDiagnosticDto,
@@ -55,19 +58,72 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
-import { AccountSection } from "@/components/xero/settings-dialog/account-section"
-import { BrowserSection } from "@/components/xero/settings-dialog/browser-section"
-import { AgentsSection } from "@/components/xero/settings-dialog/agents-section"
-import { DevelopmentSection } from "@/components/xero/settings-dialog/development-section"
-import { DictationSection } from "@/components/xero/settings-dialog/dictation-section"
-import { DiagnosticsSection } from "@/components/xero/settings-dialog/diagnostics-section"
-import { McpSection } from "@/components/xero/settings-dialog/mcp-section"
-import { NotificationsSection } from "@/components/xero/settings-dialog/notifications-section"
-import { ProvidersSection } from "@/components/xero/settings-dialog/providers-section"
-import { PluginsSection } from "@/components/xero/settings-dialog/plugins-section"
-import { SkillsSection } from "@/components/xero/settings-dialog/skills-section"
-import { SoulSection } from "@/components/xero/settings-dialog/soul-section"
-import { ThemesSection } from "@/components/xero/settings-dialog/themes-section"
+
+const LazyAccountSection = lazy(() =>
+  import("@/components/xero/settings-dialog/account-section").then((module) => ({
+    default: module.AccountSection,
+  })),
+)
+const LazyAgentsSection = lazy(() =>
+  import("@/components/xero/settings-dialog/agents-section").then((module) => ({
+    default: module.AgentsSection,
+  })),
+)
+const LazyBrowserSection = lazy(() =>
+  import("@/components/xero/settings-dialog/browser-section").then((module) => ({
+    default: module.BrowserSection,
+  })),
+)
+const LazyDevelopmentSection = lazy(() =>
+  import("@/components/xero/settings-dialog/development-section").then((module) => ({
+    default: module.DevelopmentSection,
+  })),
+)
+const LazyDictationSection = lazy(() =>
+  import("@/components/xero/settings-dialog/dictation-section").then((module) => ({
+    default: module.DictationSection,
+  })),
+)
+const LazyDiagnosticsSection = lazy(() =>
+  import("@/components/xero/settings-dialog/diagnostics-section").then((module) => ({
+    default: module.DiagnosticsSection,
+  })),
+)
+const LazyMcpSection = lazy(() =>
+  import("@/components/xero/settings-dialog/mcp-section").then((module) => ({
+    default: module.McpSection,
+  })),
+)
+const LazyNotificationsSection = lazy(() =>
+  import("@/components/xero/settings-dialog/notifications-section").then((module) => ({
+    default: module.NotificationsSection,
+  })),
+)
+const LazyProvidersSection = lazy(() =>
+  import("@/components/xero/settings-dialog/providers-section").then((module) => ({
+    default: module.ProvidersSection,
+  })),
+)
+const LazyPluginsSection = lazy(() =>
+  import("@/components/xero/settings-dialog/plugins-section").then((module) => ({
+    default: module.PluginsSection,
+  })),
+)
+const LazySkillsSection = lazy(() =>
+  import("@/components/xero/settings-dialog/skills-section").then((module) => ({
+    default: module.SkillsSection,
+  })),
+)
+const LazySoulSection = lazy(() =>
+  import("@/components/xero/settings-dialog/soul-section").then((module) => ({
+    default: module.SoulSection,
+  })),
+)
+const LazyThemesSection = lazy(() =>
+  import("@/components/xero/settings-dialog/themes-section").then((module) => ({
+    default: module.ThemesSection,
+  })),
+)
 
 export type SettingsSection =
   | "account"
@@ -164,6 +220,9 @@ export interface SettingsDialogProps {
   environmentDiscoveryStatus?: EnvironmentDiscoveryStatusDto | null
   environmentProfileSummary?: EnvironmentProfileSummaryDto
   onRefreshEnvironmentDiscovery?: (options?: { force?: boolean }) => Promise<EnvironmentDiscoveryStatusDto | null>
+  onVerifyUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto | null>
+  onSaveUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<EnvironmentProbeReportDto | null>
+  onRemoveUserEnvironmentTool?: (id: string) => Promise<EnvironmentProbeReportDto | null>
   onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<XeroDoctorReportDto>
   dictationAdapter?: DictationSettingsAdapter
   soulAdapter?: SoulSettingsAdapter
@@ -242,6 +301,9 @@ export function SettingsDialog({
   environmentDiscoveryStatus = null,
   environmentProfileSummary = null,
   onRefreshEnvironmentDiscovery,
+  onVerifyUserEnvironmentTool,
+  onSaveUserEnvironmentTool,
+  onRemoveUserEnvironmentTool,
   onRunDoctorReport,
   dictationAdapter,
   soulAdapter,
@@ -391,8 +453,9 @@ export function SettingsDialog({
               key={section}
               className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5 px-10 py-10 animate-in fade-in-0 motion-enter"
             >
+              <Suspense fallback={<SettingsSectionFallback />}>
               {section === "account" ? (
-                <AccountSection
+                <LazyAccountSection
                   session={githubSession ?? null}
                   status={githubAuthStatus ?? "idle"}
                   error={githubAuthError ?? null}
@@ -400,7 +463,7 @@ export function SettingsDialog({
                   onLogout={() => onGithubLogout?.()}
                 />
               ) : section === "providers" ? (
-                <ProvidersSection
+                <LazyProvidersSection
                   active={open && section === "providers"}
                   agent={agent}
                   providerCredentials={providerCredentials}
@@ -414,22 +477,25 @@ export function SettingsDialog({
                   onStartOAuthLogin={onStartOAuthLogin}
                 />
               ) : section === "diagnostics" ? (
-                <DiagnosticsSection
+                <LazyDiagnosticsSection
                   doctorReport={doctorReport}
                   doctorReportStatus={doctorReportStatus}
                   doctorReportError={doctorReportError}
                   environmentDiscoveryStatus={environmentDiscoveryStatus}
                   environmentProfileSummary={environmentProfileSummary}
                   onRefreshEnvironmentDiscovery={onRefreshEnvironmentDiscovery}
+                  onVerifyUserEnvironmentTool={onVerifyUserEnvironmentTool}
+                  onSaveUserEnvironmentTool={onSaveUserEnvironmentTool}
+                  onRemoveUserEnvironmentTool={onRemoveUserEnvironmentTool}
                   onRunDoctorReport={onRunDoctorReport}
                 />
               ) : section === "soul" ? (
-                <SoulSection adapter={soulAdapter} />
+                <LazySoulSection adapter={soulAdapter} />
               ) : section === "dictation" ? (
-                <DictationSection adapter={dictationAdapter} />
+                <LazyDictationSection adapter={dictationAdapter} />
               ) : section === "notifications" ? (
                 agent ? (
-                  <NotificationsSection
+                  <LazyNotificationsSection
                     agent={agent}
                     onUpsertNotificationRoute={onUpsertNotificationRoute}
                   />
@@ -440,7 +506,7 @@ export function SettingsDialog({
                   />
                 )
               ) : section === "mcp" ? (
-                <McpSection
+                <LazyMcpSection
                   mcpRegistry={mcpRegistry}
                   mcpImportDiagnostics={mcpImportDiagnostics}
                   mcpRegistryLoadStatus={mcpRegistryLoadStatus}
@@ -455,7 +521,7 @@ export function SettingsDialog({
                   onRefreshMcpServerStatuses={onRefreshMcpServerStatuses}
                 />
               ) : section === "agents" ? (
-                <AgentsSection
+                <LazyAgentsSection
                   projectId={agent?.project.id ?? null}
                   projectLabel={agent?.project.repository?.displayName ?? agent?.project.name ?? null}
                   onListAgentDefinitions={onListAgentDefinitions}
@@ -464,7 +530,7 @@ export function SettingsDialog({
                   onRegistryChanged={onAgentRegistryChanged}
                 />
               ) : section === "skills" ? (
-                <SkillsSection
+                <LazySkillsSection
                   agent={agent}
                   skillRegistry={skillRegistry}
                   skillRegistryLoadStatus={skillRegistryLoadStatus}
@@ -482,7 +548,7 @@ export function SettingsDialog({
                   onUpdateGithubSkillSource={onUpdateGithubSkillSource}
                 />
               ) : section === "plugins" ? (
-                <PluginsSection
+                <LazyPluginsSection
                   agent={agent}
                   skillRegistry={skillRegistry}
                   skillRegistryLoadStatus={skillRegistryLoadStatus}
@@ -498,21 +564,33 @@ export function SettingsDialog({
                   onRemovePlugin={onRemovePlugin}
                 />
               ) : section === "browser" ? (
-                <BrowserSection />
+                <LazyBrowserSection />
               ) : section === "themes" ? (
-                <ThemesSection />
+                <LazyThemesSection />
               ) : section === "development" ? (
-                <DevelopmentSection
+                <LazyDevelopmentSection
                   platformOverride={platformOverride}
                   onPlatformOverrideChange={onPlatformOverrideChange}
                   onStartOnboarding={onStartOnboarding}
                 />
               ) : null}
+              </Suspense>
             </div>
           </div>
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function SettingsSectionFallback() {
+  return (
+    <div
+      aria-busy="true"
+      aria-label="Loading settings section"
+      className="min-h-[240px]"
+      role="status"
+    />
   )
 }
 

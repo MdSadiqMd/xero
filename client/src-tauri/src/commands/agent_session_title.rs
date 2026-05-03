@@ -105,6 +105,7 @@ fn generate_session_title<R: Runtime>(
         system_prompt: SESSION_TITLE_SYSTEM_PROMPT.into(),
         messages: vec![ProviderMessage::User {
             content: build_session_title_prompt(prompt),
+            attachments: Vec::new(),
         }],
         tools: Vec::new(),
         turn_index: 0,
@@ -198,7 +199,7 @@ fn sanitize_provider_session_title(message: &str) -> Option<String> {
 
 fn fallback_title_from_prompt(prompt: &str) -> Option<String> {
     let cleaned = collapse_title_whitespace(
-        &prompt
+        prompt
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())

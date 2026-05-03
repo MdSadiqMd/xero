@@ -1,10 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { RefreshCw, X } from "lucide-react"
 import { motion } from "motion/react"
 
 import { cn } from "@/lib/utils"
+import { createFrameCoalescer } from "@/lib/frame-governance"
 import { useSidebarMotion } from "@/lib/sidebar-motion"
 import {
   formatMicrosUsd,
@@ -97,8 +98,8 @@ export function UsageStatsSidebar(props: UsageStatsSidebarProps) {
   const [isResizing, setIsResizing] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const { contentTransition, widthTransition } = useSidebarMotion(isResizing)
-  const startXRef = useRef(0)
-  const startWidthRef = useRef(width)
+  const widthRef = useRef(width)
+  widthRef.current = width
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -107,26 +108,42 @@ export function UsageStatsSidebar(props: UsageStatsSidebarProps) {
     return () => window.removeEventListener("resize", handle)
   }, [])
 
-  useEffect(() => {
-    if (!isResizing) return
-    const onMove = (event: MouseEvent) => {
-      const delta = startXRef.current - event.clientX
-      setWidth(clampWidth(startWidthRef.current + delta))
-    }
-    const onUp = () => {
-      setIsResizing(false)
-      writePersistedWidth(widthRef.current)
-    }
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
-    return () => {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
-    }
-  }, [isResizing])
+  const handleResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = widthRef.current
+    let latestWidth = startWidth
+    const widthUpdates = createFrameCoalescer<number>({
+      onFlush: setWidth,
+    })
+    setIsResizing(true)
 
-  const widthRef = useRef(width)
-  widthRef.current = width
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+    document.body.style.cursor = "col-resize"
+    document.body.style.userSelect = "none"
+
+    const handleMove = (ev: PointerEvent) => {
+      const delta = startX - ev.clientX
+      latestWidth = clampWidth(startWidth + delta)
+      widthUpdates.schedule(latestWidth)
+    }
+    const handleUp = () => {
+      widthUpdates.flush()
+      window.removeEventListener("pointermove", handleMove)
+      window.removeEventListener("pointerup", handleUp)
+      window.removeEventListener("pointercancel", handleUp)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+      setIsResizing(false)
+      writePersistedWidth(latestWidth)
+    }
+
+    window.addEventListener("pointermove", handleMove)
+    window.addEventListener("pointerup", handleUp)
+    window.addEventListener("pointercancel", handleUp)
+  }, [])
 
   const totals = summary?.totals
   const breakdown = summary?.byModel ?? []
@@ -184,12 +201,7 @@ export function UsageStatsSidebar(props: UsageStatsSidebarProps) {
             "hover:bg-primary/30",
             isResizing && "bg-primary/40",
           )}
-          onMouseDown={(event) => {
-            event.preventDefault()
-            startXRef.current = event.clientX
-            startWidthRef.current = width
-            setIsResizing(true)
-          }}
+          onPointerDown={handleResizeStart}
           role="separator"
           tabIndex={0}
         />

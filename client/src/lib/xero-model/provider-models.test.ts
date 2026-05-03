@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createProviderModelCatalogRequest,
   createUnavailableProviderModelCatalog,
+  estimateProviderModelCatalogBytes,
   getProviderModelById,
   getProviderModelCatalogConfiguredModel,
   getProviderModelThinkingEffortLabel,
@@ -209,5 +210,14 @@ describe('provider-models', () => {
     expect(unavailable.source).toBe('unavailable')
     expect(unavailable.models).toEqual([])
     expect(hasProviderModelCatalogSnapshot(unavailable)).toBe(false)
+  })
+
+  it('estimates provider-model catalog retained bytes for cache budgeting', () => {
+    const catalog = providerModelCatalogSchema.parse(makeOpenRouterCatalog())
+
+    expect(estimateProviderModelCatalogBytes(catalog)).toBeGreaterThan(
+      catalog.models.reduce((sum, model) => sum + model.modelId.length, 0),
+    )
+    expect(estimateProviderModelCatalogBytes(null)).toBe(0)
   })
 })

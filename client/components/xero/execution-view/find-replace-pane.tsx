@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -28,6 +29,11 @@ import {
   X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import {
+  createBackendRequestCoordinator,
+  isStaleBackendRequestError,
+  stableBackendRequestKey,
+} from '@/src/lib/backend-request-coordinator'
 import type {
   ReplaceInProjectRequestDto,
   ReplaceInProjectResponseDto,
@@ -35,9 +41,12 @@ import type {
   SearchProjectRequestDto,
   SearchProjectResponseDto,
 } from '@/src/lib/xero-model'
+import { useDebouncedValue } from '@/lib/input-priority'
 import { getFileIcon } from '../file-tree'
 
 export type SearchScope = 'file' | 'project'
+const FIND_REPLACE_PROJECT_SEARCH_SCOPE = 'find-replace-project-search'
+const PROJECT_SEARCH_PAGE_SIZE = 40
 
 interface FindReplacePaneProps {
   view: EditorView | null
@@ -126,6 +135,28 @@ function trimSuffix(text: string): string {
   return text.slice(0, 120) + '…'
 }
 
+function mergeProjectSearchResponses(
+  current: SearchProjectResponseDto | null,
+  next: SearchProjectResponseDto,
+): SearchProjectResponseDto {
+  if (!current) return next
+
+  const filesByPath = new Map(current.files.map((file) => [file.path, file]))
+  for (const file of next.files) {
+    const existing = filesByPath.get(file.path)
+    filesByPath.set(file.path, existing ? { ...file, matches: [...existing.matches, ...file.matches] } : file)
+  }
+  const files = Array.from(filesByPath.values()).sort((left, right) => left.path.localeCompare(right.path))
+
+  return {
+    ...next,
+    files,
+    totalFiles: files.length,
+    totalMatches: files.reduce((sum, file) => sum + file.matches.length, 0),
+    truncated: Boolean(next.nextCursor) || next.truncated,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Pane
 // ---------------------------------------------------------------------------
@@ -151,7 +182,7 @@ export function FindReplacePane({
   const [includeGlobs, setIncludeGlobs] = useState('')
   const [excludeGlobs, setExcludeGlobs] = useState('')
   const [projectResponse, setProjectResponse] = useState<SearchProjectResponseDto | null>(null)
-  const [projectSearchStatus, setProjectSearchStatus] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [projectSearchStatus, setProjectSearchStatus] = useState<'idle' | 'loading' | 'loadingMore' | 'error'>('idle')
   const [projectSearchError, setProjectSearchError] = useState<string | null>(null)
   const [replaceStatus, setReplaceStatus] = useState<'idle' | 'running' | 'error'>('idle')
   const [replaceError, setReplaceError] = useState<string | null>(null)
@@ -159,6 +190,12 @@ export function FindReplacePane({
   const [tick, setTick] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchEpoch = useRef(0)
+  const projectSearchCoordinatorRef = useRef(createBackendRequestCoordinator())
+  const deferredSearchText = useDeferredValue(searchText)
+  const deferredActiveContent = useDeferredValue(activeContent)
+  const debouncedProjectSearchText = useDebouncedValue(searchText, 250)
+  const debouncedIncludeGlobs = useDebouncedValue(includeGlobs, 250)
+  const debouncedExcludeGlobs = useDebouncedValue(excludeGlobs, 250)
 
   // ------------------------------------------------------------------
   // CodeMirror query (file scope)
@@ -221,23 +258,37 @@ export function FindReplacePane({
   // ------------------------------------------------------------------
 
   const localRegex = useMemo(
-    () => buildLocalRegex(searchText, caseSensitive, wholeWord, useRegex),
-    [searchText, caseSensitive, wholeWord, useRegex],
+    () => buildLocalRegex(deferredSearchText, caseSensitive, wholeWord, useRegex),
+    [deferredSearchText, caseSensitive, wholeWord, useRegex],
   )
 
   const localMatches = useMemo(() => {
     if (scope !== 'file' || !localRegex || !activePath) return []
-    return collectLocalMatches(activeContent, localRegex, 2000)
-  }, [scope, localRegex, activePath, activeContent])
+    return collectLocalMatches(deferredActiveContent, localRegex, 2000)
+  }, [scope, localRegex, activePath, deferredActiveContent])
+
+  const countQuery = useMemo<SearchQuery | null>(() => {
+    if (!deferredSearchText) return null
+    try {
+      return new SearchQuery({
+        search: deferredSearchText,
+        caseSensitive,
+        regexp: useRegex,
+        wholeWord,
+      })
+    } catch {
+      return null
+    }
+  }, [caseSensitive, deferredSearchText, useRegex, wholeWord])
 
   const { fileCurrent, fileTotal } = useMemo(() => {
-    if (scope !== 'file' || !view || !cmQuery?.valid) {
+    if (scope !== 'file' || !view || !countQuery?.valid) {
       return { fileCurrent: 0, fileTotal: localMatches.length }
     }
     const sel = view.state.selection.main
     let total = 0
     let current = 0
-    const cursor = cmQuery.getCursor(view.state)
+    const cursor = countQuery.getCursor(view.state)
     while (true) {
       const step = cursor.next()
       if (step.done) break
@@ -249,7 +300,7 @@ export function FindReplacePane({
     }
     return { fileCurrent: current, fileTotal: total }
     // `tick` forces recompute after navigation.
-  }, [scope, view, cmQuery, tick, localMatches.length])
+  }, [scope, view, countQuery, tick, localMatches.length])
 
   const fileQueryInvalid = !!searchText && !(cmQuery?.valid ?? false)
 
@@ -257,67 +308,98 @@ export function FindReplacePane({
   // Project-scope search (debounced)
   // ------------------------------------------------------------------
 
+  const buildProjectSearchRequest = useCallback(
+    (cursor?: string | null): SearchProjectRequestDto => ({
+      projectId,
+      query: debouncedProjectSearchText,
+      cursor: cursor ?? undefined,
+      caseSensitive,
+      wholeWord,
+      regex: useRegex,
+      includeGlobs: parseGlobList(debouncedIncludeGlobs),
+      excludeGlobs: parseGlobList(debouncedExcludeGlobs),
+      maxFiles: PROJECT_SEARCH_PAGE_SIZE,
+    }),
+    [
+      caseSensitive,
+      debouncedExcludeGlobs,
+      debouncedIncludeGlobs,
+      debouncedProjectSearchText,
+      projectId,
+      useRegex,
+      wholeWord,
+    ],
+  )
+
+  const runProjectSearch = useCallback(
+    async ({ append, cursor }: { append: boolean; cursor?: string | null }) => {
+      const epoch = ++searchEpoch.current
+      setProjectSearchStatus(append ? 'loadingMore' : 'loading')
+      setProjectSearchError(null)
+
+      const request = buildProjectSearchRequest(cursor)
+      try {
+        const response = await projectSearchCoordinatorRef.current.runLatest(
+          FIND_REPLACE_PROJECT_SEARCH_SCOPE,
+          stableBackendRequestKey(['search_project', request]),
+          () => searchProject(request),
+        )
+        if (epoch !== searchEpoch.current) return
+        setProjectResponse((current) => (append ? mergeProjectSearchResponses(current, response) : response))
+        setProjectSearchStatus('idle')
+      } catch (error) {
+        if (isStaleBackendRequestError(error)) return
+        if (epoch !== searchEpoch.current) return
+        if (!append) {
+          setProjectResponse(null)
+        }
+        setProjectSearchStatus('error')
+        setProjectSearchError(error instanceof Error ? error.message : String(error))
+      }
+    },
+    [buildProjectSearchRequest, searchProject],
+  )
+
   useEffect(() => {
     if (scope !== 'project') {
+      projectSearchCoordinatorRef.current.cancelScope(FIND_REPLACE_PROJECT_SEARCH_SCOPE)
       setProjectResponse(null)
       setProjectSearchStatus('idle')
       setProjectSearchError(null)
       return
     }
-    if (!searchText) {
+    if (!debouncedProjectSearchText) {
+      projectSearchCoordinatorRef.current.cancelScope(FIND_REPLACE_PROJECT_SEARCH_SCOPE)
       setProjectResponse(null)
       setProjectSearchStatus('idle')
       setProjectSearchError(null)
       return
     }
 
-    const epoch = ++searchEpoch.current
     setProjectSearchStatus('loading')
     setProjectSearchError(null)
-
-    const timer = window.setTimeout(() => {
-      const request: SearchProjectRequestDto = {
-        projectId,
-        query: searchText,
-        caseSensitive,
-        wholeWord,
-        regex: useRegex,
-        includeGlobs: parseGlobList(includeGlobs),
-        excludeGlobs: parseGlobList(excludeGlobs),
-      }
-      searchProject(request)
-        .then((response) => {
-          if (epoch !== searchEpoch.current) return
-          setProjectResponse(response)
-          setProjectSearchStatus('idle')
-        })
-        .catch((error: unknown) => {
-          if (epoch !== searchEpoch.current) return
-          setProjectResponse(null)
-          setProjectSearchStatus('error')
-          setProjectSearchError(error instanceof Error ? error.message : String(error))
-        })
-    }, 250)
+    setProjectResponse(null)
+    void runProjectSearch({ append: false })
 
     return () => {
-      window.clearTimeout(timer)
+      projectSearchCoordinatorRef.current.cancelScope(FIND_REPLACE_PROJECT_SEARCH_SCOPE)
     }
-  }, [
-    scope,
-    projectId,
-    searchText,
-    caseSensitive,
-    wholeWord,
-    useRegex,
-    includeGlobs,
-    excludeGlobs,
-    searchProject,
-  ])
+  }, [debouncedProjectSearchText, runProjectSearch, scope])
+
+  const projectSearchInputPending =
+    scope === 'project' &&
+    (searchText !== debouncedProjectSearchText ||
+      includeGlobs !== debouncedIncludeGlobs ||
+      excludeGlobs !== debouncedExcludeGlobs)
+  const effectiveProjectResponse = projectSearchInputPending ? null : projectResponse
+  const effectiveProjectSearchStatus =
+    projectSearchInputPending && searchText.trim().length > 0 ? 'loading' : projectSearchStatus
+  const effectiveProjectSearchError = projectSearchInputPending ? null : projectSearchError
 
   // Reset collapse memory whenever the set of result files changes.
   useEffect(() => {
     setCollapsedFiles(new Set())
-  }, [projectResponse])
+  }, [effectiveProjectResponse])
 
   // ------------------------------------------------------------------
   // Keyboard handlers
@@ -348,8 +430,8 @@ export function FindReplacePane({
   }, [view, cmQuery])
 
   const handleReplaceProjectAll = useCallback(async () => {
-    if (!searchText || !projectResponse) return
-    if (projectResponse.totalMatches === 0) return
+    if (!searchText || !effectiveProjectResponse) return
+    if (effectiveProjectResponse.totalMatches === 0) return
     setReplaceStatus('running')
     setReplaceError(null)
     try {
@@ -362,25 +444,13 @@ export function FindReplacePane({
         regex: useRegex,
         includeGlobs: parseGlobList(includeGlobs),
         excludeGlobs: parseGlobList(excludeGlobs),
-        targetPaths: projectResponse.files.map((f) => f.path),
+        targetPaths: effectiveProjectResponse.files.map((f) => f.path),
       }
       await replaceInProject(request)
       setReplaceStatus('idle')
-      // Re-run the search so the UI reflects post-replace state.
-      searchEpoch.current++
-      setProjectSearchStatus('loading')
-      const response = await searchProject({
-        projectId,
-        query: searchText,
-        caseSensitive,
-        wholeWord,
-        regex: useRegex,
-        includeGlobs: parseGlobList(includeGlobs),
-        excludeGlobs: parseGlobList(excludeGlobs),
-      })
-      setProjectResponse(response)
-      setProjectSearchStatus('idle')
+      await runProjectSearch({ append: false })
     } catch (error) {
+      if (isStaleBackendRequestError(error)) return
       setReplaceStatus('error')
       setReplaceError(error instanceof Error ? error.message : String(error))
     }
@@ -393,10 +463,18 @@ export function FindReplacePane({
     useRegex,
     includeGlobs,
     excludeGlobs,
-    projectResponse,
+    effectiveProjectResponse,
     replaceInProject,
-    searchProject,
+    runProjectSearch,
   ])
+
+  const handleLoadMoreProjectResults = useCallback(() => {
+    const cursor = effectiveProjectResponse?.nextCursor
+    if (!cursor || projectSearchStatus === 'loading' || projectSearchStatus === 'loadingMore') {
+      return
+    }
+    void runProjectSearch({ append: true, cursor })
+  }, [effectiveProjectResponse?.nextCursor, projectSearchStatus, runProjectSearch])
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -465,7 +543,7 @@ export function FindReplacePane({
     ]
   }, [scope, activePath, localMatches])
 
-  const resultsToRender = scope === 'project' ? projectResponse?.files ?? [] : fileResults
+  const resultsToRender = scope === 'project' ? effectiveProjectResponse?.files ?? [] : fileResults
 
   return (
     <aside className="motion-layout-island flex w-[300px] shrink-0 flex-col border-r border-border bg-sidebar">
@@ -577,8 +655,8 @@ export function FindReplacePane({
           fileCurrent={fileCurrent}
           fileTotal={fileTotal}
           fileQueryInvalid={fileQueryInvalid}
-          projectStatus={projectSearchStatus}
-          projectResponse={projectResponse}
+          projectStatus={effectiveProjectSearchStatus}
+          projectResponse={effectiveProjectResponse}
           replaceStatus={replaceStatus}
           onFindPrev={handleFindPrev}
           onFindNext={handleFindNext}
@@ -587,9 +665,9 @@ export function FindReplacePane({
           onReplaceProjectAll={handleReplaceProjectAll}
         />
 
-        {projectSearchError ? (
+        {effectiveProjectSearchError ? (
           <InlineBanner tone="error" icon={<AlertTriangle className="h-3 w-3" />}>
-            {projectSearchError}
+            {effectiveProjectSearchError}
           </InlineBanner>
         ) : null}
         {replaceError ? (
@@ -597,9 +675,13 @@ export function FindReplacePane({
             {replaceError}
           </InlineBanner>
         ) : null}
-        {projectResponse?.truncated ? (
+        {effectiveProjectResponse?.nextCursor ? (
           <InlineBanner tone="warn" icon={<AlertTriangle className="h-3 w-3" />}>
-            Showing first {projectResponse.totalMatches} matches. Narrow your query or add filters.
+            Showing {effectiveProjectResponse.totalMatches} reviewed matches so far. Load more before replacing additional files.
+          </InlineBanner>
+        ) : effectiveProjectResponse?.truncated ? (
+          <InlineBanner tone="warn" icon={<AlertTriangle className="h-3 w-3" />}>
+            Showing first {effectiveProjectResponse.totalMatches} matches. Narrow your query or add filters.
           </InlineBanner>
         ) : null}
       </div>
@@ -609,7 +691,7 @@ export function FindReplacePane({
           <EmptyResults
             scope={scope}
             hasQuery={!!searchText}
-            status={projectSearchStatus}
+            status={effectiveProjectSearchStatus}
             fileQueryInvalid={fileQueryInvalid}
           />
         ) : (
@@ -630,6 +712,18 @@ export function FindReplacePane({
                 onClickMatch={(line, column) => onOpenAtLine(file.path, line, column)}
               />
             ))}
+            {scope === 'project' && effectiveProjectResponse?.nextCursor ? (
+              <li className="px-2 py-2">
+                <button
+                  className="flex h-7 w-full items-center justify-center rounded-md border border-border/70 bg-background text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                  disabled={effectiveProjectSearchStatus === 'loadingMore'}
+                  onClick={handleLoadMoreProjectResults}
+                  type="button"
+                >
+                  {effectiveProjectSearchStatus === 'loadingMore' ? 'Loading…' : 'Load more results'}
+                </button>
+              </li>
+            ) : null}
           </ul>
         )}
       </div>
@@ -716,7 +810,7 @@ function ActionRow({
   fileCurrent: number
   fileTotal: number
   fileQueryInvalid: boolean
-  projectStatus: 'idle' | 'loading' | 'error'
+  projectStatus: 'idle' | 'loading' | 'loadingMore' | 'error'
   projectResponse: SearchProjectResponseDto | null
   replaceStatus: 'idle' | 'running' | 'error'
   onFindPrev: () => void
@@ -779,6 +873,8 @@ function ActionRow({
     ? { text: 'No query', tone: 'muted' as const }
     : projectStatus === 'loading'
       ? { text: 'Searching…', tone: 'muted' as const }
+      : projectStatus === 'loadingMore'
+        ? { text: 'Loading more…', tone: 'muted' as const }
       : projectStatus === 'error'
         ? { text: 'Search failed', tone: 'error' as const }
         : projectResponse == null
@@ -813,11 +909,11 @@ function ActionRow({
       {hasReplace ? (
         <TextButton
           disabled={!canReplace}
-          label="Replace all matches across project (Alt+Enter)"
+          label="Replace reviewed project matches (Alt+Enter)"
           onClick={onReplaceProjectAll}
           fullWidth
         >
-          {replaceStatus === 'running' ? 'Replacing…' : 'Replace all'}
+          {replaceStatus === 'running' ? 'Replacing…' : 'Replace shown'}
         </TextButton>
       ) : null}
     </div>
@@ -899,7 +995,7 @@ function EmptyResults({
 }: {
   scope: SearchScope
   hasQuery: boolean
-  status: 'idle' | 'loading' | 'error'
+  status: 'idle' | 'loading' | 'loadingMore' | 'error'
   fileQueryInvalid: boolean
 }) {
   if (!hasQuery) {

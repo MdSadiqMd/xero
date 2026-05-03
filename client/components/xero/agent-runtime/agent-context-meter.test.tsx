@@ -112,7 +112,9 @@ describe('AgentContextMeter', () => {
       />,
     )
 
-    expect(screen.getByText('58% left')).toHaveClass('hidden', 'sm:inline')
+    expect(
+      screen.getByRole('button', { name: 'Context meter: 58 percent context remaining for gpt-5.4' }),
+    ).toBeVisible()
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '42')
     expect(screen.getByRole('progressbar')).toHaveAttribute(
       'aria-valuetext',
@@ -129,7 +131,9 @@ describe('AgentContextMeter', () => {
       />,
     )
 
-    expect(screen.getByText('Full')).toHaveClass('hidden', 'sm:inline')
+    expect(
+      screen.getByRole('button', { name: 'Context meter: 100 percent context remaining for gpt-5.4' }),
+    ).toBeVisible()
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0')
     expect(screen.getByRole('progressbar')).toHaveAttribute(
       'aria-valuetext',
@@ -181,12 +185,16 @@ describe('AgentContextMeter', () => {
       />,
     )
 
-    expect(screen.getByText('5K over')).toBeVisible()
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
-    expect(screen.getByRole('progressbar')).toHaveAttribute(
+    const progress = screen.getByRole('progressbar')
+    expect(
+      screen.getByRole('button', { name: 'Context meter: 0 percent context remaining for gpt-5.4' }),
+    ).toBeVisible()
+    expect(progress).toHaveAttribute('aria-valuenow', '100')
+    expect(progress).toHaveAttribute(
       'aria-valuetext',
       '0 percent context remaining for gpt-5.4',
     )
+    expect(progress.querySelector('circle:last-child')).toHaveClass('stroke-destructive')
   })
 
   it('renders an unavailable state when refresh fails before a snapshot exists', () => {

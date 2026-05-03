@@ -1,15 +1,18 @@
-import { useMemo, useState } from "react"
+import { useDeferredValue, useMemo, useState, type ElementType, type ReactNode } from "react"
 import {
   AlertTriangle,
   ArrowRight,
   Check,
   CheckCircle2,
+  ChevronDown,
   Clipboard,
   CircleSlash,
   LoaderCircle,
+  Plus,
   Play,
   RotateCcw,
   Stethoscope,
+  X,
   XCircle,
 } from "lucide-react"
 import type {
@@ -25,12 +28,38 @@ import {
   type RunDoctorReportRequestDto,
   type EnvironmentCapabilityStateDto,
   type EnvironmentDiscoveryStatusDto,
+  type EnvironmentProbeReportDto,
   type EnvironmentProfileSummaryDto,
   type EnvironmentToolCategoryDto,
+  type EnvironmentToolSummaryDto,
+  type VerifyUserToolRequestDto,
+  type VerifyUserToolResponseDto,
+  verifyUserToolRequestSchema,
 } from "@/src/lib/xero-model"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { SectionHeader } from "./section-header"
 
@@ -41,6 +70,9 @@ interface DiagnosticsSectionProps {
   environmentDiscoveryStatus?: EnvironmentDiscoveryStatusDto | null
   environmentProfileSummary?: EnvironmentProfileSummaryDto
   onRefreshEnvironmentDiscovery?: (options?: { force?: boolean }) => Promise<EnvironmentDiscoveryStatusDto | null>
+  onVerifyUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto | null>
+  onSaveUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<EnvironmentProbeReportDto | null>
+  onRemoveUserEnvironmentTool?: (id: string) => Promise<EnvironmentProbeReportDto | null>
   onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<XeroDoctorReportDto>
 }
 
@@ -73,7 +105,7 @@ const STATUS_ICON = {
   warning: AlertTriangle,
   failed: XCircle,
   skipped: CircleSlash,
-} satisfies Record<XeroDiagnosticStatusDto, React.ElementType>
+} satisfies Record<XeroDiagnosticStatusDto, ElementType>
 
 const STATUS_LABEL: Record<XeroDiagnosticStatusDto, string> = {
   passed: "Passed",
@@ -103,29 +135,9 @@ const STATUS_RING: Record<XeroDiagnosticStatusDto, string> = {
   skipped: "ring-border/60",
 }
 
-const STATUS_ACCENT: Record<XeroDiagnosticStatusDto, string> = {
-  passed: "before:bg-success/50 dark:before:bg-success/50",
-  warning: "before:bg-warning/70 dark:before:bg-warning/70",
-  failed: "before:bg-destructive/80",
-  skipped: "before:bg-border/60",
-}
-
 const MODE_LABEL: Record<RunDoctorReportRequestDto["mode"], string> = {
   quick_local: "Quick · local checks",
   extended_network: "Extended · network checks",
-}
-
-const CATEGORY_LABEL: Record<EnvironmentToolCategoryDto, string> = {
-  base_developer_tool: "Developer tools",
-  package_manager: "Package managers",
-  platform_package_manager: "Platform managers",
-  language_runtime: "Runtimes",
-  container_orchestration: "Containers",
-  mobile_tooling: "Mobile",
-  cloud_deployment: "Cloud",
-  database_cli: "Databases",
-  solana_tooling: "Solana",
-  agent_ai_cli: "Agent CLIs",
 }
 
 const CAPABILITY_LABEL: Record<EnvironmentCapabilityStateDto, string> = {
@@ -136,6 +148,75 @@ const CAPABILITY_LABEL: Record<EnvironmentCapabilityStateDto, string> = {
   unknown: "Unknown",
 }
 
+const TOOL_CATEGORY_LABEL: Record<EnvironmentToolCategoryDto, string> = {
+  base_developer_tool: "Developer tools",
+  package_manager: "Package managers",
+  platform_package_manager: "Platform package managers",
+  language_runtime: "Languages & runtimes",
+  container_orchestration: "Containers & orchestration",
+  mobile_tooling: "Mobile",
+  cloud_deployment: "Cloud & deployment",
+  database_cli: "Databases",
+  solana_tooling: "Solana",
+  agent_ai_cli: "AI & agent CLIs",
+  editor: "Editors",
+  build_tool: "Build tools",
+  linter: "Linters & formatters",
+  version_manager: "Version managers",
+  iac_tool: "Infrastructure",
+  shell_utility: "Shell utilities",
+}
+
+const TOOL_CATEGORY_ORDER: EnvironmentToolCategoryDto[] = [
+  "base_developer_tool",
+  "language_runtime",
+  "package_manager",
+  "platform_package_manager",
+  "version_manager",
+  "build_tool",
+  "linter",
+  "editor",
+  "shell_utility",
+  "container_orchestration",
+  "iac_tool",
+  "cloud_deployment",
+  "database_cli",
+  "mobile_tooling",
+  "solana_tooling",
+  "agent_ai_cli",
+]
+
+const HEADLINER_TOOL_PRIORITY = [
+  "git",
+  "node",
+  "rustc",
+  "python3",
+  "python",
+  "go",
+  "java",
+  "swift",
+  "ruby",
+  "dotnet",
+  "php",
+  "deno",
+  "bun",
+  "pnpm",
+  "npm",
+  "yarn",
+  "uv",
+  "pip",
+  "brew",
+  "docker",
+  "kubectl",
+  "claude",
+  "codex",
+  "aider",
+  "gemini",
+  "ollama",
+]
+
+const HEADLINER_LIMIT = 8
+
 export function DiagnosticsSection({
   doctorReport,
   doctorReportStatus,
@@ -143,6 +224,9 @@ export function DiagnosticsSection({
   environmentDiscoveryStatus = null,
   environmentProfileSummary = null,
   onRefreshEnvironmentDiscovery,
+  onVerifyUserEnvironmentTool,
+  onSaveUserEnvironmentTool,
+  onRemoveUserEnvironmentTool,
   onRunDoctorReport,
 }: DiagnosticsSectionProps) {
   const [copied, setCopied] = useState(false)
@@ -182,6 +266,9 @@ export function DiagnosticsSection({
         summary={environmentProfileSummary}
         canRefresh={Boolean(onRefreshEnvironmentDiscovery)}
         onRefresh={refreshEnvironment}
+        onVerifyUserEnvironmentTool={onVerifyUserEnvironmentTool}
+        onSaveUserEnvironmentTool={onSaveUserEnvironmentTool}
+        onRemoveUserEnvironmentTool={onRemoveUserEnvironmentTool}
       />
 
       {doctorReportError ? (
@@ -235,41 +322,44 @@ function EmptyState({
   onRun: (mode: RunDoctorReportRequestDto["mode"]) => void
 }) {
   return (
-    <div className="flex flex-col items-center gap-5 rounded-xl border border-dashed border-border/70 bg-secondary/15 px-6 py-10 text-center">
-      <div className="flex size-11 items-center justify-center rounded-full border border-border/60 bg-background/60 text-muted-foreground">
-        {isRunning ? (
-          <LoaderCircle className="h-5 w-5 animate-spin" />
-        ) : (
-          <Stethoscope className="h-5 w-5" />
-        )}
-      </div>
-      <div className="flex max-w-sm flex-col gap-1.5">
-        <p className="text-[14px] font-semibold text-foreground">
+    <div className="flex flex-col items-center gap-4 rounded-md border border-dashed border-border/60 bg-secondary/10 px-5 py-8 text-center">
+      {isRunning ? (
+        <LoaderCircle className="h-4 w-4 animate-spin text-muted-foreground" />
+      ) : (
+        <Stethoscope className="h-4 w-4 text-muted-foreground" />
+      )}
+      <div className="flex max-w-xs flex-col gap-0.5">
+        <p className="text-[12.5px] font-medium text-foreground">
           {isRunning ? "Running diagnostics" : "No diagnostics yet"}
         </p>
-        <p className="text-[12.5px] leading-[1.55] text-muted-foreground">
+        <p className="text-[11.5px] leading-[1.5] text-muted-foreground">
           {isRunning
             ? "Xero is collecting current desktop state."
-            : "Run a doctor report to verify providers, agent runtime, MCP, and settings dependencies."}
+            : "Run a check to verify providers, runtime, MCP, and settings."}
         </p>
       </div>
-      <div className="grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2">
-        <ModeCard
-          title="Quick"
-          body="Local checks only — no network calls."
-          icon={RotateCcw}
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button
+          type="button"
           variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 text-[12px]"
           disabled={!canRun}
           onClick={() => onRun("quick_local")}
-        />
-        <ModeCard
-          title="Extended"
-          body="Includes provider reachability over the network."
-          icon={Play}
-          variant="default"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          Quick
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          className="h-8 gap-1.5 text-[12px]"
           disabled={!canRun}
           onClick={() => onRun("extended_network")}
-        />
+        >
+          <Play className="h-3.5 w-3.5" />
+          Extended
+        </Button>
       </div>
     </div>
   )
@@ -280,148 +370,541 @@ function EnvironmentProfilePanel({
   summary,
   canRefresh,
   onRefresh,
+  onVerifyUserEnvironmentTool,
+  onSaveUserEnvironmentTool,
+  onRemoveUserEnvironmentTool,
 }: {
   status: EnvironmentDiscoveryStatusDto | null
   summary: EnvironmentProfileSummaryDto
   canRefresh: boolean
   onRefresh: () => void
+  onVerifyUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto | null>
+  onSaveUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<EnvironmentProbeReportDto | null>
+  onRemoveUserEnvironmentTool?: (id: string) => Promise<EnvironmentProbeReportDto | null>
 }) {
-  const presentTools = summary?.tools.filter((tool) => tool.present) ?? []
-  const missingTools = summary?.tools.filter((tool) => !tool.present) ?? []
-  const readyCapabilities = summary?.capabilities.filter((capability) => capability.state === "ready") ?? []
-  const attentionCapabilities =
-    summary?.capabilities.filter((capability) => capability.state !== "ready").slice(0, 4) ?? []
-  const highlightedTools = presentTools.slice(0, 8)
+  const [showAllTools, setShowAllTools] = useState(false)
+  const [addToolOpen, setAddToolOpen] = useState(false)
+  const [removingToolId, setRemovingToolId] = useState<string | null>(null)
+  const deferredSummary = useDeferredValue(summary)
+  const presentTools = useMemo(
+    () => deferredSummary?.tools.filter((tool) => tool.present) ?? [],
+    [deferredSummary],
+  )
+  const attentionCapabilities = useMemo(
+    () =>
+      deferredSummary?.capabilities
+        .filter((capability) => capability.state !== "ready")
+        .slice(0, 4) ?? [],
+    [deferredSummary],
+  )
+  const headlinerTools = useMemo(() => pickHeadlinerTools(presentTools), [presentTools])
+  const headlinerIds = useMemo(() => new Set(headlinerTools.map((tool) => tool.id)), [headlinerTools])
+  const remainingTools = useMemo(
+    () => presentTools.filter((tool) => !headlinerIds.has(tool.id)),
+    [presentTools, headlinerIds],
+  )
+  const groupedRemaining = useMemo(() => groupToolsByCategory(remainingTools), [remainingTools])
   const isProbing = status?.status === "probing"
+  const isStale = Boolean(status?.stale)
+  const canMutateUserTools = Boolean(onVerifyUserEnvironmentTool && onSaveUserEnvironmentTool)
+
+  if (!summary && !isProbing && !status?.diagnostics.length) {
+    return null
+  }
+
+  const removeTool = (tool: EnvironmentToolSummaryDto) => {
+    if (!tool.custom || !onRemoveUserEnvironmentTool || removingToolId) return
+    const confirmed = typeof window === "undefined" || window.confirm(`Remove custom tool "${tool.id}"?`)
+    if (!confirmed) return
+    setRemovingToolId(tool.id)
+    void onRemoveUserEnvironmentTool(tool.id)
+      .catch(() => undefined)
+      .finally(() => setRemovingToolId(null))
+  }
 
   return (
-    <section className="rounded-xl border border-border/70 bg-card/35">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border/50 px-5 py-4">
+    <section className="overflow-hidden rounded-md border border-border/60">
+      <header className="flex items-center justify-between gap-3 border-b border-border/40 bg-secondary/10 px-3.5 py-2.5">
         <div className="min-w-0">
-          <h4 className="text-[13px] font-semibold tracking-tight text-foreground">Developer environment</h4>
-          <p className="mt-1 text-[11.5px] leading-[1.5] text-muted-foreground">
-            {summary
-              ? `${summary.platform.osKind} ${summary.platform.arch} · ${
-                  summary.refreshedAt ? formatTimestamp(summary.refreshedAt) : "Not refreshed yet"
-                }`
-              : status?.status === "probing"
-                ? "Discovery is running in the background."
-                : "No environment profile has been recorded yet."}
-          </p>
+          <p className="text-[12.5px] font-semibold text-foreground">Developer environment</p>
+          {summary ? (
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+              {summary.platform.osKind} {summary.platform.arch}
+              {presentTools.length > 0 ? ` · ${presentTools.length} tool${presentTools.length === 1 ? "" : "s"}` : ""}
+              {summary.refreshedAt ? ` · ${formatTimestamp(summary.refreshedAt)}` : ""}
+            </p>
+          ) : null}
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={status?.stale ? "destructive" : "secondary"} className="rounded-md text-[11px]">
-            {status?.stale ? "Stale" : summary ? CAPABILITY_LABEL.ready : "Pending"}
-          </Badge>
+        <div className="flex shrink-0 items-center gap-2">
+          {isStale ? (
+            <span className="inline-flex h-[18px] items-center rounded-full border border-warning/30 bg-warning/[0.08] px-1.5 text-[10.5px] font-medium text-warning">
+              Stale
+            </span>
+          ) : null}
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
-            className="h-8 gap-1.5 text-[12px]"
+            className="h-7 gap-1.5 text-[11.5px] text-muted-foreground hover:text-foreground"
             disabled={!canRefresh || isProbing}
             onClick={onRefresh}
           >
-            {isProbing ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+            {isProbing ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
             Refresh
           </Button>
         </div>
       </header>
 
-      <div className="grid gap-0 border-b border-border/50 sm:grid-cols-3">
-        <EnvironmentMetric label="Present tools" value={presentTools.length} />
-        <EnvironmentMetric label="Missing tools" value={missingTools.length} />
-        <EnvironmentMetric label="Ready capabilities" value={readyCapabilities.length} isLast />
-      </div>
-
       {summary ? (
-        <div className="grid gap-5 px-5 py-4 md:grid-cols-[1.2fr_0.8fr]">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
-              Detected tools
-            </p>
-            {highlightedTools.length > 0 ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {highlightedTools.map((tool) => (
-                  <span
-                    key={tool.id}
-                    className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/60 bg-background/45 px-2 py-1 text-[11.5px] text-foreground"
-                    title={tool.displayPath ?? tool.id}
-                  >
-                    <span className="font-medium">{tool.id}</span>
-                    {tool.version ? (
-                      <span className="truncate text-muted-foreground">{tool.version}</span>
-                    ) : null}
-                    <span className="text-muted-foreground/70">{CATEGORY_LABEL[tool.category]}</span>
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-[12px] text-muted-foreground">No installed developer tools were detected yet.</p>
-            )}
-          </div>
+        <div className="flex flex-col gap-3 px-3.5 py-3">
+          {headlinerTools.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {headlinerTools.map((tool) => (
+                <ToolChip
+                  key={tool.id}
+                  tool={tool}
+                  removing={removingToolId === tool.id}
+                  onRemove={tool.custom ? removeTool : undefined}
+                />
+              ))}
+            </div>
+          ) : null}
 
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
-              Capability attention
-            </p>
-            {attentionCapabilities.length > 0 ? (
-              <div className="mt-3 flex flex-col gap-2">
-                {attentionCapabilities.map((capability) => (
-                  <div key={capability.id} className="rounded-md border border-border/60 bg-background/35 px-3 py-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-[12px] font-medium text-foreground">{capability.id}</span>
-                      <Badge variant="outline" className="shrink-0 rounded-md text-[10.5px]">
-                        {CAPABILITY_LABEL[capability.state]}
-                      </Badge>
+          {groupedRemaining.length > 0 ? (
+            <Collapsible open={showAllTools} onOpenChange={setShowAllTools}>
+              <CollapsibleTrigger
+                className={cn(
+                  "group inline-flex items-center gap-1.5 self-start rounded-md text-[11.5px]",
+                  "text-muted-foreground transition-colors hover:text-foreground",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-3 w-3 transition-transform motion-fast",
+                    showAllTools ? "rotate-0" : "-rotate-90",
+                  )}
+                  aria-hidden
+                />
+                {showAllTools ? "Hide" : "Show"} all {presentTools.length} detected tools
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-3 flex flex-col gap-3">
+                {groupedRemaining.map((group) => (
+                  <div key={group.key} className="flex flex-col gap-1.5">
+                    <p className="text-[10.5px] font-medium uppercase tracking-[0.06em] text-muted-foreground/70">
+                      {TOOL_CATEGORY_LABEL[group.key] ?? group.key}
+                      <span className="ml-1.5 font-normal text-muted-foreground/50">{group.tools.length}</span>
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {group.tools.map((tool) => (
+                        <ToolChip
+                          key={tool.id}
+                          tool={tool}
+                          removing={removingToolId === tool.id}
+                          onRemove={tool.custom ? removeTool : undefined}
+                        />
+                      ))}
                     </div>
-                    {capability.message ? (
-                      <p className="mt-1 text-[11.5px] leading-[1.45] text-muted-foreground">{capability.message}</p>
-                    ) : null}
                   </div>
                 ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-[12px] text-muted-foreground">Recorded capabilities are ready or not yet available.</p>
-            )}
+              </CollapsibleContent>
+            </Collapsible>
+          ) : null}
+
+          <div className="flex items-center justify-between gap-3 border-t border-border/40 pt-2">
+            <p className="text-[11px] text-muted-foreground">
+              Add a verified CLI that is not in the built-in catalog.
+            </p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-[11.5px]"
+              disabled={!canMutateUserTools}
+              onClick={() => setAddToolOpen(true)}
+            >
+              <Plus className="h-3 w-3" />
+              Add tool
+            </Button>
           </div>
         </div>
       ) : null}
 
+      {summary ? (
+        <AddToolDialog
+          open={addToolOpen}
+          onOpenChange={setAddToolOpen}
+          onVerify={onVerifyUserEnvironmentTool}
+          onSave={onSaveUserEnvironmentTool}
+        />
+      ) : null}
+
+      {attentionCapabilities.length > 0 ? (
+        <ul className="divide-y divide-border/40 border-t border-border/40">
+          {attentionCapabilities.map((capability) => (
+            <li
+              key={capability.id}
+              className="flex items-start justify-between gap-3 px-3.5 py-2"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-[12px] font-medium text-foreground">{capability.id}</p>
+                {capability.message ? (
+                  <p className="mt-0.5 text-[11px] leading-[1.45] text-muted-foreground">
+                    {capability.message}
+                  </p>
+                ) : null}
+              </div>
+              <span className="inline-flex h-[18px] shrink-0 items-center rounded-full border border-border bg-secondary/60 px-1.5 text-[10.5px] font-medium text-foreground/70">
+                {CAPABILITY_LABEL[capability.state]}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       {status?.diagnostics.length ? (
-        <div className="border-t border-border/50 px-5 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
-            Environment diagnostics
-          </p>
-          <div className="mt-2 flex flex-col gap-1.5">
-            {status.diagnostics.slice(0, 4).map((diagnostic) => (
-              <p key={`${diagnostic.code}-${diagnostic.message}`} className="text-[12px] leading-[1.45] text-muted-foreground">
-                <span className="font-medium text-foreground">{diagnostic.code}</span>
-                <span className="mx-1 text-muted-foreground/50">·</span>
-                {diagnostic.message}
-              </p>
-            ))}
-          </div>
-        </div>
+        <ul className="divide-y divide-border/40 border-t border-border/40">
+          {status.diagnostics.slice(0, 4).map((diagnostic) => (
+            <li
+              key={`${diagnostic.code}-${diagnostic.message}`}
+              className="px-3.5 py-2 text-[11.5px] leading-[1.45] text-muted-foreground"
+            >
+              <span className="font-mono text-[10.5px] text-foreground/70">{diagnostic.code}</span>
+              <span className="mx-1.5 text-muted-foreground/40">·</span>
+              {diagnostic.message}
+            </li>
+          ))}
+        </ul>
       ) : null}
     </section>
   )
 }
 
-function EnvironmentMetric({
-  label,
-  value,
-  isLast = false,
+function ToolChip({
+  tool,
+  removing = false,
+  onRemove,
 }: {
-  label: string
-  value: number
-  isLast?: boolean
+  tool: EnvironmentToolSummaryDto
+  removing?: boolean
+  onRemove?: (tool: EnvironmentToolSummaryDto) => void
 }) {
+  const hoverDetail = [tool.version, tool.displayPath].filter(Boolean).join("\n") || tool.id
   return (
-    <div className={cn("px-5 py-3", !isLast && "border-b border-border/40 sm:border-b-0 sm:border-r")}>
-      <p className="text-[18px] font-semibold leading-none tabular-nums text-foreground">{value}</p>
-      <p className="mt-1 text-[10.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground">{label}</p>
+    <span
+      className={cn(
+        "group inline-flex h-[22px] items-center gap-1 rounded-md border border-border/50 bg-secondary/30 py-0.5 text-[11px] font-medium text-foreground",
+        onRemove ? "pl-1.5 pr-0.5" : "px-1.5",
+        removing && "opacity-60",
+      )}
+      title={hoverDetail}
+    >
+      <span>{tool.id}</span>
+      {onRemove ? (
+        <button
+          type="button"
+          className="inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+          disabled={removing}
+          aria-label={`Remove ${tool.id}`}
+          title={`Remove ${tool.id}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            onRemove(tool)
+          }}
+        >
+          {removing ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+        </button>
+      ) : null}
+    </span>
+  )
+}
+
+function AddToolDialog({
+  open,
+  onOpenChange,
+  onVerify,
+  onSave,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onVerify?: (request: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto | null>
+  onSave?: (request: VerifyUserToolRequestDto) => Promise<EnvironmentProbeReportDto | null>
+}) {
+  const [id, setId] = useState("")
+  const [command, setCommand] = useState("")
+  const [argsText, setArgsText] = useState("--version")
+  const [category, setCategory] = useState<EnvironmentToolCategoryDto>("base_developer_tool")
+  const [verification, setVerification] = useState<VerifyUserToolResponseDto | null>(null)
+  const [verifiedRequestKey, setVerifiedRequestKey] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [isVerifying, setIsVerifying] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+
+  const request = useMemo(
+    () => ({
+      id: id.trim(),
+      category,
+      command: command.trim(),
+      args: parseVersionArgs(argsText),
+    }),
+    [argsText, category, command, id],
+  )
+  const requestKey = useMemo(() => JSON.stringify(request), [request])
+  const canSave =
+    Boolean(onSave) &&
+    verification?.record.probeStatus === "ok" &&
+    verification.record.present &&
+    verifiedRequestKey === requestKey &&
+    !isSaving
+  const consentCommand = [command.trim() || "<command>", ...parseVersionArgs(argsText)].join(" ")
+
+  const reset = () => {
+    setId("")
+    setCommand("")
+    setArgsText("--version")
+    setCategory("base_developer_tool")
+    setVerification(null)
+    setVerifiedRequestKey(null)
+    setFormError(null)
+    setIsVerifying(false)
+    setIsSaving(false)
+  }
+
+  const close = (nextOpen: boolean) => {
+    onOpenChange(nextOpen)
+    if (!nextOpen) reset()
+  }
+
+  const verify = () => {
+    const parsed = verifyUserToolRequestSchema.safeParse(request)
+    if (!parsed.success) {
+      setFormError(parsed.error.issues[0]?.message ?? "Check the custom tool fields.")
+      setVerification(null)
+      setVerifiedRequestKey(null)
+      return
+    }
+    if (!onVerify) return
+    setFormError(null)
+    setVerification(null)
+    setVerifiedRequestKey(null)
+    setIsVerifying(true)
+    void onVerify(parsed.data)
+      .then((response) => {
+        if (!response) return
+        setVerification(response)
+        setVerifiedRequestKey(JSON.stringify(parsed.data))
+      })
+      .catch((error) => {
+        setFormError(error instanceof Error ? error.message : "Verification failed.")
+      })
+      .finally(() => setIsVerifying(false))
+  }
+
+  const save = () => {
+    const parsed = verifyUserToolRequestSchema.safeParse(request)
+    if (!parsed.success || !onSave || !canSave) return
+    setIsSaving(true)
+    setFormError(null)
+    void onSave(parsed.data)
+      .then((report) => {
+        if (report) close(false)
+      })
+      .catch((error) => {
+        setFormError(error instanceof Error ? error.message : "Save failed.")
+      })
+      .finally(() => setIsSaving(false))
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="max-w-md gap-4 rounded-md p-4">
+        <DialogHeader className="gap-1.5">
+          <DialogTitle className="text-[14px]">Add developer tool</DialogTitle>
+          <DialogDescription className="text-[12px] leading-[1.5]">
+            Xero will run <span className="font-mono text-foreground">{consentCommand}</span> to verify the tool. The first non-empty line of output with secrets redacted is stored as the version.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-3">
+          <FieldRow label="Tool name">
+            <Input
+              value={id}
+              onChange={(event) => setId(event.target.value.toLowerCase())}
+              placeholder="terraform"
+              className="h-8 text-[12px]"
+              autoComplete="off"
+            />
+          </FieldRow>
+          <FieldRow label="Command">
+            <Input
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
+              placeholder="terraform"
+              className="h-8 text-[12px]"
+              autoComplete="off"
+            />
+          </FieldRow>
+          <FieldRow label="Version arguments">
+            <Input
+              value={argsText}
+              onChange={(event) => setArgsText(event.target.value)}
+              placeholder="--version"
+              className="h-8 text-[12px]"
+              autoComplete="off"
+            />
+          </FieldRow>
+          <FieldRow label="Category">
+            <Select value={category} onValueChange={(value) => setCategory(value as EnvironmentToolCategoryDto)}>
+              <SelectTrigger size="sm" className="h-8 w-full text-[12px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TOOL_CATEGORY_ORDER.map((option) => (
+                  <SelectItem key={option} value={option} className="text-[12px]">
+                    {TOOL_CATEGORY_LABEL[option]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldRow>
+        </div>
+
+        <VerifyResult result={verification} error={formError} command={command.trim()} />
+
+        <DialogFooter className="gap-2 sm:justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-[12px]"
+            disabled={!onVerify || isVerifying || isSaving}
+            onClick={verify}
+          >
+            {isVerifying ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+            Verify
+          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 text-[12px]"
+              onClick={() => close(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 gap-1.5 text-[12px]"
+              disabled={!canSave}
+              onClick={save}
+            >
+              {isSaving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              Save
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function FieldRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="grid gap-1.5">
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function VerifyResult({
+  result,
+  error,
+  command,
+}: {
+  result: VerifyUserToolResponseDto | null
+  error: string | null
+  command: string
+}) {
+  if (error) {
+    return (
+      <Alert variant="destructive" className="rounded-md px-3 py-2 text-[12px]">
+        <XCircle className="h-3.5 w-3.5" />
+        <AlertTitle className="text-[12px]">Verification failed</AlertTitle>
+        <AlertDescription className="text-[12px]">{error}</AlertDescription>
+      </Alert>
+    )
+  }
+  if (!result) return null
+
+  const { record } = result
+  if (record.probeStatus === "ok" && record.present) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-success/20 bg-success/10 px-3 py-2 text-[12px] text-success dark:text-success">
+        <Badge variant="outline" className="border-success/30 text-[11px] text-success dark:text-success">
+          Verified
+        </Badge>
+        <span className="min-w-0 truncate font-mono">{record.version ?? record.id}</span>
+        {record.displayPath ? <span className="text-success/75 dark:text-success/75">{record.displayPath}</span> : null}
+      </div>
+    )
+  }
+
+  const diagnostic = result.diagnostics.find((item) => item.toolId === record.id)
+  const message =
+    record.probeStatus === "missing"
+      ? `Could not find ${command || record.id} on PATH.`
+      : diagnostic?.message ?? "The version probe did not return usable output."
+
+  return (
+    <div className="rounded-md border border-warning/25 bg-warning/10 px-3 py-2 text-[12px] leading-[1.45] text-warning">
+      {message}
     </div>
   )
+}
+
+function parseVersionArgs(value: string): string[] {
+  return value
+    .split(/[,\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+function pickHeadlinerTools(presentTools: EnvironmentToolSummaryDto[]): EnvironmentToolSummaryDto[] {
+  if (presentTools.length === 0) return []
+  const byId = new Map(presentTools.map((tool) => [tool.id, tool]))
+  const picked: EnvironmentToolSummaryDto[] = []
+  for (const id of HEADLINER_TOOL_PRIORITY) {
+    if (picked.length >= HEADLINER_LIMIT) break
+    const tool = byId.get(id)
+    if (tool) picked.push(tool)
+  }
+  return picked
+}
+
+function groupToolsByCategory(
+  tools: EnvironmentToolSummaryDto[],
+): Array<{ key: EnvironmentToolCategoryDto; tools: EnvironmentToolSummaryDto[] }> {
+  if (tools.length === 0) return []
+  const buckets = new Map<EnvironmentToolCategoryDto, EnvironmentToolSummaryDto[]>()
+  for (const tool of tools) {
+    const list = buckets.get(tool.category) ?? []
+    list.push(tool)
+    buckets.set(tool.category, list)
+  }
+  const orderIndex = new Map(TOOL_CATEGORY_ORDER.map((category, index) => [category, index]))
+  return Array.from(buckets.entries())
+    .map(([key, group]) => ({
+      key,
+      tools: [...group].sort((a, b) => a.id.localeCompare(b.id)),
+    }))
+    .sort((a, b) => {
+      const ai = orderIndex.get(a.key) ?? Number.MAX_SAFE_INTEGER
+      const bi = orderIndex.get(b.key) ?? Number.MAX_SAFE_INTEGER
+      return ai - bi
+    })
 }
 
 function ModeCard({
@@ -434,7 +917,7 @@ function ModeCard({
 }: {
   title: string
   body: string
-  icon: React.ElementType
+  icon: ElementType
   variant: "default" | "outline"
   disabled: boolean
   onClick: () => void
@@ -475,11 +958,16 @@ function ReportView({
   onCopy: () => void
   onRun: (mode: RunDoctorReportRequestDto["mode"]) => void
 }) {
-  const populatedGroups = CHECK_GROUPS.filter(({ key }) => report[key].length > 0)
+  const populatedGroups = useMemo(
+    () => CHECK_GROUPS.filter(({ key }) => report[key].length > 0),
+    [report],
+  )
   const skippedGroupCount = CHECK_GROUPS.length - populatedGroups.length
 
+  void skippedGroupCount
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       <ReportSummary
         report={report}
         copied={copied}
@@ -490,22 +978,16 @@ function ReportView({
       />
 
       {populatedGroups.length > 0 ? (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-5">
           {populatedGroups.map(({ key, label }) => (
             <CheckGroup key={key} label={label} checks={report[key]} />
           ))}
         </div>
       ) : (
-        <p className="rounded-lg border border-border/60 bg-card/30 px-4 py-6 text-center text-[12.5px] text-muted-foreground">
+        <p className="rounded-md border border-dashed border-border/60 bg-secondary/10 px-3.5 py-3 text-[11.5px] text-muted-foreground">
           No checks returned for this run.
         </p>
       )}
-
-      {skippedGroupCount > 0 && populatedGroups.length > 0 ? (
-        <p className="text-[11.5px] text-muted-foreground/70">
-          {skippedGroupCount} group{skippedGroupCount === 1 ? "" : "s"} returned no checks for this run.
-        </p>
-      ) : null}
     </div>
   )
 }
@@ -528,34 +1010,25 @@ function ReportSummary({
   const generatedAt = useMemo(() => formatTimestamp(report.generatedAt), [report.generatedAt])
 
   return (
-    <section className="overflow-hidden rounded-xl border border-border/70 bg-card/40 shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset]">
-      <header className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
+    <section className="overflow-hidden rounded-md border border-border/60">
+      <header className="flex flex-wrap items-center justify-between gap-3 bg-secondary/10 px-3.5 py-2.5">
         <div className="min-w-0">
-          <h4 className="text-[13px] font-semibold tracking-tight text-foreground">Report summary</h4>
-          <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11.5px] text-muted-foreground">
-            <span>{MODE_LABEL[report.mode]}</span>
-            <span aria-hidden className="text-muted-foreground/40">·</span>
-            <span>{generatedAt}</span>
-            <span aria-hidden className="text-muted-foreground/40">·</span>
-            <span>
-              <span className="tabular-nums text-foreground/80">{report.summary.total}</span>
-              <span className="ml-1 text-muted-foreground/80">checks</span>
-            </span>
-          </p>
+          <p className="text-[12.5px] font-semibold text-foreground">{MODE_LABEL[report.mode]}</p>
+          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{generatedAt}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1">
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="h-8 gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
+            className="h-7 gap-1.5 px-2 text-[11.5px] text-muted-foreground hover:text-foreground"
             disabled={!canRun}
             onClick={() => onRun("quick_local")}
           >
             {isRunning ? (
-              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+              <LoaderCircle className="h-3 w-3 animate-spin" />
             ) : (
-              <RotateCcw className="h-3.5 w-3.5" />
+              <RotateCcw className="h-3 w-3" />
             )}
             Quick
           </Button>
@@ -563,35 +1036,36 @@ function ReportSummary({
             type="button"
             variant="outline"
             size="sm"
-            className="h-8 gap-1.5 text-[12px]"
+            className="h-7 gap-1.5 px-2 text-[11.5px]"
             disabled={!canRun}
             onClick={() => onRun("extended_network")}
           >
-            <Play className="h-3.5 w-3.5" />
+            <Play className="h-3 w-3" />
             Extended
           </Button>
           <Button
             type="button"
             variant="ghost"
-            size="sm"
-            className="h-8 gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
+            size="icon"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
             onClick={onCopy}
+            aria-label={copied ? "Copied" : "Copy JSON"}
+            title={copied ? "Copied" : "Copy JSON"}
           >
             {copied ? (
               <Check className="h-3.5 w-3.5 text-success dark:text-success" />
             ) : (
               <Clipboard className="h-3.5 w-3.5" />
             )}
-            {copied ? "Copied" : "Copy JSON"}
           </Button>
         </div>
       </header>
 
-      <div className="grid grid-cols-2 border-t border-border/50 sm:grid-cols-4">
-        <SummaryTile tone="passed" value={report.summary.passed} isLast={false} />
-        <SummaryTile tone="warning" value={report.summary.warnings} isLast={false} />
-        <SummaryTile tone="failed" value={report.summary.failed} isLast={false} />
-        <SummaryTile tone="skipped" value={report.summary.skipped} isLast />
+      <div className="flex divide-x divide-border/40 border-t border-border/40">
+        <SummaryTile tone="passed" value={report.summary.passed} />
+        <SummaryTile tone="warning" value={report.summary.warnings} />
+        <SummaryTile tone="failed" value={report.summary.failed} />
+        <SummaryTile tone="skipped" value={report.summary.skipped} />
       </div>
     </section>
   )
@@ -600,44 +1074,30 @@ function ReportSummary({
 function SummaryTile({
   tone,
   value,
-  isLast,
 }: {
   tone: XeroDiagnosticStatusDto
   value: number
-  isLast: boolean
 }) {
   const Icon = STATUS_ICON[tone]
   const isZero = value === 0
   return (
-    <div
-      className={cn(
-        "flex items-center gap-3 px-4 py-3 sm:py-3.5",
-        !isLast && "border-r border-border/40",
-        // Stack borders for the 2-col fallback (sm:grid-cols-4 layers over)
-      )}
-    >
-      <span
+    <div className="flex flex-1 items-center gap-2 px-3 py-2">
+      <Icon
         className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-full ring-1 ring-inset",
-          isZero ? "bg-muted/30 ring-border/50" : cn(STATUS_BG[tone], STATUS_RING[tone]),
+          "h-3.5 w-3.5 shrink-0",
+          isZero ? "text-muted-foreground/40" : STATUS_TEXT[tone],
         )}
         aria-hidden
+      />
+      <span
+        className={cn(
+          "text-[14px] font-semibold tabular-nums",
+          isZero ? "text-foreground/40" : "text-foreground",
+        )}
       >
-        <Icon className={cn("h-4 w-4", isZero ? "text-muted-foreground/50" : STATUS_TEXT[tone])} />
+        {value}
       </span>
-      <div className="flex min-w-0 flex-col">
-        <span
-          className={cn(
-            "text-[18px] font-semibold leading-none tabular-nums",
-            isZero ? "text-foreground/40" : "text-foreground",
-          )}
-        >
-          {value}
-        </span>
-        <span className="mt-1 text-[10.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
-          {STATUS_LABEL[tone]}
-        </span>
-      </div>
+      <span className="text-[11px] text-muted-foreground">{STATUS_LABEL[tone]}</span>
     </div>
   )
 }
@@ -666,17 +1126,18 @@ function CheckGroup({
 
   return (
     <section className="flex flex-col gap-2.5">
-      <header className="flex items-center justify-between gap-3 px-1">
-        <h4 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/85">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-[12.5px] font-semibold text-foreground">
           {label}
+          <span className="ml-1.5 font-normal text-muted-foreground">{checks.length}</span>
         </h4>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           {(["failed", "warning", "skipped", "passed"] as const).map((tone) =>
             counts[tone] > 0 ? <CountChip key={tone} tone={tone} value={counts[tone]} /> : null,
           )}
         </div>
-      </header>
-      <div className="flex flex-col gap-1.5">
+      </div>
+      <div className="overflow-hidden rounded-md border border-border/60 divide-y divide-border/40">
         {sorted.map((check, index) => (
           <CheckRow key={`${check.checkId}-${index}`} check={check} />
         ))}
@@ -712,93 +1173,31 @@ function CountChip({ tone, value }: { tone: XeroDiagnosticStatusDto; value: numb
 
 function CheckRow({ check }: { check: XeroDiagnosticCheckDto }) {
   const Icon = STATUS_ICON[check.status]
-  const meta = buildMetaParts(check)
 
   return (
-    <div
-      className={cn(
-        "relative overflow-hidden rounded-lg border border-border/60 bg-card/30",
-        "before:absolute before:inset-y-0 before:left-0 before:w-[3px]",
-        STATUS_ACCENT[check.status],
-      )}
-    >
-      <div className="flex items-start gap-3 px-4 py-3 pl-[18px]">
-        <span
-          className={cn(
-            "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full ring-1 ring-inset",
-            STATUS_BG[check.status],
-            STATUS_RING[check.status],
-          )}
-          aria-hidden
-        >
-          <Icon className={cn("h-3 w-3", STATUS_TEXT[check.status])} />
-        </span>
-
-        <div className="min-w-0 flex-1">
-          <p className="text-[12.5px] font-medium leading-[1.5] text-foreground">
-            {check.message}
-          </p>
-
-          {meta.length > 0 || check.code ? (
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground/80">
-              {meta.map((part, index) => (
-                <span key={`m-${index}`} className="inline-flex items-center gap-1">
-                  {index > 0 ? <span aria-hidden className="text-muted-foreground/30">·</span> : null}
-                  {part.label ? (
-                    <>
-                      <span className="text-muted-foreground/80">{part.label}</span>
-                      <span className="font-mono text-[10.5px] text-foreground/70">{part.value}</span>
-                    </>
-                  ) : (
-                    <span className="rounded-sm bg-muted/50 px-1 py-px font-mono text-[10px] uppercase tracking-wide text-foreground/70">
-                      {part.value}
-                    </span>
-                  )}
-                </span>
-              ))}
-              {meta.length > 0 ? <span aria-hidden className="text-muted-foreground/30">·</span> : null}
-              <span className="font-mono text-[10.5px] text-muted-foreground/70">{check.code}</span>
-            </div>
-          ) : null}
-
-          {check.remediation ? (
-            <div
-              className={cn(
-                "mt-2.5 flex items-start gap-2 rounded-md px-2.5 py-1.5 text-[11.5px] leading-[1.5]",
-                check.status === "failed"
-                  ? "bg-destructive/8 text-foreground/85 ring-1 ring-inset ring-destructive/20"
-                  : "bg-warning/8 text-foreground/85 ring-1 ring-inset ring-warning/20",
-              )}
-            >
-              <ArrowRight
-                className={cn(
-                  "mt-0.5 h-3 w-3 shrink-0",
-                  check.status === "failed"
-                    ? "text-destructive"
-                    : "text-warning dark:text-warning",
-                )}
-                aria-hidden
-              />
-              <p>{check.remediation}</p>
-            </div>
-          ) : null}
-        </div>
+    <div className="flex items-start gap-3 px-3.5 py-2.5">
+      <Icon
+        className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", STATUS_TEXT[check.status])}
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-[12px] leading-[1.5] text-foreground">{check.message}</p>
+        {check.remediation && check.status !== "passed" ? (
+          <div
+            className={cn(
+              "mt-1.5 flex items-start gap-1.5 text-[11.5px] leading-[1.5]",
+              check.status === "failed"
+                ? "text-destructive/90"
+                : "text-warning/90 dark:text-warning/90",
+            )}
+          >
+            <ArrowRight className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+            <p>{check.remediation}</p>
+          </div>
+        ) : null}
       </div>
     </div>
   )
-}
-
-interface MetaPart {
-  label: string
-  value: string
-}
-
-function buildMetaParts(check: XeroDiagnosticCheckDto): MetaPart[] {
-  const parts: MetaPart[] = []
-  if (check.affectedProviderId) parts.push({ label: "provider", value: check.affectedProviderId })
-  if (check.retryable) parts.push({ label: "", value: "retryable" })
-  if (check.redacted) parts.push({ label: "", value: "redacted" })
-  return parts
 }
 
 function formatTimestamp(iso: string): string {

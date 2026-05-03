@@ -1,6 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { Plus, Workflow as WorkflowIcon } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { WorkflowPaneView } from '@/src/features/xero/use-xero-desktop-state'
 
@@ -10,13 +12,17 @@ interface PhaseViewProps {
   onOpenSettings?: () => void
   canStartRun?: boolean
   isStartingRun?: boolean
+  onToggleWorkflows?: () => void
+  workflowsOpen?: boolean
+  onCreateWorkflow?: () => void
 }
 
 const BASE_GRID_SIZE = 28
 const MIN_ZOOM = 0.25
 const MAX_ZOOM = 4
 
-export function PhaseView(_props: PhaseViewProps) {
+export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
+  const { onToggleWorkflows, workflowsOpen = false, onCreateWorkflow } = props
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [zoom, setZoom] = useState(1)
@@ -118,6 +124,52 @@ export function PhaseView(_props: PhaseViewProps) {
         // CSS custom property for the dot radius so the gradient stops stay in sync.
         ['--workflow-dot-size' as string]: `${dotRadius}px`,
       }}
-    />
+    >
+      {onToggleWorkflows || onCreateWorkflow ? (
+        <div
+          className="absolute right-2.5 top-2.5 z-10 flex items-center gap-1.5"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {onCreateWorkflow ? (
+            <Button
+              type="button"
+              aria-label="Create workflow"
+              onClick={onCreateWorkflow}
+              size="sm"
+              variant="ghost"
+              className={cn(
+                'h-[30px] cursor-pointer gap-1 rounded-md bg-transparent px-2 text-[12.5px] font-semibold has-[>svg]:px-2',
+                'text-foreground/70 hover:bg-transparent hover:text-foreground',
+              )}
+            >
+              <Plus className="size-3.5" />
+              <span>Create</span>
+            </Button>
+          ) : null}
+          {onCreateWorkflow && onToggleWorkflows ? (
+            <span aria-hidden="true" className="h-3.5 w-px bg-foreground/30" />
+          ) : null}
+          {onToggleWorkflows ? (
+            <Button
+              type="button"
+              aria-label={workflowsOpen ? 'Close workflows' : 'Open workflows'}
+              aria-pressed={workflowsOpen}
+              onClick={onToggleWorkflows}
+              title="Workflows"
+              size="icon-sm"
+              variant="ghost"
+              className={cn(
+                'size-[30px] cursor-pointer rounded-md bg-transparent',
+                workflowsOpen
+                  ? 'text-primary hover:bg-transparent hover:text-primary'
+                  : 'text-foreground/70 hover:bg-transparent hover:text-foreground',
+              )}
+            >
+              <WorkflowIcon className="size-3.5" />
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   )
-}
+})

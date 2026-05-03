@@ -22,6 +22,7 @@ use crate::{
         EnvironmentToolCategory, EnvironmentToolProbeStatus, EnvironmentToolRecord,
         EnvironmentToolSource, EnvironmentToolSummary, ENVIRONMENT_PROFILE_SCHEMA_VERSION,
     },
+    global_db::user_added_tools::UserAddedToolRow,
     runtime::redaction::find_prohibited_persistence_content,
 };
 
@@ -57,10 +58,11 @@ impl Default for EnvironmentProbeOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentProbeCatalogEntry {
-    pub id: &'static str,
+    pub id: String,
     pub category: EnvironmentToolCategory,
-    pub command: &'static str,
-    pub args: &'static [&'static str],
+    pub command: String,
+    pub args: Vec<String>,
+    pub custom: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,10 +248,16 @@ impl EnvironmentCommandExecutor for SystemEnvironmentCommandExecutor {
 }
 
 pub fn probe_environment_profile() -> EnvironmentProbeResult<EnvironmentProbeReport> {
+    probe_environment_profile_with_user_tools(vec![])
+}
+
+pub fn probe_environment_profile_with_user_tools(
+    user_entries: Vec<UserAddedToolRow>,
+) -> EnvironmentProbeResult<EnvironmentProbeReport> {
     let resolver = Arc::new(SystemEnvironmentBinaryResolver::from_process());
     let executor = Arc::new(SystemEnvironmentCommandExecutor);
     probe_environment_profile_with(
-        environment_probe_catalog(),
+        merged_environment_probe_catalog(user_entries),
         resolver,
         executor,
         EnvironmentProbeOptions::default(),
@@ -304,12 +312,20 @@ pub fn probe_environment_profile_with(
 }
 
 pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
+    built_in_environment_probe_catalog()
+}
+
+pub fn built_in_environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
     use EnvironmentToolCategory::*;
 
     let mut entries = vec![
+        // Base developer tools
         entry("git", BaseDeveloperTool, "git", &["--version"]),
+        entry("git_lfs", BaseDeveloperTool, "git-lfs", &["--version"]),
+        entry("hub", BaseDeveloperTool, "hub", &["--version"]),
         entry("ssh", BaseDeveloperTool, "ssh", &["-V"]),
         entry("gh", BaseDeveloperTool, "gh", &["--version"]),
+        entry("glab", BaseDeveloperTool, "glab", &["--version"]),
         entry("protoc", BaseDeveloperTool, "protoc", &["--version"]),
         entry("make", BaseDeveloperTool, "make", &["--version"]),
         entry("cmake", BaseDeveloperTool, "cmake", &["--version"]),
@@ -319,6 +335,10 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
             "pkg-config",
             &["--version"],
         ),
+        entry("openssl", BaseDeveloperTool, "openssl", &["version"]),
+        entry("curl", BaseDeveloperTool, "curl", &["--version"]),
+        entry("wget", BaseDeveloperTool, "wget", &["--version"]),
+        // Package managers (cross-language)
         entry("pnpm", PackageManager, "pnpm", &["--version"]),
         entry("npm", PackageManager, "npm", &["--version"]),
         entry("yarn", PackageManager, "yarn", &["--version"]),
@@ -326,8 +346,20 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("deno", PackageManager, "deno", &["--version"]),
         entry("uv", PackageManager, "uv", &["--version"]),
         entry("pipx", PackageManager, "pipx", &["--version"]),
+        entry("pip", PackageManager, "pip", &["--version"]),
+        entry("pip3", PackageManager, "pip3", &["--version"]),
+        entry("poetry", PackageManager, "poetry", &["--version"]),
+        entry("conda", PackageManager, "conda", &["--version"]),
+        entry("mamba", PackageManager, "mamba", &["--version"]),
         entry("brew", PackageManager, "brew", &["--version"]),
+        entry("gem", PackageManager, "gem", &["--version"]),
+        entry("bundler", PackageManager, "bundle", &["--version"]),
+        entry("composer", PackageManager, "composer", &["--version"]),
+        entry("cocoapods", PackageManager, "pod", &["--version"]),
+        entry("nuget", PackageManager, "nuget", &["help"]),
+        // Language runtimes
         entry("node", LanguageRuntime, "node", &["--version"]),
+        entry("python", LanguageRuntime, "python", &["--version"]),
         entry("python3", LanguageRuntime, "python3", &["--version"]),
         entry("rustc", LanguageRuntime, "rustc", &["--version"]),
         entry("cargo", LanguageRuntime, "cargo", &["--version"]),
@@ -335,11 +367,109 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
         entry("go", LanguageRuntime, "go", &["version"]),
         entry("java", LanguageRuntime, "java", &["-version"]),
         entry("javac", LanguageRuntime, "javac", &["-version"]),
+        entry("kotlin", LanguageRuntime, "kotlin", &["-version"]),
+        entry("kotlinc", LanguageRuntime, "kotlinc", &["-version"]),
+        entry("scala", LanguageRuntime, "scala", &["-version"]),
         entry("swift", LanguageRuntime, "swift", &["--version"]),
         entry("ruby", LanguageRuntime, "ruby", &["--version"]),
         entry("php", LanguageRuntime, "php", &["--version"]),
         entry("dotnet", LanguageRuntime, "dotnet", &["--version"]),
         entry("zig", LanguageRuntime, "zig", &["version"]),
+        entry("dart", LanguageRuntime, "dart", &["--version"]),
+        entry("elixir", LanguageRuntime, "elixir", &["--version"]),
+        entry("erl", LanguageRuntime, "erl", &["-version"]),
+        entry("ghc", LanguageRuntime, "ghc", &["--version"]),
+        entry("ocaml", LanguageRuntime, "ocaml", &["-version"]),
+        entry("lua", LanguageRuntime, "lua", &["-v"]),
+        entry("perl", LanguageRuntime, "perl", &["-v"]),
+        entry("julia", LanguageRuntime, "julia", &["--version"]),
+        entry("crystal", LanguageRuntime, "crystal", &["--version"]),
+        entry("nim", LanguageRuntime, "nim", &["--version"]),
+        entry("clojure", LanguageRuntime, "clojure", &["--version"]),
+        entry("r", LanguageRuntime, "R", &["--version"]),
+        // Editors
+        entry("vim", Editor, "vim", &["--version"]),
+        entry("nvim", Editor, "nvim", &["--version"]),
+        entry("emacs", Editor, "emacs", &["--version"]),
+        entry("nano", Editor, "nano", &["--version"]),
+        entry("code", Editor, "code", &["--version"]),
+        entry("code_insiders", Editor, "code-insiders", &["--version"]),
+        entry("cursor", Editor, "cursor", &["--version"]),
+        entry("subl", Editor, "subl", &["--version"]),
+        entry("hx", Editor, "hx", &["--version"]),
+        entry("micro", Editor, "micro", &["--version"]),
+        entry("zed", Editor, "zed", &["--version"]),
+        // Build tools
+        entry("gradle", BuildTool, "gradle", &["--version"]),
+        entry("maven", BuildTool, "mvn", &["--version"]),
+        entry("bazel", BuildTool, "bazel", &["--version"]),
+        entry("sbt", BuildTool, "sbt", &["--version"]),
+        entry("ninja", BuildTool, "ninja", &["--version"]),
+        entry("ant", BuildTool, "ant", &["-version"]),
+        entry("meson", BuildTool, "meson", &["--version"]),
+        entry("scons", BuildTool, "scons", &["--version"]),
+        entry("buck2", BuildTool, "buck2", &["--version"]),
+        entry("just", BuildTool, "just", &["--version"]),
+        entry("task", BuildTool, "task", &["--version"]),
+        // Linters / formatters
+        entry("rustfmt", Linter, "rustfmt", &["--version"]),
+        entry("clippy", Linter, "cargo-clippy", &["--version"]),
+        entry("eslint", Linter, "eslint", &["--version"]),
+        entry("prettier", Linter, "prettier", &["--version"]),
+        entry("biome", Linter, "biome", &["--version"]),
+        entry("ruff", Linter, "ruff", &["--version"]),
+        entry("black", Linter, "black", &["--version"]),
+        entry("flake8", Linter, "flake8", &["--version"]),
+        entry("mypy", Linter, "mypy", &["--version"]),
+        entry("pylint", Linter, "pylint", &["--version"]),
+        entry("pytest", Linter, "pytest", &["--version"]),
+        entry("golangci_lint", Linter, "golangci-lint", &["--version"]),
+        entry("shellcheck", Linter, "shellcheck", &["--version"]),
+        entry("shfmt", Linter, "shfmt", &["--version"]),
+        entry("hadolint", Linter, "hadolint", &["--version"]),
+        entry("tsc", Linter, "tsc", &["--version"]),
+        // Version managers
+        entry("asdf", VersionManager, "asdf", &["--version"]),
+        entry("mise", VersionManager, "mise", &["--version"]),
+        entry("nvm", VersionManager, "nvm", &["--version"]),
+        entry("fnm", VersionManager, "fnm", &["--version"]),
+        entry("volta", VersionManager, "volta", &["--version"]),
+        entry("pyenv", VersionManager, "pyenv", &["--version"]),
+        entry("rbenv", VersionManager, "rbenv", &["--version"]),
+        entry("jenv", VersionManager, "jenv", &["--version"]),
+        entry("sdkman", VersionManager, "sdk", &["version"]),
+        entry("nodenv", VersionManager, "nodenv", &["--version"]),
+        // Infrastructure / IaC
+        entry("terraform", IacTool, "terraform", &["--version"]),
+        entry("tofu", IacTool, "tofu", &["--version"]),
+        entry("ansible", IacTool, "ansible", &["--version"]),
+        entry("pulumi", IacTool, "pulumi", &["version"]),
+        entry("packer", IacTool, "packer", &["--version"]),
+        entry("vault", IacTool, "vault", &["--version"]),
+        entry("consul", IacTool, "consul", &["--version"]),
+        entry("nomad", IacTool, "nomad", &["--version"]),
+        entry("helmfile", IacTool, "helmfile", &["--version"]),
+        entry("terragrunt", IacTool, "terragrunt", &["--version"]),
+        // Shell utilities
+        entry("jq", ShellUtility, "jq", &["--version"]),
+        entry("yq", ShellUtility, "yq", &["--version"]),
+        entry("rg", ShellUtility, "rg", &["--version"]),
+        entry("fd", ShellUtility, "fd", &["--version"]),
+        entry("bat", ShellUtility, "bat", &["--version"]),
+        entry("fzf", ShellUtility, "fzf", &["--version"]),
+        entry("lazygit", ShellUtility, "lazygit", &["--version"]),
+        entry("tig", ShellUtility, "tig", &["--version"]),
+        entry("tmux", ShellUtility, "tmux", &["-V"]),
+        entry("zellij", ShellUtility, "zellij", &["--version"]),
+        entry("direnv", ShellUtility, "direnv", &["--version"]),
+        entry("htop", ShellUtility, "htop", &["--version"]),
+        entry("btop", ShellUtility, "btop", &["--version"]),
+        entry("watchman", ShellUtility, "watchman", &["--version"]),
+        entry("ngrok", ShellUtility, "ngrok", &["--version"]),
+        entry("tldr", ShellUtility, "tldr", &["--version"]),
+        entry("entr", ShellUtility, "entr", &["-h"]),
+        entry("delta", ShellUtility, "delta", &["--version"]),
+        // Container / orchestration
         entry("docker", ContainerOrchestration, "docker", &["--version"]),
         entry(
             "docker_compose",
@@ -348,6 +478,8 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
             &["compose", "version"],
         ),
         entry("podman", ContainerOrchestration, "podman", &["--version"]),
+        entry("colima", ContainerOrchestration, "colima", &["version"]),
+        entry("lima", ContainerOrchestration, "limactl", &["--version"]),
         entry(
             "kubectl",
             ContainerOrchestration,
@@ -360,20 +492,62 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
             "helm",
             &["version", "--short"],
         ),
+        entry("minikube", ContainerOrchestration, "minikube", &["version"]),
+        entry("kind", ContainerOrchestration, "kind", &["version"]),
+        entry("k3d", ContainerOrchestration, "k3d", &["version"]),
+        entry("k9s", ContainerOrchestration, "k9s", &["version"]),
+        entry("skaffold", ContainerOrchestration, "skaffold", &["version"]),
+        entry(
+            "lazydocker",
+            ContainerOrchestration,
+            "lazydocker",
+            &["--version"],
+        ),
+        // Mobile tooling
         entry("xcodebuild", MobileTooling, "xcodebuild", &["-version"]),
         entry("xcrun", MobileTooling, "xcrun", &["--version"]),
         entry("adb", MobileTooling, "adb", &["version"]),
         entry("emulator", MobileTooling, "emulator", &["-version"]),
+        entry("flutter", MobileTooling, "flutter", &["--version"]),
+        entry("fastlane", MobileTooling, "fastlane", &["--version"]),
+        entry("expo", MobileTooling, "expo", &["--version"]),
+        entry("eas", MobileTooling, "eas", &["--version"]),
+        // Cloud deployment
         entry("aws", CloudDeployment, "aws", &["--version"]),
         entry("gcloud", CloudDeployment, "gcloud", &["--version"]),
         entry("az", CloudDeployment, "az", &["version"]),
         entry("flyctl", CloudDeployment, "flyctl", &["version"]),
         entry("vercel", CloudDeployment, "vercel", &["--version"]),
         entry("netlify", CloudDeployment, "netlify", &["--version"]),
+        entry("heroku", CloudDeployment, "heroku", &["--version"]),
+        entry("doctl", CloudDeployment, "doctl", &["version"]),
+        entry("railway", CloudDeployment, "railway", &["--version"]),
+        entry("render", CloudDeployment, "render", &["--version"]),
+        entry("supabase", CloudDeployment, "supabase", &["--version"]),
+        entry("firebase", CloudDeployment, "firebase", &["--version"]),
+        entry(
+            "cloudflare_wrangler",
+            CloudDeployment,
+            "wrangler",
+            &["--version"],
+        ),
+        // Database CLIs
         entry("sqlite3", DatabaseCli, "sqlite3", &["--version"]),
         entry("psql", DatabaseCli, "psql", &["--version"]),
+        entry("pg_dump", DatabaseCli, "pg_dump", &["--version"]),
         entry("mysql", DatabaseCli, "mysql", &["--version"]),
+        entry("mongosh", DatabaseCli, "mongosh", &["--version"]),
+        entry("mongo", DatabaseCli, "mongo", &["--version"]),
         entry("redis_cli", DatabaseCli, "redis-cli", &["--version"]),
+        entry("influx", DatabaseCli, "influx", &["version"]),
+        entry(
+            "clickhouse_client",
+            DatabaseCli,
+            "clickhouse-client",
+            &["--version"],
+        ),
+        entry("duckdb", DatabaseCli, "duckdb", &["--version"]),
+        // Solana tooling
         entry("solana", SolanaTooling, "solana", &["--version"]),
         entry("anchor", SolanaTooling, "anchor", &["--version"]),
         entry(
@@ -392,15 +566,37 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
             "solana-verify",
             &["--version"],
         ),
+        // AI / agent CLIs
         entry("codex", AgentAiCli, "codex", &["--version"]),
         entry("claude", AgentAiCli, "claude", &["--version"]),
         entry("opencode", AgentAiCli, "opencode", &["--version"]),
         entry("aider", AgentAiCli, "aider", &["--version"]),
         entry("gemini", AgentAiCli, "gemini", &["--version"]),
+        entry("ollama", AgentAiCli, "ollama", &["--version"]),
+        entry("llm", AgentAiCli, "llm", &["--version"]),
+        entry("continue", AgentAiCli, "continue", &["--version"]),
     ];
 
     entries.extend(platform_package_manager_entries());
     entries
+}
+
+pub fn merged_environment_probe_catalog(
+    user_entries: Vec<UserAddedToolRow>,
+) -> Vec<EnvironmentProbeCatalogEntry> {
+    let mut entries = built_in_environment_probe_catalog();
+    entries.extend(user_entries.into_iter().map(user_tool_entry));
+    entries
+}
+
+fn user_tool_entry(row: UserAddedToolRow) -> EnvironmentProbeCatalogEntry {
+    EnvironmentProbeCatalogEntry {
+        id: row.id,
+        category: row.category,
+        command: row.command,
+        args: row.args,
+        custom: true,
+    }
 }
 
 fn entry(
@@ -410,10 +606,11 @@ fn entry(
     args: &'static [&'static str],
 ) -> EnvironmentProbeCatalogEntry {
     EnvironmentProbeCatalogEntry {
-        id,
+        id: id.into(),
         category,
-        command,
-        args,
+        command: command.into(),
+        args: args.iter().map(|arg| (*arg).into()).collect(),
+        custom: false,
     }
 }
 
@@ -483,11 +680,12 @@ fn run_catalog_entry(
     executor: &dyn EnvironmentCommandExecutor,
     options: &EnvironmentProbeOptions,
 ) -> EnvironmentToolRecord {
-    let Some(resolved) = resolver.resolve(entry.command) else {
+    let Some(resolved) = resolver.resolve(&entry.command) else {
         return EnvironmentToolRecord {
-            id: entry.id.into(),
+            id: entry.id.clone(),
             category: entry.category,
-            command: entry.command.into(),
+            command: entry.command.clone(),
+            custom: entry.custom,
             present: false,
             path: None,
             version: None,
@@ -498,14 +696,9 @@ fn run_catalog_entry(
     };
 
     let started = Instant::now();
-    let args = entry
-        .args
-        .iter()
-        .map(|arg| (*arg).to_string())
-        .collect::<Vec<_>>();
     let execution = executor.run(
         &resolved.path,
-        &args,
+        &entry.args,
         options.timeout,
         &resolver.child_envs(),
     );
@@ -536,9 +729,10 @@ fn run_catalog_entry(
     };
 
     EnvironmentToolRecord {
-        id: entry.id.into(),
+        id: entry.id.clone(),
         category: entry.category,
-        command: entry.command.into(),
+        command: entry.command.clone(),
+        custom: entry.custom,
         present: true,
         path: safe_persisted_path(&resolved.path),
         version,
@@ -745,6 +939,7 @@ fn tool_summary(tool: &EnvironmentToolRecord) -> EnvironmentToolSummary {
     EnvironmentToolSummary {
         id: tool.id.clone(),
         category: tool.category,
+        custom: tool.custom,
         present: tool.present,
         version: tool.version.clone(),
         display_path: tool.path.as_deref().and_then(display_path),
@@ -1223,5 +1418,53 @@ mod tests {
             .expect("tauri capability");
         assert_eq!(capability.state, EnvironmentCapabilityState::Ready);
         assert!(capability.evidence.contains(&"protoc".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_probe_uses_executor_and_captures_version_line() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let script = tempdir.path().join("fixture-tool");
+        std::fs::write(&script, "#!/bin/sh\necho fixture-tool 1.2.3\n").expect("write fixture");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("fixture metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).expect("chmod fixture");
+
+        let mut binaries = HashMap::new();
+        binaries.insert(
+            "fixture-tool".into(),
+            ResolvedEnvironmentBinary {
+                path: script,
+                source: EnvironmentToolSource::Path,
+            },
+        );
+
+        let report = probe_environment_profile_with(
+            vec![EnvironmentProbeCatalogEntry {
+                id: "fixture_tool".into(),
+                category: EnvironmentToolCategory::ShellUtility,
+                command: "fixture-tool".into(),
+                args: vec!["--version".into()],
+                custom: true,
+            }],
+            Arc::new(FakeResolver { binaries }),
+            Arc::new(SystemEnvironmentCommandExecutor),
+            EnvironmentProbeOptions {
+                timeout: Duration::from_secs(1),
+                concurrency: 1,
+            },
+        )
+        .expect("probe report");
+
+        let tool = &report.payload.tools[0];
+        assert!(tool.custom);
+        assert!(tool.present);
+        assert_eq!(tool.version.as_deref(), Some("fixture-tool 1.2.3"));
+        assert_eq!(tool.probe_status, EnvironmentToolProbeStatus::Ok);
+        assert_eq!(report.summary.tools[0].custom, true);
     }
 }

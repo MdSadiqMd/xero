@@ -1,6 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   CircleCheckBig,
   CircleSlash,
@@ -21,6 +29,7 @@ import {
   Zap,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { createFrameCoalescer } from "@/lib/frame-governance"
 import {
   useDeferredSidebarActivation,
   useSidebarWidthMotion,
@@ -34,18 +43,7 @@ import {
 } from "@/components/ui/breadcrumb"
 import { Badge } from "@/components/ui/badge"
 import { SolanaLogoIcon } from "./brand-icons"
-import { SolanaAuditPanel } from "./solana-audit-panel"
-import { SolanaDeployPanel } from "./solana-deploy-panel"
-import { SolanaIdlPanel } from "./solana-idl-panel"
-import { SolanaIndexerPanel } from "./solana-indexer-panel"
-import { SolanaLogFeed } from "./solana-log-feed"
 import { SolanaMissingToolchain } from "./solana-missing-toolchain"
-import { SolanaPersonaPanel } from "./solana-persona-panel"
-import { SolanaSafetyPanel } from "./solana-safety-panel"
-import { SolanaScenarioPanel } from "./solana-scenario-panel"
-import { SolanaTokenPanel } from "./solana-token-panel"
-import { SolanaTxInspector } from "./solana-tx-inspector"
-import { SolanaWalletPanel } from "./solana-wallet-panel"
 import { PanelHeader } from "./solana-panel-shell"
 import {
   useSolanaWorkbench,
@@ -64,6 +62,68 @@ const DEFAULT_WIDTH = 440
 const MAX_WIDTH = 900
 const STORAGE_KEY = "xero.solana.workbench.width"
 
+const loadSolanaAuditPanel = () => import("./solana-audit-panel")
+const loadSolanaDeployPanel = () => import("./solana-deploy-panel")
+const loadSolanaIdlPanel = () => import("./solana-idl-panel")
+const loadSolanaIndexerPanel = () => import("./solana-indexer-panel")
+const loadSolanaLogFeed = () => import("./solana-log-feed")
+const loadSolanaPersonaPanel = () => import("./solana-persona-panel")
+const loadSolanaSafetyPanel = () => import("./solana-safety-panel")
+const loadSolanaScenarioPanel = () => import("./solana-scenario-panel")
+const loadSolanaTokenPanel = () => import("./solana-token-panel")
+const loadSolanaTxInspector = () => import("./solana-tx-inspector")
+const loadSolanaWalletPanel = () => import("./solana-wallet-panel")
+
+export async function preloadSolanaWorkbenchPanels(): Promise<void> {
+  await Promise.all([
+    loadSolanaAuditPanel(),
+    loadSolanaDeployPanel(),
+    loadSolanaIdlPanel(),
+    loadSolanaIndexerPanel(),
+    loadSolanaLogFeed(),
+    loadSolanaPersonaPanel(),
+    loadSolanaSafetyPanel(),
+    loadSolanaScenarioPanel(),
+    loadSolanaTokenPanel(),
+    loadSolanaTxInspector(),
+    loadSolanaWalletPanel(),
+  ])
+}
+
+const LazySolanaAuditPanel = lazy(() =>
+  loadSolanaAuditPanel().then((module) => ({ default: module.SolanaAuditPanel })),
+)
+const LazySolanaDeployPanel = lazy(() =>
+  loadSolanaDeployPanel().then((module) => ({ default: module.SolanaDeployPanel })),
+)
+const LazySolanaIdlPanel = lazy(() =>
+  loadSolanaIdlPanel().then((module) => ({ default: module.SolanaIdlPanel })),
+)
+const LazySolanaIndexerPanel = lazy(() =>
+  loadSolanaIndexerPanel().then((module) => ({ default: module.SolanaIndexerPanel })),
+)
+const LazySolanaLogFeed = lazy(() =>
+  loadSolanaLogFeed().then((module) => ({ default: module.SolanaLogFeed })),
+)
+const LazySolanaPersonaPanel = lazy(() =>
+  loadSolanaPersonaPanel().then((module) => ({ default: module.SolanaPersonaPanel })),
+)
+const LazySolanaSafetyPanel = lazy(() =>
+  loadSolanaSafetyPanel().then((module) => ({ default: module.SolanaSafetyPanel })),
+)
+const LazySolanaScenarioPanel = lazy(() =>
+  loadSolanaScenarioPanel().then((module) => ({ default: module.SolanaScenarioPanel })),
+)
+const LazySolanaTokenPanel = lazy(() =>
+  loadSolanaTokenPanel().then((module) => ({ default: module.SolanaTokenPanel })),
+)
+const LazySolanaTxInspector = lazy(() =>
+  loadSolanaTxInspector().then((module) => ({ default: module.SolanaTxInspector })),
+)
+const LazySolanaWalletPanel = lazy(() =>
+  loadSolanaWalletPanel().then((module) => ({ default: module.SolanaWalletPanel })),
+)
+
 type TabId =
   | "cluster"
   | "personas"
@@ -81,6 +141,7 @@ type TabId =
 
 interface SolanaWorkbenchSidebarProps {
   open: boolean
+  prewarm?: boolean
 }
 
 function readPersistedWidth(): number | null {
@@ -105,7 +166,63 @@ function writePersistedWidth(value: number) {
   }
 }
 
-export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
+function SolanaPanelFallback() {
+  return (
+    <div
+      aria-label="Loading workbench panel"
+      aria-live="polite"
+      className="flex flex-col gap-3"
+      role="status"
+    >
+      <div className="h-7 w-36 rounded-md bg-secondary/50" />
+      <div className="h-24 rounded-md border border-border/60 bg-background/35" />
+      <div className="space-y-2">
+        <div className="h-3 w-3/4 rounded bg-secondary/45" />
+        <div className="h-3 w-1/2 rounded bg-secondary/35" />
+      </div>
+    </div>
+  )
+}
+
+function SolanaPanelSlot({
+  active,
+  children,
+  padded = true,
+  tabId,
+  warmLayout = false,
+}: {
+  active: boolean
+  children: React.ReactNode
+  padded?: boolean
+  tabId: TabId
+  warmLayout?: boolean
+}) {
+  return (
+    <div
+      aria-hidden={!active}
+      aria-labelledby={`tab-${tabId}`}
+      className={cn(
+        "min-w-0",
+        active
+          ? "relative"
+          : warmLayout
+            ? "pointer-events-none invisible absolute inset-x-0 top-0 overflow-hidden"
+            : "hidden",
+        padded && "px-3 py-3",
+      )}
+      hidden={!active && !warmLayout}
+      inert={!active ? true : undefined}
+      role="tabpanel"
+    >
+      {children}
+    </div>
+  )
+}
+
+export function SolanaWorkbenchSidebar({
+  open,
+  prewarm = false,
+}: SolanaWorkbenchSidebarProps) {
   const [width, setWidth] = useState<number>(() => readPersistedWidth() ?? DEFAULT_WIDTH)
   const [isResizing, setIsResizing] = useState(false)
   const {
@@ -113,7 +230,10 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
     active: workbenchActive,
   } = useDeferredSidebarActivation(open)
   const targetWidth = open ? width : 0
-  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
+  const widthMotion = useSidebarWidthMotion(targetWidth, {
+    durationMs: prewarm ? 80 : undefined,
+    isResizing,
+  })
   const widthRef = useRef(width)
   widthRef.current = width
 
@@ -130,16 +250,16 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
     })
   }, [workbench.clusters])
 
-  useEffect(() => {
-    writePersistedWidth(width)
-  }, [width])
-
   const handleResizeStart = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return
       event.preventDefault()
       const startX = event.clientX
       const startWidth = widthRef.current
+      let latestWidth = startWidth
+      const widthUpdates = createFrameCoalescer<number>({
+        onFlush: setWidth,
+      })
       setIsResizing(true)
 
       const previousCursor = document.body.style.cursor
@@ -149,16 +269,18 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
 
       const handleMove = (ev: PointerEvent) => {
         const delta = startX - ev.clientX
-        const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + delta))
-        setWidth(next)
+        latestWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + delta))
+        widthUpdates.schedule(latestWidth)
       }
       const handleUp = () => {
+        widthUpdates.flush()
         window.removeEventListener("pointermove", handleMove)
         window.removeEventListener("pointerup", handleUp)
         window.removeEventListener("pointercancel", handleUp)
         document.body.style.cursor = previousCursor
         document.body.style.userSelect = previousSelect
         setIsResizing(false)
+        writePersistedWidth(latestWidth)
       }
 
       window.addEventListener("pointermove", handleMove)
@@ -674,321 +796,339 @@ export function SolanaWorkbenchSidebar({ open }: SolanaWorkbenchSidebarProps) {
           ))}
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
-        <div
-          role="tabpanel"
-          aria-labelledby={`tab-${activeTab}`}
-          className={cn(activeTab === "cluster" ? "" : "px-3 py-3")}
-        >
-          {activeTab === "cluster" ? (
-            <>
-              <div className="px-3 pt-3">
-                <PanelHeader
-                  icon={Network}
-                  title="Cluster"
-                  description="Pick a cluster and control the local validator."
-                  busy={workbench.isStarting || workbench.isStopping}
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
+          <SolanaPanelSlot
+            active={activeTab === "cluster"}
+            padded={false}
+            tabId="cluster"
+          >
+            <div className="px-3 pt-3">
+              <PanelHeader
+                icon={Network}
+                title="Cluster"
+                description="Pick a cluster and control the local validator."
+                busy={workbench.isStarting || workbench.isStopping}
+              />
+            </div>
+            <section className="border-b border-border/70 px-3 py-3">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Cluster
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {workbench.clusters.map((cluster) => (
+                  <button
+                    key={cluster.kind}
+                    type="button"
+                    disabled={!cluster.startable && !workbench.status.running}
+                    onClick={() => setSelectedKind(cluster.kind)}
+                    className={cn(
+                      "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                      selectedKind === cluster.kind
+                        ? "border-primary/50 bg-primary/10 text-primary"
+                        : "border-border/70 bg-background/40 text-foreground/80 hover:border-primary/40 hover:text-foreground",
+                      !cluster.startable && "opacity-60",
+                    )}
+                  >
+                    {cluster.label}
+                  </button>
+                ))}
+              </div>
+              {selectedCluster ? (
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  {selectedCluster.startable
+                    ? "Local cluster — Xero can spin it up on your machine."
+                    : "Remote cluster — read-only from here."}
+                </p>
+              ) : null}
+            </section>
+
+            <section className="px-3 py-3">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Validator
+                </div>
+                <StatusDot
+                  running={workbench.status.running}
+                  starting={workbench.isStarting}
                 />
               </div>
-              <section className="border-b border-border/70 px-3 py-3">
-                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Cluster
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {workbench.clusters.map((cluster) => (
-                    <button
-                      key={cluster.kind}
-                      type="button"
-                      disabled={!cluster.startable && !workbench.status.running}
-                      onClick={() => setSelectedKind(cluster.kind)}
-                      className={cn(
-                        "rounded-md border px-2 py-1 text-[11px] transition-colors",
-                        selectedKind === cluster.kind
-                          ? "border-primary/50 bg-primary/10 text-primary"
-                          : "border-border/70 bg-background/40 text-foreground/80 hover:border-primary/40 hover:text-foreground",
-                        !cluster.startable && "opacity-60",
-                      )}
-                    >
-                      {cluster.label}
-                    </button>
-                  ))}
-                </div>
-                {selectedCluster ? (
-                  <p className="mt-2 text-[11px] text-muted-foreground">
-                    {selectedCluster.startable
-                      ? "Local cluster — Xero can spin it up on your machine."
-                      : "Remote cluster — read-only from here."}
-                  </p>
-                ) : null}
-              </section>
-
-              <section className="px-3 py-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                    Validator
-                  </div>
-                  <StatusDot
-                    running={workbench.status.running}
-                    starting={workbench.isStarting}
-                  />
-                </div>
-                <div className="space-y-1.5 text-[11px] text-foreground/85">
+              <div className="space-y-1.5 text-[11px] text-foreground/85">
+                <KV
+                  label="State"
+                  value={
+                    workbench.isStarting
+                      ? "Starting…"
+                      : workbench.isStopping
+                        ? "Stopping…"
+                        : workbench.status.running
+                          ? "Running"
+                          : "Stopped"
+                  }
+                />
+                <KV label="RPC" value={workbench.status.rpcUrl ?? "—"} mono />
+                <KV label="WS" value={workbench.status.wsUrl ?? "—"} mono />
+                {workbench.status.uptimeS != null ? (
                   <KV
-                    label="State"
-                    value={
-                      workbench.isStarting
-                        ? "Starting…"
-                        : workbench.isStopping
-                          ? "Stopping…"
-                          : workbench.status.running
-                            ? "Running"
-                            : "Stopped"
-                    }
+                    label="Uptime"
+                    value={`${workbench.status.uptimeS}s`}
+                    mono
                   />
-                  <KV label="RPC" value={workbench.status.rpcUrl ?? "—"} mono />
-                  <KV label="WS" value={workbench.status.wsUrl ?? "—"} mono />
-                  {workbench.status.uptimeS != null ? (
-                    <KV
-                      label="Uptime"
-                      value={`${workbench.status.uptimeS}s`}
-                      mono
-                    />
-                  ) : null}
-                  {workbench.lastEvent?.message ? (
-                    <div className="text-[11px] italic text-muted-foreground">
-                      {workbench.lastEvent.message}
-                    </div>
-                  ) : null}
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleStart}
-                    disabled={
-                      !selectedCluster?.startable ||
-                      workbench.isStarting ||
-                      workbench.isStopping ||
-                      workbench.status.running
-                    }
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
-                      "hover:bg-primary/25 disabled:opacity-50",
-                    )}
-                  >
-                    {workbench.isStarting ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Play className="h-3 w-3 fill-current" />
-                    )}
-                    Start
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleStop}
-                    disabled={!workbench.status.running || workbench.isStopping}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background/40 px-2.5 py-1 text-[11px] text-foreground/85 transition-colors",
-                      "hover:border-destructive/50 hover:text-destructive disabled:opacity-50",
-                    )}
-                  >
-                    {workbench.isStopping ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <Square className="h-3 w-3" />
-                    )}
-                    Stop
-                  </button>
-                </div>
-                {workbench.error ? (
-                  <p className="mt-2 text-[11px] text-destructive">
-                    {workbench.error}
-                  </p>
                 ) : null}
-              </section>
-            </>
-          ) : null}
+                {workbench.lastEvent?.message ? (
+                  <div className="text-[11px] italic text-muted-foreground">
+                    {workbench.lastEvent.message}
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleStart}
+                  disabled={
+                    !selectedCluster?.startable ||
+                    workbench.isStarting ||
+                    workbench.isStopping ||
+                    workbench.status.running
+                  }
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary transition-colors",
+                    "hover:bg-primary/25 disabled:opacity-50",
+                  )}
+                >
+                  {workbench.isStarting ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Play className="h-3 w-3 fill-current" />
+                  )}
+                  Start
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  disabled={!workbench.status.running || workbench.isStopping}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background/40 px-2.5 py-1 text-[11px] text-foreground/85 transition-colors",
+                    "hover:border-destructive/50 hover:text-destructive disabled:opacity-50",
+                  )}
+                >
+                  {workbench.isStopping ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Square className="h-3 w-3" />
+                  )}
+                  Stop
+                </button>
+              </div>
+              {workbench.error ? (
+                <p className="mt-2 text-[11px] text-destructive">
+                  {workbench.error}
+                </p>
+              ) : null}
+            </section>
+          </SolanaPanelSlot>
 
-          {activeTab === "personas" ? (
-            <SolanaPersonaPanel
-              busy={workbench.personaBusy}
-              cluster={selectedKind}
-              clusterRunning={clusterRunning}
-              onCreate={handleCreatePersona}
-              onDelete={handleDeletePersona}
-              onFund={handleFundPersona}
-              onRefresh={refreshPersonasForCluster}
-              personas={workbench.personas}
-              roles={workbench.personaRoles}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "personas" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "personas"} tabId="personas">
+              <LazySolanaPersonaPanel
+                busy={workbench.personaBusy}
+                cluster={selectedKind}
+                clusterRunning={clusterRunning}
+                onCreate={handleCreatePersona}
+                onDelete={handleDeletePersona}
+                onFund={handleFundPersona}
+                onRefresh={refreshPersonasForCluster}
+                personas={workbench.personas}
+                roles={workbench.personaRoles}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "scenarios" ? (
-            <SolanaScenarioPanel
-              busy={workbench.scenarioBusy}
-              cluster={selectedKind}
-              clusterRunning={clusterRunning}
-              lastRun={workbench.lastScenarioRun}
-              onRunScenario={workbench.runScenario}
-              personas={workbench.personas}
-              scenarios={workbench.scenarios}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "scenarios" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "scenarios"} tabId="scenarios">
+              <LazySolanaScenarioPanel
+                busy={workbench.scenarioBusy}
+                cluster={selectedKind}
+                clusterRunning={clusterRunning}
+                lastRun={workbench.lastScenarioRun}
+                onRunScenario={workbench.runScenario}
+                personas={workbench.personas}
+                scenarios={workbench.scenarios}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "tx" ? (
-            <SolanaTxInspector
-              cluster={selectedKind}
-              clusterRunning={clusterRunning}
-              txBusy={workbench.txBusy}
-              lastSimulation={workbench.lastSimulation}
-              lastExplanation={workbench.lastExplanation}
-              onSimulate={handleSimulate}
-              onExplain={handleExplain}
-              onEstimateFee={handleEstimateFee}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "tx" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "tx"} tabId="tx">
+              <LazySolanaTxInspector
+                cluster={selectedKind}
+                clusterRunning={clusterRunning}
+                txBusy={workbench.txBusy}
+                lastSimulation={workbench.lastSimulation}
+                lastExplanation={workbench.lastExplanation}
+                onSimulate={handleSimulate}
+                onExplain={handleExplain}
+                onEstimateFee={handleEstimateFee}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "logs" ? (
-            <SolanaLogFeed
-              cluster={selectedKind}
-              busy={workbench.logBusy}
-              entries={workbench.logEntries}
-              decodedEvents={workbench.decodedLogEvents}
-              activeSubscriptions={workbench.activeLogSubscriptions}
-              lastFetch={workbench.lastLogFetch}
-              onSubscribe={handleSubscribeLogs}
-              onUnsubscribe={workbench.unsubscribeLogs}
-              onFetchRecent={handleFetchRecentLogs}
-              onRefreshSubscriptions={workbench.refreshActiveLogSubscriptions}
-              onClear={workbench.clearLogFeed}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "logs" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "logs"} tabId="logs">
+              <LazySolanaLogFeed
+                cluster={selectedKind}
+                busy={workbench.logBusy}
+                entries={workbench.logEntries}
+                decodedEvents={workbench.decodedLogEvents}
+                activeSubscriptions={workbench.activeLogSubscriptions}
+                lastFetch={workbench.lastLogFetch}
+                onSubscribe={handleSubscribeLogs}
+                onUnsubscribe={workbench.unsubscribeLogs}
+                onFetchRecent={handleFetchRecentLogs}
+                onRefreshSubscriptions={workbench.refreshActiveLogSubscriptions}
+                onClear={workbench.clearLogFeed}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "indexer" ? (
-            <SolanaIndexerPanel
-              cluster={selectedKind}
-              busy={workbench.indexerBusy}
-              lastScaffold={workbench.lastIndexerScaffold}
-              lastRun={workbench.lastIndexerRun}
-              onScaffold={handleScaffoldIndexer}
-              onRun={handleRunIndexer}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "indexer" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "indexer"} tabId="indexer">
+              <LazySolanaIndexerPanel
+                cluster={selectedKind}
+                busy={workbench.indexerBusy}
+                lastScaffold={workbench.lastIndexerScaffold}
+                lastRun={workbench.lastIndexerRun}
+                onScaffold={handleScaffoldIndexer}
+                onRun={handleRunIndexer}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "idl" ? (
-            <SolanaIdlPanel
-              cluster={selectedKind}
-              idls={workbench.idls}
-              idlBusy={workbench.idlBusy}
-              lastIdlEvent={workbench.lastIdlEvent}
-              lastDriftReport={workbench.lastDriftReport}
-              lastCodamaReport={workbench.lastCodamaReport}
-              lastPublishReport={workbench.lastPublishReport}
-              lastDeployProgress={workbench.lastDeployProgress}
-              activeWatches={workbench.activeIdlWatches}
-              personaNames={workbench.personas.map((p) => p.name)}
-              onLoad={workbench.loadIdl}
-              onFetch={handleIdlFetch}
-              onDrift={handleIdlDrift}
-              onCodama={handleCodama}
-              onPublish={handlePublishIdl}
-              onStartWatch={workbench.startIdlWatch}
-              onStopWatch={workbench.stopIdlWatch}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "idl" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "idl"} tabId="idl">
+              <LazySolanaIdlPanel
+                cluster={selectedKind}
+                idls={workbench.idls}
+                idlBusy={workbench.idlBusy}
+                lastIdlEvent={workbench.lastIdlEvent}
+                lastDriftReport={workbench.lastDriftReport}
+                lastCodamaReport={workbench.lastCodamaReport}
+                lastPublishReport={workbench.lastPublishReport}
+                lastDeployProgress={workbench.lastDeployProgress}
+                activeWatches={workbench.activeIdlWatches}
+                personaNames={workbench.personas.map((p) => p.name)}
+                onLoad={workbench.loadIdl}
+                onFetch={handleIdlFetch}
+                onDrift={handleIdlDrift}
+                onCodama={handleCodama}
+                onPublish={handlePublishIdl}
+                onStartWatch={workbench.startIdlWatch}
+                onStopWatch={workbench.stopIdlWatch}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "deploy" ? (
-            <SolanaDeployPanel
-              busy={workbench.programBusy}
-              cluster={selectedKind}
-              clusterRunning={clusterRunning}
-              personaNames={workbench.personas.map((p) => p.name)}
-              lastBuildReport={workbench.lastBuildReport}
-              lastUpgradeSafety={workbench.lastUpgradeSafety}
-              lastDeployResult={workbench.lastDeployResult}
-              lastSquadsProposal={workbench.lastSquadsProposal}
-              lastVerifiedBuild={workbench.lastVerifiedBuild}
-              lastRollback={workbench.lastRollback}
-              onBuild={handleBuildProgram}
-              onUpgradeCheck={handleUpgradeCheck}
-              onDeploy={handleDeploy}
-              onSubmitVerified={handleSubmitVerified}
-              onRollback={handleRollback}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "deploy" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "deploy"} tabId="deploy">
+              <LazySolanaDeployPanel
+                busy={workbench.programBusy}
+                cluster={selectedKind}
+                clusterRunning={clusterRunning}
+                personaNames={workbench.personas.map((p) => p.name)}
+                lastBuildReport={workbench.lastBuildReport}
+                lastUpgradeSafety={workbench.lastUpgradeSafety}
+                lastDeployResult={workbench.lastDeployResult}
+                lastSquadsProposal={workbench.lastSquadsProposal}
+                lastVerifiedBuild={workbench.lastVerifiedBuild}
+                lastRollback={workbench.lastRollback}
+                onBuild={handleBuildProgram}
+                onUpgradeCheck={handleUpgradeCheck}
+                onDeploy={handleDeploy}
+                onSubmitVerified={handleSubmitVerified}
+                onRollback={handleRollback}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "audit" ? (
-            <SolanaAuditPanel
-              cluster={selectedKind}
-              clusterRunning={clusterRunning}
-              busy={workbench.auditBusy}
-              findings={workbench.auditFindings}
-              events={workbench.auditEvents}
-              lastStatic={workbench.lastStaticReport}
-              lastExternal={workbench.lastExternalReport}
-              lastFuzz={workbench.lastFuzzReport}
-              lastCoverage={workbench.lastCoverageReport}
-              lastReplay={workbench.lastReplayReport}
-              replayCatalog={workbench.replayCatalog}
-              onClearFeed={workbench.clearAuditFeed}
-              onRunStatic={workbench.runStaticAudit}
-              onRunExternal={workbench.runExternalAudit}
-              onRunFuzz={workbench.runFuzzAudit}
-              onScaffoldFuzz={workbench.scaffoldFuzzHarness}
-              onRunCoverage={workbench.runCoverageAudit}
-              onRunReplay={workbench.runReplay}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "audit" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "audit"} tabId="audit">
+              <LazySolanaAuditPanel
+                cluster={selectedKind}
+                clusterRunning={clusterRunning}
+                busy={workbench.auditBusy}
+                findings={workbench.auditFindings}
+                events={workbench.auditEvents}
+                lastStatic={workbench.lastStaticReport}
+                lastExternal={workbench.lastExternalReport}
+                lastFuzz={workbench.lastFuzzReport}
+                lastCoverage={workbench.lastCoverageReport}
+                lastReplay={workbench.lastReplayReport}
+                replayCatalog={workbench.replayCatalog}
+                onClearFeed={workbench.clearAuditFeed}
+                onRunStatic={workbench.runStaticAudit}
+                onRunExternal={workbench.runExternalAudit}
+                onRunFuzz={workbench.runFuzzAudit}
+                onScaffoldFuzz={workbench.scaffoldFuzzHarness}
+                onRunCoverage={workbench.runCoverageAudit}
+                onRunReplay={workbench.runReplay}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "token" ? (
-            <SolanaTokenPanel
-              cluster={selectedKind}
-              clusterRunning={clusterRunning}
-              busy={workbench.tokenBusy}
-              personaNames={workbench.personas.map((p) => p.name)}
-              matrix={workbench.extensionMatrix}
-              lastTokenCreate={workbench.lastTokenCreate}
-              lastMetaplexMint={workbench.lastMetaplexMint}
-              onCreateToken={workbench.createToken}
-              onMintMetaplex={workbench.mintMetaplex}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "token" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "token"} tabId="token">
+              <LazySolanaTokenPanel
+                cluster={selectedKind}
+                clusterRunning={clusterRunning}
+                busy={workbench.tokenBusy}
+                personaNames={workbench.personas.map((p) => p.name)}
+                matrix={workbench.extensionMatrix}
+                lastTokenCreate={workbench.lastTokenCreate}
+                lastMetaplexMint={workbench.lastMetaplexMint}
+                onCreateToken={workbench.createToken}
+                onMintMetaplex={workbench.mintMetaplex}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "wallet" ? (
-            <SolanaWalletPanel
-              cluster={selectedKind}
-              busy={workbench.walletBusy}
-              descriptors={workbench.walletDescriptors}
-              lastScaffold={workbench.lastWalletScaffold}
-              onGenerate={workbench.generateWalletScaffold}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "wallet" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "wallet"} tabId="wallet">
+              <LazySolanaWalletPanel
+                cluster={selectedKind}
+                busy={workbench.walletBusy}
+                descriptors={workbench.walletDescriptors}
+                lastScaffold={workbench.lastWalletScaffold}
+                onGenerate={workbench.generateWalletScaffold}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "safety" ? (
-            <SolanaSafetyPanel
-              busy={workbench.safetyBusy}
-              lastSecretScan={workbench.lastSecretScan}
-              lastScopeCheck={workbench.lastScopeCheck}
-              lastDrift={workbench.lastClusterDrift}
-              lastCost={workbench.lastCostSnapshot}
-              trackedPrograms={workbench.trackedPrograms}
-              onScanSecrets={workbench.scanSecrets}
-              onRunScopeCheck={workbench.runScopeCheck}
-              onCheckDrift={() => workbench.checkClusterDrift()}
-              onRefreshCost={() => workbench.refreshCostSnapshot()}
-              onResetCost={workbench.resetCostLedger}
-            />
-          ) : null}
+          <Suspense fallback={activeTab === "safety" ? <SolanaPanelFallback /> : null}>
+            <SolanaPanelSlot active={activeTab === "safety"} tabId="safety">
+              <LazySolanaSafetyPanel
+                busy={workbench.safetyBusy}
+                lastSecretScan={workbench.lastSecretScan}
+                lastScopeCheck={workbench.lastScopeCheck}
+                lastDrift={workbench.lastClusterDrift}
+                lastCost={workbench.lastCostSnapshot}
+                trackedPrograms={workbench.trackedPrograms}
+                onScanSecrets={workbench.scanSecrets}
+                onRunScopeCheck={workbench.runScopeCheck}
+                onCheckDrift={() => workbench.checkClusterDrift()}
+                onRefreshCost={() => workbench.refreshCostSnapshot()}
+                onResetCost={workbench.resetCostLedger}
+              />
+            </SolanaPanelSlot>
+          </Suspense>
 
-          {activeTab === "rpc" ? (
+          <SolanaPanelSlot active={activeTab === "rpc"} tabId="rpc">
             <RpcEndpoints
               active={activeTab === "rpc"}
               onRefresh={() => workbench.refreshRpcHealth()}
               rpcHealth={workbench.rpcHealth}
             />
-          ) : null}
+          </SolanaPanelSlot>
         </div>
         </div>
-      </div>
       </div>
       </div>
     </aside>

@@ -1,5 +1,6 @@
 
 import { z } from 'zod'
+import { estimateUtf16Bytes } from '@/lib/byte-budget-cache'
 import {
   isoTimestampSchema,
   nonEmptyOptionalTextSchema,
@@ -431,7 +432,9 @@ function capRuntimeTimelineItems(
   transcriptItems: RuntimeStreamTranscriptItemView[],
   nextItem: RuntimeStreamViewItem,
 ): RuntimeStreamViewItem[] {
-  let nonTranscriptItems: RuntimeStreamViewItem[] = currentItems.filter((item) => item.kind !== 'transcript')
+  let nonTranscriptItems: RuntimeStreamViewItem[] = currentItems.filter(
+    (item) => item.kind !== 'transcript',
+  )
 
   if (nextItem.kind === 'tool') {
     nonTranscriptItems = [
@@ -995,4 +998,144 @@ export function getRuntimeStreamStatusLabel(status: RuntimeStreamStatus): string
     case 'error':
       return 'Stream failed'
   }
+}
+
+function estimateOptionalTextBytes(value: string | null | undefined): number {
+  return value ? estimateUtf16Bytes(value) : 0
+}
+
+function estimateRuntimeStreamItemBytes(item: RuntimeStreamViewItem): number {
+  let bytes = 96
+  bytes += estimateUtf16Bytes(item.id)
+  bytes += estimateUtf16Bytes(item.runId)
+  bytes += estimateUtf16Bytes(item.createdAt)
+  bytes += estimateUtf16Bytes(item.kind)
+
+  switch (item.kind) {
+    case 'transcript':
+      bytes += estimateUtf16Bytes(item.text)
+      bytes += estimateUtf16Bytes(item.role)
+      return bytes
+    case 'tool':
+      bytes += estimateUtf16Bytes(item.toolCallId)
+      bytes += estimateUtf16Bytes(item.toolName)
+      bytes += estimateUtf16Bytes(item.toolState)
+      bytes += estimateOptionalTextBytes(item.detail)
+      if (item.toolSummary) {
+        bytes += estimateUtf16Bytes(item.toolSummary.kind)
+        switch (item.toolSummary.kind) {
+          case 'file':
+            bytes += estimateOptionalTextBytes(item.toolSummary.path)
+            bytes += estimateOptionalTextBytes(item.toolSummary.scope)
+            break
+          case 'git':
+            bytes += estimateOptionalTextBytes(item.toolSummary.scope)
+            bytes += estimateOptionalTextBytes(item.toolSummary.baseRevision)
+            break
+          case 'web':
+            bytes += estimateUtf16Bytes(item.toolSummary.target)
+            bytes += estimateOptionalTextBytes(item.toolSummary.finalUrl)
+            bytes += estimateOptionalTextBytes(item.toolSummary.contentKind)
+            bytes += estimateOptionalTextBytes(item.toolSummary.contentType)
+            break
+          case 'browser_computer_use':
+            bytes += estimateUtf16Bytes(item.toolSummary.surface)
+            bytes += estimateUtf16Bytes(item.toolSummary.action)
+            bytes += estimateUtf16Bytes(item.toolSummary.status)
+            bytes += estimateOptionalTextBytes(item.toolSummary.target)
+            bytes += estimateOptionalTextBytes(item.toolSummary.outcome)
+            break
+          case 'mcp_capability':
+            bytes += estimateUtf16Bytes(item.toolSummary.serverId)
+            bytes += estimateUtf16Bytes(item.toolSummary.capabilityKind)
+            bytes += estimateUtf16Bytes(item.toolSummary.capabilityId)
+            bytes += estimateOptionalTextBytes(item.toolSummary.capabilityName)
+            break
+          case 'command':
+            break
+        }
+      }
+      return bytes
+    case 'skill':
+      bytes += estimateUtf16Bytes(item.skillId)
+      bytes += estimateUtf16Bytes(item.stage)
+      bytes += estimateUtf16Bytes(item.result)
+      bytes += estimateUtf16Bytes(item.detail)
+      bytes += estimateUtf16Bytes(item.source.repo)
+      bytes += estimateUtf16Bytes(item.source.path)
+      bytes += estimateUtf16Bytes(item.source.reference)
+      bytes += estimateUtf16Bytes(item.source.treeHash)
+      bytes += estimateOptionalTextBytes(item.cacheStatus)
+      if (item.diagnostic) {
+        bytes += estimateUtf16Bytes(item.diagnostic.code)
+        bytes += estimateUtf16Bytes(item.diagnostic.message)
+      }
+      return bytes
+    case 'activity':
+      bytes += estimateUtf16Bytes(item.code)
+      bytes += estimateUtf16Bytes(item.title)
+      bytes += estimateOptionalTextBytes(item.text)
+      bytes += estimateOptionalTextBytes(item.detail)
+      return bytes
+    case 'action_required':
+      bytes += estimateUtf16Bytes(item.actionId)
+      bytes += estimateOptionalTextBytes(item.boundaryId)
+      bytes += estimateUtf16Bytes(item.actionType)
+      bytes += estimateUtf16Bytes(item.title)
+      bytes += estimateUtf16Bytes(item.detail)
+      return bytes
+    case 'complete':
+      bytes += estimateUtf16Bytes(item.detail)
+      return bytes
+    case 'failure':
+      bytes += estimateUtf16Bytes(item.code)
+      bytes += estimateUtf16Bytes(item.message)
+      return bytes
+  }
+}
+
+function estimateRuntimeStreamItemsBytes(items: readonly RuntimeStreamViewItem[]): number {
+  const seenIds = new Set<string>()
+  let bytes = 0
+  for (const item of items) {
+    if (seenIds.has(item.id)) continue
+    seenIds.add(item.id)
+    bytes += estimateRuntimeStreamItemBytes(item)
+  }
+  return bytes
+}
+
+export function estimateRuntimeStreamViewBytes(stream: RuntimeStreamView | null | undefined): number {
+  if (!stream) {
+    return 0
+  }
+
+  let bytes = 192
+  bytes += estimateUtf16Bytes(stream.projectId)
+  bytes += estimateUtf16Bytes(stream.agentSessionId)
+  bytes += estimateUtf16Bytes(stream.runtimeKind)
+  bytes += estimateOptionalTextBytes(stream.runId)
+  bytes += estimateOptionalTextBytes(stream.sessionId)
+  bytes += estimateOptionalTextBytes(stream.flowId)
+  bytes += estimateUtf16Bytes(stream.status)
+  bytes += estimateOptionalTextBytes(stream.lastItemAt)
+  for (const kind of stream.subscribedItemKinds) {
+    bytes += estimateUtf16Bytes(kind)
+  }
+  if (stream.lastIssue) {
+    bytes += estimateUtf16Bytes(stream.lastIssue.code)
+    bytes += estimateUtf16Bytes(stream.lastIssue.message)
+    bytes += estimateUtf16Bytes(stream.lastIssue.observedAt)
+  }
+  bytes += estimateRuntimeStreamItemsBytes([
+    ...stream.items,
+    ...stream.transcriptItems,
+    ...stream.toolCalls,
+    ...stream.skillItems,
+    ...stream.activityItems,
+    ...stream.actionRequired,
+    ...(stream.completion ? [stream.completion] : []),
+    ...(stream.failure ? [stream.failure] : []),
+  ])
+  return bytes
 }
