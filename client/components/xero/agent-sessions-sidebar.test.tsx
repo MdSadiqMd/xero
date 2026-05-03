@@ -108,17 +108,58 @@ describe('AgentSessionsSidebar', () => {
     expect(onSelectSession).toHaveBeenCalledWith('agent-session-alt')
   })
 
-  it('allows archiving the only active session', async () => {
+  it('requires inline confirmation before archiving the only active session from the card', () => {
+    const onArchiveSession = vi.fn()
+    const onSelectSession = vi.fn()
+    renderSidebar({ onArchiveSession, onSelectSession })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Main session' }))
+
+    expect(onArchiveSession).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Confirm archive Main session' })).toHaveTextContent('Archive')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive Main session' }))
+
+    expect(onArchiveSession).toHaveBeenCalledWith('agent-session-main')
+    expect(onSelectSession).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Session actions for Main session' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Rename')).not.toBeInTheDocument()
+  })
+
+  it('clears archive confirmation when the cursor leaves the archive button', () => {
     const onArchiveSession = vi.fn()
     renderSidebar({ onArchiveSession })
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Session actions for Main session' }), {
-      button: 0,
-      ctrlKey: false,
-    })
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Main session' }))
+    const confirmButton = screen.getByRole('button', { name: 'Confirm archive Main session' })
 
-    expect(onArchiveSession).toHaveBeenCalledWith('agent-session-main')
+    fireEvent.pointerLeave(confirmButton)
+
+    expect(screen.queryByRole('button', { name: 'Confirm archive Main session' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive Main session' }))
+
+    expect(onArchiveSession).not.toHaveBeenCalled()
+  })
+
+  it('pins and unpins a session from the card without selecting it', () => {
+    const onSelectSession = vi.fn()
+    renderSidebar({ onSelectSession })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin Main session' }))
+
+    expect(onSelectSession).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem('xero:pinned-sessions:project-1')).toBe(
+      JSON.stringify(['agent-session-main']),
+    )
+    expect(screen.getByText('Pinned')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin Main session' }))
+
+    expect(onSelectSession).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem('xero:pinned-sessions:project-1')).toBe(
+      JSON.stringify([]),
+    )
   })
 
   it('keeps the resize control hidden while collapsed', () => {
@@ -154,6 +195,33 @@ describe('AgentSessionsSidebar', () => {
 
     expect(onRequestPeek).toHaveBeenCalledTimes(1)
     expect(onReleasePeek).toHaveBeenCalledTimes(1)
+  })
+
+  it('snaps the sessions strip closed while animating a compositor collapse ghost', () => {
+    const props: ComponentProps<typeof AgentSessionsSidebar> = {
+      projectId: 'project-1',
+      sessions,
+      selectedSessionId: 'agent-session-main',
+      onSelectSession: vi.fn(),
+      onCreateSession: vi.fn(),
+      onArchiveSession: vi.fn(),
+      onOpenArchivedSessions: vi.fn(),
+    }
+    const { container, rerender } = render(<AgentSessionsSidebar {...props} />)
+
+    rerender(
+      <AgentSessionsSidebar
+        {...props}
+        collapsed
+        mode="collapsed"
+        onPin={vi.fn()}
+      />,
+    )
+
+    const sidebar = container.querySelector('aside') as HTMLElement
+    expect(sidebar.style.width).toBe('6px')
+    expect(sidebar.style.transition).toBe('none')
+    expect(container.querySelector('[data-session-collapse-ghost="true"]')).toBeInTheDocument()
   })
 
   it('expands the collapsed sessions strip when the chevron is pressed without requesting peek', () => {
@@ -203,36 +271,6 @@ describe('AgentSessionsSidebar', () => {
 
     expect(onRequestPeek).toHaveBeenCalled()
     expect(onReleasePeek).toHaveBeenCalled()
-  })
-
-  it('validates rename input and recovers after a failed rename', async () => {
-    const onRenameSession = vi
-      .fn<NonNullable<ComponentProps<typeof AgentSessionsSidebar>['onRenameSession']>>()
-      .mockRejectedValueOnce(new Error('Session name already exists.'))
-      .mockResolvedValueOnce(undefined)
-
-    renderSidebar({ onRenameSession })
-
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Session actions for Main session' }), {
-      button: 0,
-      ctrlKey: false,
-    })
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }))
-
-    const input = screen.getByRole('textbox', { name: 'Name' })
-    fireEvent.change(input, { target: { value: '   ' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
-    expect(await screen.findByText('Enter a session name.')).toBeVisible()
-    expect(onRenameSession).not.toHaveBeenCalled()
-
-    fireEvent.change(input, { target: { value: 'Investigation notes' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
-    expect(await screen.findByText('Session name already exists.')).toBeVisible()
-    expect(onRenameSession).toHaveBeenCalledWith('agent-session-main', 'Investigation notes')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Rename' }))
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    expect(onRenameSession).toHaveBeenCalledTimes(2)
   })
 
   it('debounces transcript search and opens the selected result', async () => {

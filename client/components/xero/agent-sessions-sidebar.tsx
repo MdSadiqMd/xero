@@ -4,9 +4,11 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type FocusEvent,
   type KeyboardEvent,
   type PointerEvent,
 } from 'react'
@@ -16,35 +18,17 @@ import {
   FileText,
   Loader2,
   MessageSquare,
-  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
-  Pencil,
   Pin,
   PinOff,
   Plus,
   Search,
-  Trash2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createFrameCoalescer } from '@/lib/frame-governance'
 import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Toggle } from '@/components/ui/toggle'
 import type { AgentSessionView } from '@/src/lib/xero-model'
@@ -58,7 +42,6 @@ interface AgentSessionsSidebarProps {
   onCreateSession: () => void
   onArchiveSession: (agentSessionId: string) => void
   onOpenArchivedSessions: () => void
-  onRenameSession?: (agentSessionId: string, title: string) => Promise<void> | void
   onSearchSessions?: (query: string) => Promise<SessionTranscriptSearchResultSnippetDto[]>
   onOpenSearchResult?: (result: SessionTranscriptSearchResultSnippetDto) => void
   pendingSessionId?: string | null
@@ -84,6 +67,8 @@ const MAX_WIDTH = 560
 const RIGHT_PADDING = 360
 const WIDTH_STORAGE_KEY = 'xero.agentSessions.width'
 const STRIP_WIDTH = 6
+const STRIP_COLLAPSE_GHOST_DURATION_MS = 110
+const STRIP_EXPAND_DURATION_MS = 140
 
 export function readPinnedSessionIds(projectId: string | null): Set<string> {
   if (!projectId || typeof window === 'undefined') return new Set()
@@ -156,7 +141,6 @@ export function AgentSessionsSidebar({
   onCreateSession,
   onArchiveSession,
   onOpenArchivedSessions,
-  onRenameSession,
   onSearchSessions,
   onOpenSearchResult,
   pendingSessionId,
@@ -186,22 +170,55 @@ export function AgentSessionsSidebar({
   const [searchResults, setSearchResults] = useState<SessionTranscriptSearchResultSnippetDto[]>([])
   const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [searchError, setSearchError] = useState<string | null>(null)
-  const [renameSession, setRenameSession] = useState<AgentSessionView | null>(null)
-  const [renameTitle, setRenameTitle] = useState('')
-  const [renameError, setRenameError] = useState<string | null>(null)
-  const [pendingRename, setPendingRename] = useState(false)
   const [optimisticSessionId, setOptimisticSessionId] = useState<string | null>(null)
+  const [collapseGhostActive, setCollapseGhostActive] = useState(false)
   const targetWidth = isStripMode ? STRIP_WIDTH : collapsed ? 0 : width
   const displayedSelectedSessionId = optimisticSessionId ?? selectedSessionId
-  const widthMotion = useSidebarWidthMotion(targetWidth, { isResizing })
+  const widthMotion = useSidebarWidthMotion(targetWidth, {
+    durationMs: STRIP_EXPAND_DURATION_MS,
+    isResizing,
+  })
   const islandClassName = isStripMode ? 'sidebar-peek-island' : widthMotion.islandClassName
+  const sidebarStyle = isStripMode
+    ? { ...widthMotion.style, transition: 'none' }
+    : widthMotion.style
   const widthRef = useRef(width)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const wasStripModeRef = useRef(isStripMode)
+  const collapseGhostTimerRef = useRef<number | null>(null)
   widthRef.current = width
+
+  const clearCollapseGhostTimer = useCallback(() => {
+    if (collapseGhostTimerRef.current === null) return
+    window.clearTimeout(collapseGhostTimerRef.current)
+    collapseGhostTimerRef.current = null
+  }, [])
 
   useEffect(() => {
     setPinnedIds(readPinnedSessionIds(projectId))
   }, [projectId])
+
+  useLayoutEffect(() => {
+    const wasStripMode = wasStripModeRef.current
+    wasStripModeRef.current = isStripMode
+
+    clearCollapseGhostTimer()
+
+    if (!wasStripMode && isStripMode) {
+      setCollapseGhostActive(true)
+      collapseGhostTimerRef.current = window.setTimeout(() => {
+        collapseGhostTimerRef.current = null
+        setCollapseGhostActive(false)
+      }, STRIP_COLLAPSE_GHOST_DURATION_MS)
+      return
+    }
+
+    if (!isStripMode) {
+      setCollapseGhostActive(false)
+    }
+  }, [clearCollapseGhostTimer, isStripMode])
+
+  useEffect(() => clearCollapseGhostTimer, [clearCollapseGhostTimer])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -359,32 +376,6 @@ export function AgentSessionsSidebar({
     [projectId],
   )
 
-  const handleOpenRename = useCallback((session: AgentSessionView) => {
-    setRenameSession(session)
-    setRenameTitle(session.title)
-    setRenameError(null)
-  }, [])
-
-  const handleRenameSubmit = useCallback(async () => {
-    if (!renameSession || !onRenameSession) return
-    const title = renameTitle.trim()
-    if (title.length === 0) {
-      setRenameError('Enter a session name.')
-      return
-    }
-
-    setPendingRename(true)
-    setRenameError(null)
-    try {
-      await onRenameSession(renameSession.agentSessionId, title)
-      setRenameSession(null)
-    } catch (error) {
-      setRenameError(error instanceof Error ? error.message : 'Xero could not rename this session.')
-    } finally {
-      setPendingRename(false)
-    }
-  }, [onRenameSession, renameSession, renameTitle])
-
   const isFirstSyncRef = useRef(true)
   const lastProjectIdRef = useRef(projectId)
   const [entries, setEntries] = useState<SessionEntry[]>(() =>
@@ -488,7 +479,6 @@ export function AgentSessionsSidebar({
         onPreviewSession={handlePreviewSession}
         onArchiveSession={onArchiveSession}
         onTogglePin={togglePinSession}
-        onRenameSession={onRenameSession ? handleOpenRename : undefined}
         canArchive={entry.state !== 'exiting'}
         paneNumber={sessionPaneAssignments?.[entry.session.agentSessionId] ?? null}
       />
@@ -672,50 +662,6 @@ export function AgentSessionsSidebar({
     </>
   )
 
-  const renameDialog = (
-    <Dialog open={renameSession !== null} onOpenChange={(open) => !open && setRenameSession(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Rename session</DialogTitle>
-            <DialogDescription>Change the session name shown in the project sidebar.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="agent-session-rename">
-              Name
-            </label>
-            <Input
-              id="agent-session-rename"
-              value={renameTitle}
-              onChange={(event) => setRenameTitle(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  void handleRenameSubmit()
-                }
-              }}
-              disabled={pendingRename}
-              autoFocus
-            />
-            {renameError ? <p className="text-xs text-destructive">{renameError}</p> : null}
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pendingRename}
-              onClick={() => setRenameSession(null)}
-            >
-              Cancel
-            </Button>
-            <Button type="button" disabled={pendingRename} onClick={() => void handleRenameSubmit()}>
-              {pendingRename ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              Rename
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-  )
-
   return (
     <aside
       aria-hidden={!isStripMode && !showOverlay && collapsed}
@@ -727,7 +673,7 @@ export function AgentSessionsSidebar({
         isStripMode && 'z-40',
       )}
       inert={!isStripMode && !showOverlay && collapsed ? true : undefined}
-      style={widthMotion.style}
+      style={sidebarStyle}
     >
       {!collapsed ? (
         <div
@@ -812,13 +758,27 @@ export function AgentSessionsSidebar({
         </div>
       ) : null}
 
+      {collapseGhostActive && isStripMode && !showOverlay ? (
+        <div
+          aria-hidden="true"
+          className="sessions-collapse-ghost pointer-events-none absolute inset-y-0 left-0 z-30 flex flex-col border-r border-border bg-sidebar shadow-2xl"
+          data-session-collapse-ghost="true"
+          inert
+          style={{
+            animationDuration: `${STRIP_COLLAPSE_GHOST_DURATION_MS}ms`,
+            width,
+          }}
+        >
+          {panelChildren}
+        </div>
+      ) : null}
+
       {!isStripMode ? (
         <div className="flex h-full shrink-0 flex-col" style={{ width }}>
           {panelChildren}
         </div>
       ) : null}
 
-      {renameDialog}
     </aside>
   )
 }
@@ -841,7 +801,6 @@ export interface AgentSessionsSidebarItemProps {
   onPreviewSession?: (agentSessionId: string) => void
   onArchiveSession: (agentSessionId: string) => void
   onTogglePin: (agentSessionId: string) => void
-  onRenameSession?: (session: AgentSessionView) => void
   compact?: 'icon' | 'list' | 'full'
   /** Pane number (1-based) when this session is loaded in a non-focused pane. */
   paneNumber?: number | null
@@ -857,15 +816,25 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
   onPreviewSession,
   onArchiveSession,
   onTogglePin,
-  onRenameSession,
   compact = 'full',
   paneNumber = null,
 }: AgentSessionsSidebarItemProps) {
+  const [archiveConfirmationActive, setArchiveConfirmationActive] = useState(false)
   const handlePointerDown = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     if (event.button === 0) {
       onPreviewSession?.(session.agentSessionId)
     }
   }, [onPreviewSession, session.agentSessionId])
+
+  useEffect(() => {
+    setArchiveConfirmationActive(false)
+  }, [session.agentSessionId])
+
+  useEffect(() => {
+    if (isPending || !canArchive) {
+      setArchiveConfirmationActive(false)
+    }
+  }, [canArchive, isPending])
 
   if (compact === 'icon') {
     return (
@@ -945,18 +914,34 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
     )
   }
 
+  const pinActionLabel = isPinned ? `Unpin ${session.title}` : `Pin ${session.title}`
+  const isArchiveConfirming = archiveConfirmationActive && canArchive && !isPending
+  const archiveActionLabel = isArchiveConfirming
+    ? `Confirm archive ${session.title}`
+    : `Archive ${session.title}`
+  const archiveActionTitle = isArchiveConfirming
+    ? `Press again to archive ${session.title}`
+    : `Archive ${session.title}`
+  const clearArchiveConfirmation = () => setArchiveConfirmationActive(false)
+  const stopActionPreview = (event: PointerEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+  }
+
   return (
     <div className="group relative">
       <button
+        aria-label={session.title}
         className={cn(
-          'flex w-full items-center rounded-md px-3 py-2 text-left transition-colors',
+          'flex w-full items-center rounded-md px-3 py-2 pr-[72px] text-left transition-colors',
+          isArchiveConfirming && 'pr-[112px]',
           isActive ? 'bg-primary/[0.08]' : 'hover:bg-secondary/50',
         )}
         onClick={() => onSelectSession(session.agentSessionId)}
         onPointerDown={handlePointerDown}
+        title={session.title}
         type="button"
       >
-        <div className="flex min-w-0 flex-1 items-center gap-1 pr-6">
+        <div className="flex min-w-0 flex-1 items-center gap-1">
           <span
             className={cn(
               'truncate text-[12.5px] font-medium leading-tight',
@@ -982,74 +967,84 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
         </div>
       </button>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            aria-label={`Session actions for ${session.title}`}
+      <div
+        className={cn(
+          'absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5',
+          'transition-opacity duration-150',
+          isActive || isPending
+            ? 'opacity-100'
+            : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
+        )}
+      >
+        <Button
+          aria-label={pinActionLabel}
+          className="h-6 w-6 p-0 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          disabled={isPending}
+          onClick={(event) => {
+            event.stopPropagation()
+            onTogglePin(session.agentSessionId)
+          }}
+          onPointerDown={stopActionPreview}
+          size="icon-sm"
+          title={pinActionLabel}
+          type="button"
+          variant="ghost"
+        >
+          {isPinned ? (
+            <PinOff className="h-3.5 w-3.5" />
+          ) : (
+            <Pin className="h-3.5 w-3.5" />
+          )}
+        </Button>
+        {canArchive ? (
+          <Button
+            aria-label={archiveActionLabel}
             className={cn(
-              'absolute right-1 top-1/2 z-10 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors',
-              'hover:bg-secondary hover:text-foreground disabled:opacity-50',
-              isActive || isPending
-                ? 'opacity-100'
-                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+              'h-6 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive',
+              isArchiveConfirming
+                ? 'w-auto min-w-[58px] bg-destructive/10 px-2 text-[11px] font-semibold text-destructive hover:bg-destructive/15'
+                : 'w-6',
             )}
             disabled={isPending}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (isArchiveConfirming) {
+                setArchiveConfirmationActive(false)
+                onArchiveSession(session.agentSessionId)
+                return
+              }
+              setArchiveConfirmationActive(true)
+            }}
+            onBlur={(event: FocusEvent<HTMLButtonElement>) => {
+              const nextFocused = event.relatedTarget
+              if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
+                return
+              }
+              clearArchiveConfirmation()
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                clearArchiveConfirmation()
+              }
+            }}
+            onPointerDown={stopActionPreview}
+            onPointerLeave={clearArchiveConfirmation}
+            size="icon-sm"
+            title={archiveActionTitle}
             type="button"
+            variant="ghost"
           >
             {isPending ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : isArchiveConfirming ? (
+              <span>Archive</span>
             ) : (
-              <MoreHorizontal className="h-3.5 w-3.5" />
+              <Archive className="h-3.5 w-3.5" />
             )}
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            onSelect={(event) => {
-              event.preventDefault()
-              onTogglePin(session.agentSessionId)
-            }}
-          >
-            {isPinned ? (
-              <>
-                <PinOff className="h-4 w-4" />
-                Unpin
-              </>
-            ) : (
-              <>
-                <Pin className="h-4 w-4" />
-                Pin
-              </>
-            )}
-          </DropdownMenuItem>
-          {onRenameSession ? (
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault()
-                onRenameSession(session)
-              }}
-            >
-              <Pencil className="h-4 w-4" />
-              Rename
-            </DropdownMenuItem>
-          ) : null}
-          {canArchive ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault()
-                  onArchiveSession(session.agentSessionId)
-                }}
-                variant="destructive"
-              >
-                <Trash2 className="h-4 w-4" />
-                Archive
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+          </Button>
+        ) : null}
+      </div>
     </div>
   )
 })

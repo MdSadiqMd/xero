@@ -1710,7 +1710,17 @@ function createMockAdapter(options?: {
       children: [],
     },
   }))
-  const readProjectFile = vi.fn(async (projectId: string, path: string) => ({ projectId, path, content: '' }))
+  const readProjectFile = vi.fn(async (projectId: string, path: string) => ({
+    kind: 'text' as const,
+    projectId,
+    path,
+    byteLength: 0,
+    modifiedAt: '2026-01-01T00:00:00Z',
+    contentHash: `test-${path}`,
+    mimeType: 'text/plain; charset=utf-8',
+    rendererKind: 'code' as const,
+    text: '',
+  }))
   const writeProjectFile = vi.fn(async (projectId: string, path: string) => ({ projectId, path }))
   const createProjectEntry = vi.fn(async (request) => ({
     projectId: request.projectId,
@@ -3273,10 +3283,13 @@ describe('useXeroDesktopState', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Spawn pane' }))
     await waitFor(() => expect(screen.getByTestId('workspace-pane-session-ids')).toHaveTextContent('agent-session-main,agent-session-2'))
 
+    const snapshotCallsBeforeArchive = setup.getProjectSnapshot.mock.calls.length
     fireEvent.click(screen.getByRole('button', { name: 'Archive second pane session' }))
 
     await waitFor(() => expect(screen.getByTestId('workspace-pane-count')).toHaveTextContent('2'))
     expect(screen.getByTestId('workspace-pane-session-ids')).toHaveTextContent('agent-session-main,empty')
+    expect(screen.getByTestId('project-loading')).toHaveTextContent('false')
+    expect(setup.getProjectSnapshot).toHaveBeenCalledTimes(snapshotCallsBeforeArchive)
 
     fireEvent.click(screen.getByRole('button', { name: 'Spawn pane' }))
 

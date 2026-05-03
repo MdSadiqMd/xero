@@ -1,6 +1,6 @@
 "use client"
 
-import { lazy, memo, Suspense, useCallback, useMemo, useState, type ReactNode } from 'react'
+import { lazy, memo, Suspense, useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { PaneGrid, type PaneGridSlot } from '@/components/xero/agent-runtime/pane-grid'
 import type { AgentPaneCloseState, AgentRuntimeProps } from '@/components/xero/agent-runtime'
@@ -49,6 +49,30 @@ function getPaneAriaLabel(pane: AgentWorkspacePaneView, paneNumber: number): str
   }
 
   return `Agent pane ${paneNumber} - Empty session`
+}
+
+function shallowEqualRecords<T extends object>(left: T, right: T): boolean {
+  if (left === right) {
+    return true
+  }
+
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) {
+    return false
+  }
+
+  return leftKeys.every((key) =>
+    Object.is(left[key as keyof T], right[key as keyof T]),
+  )
+}
+
+function useShallowStableRecord<T extends object>(value: T): T {
+  const ref = useRef(value)
+  if (!shallowEqualRecords(ref.current, value)) {
+    ref.current = value
+  }
+  return ref.current
 }
 
 function useAgentViewWithLiveRuntimeStream(
@@ -210,7 +234,7 @@ const LiveAgentRuntime = memo(function LiveAgentRuntime({
   )
 })
 
-export function AgentWorkspace({
+export const AgentWorkspace = memo(function AgentWorkspace({
   layout,
   panes,
   highChurnStore,
@@ -237,6 +261,7 @@ export function AgentWorkspace({
   onUpsertNotificationRoute,
   ...runtimeProps
 }: AgentWorkspaceProps) {
+  const stableRuntimeProps = useShallowStableRecord(runtimeProps)
   const paneCount = panes.length
   const focusedPaneId = layout?.focusedPaneId ?? panes[0]?.paneId ?? null
   const density: 'comfortable' | 'compact' =
@@ -270,45 +295,76 @@ export function AgentWorkspace({
     return <>{fallback}</>
   }
 
-  const renderPane = (slot: PaneGridSlot, index: number) => {
-    const pane = panes[index]
-    if (!pane || pane.paneId !== slot.paneId) {
-      return null
-    }
-    return (
-      <PaneRuntime
-        pane={pane}
-        index={index}
-        paneCount={paneCount}
-        density={density}
-        isFocused={slot.isFocused}
-        spawnPaneDisabled={spawnPaneDisabled}
-        showCompactFirstRunTooltip={showCompactFirstRunTooltip && slot.isFocused}
-        onAckCompactFirstRunTooltip={ackCompactFirstRunTooltip}
-        onSpawnPane={onSpawnPane}
-        onClosePane={onClosePane}
-        onFocusPane={onFocusPane}
-        onPaneCloseStateChange={onPaneCloseStateChange}
-        runtimeProps={runtimeProps}
-        highChurnStore={highChurnStore}
-        onStartAutonomousRun={onStartAutonomousRun}
-        onInspectAutonomousRun={onInspectAutonomousRun}
-        onCancelAutonomousRun={onCancelAutonomousRun}
-        onStartLogin={onStartLogin}
-        onStartRuntimeRun={onStartRuntimeRun}
-        onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
-        onComposerControlsChange={onComposerControlsChange}
-        onStartRuntimeSession={onStartRuntimeSession}
-        onStopRuntimeRun={onStopRuntimeRun}
-        onSubmitManualCallback={onSubmitManualCallback}
-        onLogout={onLogout}
-        onResolveOperatorAction={onResolveOperatorAction}
-        onResumeOperatorRun={onResumeOperatorRun}
-        onRefreshNotificationRoutes={onRefreshNotificationRoutes}
-        onUpsertNotificationRoute={onUpsertNotificationRoute}
-      />
-    )
-  }
+  const renderPane = useCallback(
+    (slot: PaneGridSlot, index: number) => {
+      const pane = panes[index]
+      if (!pane || pane.paneId !== slot.paneId) {
+        return null
+      }
+      return (
+        <PaneRuntime
+          pane={pane}
+          index={index}
+          paneCount={paneCount}
+          density={density}
+          isFocused={slot.isFocused}
+          spawnPaneDisabled={spawnPaneDisabled}
+          showCompactFirstRunTooltip={showCompactFirstRunTooltip && slot.isFocused}
+          onAckCompactFirstRunTooltip={ackCompactFirstRunTooltip}
+          onSpawnPane={onSpawnPane}
+          onClosePane={onClosePane}
+          onFocusPane={onFocusPane}
+          onPaneCloseStateChange={onPaneCloseStateChange}
+          runtimeProps={stableRuntimeProps}
+          highChurnStore={highChurnStore}
+          onStartAutonomousRun={onStartAutonomousRun}
+          onInspectAutonomousRun={onInspectAutonomousRun}
+          onCancelAutonomousRun={onCancelAutonomousRun}
+          onStartLogin={onStartLogin}
+          onStartRuntimeRun={onStartRuntimeRun}
+          onUpdateRuntimeRunControls={onUpdateRuntimeRunControls}
+          onComposerControlsChange={onComposerControlsChange}
+          onStartRuntimeSession={onStartRuntimeSession}
+          onStopRuntimeRun={onStopRuntimeRun}
+          onSubmitManualCallback={onSubmitManualCallback}
+          onLogout={onLogout}
+          onResolveOperatorAction={onResolveOperatorAction}
+          onResumeOperatorRun={onResumeOperatorRun}
+          onRefreshNotificationRoutes={onRefreshNotificationRoutes}
+          onUpsertNotificationRoute={onUpsertNotificationRoute}
+        />
+      )
+    },
+    [
+      ackCompactFirstRunTooltip,
+      density,
+      highChurnStore,
+      onCancelAutonomousRun,
+      onClosePane,
+      onComposerControlsChange,
+      onFocusPane,
+      onInspectAutonomousRun,
+      onLogout,
+      onPaneCloseStateChange,
+      onRefreshNotificationRoutes,
+      onResolveOperatorAction,
+      onResumeOperatorRun,
+      onSpawnPane,
+      onStartAutonomousRun,
+      onStartLogin,
+      onStartRuntimeRun,
+      onStartRuntimeSession,
+      onStopRuntimeRun,
+      onSubmitManualCallback,
+      onUpdateRuntimeRunControls,
+      onUpsertNotificationRoute,
+      paneCount,
+      panes,
+      showCompactFirstRunTooltip,
+      spawnPaneDisabled,
+      stableRuntimeProps,
+    ],
+  )
 
   return (
     <PaneGrid
@@ -319,7 +375,7 @@ export function AgentWorkspace({
       renderPane={renderPane}
     />
   )
-}
+})
 
 interface PaneRuntimeWrapperProps extends PaneAwareRuntimeHandlers {
   pane: AgentWorkspacePaneView
@@ -512,6 +568,7 @@ const PaneRuntime = memo(function PaneRuntime({
       paneId={paneId}
       paneNumber={index + 1}
       paneCount={paneCount}
+      isPaneFocused={isFocused}
       onSpawnPane={onSpawnPane}
       spawnPaneDisabled={spawnPaneDisabled}
       onClosePane={handleClose}

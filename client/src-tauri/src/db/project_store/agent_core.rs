@@ -1525,9 +1525,8 @@ fn read_agent_messages(
         .map_err(|error| {
             map_agent_store_query_error(repo_root, "agent_messages_query_failed", error)
         })?;
-    let mut messages: Vec<AgentMessageRecord> = rows
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| {
+    let mut messages: Vec<AgentMessageRecord> =
+        rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
             map_agent_store_query_error(repo_root, "agent_messages_decode_failed", error)
         })?;
     if messages.is_empty() {
@@ -1574,11 +1573,7 @@ fn read_agent_messages(
     let attachments: Vec<AgentMessageAttachmentRecord> = attachment_rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
-            map_agent_store_query_error(
-                repo_root,
-                "agent_message_attachments_decode_failed",
-                error,
-            )
+            map_agent_store_query_error(repo_root, "agent_message_attachments_decode_failed", error)
         })?;
     let mut by_id: std::collections::HashMap<i64, Vec<AgentMessageAttachmentRecord>> =
         std::collections::HashMap::new();
@@ -1928,9 +1923,7 @@ pub fn agent_message_role_sql_value(role: &AgentMessageRole) -> &'static str {
     }
 }
 
-pub fn agent_message_attachment_kind_sql_value(
-    kind: &AgentMessageAttachmentKind,
-) -> &'static str {
+pub fn agent_message_attachment_kind_sql_value(kind: &AgentMessageAttachmentKind) -> &'static str {
     match kind {
         AgentMessageAttachmentKind::Image => "image",
         AgentMessageAttachmentKind::Document => "document",

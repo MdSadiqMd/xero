@@ -41,6 +41,7 @@ export function useAgentSessionMutations({
     loadProject,
     optimisticallySelectAgentSession,
     applyAgentSessionSelection,
+    applyAgentSessionUpdate,
     rollbackAgentSessionSelection,
     hydrateAgentSessionRuntimeState,
   } = operations
@@ -119,11 +120,11 @@ export function useAgentSessionMutations({
         'Select an imported project before archiving an agent session.',
       )
 
-      await adapter.archiveAgentSession({ projectId, agentSessionId })
-      await loadProject(projectId, 'selection')
+      const response = await adapter.archiveAgentSession({ projectId, agentSessionId })
+      applyAgentSessionUpdate(mapAgentSession(response))
       return activeProjectIdRef.current === projectId ? activeProjectRef.current : null
     },
-    [activeProjectIdRef, activeProjectRef, adapter, loadProject],
+    [activeProjectIdRef, activeProjectRef, adapter, applyAgentSessionUpdate],
   )
 
   const restoreAgentSession = useCallback(

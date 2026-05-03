@@ -1489,9 +1489,15 @@ function createAdapter(options?: {
     gitPush: async () => ({ remote: 'origin', branch: 'main', updates: [] }),
     listProjectFiles: async () => currentProjectFiles,
     readProjectFile: async (projectId, path) => ({
+      kind: 'text' as const,
       projectId,
       path,
-      content: currentFileContents[path] ?? '',
+      byteLength: (currentFileContents[path] ?? '').length,
+      modifiedAt: '2026-01-01T00:00:00Z',
+      contentHash: `test-${path}`,
+      mimeType: 'text/plain; charset=utf-8',
+      rendererKind: 'code' as const,
+      text: currentFileContents[path] ?? '',
     }),
     writeProjectFile: async (projectId, path, content) => {
       currentFileContents[path] = content
@@ -2304,6 +2310,45 @@ describe('XeroApp current UI', () => {
     })
 
     expect(await screen.findByRole('button', { name: 'Workflow' })).toBeVisible()
+  })
+
+  it('keeps the app shell visible while switching projects from the rail', async () => {
+    let resolveProjectTwo!: (value: ProjectSnapshotResponseDto) => void
+    const projectTwoSnapshotPromise = new Promise<ProjectSnapshotResponseDto>((resolve) => {
+      resolveProjectTwo = resolve
+    })
+    const { adapter } = createAdapter({
+      projects: [
+        makeProjectSummary('project-1', 'Xero'),
+        makeProjectSummary('project-2', 'Orchestra'),
+      ],
+    })
+    adapter.getProjectSnapshot = vi.fn(async (projectId: string) =>
+      projectId === 'project-2'
+        ? projectTwoSnapshotPromise
+        : makeSnapshot('project-1', 'Xero'),
+    )
+
+    render(<XeroApp adapter={adapter} />)
+
+    expect(await screen.findByRole('button', { name: 'Workflow' })).toBeVisible()
+    expect(screen.queryByRole('status', { name: 'Loading' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Orchestra').closest('button') as HTMLElement)
+
+    await waitFor(() => expect(adapter.getProjectSnapshot).toHaveBeenCalledWith('project-2'))
+    expect(screen.queryByRole('status', { name: 'Loading' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Workflow' })).toBeVisible()
+    expect(screen.getByText('Refreshing…')).toBeInTheDocument()
+
+    await act(async () => {
+      resolveProjectTwo(makeSnapshot('project-2', 'Orchestra'))
+      await projectTwoSnapshotPromise
+    })
+
+    await waitFor(() =>
+      expect(screen.queryByRole('status', { name: 'Loading' })).not.toBeInTheDocument(),
+    )
   })
 
 

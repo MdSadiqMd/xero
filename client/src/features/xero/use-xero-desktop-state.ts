@@ -1499,6 +1499,60 @@ export function useXeroDesktopState(
     return nextProject
   }, [])
 
+  const applyAgentSessionUpdate = useCallback(
+    (agentSession: AgentSessionView) => {
+      const currentProject = activeProjectRef.current
+      if (!currentProject || currentProject.id !== agentSession.projectId) {
+        return null
+      }
+
+      supersedeInFlightProjectLoad(agentSession.projectId)
+      setErrorMessage(null)
+
+      const previousSelectedSessionId = selectAgentSessionId(currentProject.agentSessions)
+      const nextProject = applyAgentSessionToProject(currentProject, agentSession)
+      const nextSelectedSessionId = selectAgentSessionId(nextProject.agentSessions)
+
+      activeProjectRef.current = nextProject
+      projectDetailsRef.current[nextProject.id] = nextProject
+      setActiveProject(nextProject)
+
+      if (nextSelectedSessionId === previousSelectedSessionId) {
+        return nextProject
+      }
+
+      setRefreshSource('selection')
+      setRuntimeRunActionError(null)
+      setPendingRuntimeRunAction(null)
+      setRuntimeRunActionStatus('idle')
+      setAutonomousRunActionError(null)
+      setPendingAutonomousRunAction(null)
+      setAutonomousRunActionStatus('idle')
+
+      const cacheKey = createAgentSessionStateKey(nextProject.id, nextSelectedSessionId)
+      const cachedRuntimeRun = hasOwnRecord(runtimeRunsBySessionRef.current, cacheKey)
+        ? runtimeRunsBySessionRef.current[cacheKey]
+        : null
+      const cachedAutonomousRun = hasOwnRecord(autonomousRunsBySessionRef.current, cacheKey)
+        ? autonomousRunsBySessionRef.current[cacheKey]
+        : null
+      const cachedRuntimeStream = runtimeStreamsBySessionRef.current[cacheKey] ?? null
+      const nextRuntimeStream =
+        cachedRuntimeStream && (!cachedRuntimeRun || cachedRuntimeStream.runId === cachedRuntimeRun.runId)
+          ? cachedRuntimeStream
+          : null
+
+      return applyAgentSessionRuntimeState(
+        nextProject.id,
+        nextSelectedSessionId,
+        cachedRuntimeRun ?? null,
+        cachedAutonomousRun ?? null,
+        nextRuntimeStream,
+      )
+    },
+    [applyAgentSessionRuntimeState, supersedeInFlightProjectLoad],
+  )
+
   const rollbackAgentSessionSelection = useCallback(
     (previousProject: ProjectDetailView | null) => {
       if (!previousProject || activeProjectIdRef.current !== previousProject.id) {
@@ -2420,6 +2474,7 @@ export function useXeroDesktopState(
       syncAutonomousRun,
       optimisticallySelectAgentSession,
       applyAgentSessionSelection,
+      applyAgentSessionUpdate,
       rollbackAgentSessionSelection,
       hydrateAgentSessionRuntimeState,
       applyRuntimeSessionUpdate,

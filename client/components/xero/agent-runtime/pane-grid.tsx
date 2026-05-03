@@ -171,7 +171,7 @@ const PaneShell = memo(function PaneShell({ slot, isSolo, onFocusPane, children 
         aria-label={slot.ariaLabel}
         data-pane-id={slot.paneId}
         data-pane-focused="true"
-        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
+        className="agent-pane-shell flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
       >
         {children}
       </div>
@@ -187,7 +187,7 @@ const PaneShell = memo(function PaneShell({ slot, isSolo, onFocusPane, children 
       onFocusCapture={handleFocusCapture}
       onMouseDown={handleMouseDown}
       className={cn(
-        'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background transition-[border-color,box-shadow] duration-200 ease-out',
+        'agent-pane-shell flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background transition-[border-color,box-shadow] duration-200 ease-out',
         slot.isFocused
           ? 'border-primary/40 shadow-[0_0_0_1px_hsl(var(--primary)/0.18)]'
           : 'border-border/60',

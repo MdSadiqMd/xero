@@ -638,6 +638,7 @@ mod tests {
     #[test]
     fn project_search_uses_same_ignore_rules_as_project_tree() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir(temp_dir.path().join(".git")).expect("git dir");
         fs::write(temp_dir.path().join(".gitignore"), "ignored.txt\n").expect("gitignore");
         fs::write(temp_dir.path().join("visible.txt"), "needle").expect("visible");
         fs::write(temp_dir.path().join("ignored.txt"), "needle").expect("ignored");

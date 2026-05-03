@@ -145,6 +145,8 @@ const EMPTY_ACTION_REQUIRED_ITEMS: NonNullable<AgentPaneView['actionRequiredItem
 const MAX_VISIBLE_RUNTIME_ACTION_TURNS = 16
 const COMPACT_TOOL_BURST_THRESHOLD = 5
 const CONVERSATION_NEAR_BOTTOM_THRESHOLD_PX = 96
+const BACKGROUND_PANE_STREAM_ITEM_LIMIT = 160
+const BACKGROUND_PANE_VISIBLE_TURN_LIMIT = 48
 
 export interface AgentPaneCloseState {
   hasRunningRun: boolean
@@ -473,6 +475,22 @@ function buildConversationTurns(runtimeStreamItems: RuntimeStreamViewItem[]): Co
   return limitActionTurns(compactActionBursts(turns))
 }
 
+function sliceBackgroundPaneStreamItems(
+  runtimeStreamItems: RuntimeStreamViewItem[],
+): RuntimeStreamViewItem[] {
+  if (runtimeStreamItems.length <= BACKGROUND_PANE_STREAM_ITEM_LIMIT) {
+    return runtimeStreamItems
+  }
+  return runtimeStreamItems.slice(-BACKGROUND_PANE_STREAM_ITEM_LIMIT)
+}
+
+function sliceBackgroundPaneTurns(visibleTurns: ConversationTurn[]): ConversationTurn[] {
+  if (visibleTurns.length <= BACKGROUND_PANE_VISIBLE_TURN_LIMIT) {
+    return visibleTurns
+  }
+  return visibleTurns.slice(-BACKGROUND_PANE_VISIBLE_TURN_LIMIT)
+}
+
 function toContextMeterError(error: unknown): {
   code: string
   message: string
@@ -493,6 +511,7 @@ function toContextMeterError(error: unknown): {
 }
 
 function useAgentContextMeterSnapshot(options: {
+  enabled?: boolean
   adapter?: AgentRuntimeDesktopAdapter
   projectId: string
   agentSessionId: string | null
@@ -514,13 +533,14 @@ function useAgentContextMeterSnapshot(options: {
   const [error, setError] = useState<ReturnType<typeof toContextMeterError> | null>(null)
   const requestIdRef = useRef(0)
   const snapshotRef = useRef<SessionContextSnapshotDto | null>(null)
+  const enabled = options.enabled ?? true
 
   useEffect(() => {
     snapshotRef.current = snapshot
   }, [snapshot])
 
   const refresh = useCallback(() => {
-    if (!options.adapter?.getSessionContextSnapshot || !options.agentSessionId) {
+    if (!enabled || !options.adapter?.getSessionContextSnapshot || !options.agentSessionId) {
       requestIdRef.current += 1
       setStatus('idle')
       setSnapshot(null)
@@ -557,6 +577,7 @@ function useAgentContextMeterSnapshot(options: {
       })
   }, [
     debouncedPendingPrompt,
+    enabled,
     options.adapter,
     options.agentSessionId,
     options.modelId,
@@ -596,6 +617,7 @@ export const AgentRuntime = memo(function AgentRuntime({
   onSpawnPane,
   spawnPaneDisabled = false,
   onClosePane,
+  isPaneFocused,
   showCompactFirstRunTooltip = false,
   onAckCompactFirstRunTooltip,
   onPaneCloseStateChange,
@@ -613,7 +635,26 @@ export const AgentRuntime = memo(function AgentRuntime({
   const transcriptItems = runtimeStream?.transcriptItems ?? []
   const toolCalls = runtimeStream?.toolCalls ?? []
   const streamIssue = agent.runtimeStreamError ?? runtimeStream?.lastIssue ?? null
-  const visibleTurns = useMemo(() => buildConversationTurns(runtimeStreamItems), [runtimeStreamItems])
+  const isFocusedPane = paneCount <= 1 || isPaneFocused !== false
+  const useBackgroundPaneFastPath = paneCount >= 3 && !isFocusedPane
+  const runtimeStreamItemsForTurns = useMemo(
+    () =>
+      useBackgroundPaneFastPath
+        ? sliceBackgroundPaneStreamItems(runtimeStreamItems)
+        : runtimeStreamItems,
+    [runtimeStreamItems, useBackgroundPaneFastPath],
+  )
+  const visibleTurns = useMemo(
+    () => buildConversationTurns(runtimeStreamItemsForTurns),
+    [runtimeStreamItemsForTurns],
+  )
+  const visibleTurnsForDisplay = useMemo(
+    () =>
+      useBackgroundPaneFastPath
+        ? sliceBackgroundPaneTurns(visibleTurns)
+        : visibleTurns,
+    [useBackgroundPaneFastPath, visibleTurns],
+  )
   const pendingRuntimeRunAction = agent.pendingRuntimeRunAction ?? null
   const runtimeRunActionStatus = agent.runtimeRunActionStatus
   const isQueueingRuntimePrompt =
@@ -847,7 +888,9 @@ export const AgentRuntime = memo(function AgentRuntime({
     canStopRuntimeRun,
     actionRequiredItems,
     dictationAdapter: desktopAdapter,
+    dictationEnabled: isFocusedPane,
     dictationScopeKey: `${agent.project.id}:${agent.project.selectedAgentSessionId ?? 'none'}`,
+    reportComposerControls: isFocusedPane,
     onStartRuntimeRun,
     onStartRuntimeSession,
     onUpdateRuntimeRunControls: canMutateRuntimeRun ? onUpdateRuntimeRunControls : undefined,
@@ -877,6 +920,7 @@ export const AgentRuntime = memo(function AgentRuntime({
   )
   const streamRunId = getStreamRunId(runtimeStream, renderableRuntimeRun)
   const contextMeterState = useAgentContextMeterSnapshot({
+    enabled: isFocusedPane,
     adapter: desktopAdapter,
     projectId: agent.project.id,
     agentSessionId: selectedAgentSessionId,
@@ -964,7 +1008,7 @@ export const AgentRuntime = memo(function AgentRuntime({
   const bottomSentinelRef = useRef<HTMLDivElement | null>(null)
   const shouldAutoFollowRef = useRef(true)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
-  const latestVisibleTurn = visibleTurns.at(-1)
+  const latestVisibleTurn = visibleTurnsForDisplay.at(-1)
   const conversationScrollKey = [
     latestVisibleTurn?.id ?? 'none',
     latestVisibleTurn?.sequence ?? 'none',
@@ -1041,7 +1085,7 @@ export const AgentRuntime = memo(function AgentRuntime({
   }, [conversationScrollKey, hasConversationViewportContent, scrollToLatest])
 
   const isCompact = density === 'compact'
-  const isDense = paneCount >= 4
+  const isDense = paneCount >= 4 || useBackgroundPaneFastPath
   const showPaneNumberChip = paneCount > 1 && paneNumber != null
   const showCloseButton = paneCount > 1 && typeof onClosePane === 'function'
   const closeState = useMemo<AgentPaneCloseState>(
@@ -1175,7 +1219,7 @@ export const AgentRuntime = memo(function AgentRuntime({
               >
                 <ConversationSection
                   runtimeRun={renderableRuntimeRun}
-                  visibleTurns={visibleTurns}
+                  visibleTurns={visibleTurnsForDisplay}
                   streamIssue={streamIssue}
                   streamFailure={runtimeStream?.failure ?? null}
                   showActivityIndicator={showAgentActivityIndicator}

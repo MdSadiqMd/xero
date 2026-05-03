@@ -854,6 +854,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
     listProjectFiles,
     readProjectFile,
     writeProjectFile,
+    revokeProjectAssetTokens,
+    openProjectFileExternal,
     createProjectEntry,
     renameProjectEntry,
     moveProjectEntry,
@@ -901,7 +903,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
     archiveAgentSession,
     restoreAgentSession,
     deleteAgentSession,
-    renameAgentSession,
     activeUsageSummary,
     refreshUsageSummary,
     spawnPane,
@@ -1645,10 +1646,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
     })
   }, [archiveAgentSession])
 
-  const handleRenameAgentSession = useCallback(async (agentSessionId: string, title: string) => {
-    await renameAgentSession(agentSessionId, title)
-  }, [renameAgentSession])
-
   const handleOpenSearchResult = useCallback((result: SessionTranscriptSearchResultSnippetDto) => {
     if (!activeProject) return
     setActiveView('agent')
@@ -1877,14 +1874,25 @@ export function XeroApp({ adapter }: XeroAppProps) {
     const shouldRenderExecutionPanel = Boolean(executionView && activeProjectId)
 
     const isExecutionVisible = activeView === 'execution'
-    const getViewPaneClassName = (visible: boolean) =>
+    const getViewPaneClassName = (
+      visible: boolean,
+      options: { heavySwitchSurface?: boolean } = {},
+    ) =>
       cn(
-        'view-pane absolute inset-0 flex min-h-0 min-w-0 transform-gpu overflow-hidden transition-[opacity,transform] motion-standard',
+        'view-pane absolute inset-0 flex min-h-0 min-w-0 overflow-hidden motion-standard',
+        options.heavySwitchSurface
+          ? 'transition-opacity'
+          : 'transform-gpu transition-[opacity,transform]',
         visible
-          ? 'z-10 translate-x-0 opacity-100'
-          : 'pointer-events-none z-0 translate-x-2 opacity-0',
+          ? 'z-10 opacity-100'
+          : cn(
+              'pointer-events-none z-0 opacity-0',
+              options.heavySwitchSurface ? 'invisible' : 'translate-x-2',
+            ),
+        !options.heavySwitchSurface && visible ? 'translate-x-0' : null,
       )
     const sessionsPeekAvailable = activeView === 'agent' && explorerMode === 'collapsed'
+    const agentUsesHeavySwitchSurface = paneCount >= 3
 
     return (
       <>
@@ -1896,7 +1904,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
           onCreateSession={handleCreateAgentSession}
           onArchiveSession={handleArchiveAgentSession}
           onOpenArchivedSessions={() => setArchivedSessionsOpen(true)}
-          onRenameSession={handleRenameAgentSession}
           onSearchSessions={
             resolvedAdapter.searchSessionTranscripts
               ? async (query) => {
@@ -2021,7 +2028,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
           {agentView ? (
             <LazyActivityPane
               active={activeView === 'agent'}
-              className={getViewPaneClassName(activeView === 'agent')}
+              className={getViewPaneClassName(activeView === 'agent', {
+                heavySwitchSurface: agentUsesHeavySwitchSurface,
+              })}
               name="agent-pane"
               prewarm={startupSurfacePrewarm.shouldMount}
             >
@@ -2076,6 +2085,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
                   listProjectFiles={listProjectFiles}
                   readProjectFile={readProjectFile}
                   writeProjectFile={writeProjectFile}
+                  revokeProjectAssetTokens={revokeProjectAssetTokens}
+                  openProjectFileExternal={openProjectFileExternal}
                   createProjectEntry={createProjectEntry}
                   renameProjectEntry={renameProjectEntry}
                   moveProjectEntry={moveProjectEntry}
@@ -2099,19 +2110,21 @@ export function XeroApp({ adapter }: XeroAppProps) {
     : null
   const shouldAutoOpenOnboarding = !onboardingDismissed && !isLoading && projects.length === 0
   const showOnboarding = (onboardingOpen || shouldAutoOpenOnboarding) && !onboardingDismissed && !isLoading
+  const isForegroundProjectSelection = pendingProjectSelectionId !== null
+  const isBlockingProjectLoading = isProjectLoading && !isForegroundProjectSelection
   const startupSurfacePrewarm = useStartupSurfacePrewarm(
-    !showOnboarding && !isLoading && !isProjectLoading,
+    !showOnboarding && !isLoading && !isBlockingProjectLoading,
   )
   useIdleSurfacePreloads(
     !showOnboarding &&
       !isLoading &&
-      !isProjectLoading &&
+      !isBlockingProjectLoading &&
       startupSurfacePrewarm.ready,
   )
   const showStartupSurfacePrewarm = !startupSurfacePrewarm.ready
   const showAppBootLoading = !showOnboarding && (
     isLoading ||
-    isProjectLoading ||
+    isBlockingProjectLoading ||
     showStartupSurfacePrewarm
   )
 
