@@ -38,6 +38,8 @@ import {
   type RuntimeSessionView,
   type RunDoctorReportRequestDto,
   type RuntimeStreamView,
+  runtimeAgentIdSchema,
+  type RuntimeAgentIdDto,
   type SkillRegistryDto,
   type SyncNotificationAdaptersResponseDto,
 } from '@/src/lib/xero-model'
@@ -171,6 +173,7 @@ const PROVIDER_MODEL_CATALOG_CACHE_MAX_ENTRIES = 24
 const AGENT_WORKSPACE_LAYOUT_STORAGE_KEY = 'agentWorkspaceLayout'
 const AGENT_WORKSPACE_LAYOUT_PERSIST_DEBOUNCE_MS = 250
 const AGENT_WORKSPACE_MAX_PANES = 6
+const SPAWNED_AGENT_WORKSPACE_DEFAULT_RUNTIME_AGENT_ID: RuntimeAgentIdDto = 'engineer'
 
 let agentWorkspacePaneIdSequence = 0
 
@@ -327,12 +330,16 @@ function sanitizeAgentWorkspaceLayout(value: unknown): AgentWorkspaceLayoutState
           : typeof maybeSlot.agentSessionId === 'string'
             ? maybeSlot.agentSessionId.trim()
             : ''
+      const defaultRuntimeAgentParse = runtimeAgentIdSchema.safeParse(maybeSlot.defaultRuntimeAgentId)
+      const defaultRuntimeAgentId = defaultRuntimeAgentParse.success
+        ? defaultRuntimeAgentParse.data
+        : null
       if (!id || agentSessionId === '' || seenPaneIds.has(id)) {
         continue
       }
 
       seenPaneIds.add(id)
-      paneSlots.push({ id, agentSessionId })
+      paneSlots.push({ id, agentSessionId, defaultRuntimeAgentId })
       if (paneSlots.length >= AGENT_WORKSPACE_MAX_PANES) {
         break
       }
@@ -2509,10 +2516,21 @@ export function useXeroDesktopState(
       reusablePaneIndex >= 0 ? currentLayout.paneSlots[reusablePaneIndex]?.id ?? paneId : paneId
     const pendingPaneSlots =
       reusablePaneIndex >= 0
-        ? currentLayout.paneSlots
+        ? currentLayout.paneSlots.map((slot, index) =>
+            index === reusablePaneIndex
+              ? {
+                  ...slot,
+                  defaultRuntimeAgentId: SPAWNED_AGENT_WORKSPACE_DEFAULT_RUNTIME_AGENT_ID,
+                }
+              : slot,
+          )
         : [
             ...currentLayout.paneSlots,
-            { id: paneId, agentSessionId: null },
+            {
+              id: paneId,
+              agentSessionId: null,
+              defaultRuntimeAgentId: SPAWNED_AGENT_WORKSPACE_DEFAULT_RUNTIME_AGENT_ID,
+            },
           ]
     const pendingLayout: AgentWorkspaceLayoutState = {
       ...currentLayout,
@@ -3064,6 +3082,7 @@ export function useXeroDesktopState(
           project: createEmptyAgentSessionProject(activeProject),
           activePhase,
           repositoryStatus,
+          fallbackRuntimeAgentId: slot.defaultRuntimeAgentId,
           providerCredentials,
           runtimeSession: activeRuntimeSession,
           providerModelCatalogs,
@@ -3109,10 +3128,51 @@ export function useXeroDesktopState(
       }
 
       if (slot.agentSessionId === activeAgentSessionId && agentView) {
+        const paneAgentView = slot.defaultRuntimeAgentId
+          ? buildAgentView({
+              project: activeProject,
+              activePhase,
+              repositoryStatus,
+              fallbackRuntimeAgentId: slot.defaultRuntimeAgentId,
+              providerCredentials,
+              runtimeSession: activeRuntimeSession,
+              providerModelCatalogs,
+              providerModelCatalogLoadStatuses,
+              providerModelCatalogLoadErrors,
+              activeProviderModelCatalog,
+              activeProviderModelCatalogLoadStatus,
+              activeProviderModelCatalogLoadError,
+              runtimeRun: activeRuntimeRun,
+              autonomousRun: activeAutonomousRun,
+              runtimeErrorMessage: activeRuntimeErrorMessage,
+              runtimeRunErrorMessage: activeRuntimeRunErrorMessage,
+              autonomousRunErrorMessage: activeAutonomousRunErrorMessage,
+              runtimeStream: activeRuntimeStream,
+              notificationRoutes: activeNotificationRoutes,
+              notificationRouteLoadStatus: activeNotificationRouteLoadStatus,
+              notificationRouteError: activeNotificationRouteLoadError,
+              notificationSyncSummary: activeNotificationSyncSummary,
+              notificationSyncError: activeNotificationSyncError,
+              blockedNotificationSyncPollTarget: activeBlockedNotificationSyncPollTarget,
+              notificationRouteMutationStatus,
+              pendingNotificationRouteId,
+              notificationRouteMutationError,
+              previousTrustSnapshot: activeProject ? trustSnapshotRef.current[activeProject.id] ?? null : null,
+              operatorActionStatus,
+              pendingOperatorActionId,
+              operatorActionError,
+              autonomousRunActionStatus,
+              pendingAutonomousRunAction,
+              autonomousRunActionError,
+              runtimeRunActionStatus,
+              pendingRuntimeRunAction,
+              runtimeRunActionError,
+            }).view ?? agentView
+          : agentView
         return [{
           paneId: slot.id,
           agentSessionId: slot.agentSessionId,
-          agent: agentView,
+          agent: paneAgentView,
         }]
       }
 
@@ -3129,6 +3189,7 @@ export function useXeroDesktopState(
         project: paneProject,
         activePhase,
         repositoryStatus,
+        fallbackRuntimeAgentId: slot.defaultRuntimeAgentId,
         providerCredentials,
         runtimeSession: activeRuntimeSession,
         providerModelCatalogs,

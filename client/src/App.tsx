@@ -14,7 +14,6 @@ import { SetupEmptyState } from '@/components/xero/agent-runtime/setup-empty-sta
 import { AgentWorkspace } from '@/components/xero/agent-workspace'
 import { AgentSessionsSidebar } from '@/components/xero/agent-sessions-sidebar'
 import { AgentCommandPalette } from '@/components/xero/agent-runtime/agent-command-palette'
-import { ArchivedSessionsDialog } from '@/components/xero/archived-sessions-dialog'
 import { type View } from '@/components/xero/data'
 import { LoadingScreen } from '@/components/xero/loading-screen'
 import { NoProjectEmptyState } from '@/components/xero/no-project-empty-state'
@@ -76,6 +75,7 @@ const loadSettingsDialog = () => import('@/components/xero/settings-dialog')
 const loadUsageStatsSidebar = () => import('@/components/xero/usage-stats-sidebar')
 const loadVcsSidebar = () => import('@/components/xero/vcs-sidebar')
 const loadWorkflowsSidebar = () => import('@/components/xero/workflows-sidebar')
+const loadAgentDockSidebar = () => import('@/components/xero/agent-dock-sidebar')
 
 const warmedSurfaceChunks = new Set<SurfacePreloadTarget>()
 
@@ -362,6 +362,9 @@ const LazyVcsSidebar = lazy(() =>
 )
 const LazyWorkflowsSidebar = lazy(() =>
   loadWorkflowsSidebar().then((module) => ({ default: module.WorkflowsSidebar })),
+)
+const LazyAgentDockSidebar = lazy(() =>
+  loadAgentDockSidebar().then((module) => ({ default: module.AgentDockSidebar })),
 )
 
 function preloadViewChunk(view: View): void {
@@ -927,7 +930,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [agentComposerControls, setAgentComposerControls] =
     useState<RuntimeRunControlInputDto | null>(null)
   const [isCreatingAgentSession, setIsCreatingAgentSession] = useState(false)
-  const [archivedSessionsOpen, setArchivedSessionsOpen] = useState(false)
   const [projectAddOpen, setProjectAddOpen] = useState(false)
   const [gamesOpen, setGamesOpen] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
@@ -937,6 +939,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [vcsOpen, setVcsOpen] = useState(false)
   const [workflowsOpen, setWorkflowsOpen] = useState(false)
   const [usageOpen, setUsageOpen] = useState(false)
+  const [agentDockOpen, setAgentDockOpen] = useState(false)
   const [environmentDiscoveryStatus, setEnvironmentDiscoveryStatus] =
     useState<EnvironmentDiscoveryStatusDto | null>(null)
   const [environmentProfileSummary, setEnvironmentProfileSummary] =
@@ -1089,6 +1092,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSolanaOpen(false)
         setVcsOpen(false)
         setWorkflowsOpen(false)
+        setAgentDockOpen(false)
       }
       return next
     })
@@ -1105,6 +1109,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSolanaOpen(false)
         setVcsOpen(false)
         setWorkflowsOpen(false)
+        setAgentDockOpen(false)
       }
       return next
     })
@@ -1121,6 +1126,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSolanaOpen(false)
         setVcsOpen(false)
         setWorkflowsOpen(false)
+        setAgentDockOpen(false)
       }
       return next
     })
@@ -1137,6 +1143,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSolanaOpen(false)
         setVcsOpen(false)
         setWorkflowsOpen(false)
+        setAgentDockOpen(false)
       }
       return next
     })
@@ -1153,6 +1160,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setAndroidOpen(false)
         setVcsOpen(false)
         setWorkflowsOpen(false)
+        setAgentDockOpen(false)
       }
       return next
     })
@@ -1169,6 +1177,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setAndroidOpen(false)
         setSolanaOpen(false)
         setWorkflowsOpen(false)
+        setAgentDockOpen(false)
       }
       return next
     })
@@ -1185,6 +1194,24 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setAndroidOpen(false)
         setSolanaOpen(false)
         setVcsOpen(false)
+        setAgentDockOpen(false)
+      }
+      return next
+    })
+  }, [])
+
+  const toggleAgentDock = useCallback(() => {
+    setAgentDockOpen((current) => {
+      const next = !current
+      if (next) {
+        setGamesOpen(false)
+        setBrowserOpen(false)
+        setIosOpen(false)
+        setAndroidOpen(false)
+        setSolanaOpen(false)
+        setVcsOpen(false)
+        setWorkflowsOpen(false)
+        setUsageOpen(false)
       }
       return next
     })
@@ -1903,7 +1930,22 @@ export function XeroApp({ adapter }: XeroAppProps) {
           onSelectSession={handleSelectAgentSession}
           onCreateSession={handleCreateAgentSession}
           onArchiveSession={handleArchiveAgentSession}
-          onOpenArchivedSessions={() => setArchivedSessionsOpen(true)}
+          onLoadArchivedSessions={async (projectId) => {
+            const response = await resolvedAdapter.listAgentSessions({
+              projectId,
+              includeArchived: true,
+            })
+            return response.sessions
+              .filter((session) => session.status === 'archived')
+              .map(mapAgentSession)
+          }}
+          onRestoreSession={async (agentSessionId) => {
+            await restoreAgentSession(agentSessionId)
+            await selectAgentSession(agentSessionId)
+          }}
+          onDeleteSession={async (agentSessionId) => {
+            await deleteAgentSession(agentSessionId)
+          }}
           onSearchSessions={
             resolvedAdapter.searchSessionTranscripts
               ? async (query) => {
@@ -1928,28 +1970,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
           onRequestPeek={sessionsPeekAvailable ? requestExplorerPeek : undefined}
           onReleasePeek={sessionsPeekAvailable ? releaseExplorerPeek : undefined}
           sessionPaneAssignments={isMultiPane ? sessionPaneAssignments : undefined}
-        />
-        <ArchivedSessionsDialog
-          open={archivedSessionsOpen}
-          onOpenChange={setArchivedSessionsOpen}
-          projectId={activeProject.id}
-          projectLabel={activeProject.name}
-          onLoad={async (projectId) => {
-            const response = await resolvedAdapter.listAgentSessions({
-              projectId,
-              includeArchived: true,
-            })
-            return response.sessions
-              .filter((session) => session.status === 'archived')
-              .map(mapAgentSession)
-          }}
-          onRestore={async (agentSessionId) => {
-            await restoreAgentSession(agentSessionId)
-            await selectAgentSession(agentSessionId)
-          }}
-          onDelete={async (agentSessionId) => {
-            await deleteAgentSession(agentSessionId)
-          }}
         />
         <AgentCommandPalette
           enabled={activeView === 'agent' && Boolean(agentWorkspaceLayout)}
@@ -2186,6 +2206,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
         vcsOpen={vcsOpen}
         onToggleWorkflows={toggleWorkflows}
         workflowsOpen={workflowsOpen}
+        onToggleAgentDock={toggleAgentDock}
+        agentDockOpen={agentDockOpen}
+        agentDockDisabled={activeView === 'agent' || !activeProject}
         vcsChangeCount={repositoryStatus?.statusCount ?? 0}
         vcsAdditions={repositoryStatus?.additions ?? 0}
         vcsDeletions={repositoryStatus?.deletions ?? 0}
@@ -2269,6 +2292,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
           vcsOpen={vcsOpen}
           onToggleWorkflows={toggleWorkflows}
           workflowsOpen={workflowsOpen}
+          onToggleAgentDock={toggleAgentDock}
+          agentDockOpen={agentDockOpen}
+          agentDockDisabled={activeView === 'agent' || !activeProject}
           vcsChangeCount={repositoryStatus?.statusCount ?? 0}
           vcsAdditions={repositoryStatus?.additions ?? 0}
           vcsDeletions={repositoryStatus?.deletions ?? 0}
@@ -2434,6 +2460,66 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onFetch={fetchRepository}
                 onPull={pullRepository}
                 onPush={pushRepository}
+              />
+            </Suspense>
+          </LazyActivitySurface>
+          <LazyActivitySurface
+            name="agent-dock-sidebar"
+            open={agentDockOpen}
+            prewarm={startupSurfacePrewarm.shouldMount}
+          >
+            <Suspense
+              fallback={
+                <InlineSidebarLoadingShell label="Agent" open={agentDockOpen} width={460} />
+              }
+            >
+              <LazyAgentDockSidebar
+                open={agentDockOpen}
+                agent={agentView}
+                highChurnStore={highChurnStore}
+                sessions={activeProject?.agentSessions ?? []}
+                selectedSessionId={activeProject?.selectedAgentSessionId ?? null}
+                isCreatingSession={isCreatingAgentSession}
+                onClose={() => setAgentDockOpen(false)}
+                onSelectSession={handleSelectAgentSession}
+                onCreateSession={handleCreateAgentSession}
+                desktopAdapter={resolvedAdapter}
+                accountAvatarUrl={githubSession?.user.avatarUrl ?? null}
+                accountLogin={githubSession?.user.login ?? null}
+                customAgentDefinitions={customAgentDefinitions}
+                onOpenAgentManagement={handleOpenAgentManagement}
+                onOpenSettings={handleOpenAgentProviderSettings}
+                onOpenDiagnostics={handleOpenAgentDiagnostics}
+                onStartLogin={(options) => startOpenAiLogin(options)}
+                onStartAutonomousRun={() => startAutonomousRun()}
+                onInspectAutonomousRun={() => inspectAutonomousRun()}
+                onCancelAutonomousRun={(runId) => cancelAutonomousRun(runId)}
+                onStartRuntimeRun={(options) => startRuntimeRun(options)}
+                onUpdateRuntimeRunControls={(request) => updateRuntimeRunControls(request)}
+                onComposerControlsChange={(controls) =>
+                  setAgentComposerControls((current) =>
+                    sameRuntimeRunControlInput(current, controls) ? current : controls,
+                  )
+                }
+                onStartRuntimeSession={(options) => startRuntimeSession(options)}
+                onStopRuntimeRun={(runId) => stopRuntimeRun(runId)}
+                onSubmitManualCallback={(flowId, manualInput) =>
+                  submitOpenAiCallback(flowId, { manualInput })
+                }
+                onLogout={() => logoutRuntimeSession()}
+                onResolveOperatorAction={async (actionId, decision, options) => {
+                  const result = await resolveOperatorAction(actionId, decision, {
+                    userAnswer: options?.userAnswer ?? null,
+                  })
+                  if (decision === 'approve') refreshCustomAgentDefinitions()
+                  return result
+                }}
+                onResumeOperatorRun={(actionId, options) =>
+                  resumeOperatorRun(actionId, { userAnswer: options?.userAnswer ?? null })
+                }
+                onRefreshNotificationRoutes={(options) => refreshNotificationRoutes(options)}
+                onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
+                onRetryStream={retry}
               />
             </Suspense>
           </LazyActivitySurface>

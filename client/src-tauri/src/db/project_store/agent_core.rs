@@ -1071,6 +1071,17 @@ pub fn load_agent_run(
     })
 }
 
+pub(crate) fn load_agent_file_changes(
+    repo_root: &Path,
+    project_id: &str,
+    run_id: &str,
+) -> Result<Vec<AgentFileChangeRecord>, CommandError> {
+    validate_non_empty_text(project_id, "projectId")?;
+    validate_non_empty_text(run_id, "runId")?;
+    let connection = open_agent_database(repo_root)?;
+    read_agent_file_changes(&connection, project_id, run_id, repo_root)
+}
+
 pub fn load_agent_usage(
     repo_root: &Path,
     project_id: &str,

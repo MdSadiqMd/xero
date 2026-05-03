@@ -63,7 +63,7 @@ import { SetupEmptyState } from './agent-runtime/setup-empty-state'
 import { useAgentRuntimeController } from './agent-runtime/use-agent-runtime-controller'
 import type { SpeechDictationAdapter } from './agent-runtime/use-speech-dictation'
 
-type AgentRuntimeDesktopAdapter = SpeechDictationAdapter &
+export type AgentRuntimeDesktopAdapter = SpeechDictationAdapter &
   Partial<
     Pick<
       XeroDesktopAdapter,
@@ -133,10 +133,6 @@ export interface AgentRuntimeProps {
   onFocusPane?: () => void
   /** Whether this pane is currently focused. */
   isPaneFocused?: boolean
-  /** Whether this pane should show the first-run compact-mode tooltip. */
-  showCompactFirstRunTooltip?: boolean
-  /** Acknowledge first-run tooltip. */
-  onAckCompactFirstRunTooltip?: () => void
   /** Reports pane-local state that should block an immediate close. */
   onPaneCloseStateChange?: (state: AgentPaneCloseState) => void
 }
@@ -618,8 +614,6 @@ export const AgentRuntime = memo(function AgentRuntime({
   spawnPaneDisabled = false,
   onClosePane,
   isPaneFocused,
-  showCompactFirstRunTooltip = false,
-  onAckCompactFirstRunTooltip,
   onPaneCloseStateChange,
 }: AgentRuntimeProps) {
   const runtimeSession = agent.runtimeSession ?? null
@@ -1085,7 +1079,7 @@ export const AgentRuntime = memo(function AgentRuntime({
   }, [conversationScrollKey, hasConversationViewportContent, scrollToLatest])
 
   const isCompact = density === 'compact'
-  const isDense = paneCount >= 4 || useBackgroundPaneFastPath
+  const isDense = isCompact || paneCount >= 4 || useBackgroundPaneFastPath
   const showPaneNumberChip = paneCount > 1 && paneNumber != null
   const showCloseButton = paneCount > 1 && typeof onClosePane === 'function'
   const closeState = useMemo<AgentPaneCloseState>(
@@ -1259,8 +1253,6 @@ export const AgentRuntime = memo(function AgentRuntime({
 
         <ComposerDock
           density={density}
-          showCompactFirstRunTooltip={showCompactFirstRunTooltip}
-          onAckCompactFirstRunTooltip={onAckCompactFirstRunTooltip}
           composerRuntimeAgentId={controller.composerRuntimeAgentId}
           composerRuntimeAgentLabel={getRuntimeAgentLabel(controller.composerRuntimeAgentId)}
           composerAgentDefinitionId={controller.composerAgentDefinitionId}

@@ -351,11 +351,7 @@ fn read_file_range(path: &PathBuf, range: ByteRange) -> std::io::Result<Vec<u8>>
 
 fn token_from_uri(uri: &http::Uri) -> Option<String> {
     let host = uri.host().filter(|host| !host.trim().is_empty());
-    let path_token = uri
-        .path()
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .next();
+    let path_token = uri.path().split('/').find(|segment| !segment.is_empty());
     host.or(path_token)
         .filter(|token| is_safe_token(token))
         .map(ToOwned::to_owned)
@@ -451,6 +447,10 @@ fn empty_response(status: http::StatusCode) -> http::Response<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    use crate::commands::ReadProjectFileResponseDto;
+    use tauri::Manager;
 
     #[test]
     fn parses_standard_and_suffix_ranges() {
@@ -511,5 +511,273 @@ mod tests {
                 .unwrap(),
             "4"
         );
+    }
+
+    #[test]
+    fn project_asset_protocol_serves_classified_preview_bytes_and_ranges() {
+        let registry_root = tempfile::tempdir().expect("registry temp dir");
+        let project_root = tempfile::tempdir().expect("project temp dir");
+        let bytes = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x55, 0x66];
+        fs::write(project_root.path().join("pixel.png"), bytes).expect("write png");
+        let app = build_project_asset_test_app(&registry_root, project_root.path());
+
+        let response = read_project_asset_test_file(&app, "/pixel.png");
+        let ReadProjectFileResponseDto::Renderable {
+            preview_url,
+            content_hash,
+            ..
+        } = response
+        else {
+            panic!("expected renderable response");
+        };
+
+        let full_response = serve_request(
+            app.handle(),
+            http::Request::builder()
+                .method(http::Method::GET)
+                .uri(preview_url.as_str())
+                .body(Vec::new())
+                .expect("full request"),
+        );
+
+        assert_eq!(full_response.status(), http::StatusCode::OK);
+        assert_eq!(full_response.body(), &bytes);
+        assert_eq!(
+            full_response
+                .headers()
+                .get(http::header::CONTENT_TYPE)
+                .unwrap(),
+            "image/png"
+        );
+        assert_eq!(
+            full_response
+                .headers()
+                .get(http::header::CONTENT_LENGTH)
+                .unwrap(),
+            "10"
+        );
+        assert_eq!(
+            full_response
+                .headers()
+                .get(http::header::CACHE_CONTROL)
+                .unwrap(),
+            "private, max-age=60"
+        );
+        assert_eq!(
+            full_response.headers().get(http::header::ETAG).unwrap(),
+            &etag(&content_hash)
+        );
+        assert_eq!(
+            full_response.headers().get("X-Xero-Renderer-Kind").unwrap(),
+            "image"
+        );
+
+        let range_response = serve_request(
+            app.handle(),
+            http::Request::builder()
+                .method(http::Method::GET)
+                .uri(preview_url.as_str())
+                .header(http::header::RANGE, "bytes=8-9")
+                .body(Vec::new())
+                .expect("range request"),
+        );
+
+        assert_eq!(range_response.status(), http::StatusCode::PARTIAL_CONTENT);
+        assert_eq!(range_response.body(), &[0x55, 0x66]);
+        assert_eq!(
+            range_response
+                .headers()
+                .get(http::header::CONTENT_RANGE)
+                .unwrap(),
+            "bytes 8-9/10"
+        );
+    }
+
+    #[test]
+    fn project_asset_protocol_expires_and_revokes_tokens() {
+        let state = ProjectAssetState::default();
+        let token = token_from_preview_url(&state.issue_preview_url(test_grant("/preview.png")));
+        {
+            let mut tokens = state.tokens.lock().expect("token lock");
+            tokens.get_mut(&token).expect("issued token").expires_at =
+                Instant::now() - Duration::from_secs(1);
+        }
+
+        assert!(state.take_valid_grant(&token).is_none());
+        assert!(!state
+            .tokens
+            .lock()
+            .expect("token lock")
+            .contains_key(&token));
+
+        let project_one_a = token_from_preview_url(&state.issue_preview_url(test_grant("/a.png")));
+        let project_one_b = token_from_preview_url(&state.issue_preview_url(test_grant("/b.png")));
+        let project_two = token_from_preview_url(&state.issue_preview_url(ProjectAssetGrant {
+            project_id: "project-2".into(),
+            path: "/a.png".into(),
+            ..test_grant("/a.png")
+        }));
+
+        state.revoke_project_tokens("project-1", &["/a.png".into()]);
+
+        assert!(state.take_valid_grant(&project_one_a).is_none());
+        assert!(state.take_valid_grant(&project_one_b).is_some());
+        assert!(state.take_valid_grant(&project_two).is_some());
+
+        state.revoke_project_tokens("project-1", &[]);
+
+        assert!(state.take_valid_grant(&project_one_b).is_none());
+    }
+
+    #[test]
+    fn project_asset_protocol_rejects_unsafe_or_changed_grants() {
+        let registry_root = tempfile::tempdir().expect("registry temp dir");
+        let project_root = tempfile::tempdir().expect("project temp dir");
+        let path = project_root.path().join("payload.png");
+        fs::write(&path, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]).expect("write png");
+        let app = build_project_asset_test_app(&registry_root, project_root.path());
+
+        let response = read_project_asset_test_file(&app, "/payload.png");
+        let ReadProjectFileResponseDto::Renderable { preview_url, .. } = response else {
+            panic!("expected renderable response");
+        };
+        fs::write(
+            &path,
+            [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x44],
+        )
+        .expect("change file");
+
+        let changed_response = serve_request(
+            app.handle(),
+            http::Request::builder()
+                .method(http::Method::GET)
+                .uri(preview_url.as_str())
+                .body(Vec::new())
+                .expect("changed request"),
+        );
+        assert_eq!(changed_response.status(), http::StatusCode::GONE);
+
+        let revoked_response = serve_request(
+            app.handle(),
+            http::Request::builder()
+                .method(http::Method::GET)
+                .uri(preview_url.as_str())
+                .body(Vec::new())
+                .expect("revoked request"),
+        );
+        assert_eq!(revoked_response.status(), http::StatusCode::NOT_FOUND);
+
+        let unsafe_url = app
+            .state::<ProjectAssetState>()
+            .issue_preview_url(ProjectAssetGrant {
+                path: "/../escape.png".into(),
+                ..test_grant("/../escape.png")
+            });
+        let unsafe_response = serve_request(
+            app.handle(),
+            http::Request::builder()
+                .method(http::Method::GET)
+                .uri(unsafe_url.as_str())
+                .body(Vec::new())
+                .expect("unsafe request"),
+        );
+
+        assert_eq!(unsafe_response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_asset_protocol_denies_symlinked_paths() {
+        use std::os::unix::fs::symlink;
+
+        let registry_root = tempfile::tempdir().expect("registry temp dir");
+        let project_root = tempfile::tempdir().expect("project temp dir");
+        fs::write(
+            project_root.path().join("real.png"),
+            [0x89, b'P', b'N', b'G'],
+        )
+        .expect("write real file");
+        symlink(
+            project_root.path().join("real.png"),
+            project_root.path().join("link.png"),
+        )
+        .expect("create symlink");
+        let app = build_project_asset_test_app(&registry_root, project_root.path());
+        let url = app
+            .state::<ProjectAssetState>()
+            .issue_preview_url(ProjectAssetGrant {
+                path: "/link.png".into(),
+                ..test_grant("/link.png")
+            });
+
+        let response = serve_request(
+            app.handle(),
+            http::Request::builder()
+                .method(http::Method::GET)
+                .uri(url.as_str())
+                .body(Vec::new())
+                .expect("symlink request"),
+        );
+
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+    }
+
+    fn build_project_asset_test_app(
+        registry_root: &tempfile::TempDir,
+        project_root: &Path,
+    ) -> tauri::App<tauri::test::MockRuntime> {
+        let registry_path = registry_root.path().join("app-data").join("xero.db");
+        crate::registry::upsert_project(
+            &registry_path,
+            crate::registry::RegistryProjectRecord {
+                project_id: "project-1".into(),
+                repository_id: "repository-1".into(),
+                root_path: project_root.to_string_lossy().into_owned(),
+            },
+            &crate::state::ImportFailpoints::default(),
+        )
+        .expect("register project");
+
+        crate::configure_builder_with_state(
+            tauri::test::mock_builder(),
+            crate::state::DesktopState::default().with_global_db_path_override(registry_path),
+        )
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("build app")
+    }
+
+    fn read_project_asset_test_file(
+        app: &tauri::App<tauri::test::MockRuntime>,
+        path: &str,
+    ) -> ReadProjectFileResponseDto {
+        tauri::async_runtime::block_on(crate::commands::project_files::read_project_file(
+            app.handle().clone(),
+            app.state::<crate::state::DesktopState>(),
+            app.state::<ProjectAssetState>(),
+            crate::commands::ProjectFileRequestDto {
+                project_id: "project-1".into(),
+                path: path.into(),
+            },
+        ))
+        .expect("read project file")
+    }
+
+    fn test_grant(path: &str) -> ProjectAssetGrant {
+        ProjectAssetGrant {
+            project_id: "project-1".into(),
+            path: path.into(),
+            byte_length: 10,
+            modified_at: "2026-01-01T00:00:00Z".into(),
+            content_hash: "abc123".into(),
+            mime_type: "image/png".into(),
+            renderer_kind: ProjectFileRendererKindDto::Image,
+        }
+    }
+
+    fn token_from_preview_url(preview_url: &str) -> String {
+        preview_url
+            .strip_prefix("project-asset://")
+            .expect("project asset URL")
+            .to_owned()
     }
 }

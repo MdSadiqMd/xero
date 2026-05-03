@@ -1182,6 +1182,39 @@ describe('ExecutionView file editor host', () => {
     expect(screen.getByTestId('preview-status-bar')).toBeVisible()
   })
 
+  it('revokes project asset preview tokens when preview tabs close or the project changes', async () => {
+    const { workspace, rerender } = renderHostExecutionView()
+
+    expect(await screen.findByTestId('file:/photo.png')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Open /photo.png' }))
+    expect(await screen.findByTestId('image-preview')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close photo.png' }))
+
+    await waitFor(() =>
+      expect(workspace.revokeProjectAssetTokens).toHaveBeenCalledWith('project-1', ['/photo.png']),
+    )
+
+    rerender(
+      <ExecutionView
+        execution={makeExecution('project-2', 'Project Two')}
+        listProjectFiles={workspace.listProjectFiles}
+        readProjectFile={workspace.readProjectFile}
+        writeProjectFile={workspace.writeProjectFile}
+        revokeProjectAssetTokens={workspace.revokeProjectAssetTokens}
+        openProjectFileExternal={workspace.openProjectFileExternal}
+        createProjectEntry={workspace.createProjectEntry}
+        renameProjectEntry={workspace.renameProjectEntry}
+        moveProjectEntry={workspace.moveProjectEntry}
+        deleteProjectEntry={workspace.deleteProjectEntry}
+        searchProject={workspace.searchProject}
+        replaceInProject={workspace.replaceInProject}
+      />,
+    )
+
+    await waitFor(() => expect(workspace.revokeProjectAssetTokens).toHaveBeenCalledWith('project-1'))
+  })
+
   it('keeps large image previews URL-backed without source editor state', async () => {
     renderHostExecutionView()
 

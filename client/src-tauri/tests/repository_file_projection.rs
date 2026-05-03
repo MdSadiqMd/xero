@@ -395,3 +395,16 @@ fn read_project_file_denies_symlinked_paths() {
 
     assert_eq!(error.code, "policy_denied");
 }
+
+#[test]
+fn read_project_file_denies_path_traversal_segments() {
+    let registry_root = tempfile::tempdir().expect("registry temp dir");
+    let repository_root = init_git_repo();
+    let app = build_mock_app(create_state(&registry_root));
+
+    let imported = import_with_app(&app, repository_root.path()).expect("import succeeds");
+    let error = read_file_with_app(&app, &imported.project.id, "/../README.md")
+        .expect_err("path traversal should fail");
+
+    assert_eq!(error.code, "policy_denied");
+}

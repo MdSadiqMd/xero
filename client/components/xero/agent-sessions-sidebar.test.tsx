@@ -36,7 +36,6 @@ function renderSidebar(overrides: Partial<ComponentProps<typeof AgentSessionsSid
       onSelectSession={vi.fn()}
       onCreateSession={vi.fn()}
       onArchiveSession={vi.fn()}
-      onOpenArchivedSessions={vi.fn()}
       {...overrides}
     />,
   )
@@ -205,7 +204,6 @@ describe('AgentSessionsSidebar', () => {
       onSelectSession: vi.fn(),
       onCreateSession: vi.fn(),
       onArchiveSession: vi.fn(),
-      onOpenArchivedSessions: vi.fn(),
     }
     const { container, rerender } = render(<AgentSessionsSidebar {...props} />)
 
@@ -316,6 +314,82 @@ describe('AgentSessionsSidebar', () => {
 
     fireEvent.click(searchToggle)
     expect(screen.getByRole('searchbox', { name: 'Search sessions' })).toHaveValue('')
+  })
+
+  it('toggles the archived section, restores, and deletes archived sessions inline', async () => {
+    const archivedSession: AgentSessionView = {
+      ...sessions[0],
+      agentSessionId: 'agent-session-archived',
+      title: 'Old session',
+      status: 'archived',
+      statusLabel: 'Archived',
+      selected: false,
+      archivedAt: '2026-04-10T20:00:00Z',
+      isActive: false,
+      isArchived: true,
+    }
+    const onLoadArchivedSessions = vi.fn(async () => [archivedSession])
+    const onRestoreSession = vi.fn(async () => undefined)
+    const onDeleteSession = vi.fn(async () => undefined)
+
+    renderSidebar({
+      onLoadArchivedSessions,
+      onRestoreSession,
+      onDeleteSession,
+    })
+
+    expect(screen.queryByText('Archived')).not.toBeInTheDocument()
+    expect(screen.queryByText('Old session')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show archived sessions' }))
+
+    expect(onLoadArchivedSessions).toHaveBeenCalledWith('project-1')
+    expect(await screen.findByText('Archived')).toBeVisible()
+    expect(await screen.findByText('Old session')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Old session' }))
+
+    await waitFor(() =>
+      expect(onRestoreSession).toHaveBeenCalledWith('agent-session-archived'),
+    )
+    await waitFor(() => expect(screen.queryByText('Old session')).not.toBeInTheDocument())
+  })
+
+  it('confirms via alert dialog before deleting an archived session', async () => {
+    const archivedSession: AgentSessionView = {
+      ...sessions[0],
+      agentSessionId: 'agent-session-archived',
+      title: 'Old session',
+      status: 'archived',
+      statusLabel: 'Archived',
+      selected: false,
+      archivedAt: '2026-04-10T20:00:00Z',
+      isActive: false,
+      isArchived: true,
+    }
+    const onLoadArchivedSessions = vi.fn(async () => [archivedSession])
+    const onRestoreSession = vi.fn(async () => undefined)
+    const onDeleteSession = vi.fn(async () => undefined)
+
+    renderSidebar({
+      onLoadArchivedSessions,
+      onRestoreSession,
+      onDeleteSession,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show archived sessions' }))
+    await screen.findByText('Old session')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Old session permanently' }))
+
+    expect(onDeleteSession).not.toHaveBeenCalled()
+    const confirmButton = await screen.findByRole('button', { name: 'Delete' })
+    fireEvent.click(confirmButton)
+
+    await waitFor(() =>
+      expect(onDeleteSession).toHaveBeenCalledWith('agent-session-archived'),
+    )
+    await waitFor(() => expect(screen.queryByText('Old session')).not.toBeInTheDocument())
   })
 
   it('renders pane number chips for sessions loaded in non-focused panes', () => {

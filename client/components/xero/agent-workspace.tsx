@@ -1,46 +1,18 @@
 "use client"
 
-import { lazy, memo, Suspense, useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useMemo, useRef, type ReactNode } from 'react'
 
 import { PaneGrid, type PaneGridSlot } from '@/components/xero/agent-runtime/pane-grid'
 import type { AgentPaneCloseState, AgentRuntimeProps } from '@/components/xero/agent-runtime'
-import { LoadingScreen } from '@/components/xero/loading-screen'
-import {
-  selectRuntimeStreamForProject,
-  useXeroHighChurnStoreValue,
-  type AgentPaneView,
-  type AgentWorkspaceLayoutState,
-  type AgentWorkspacePaneView,
-  type XeroHighChurnStore,
+import { LiveAgentRuntimeView } from '@/components/xero/agent-runtime/live-agent-runtime'
+import type {
+  AgentWorkspaceLayoutState,
+  AgentWorkspacePaneView,
+  XeroHighChurnStore,
 } from '@/src/features/xero/use-xero-desktop-state'
-import { getAgentMessagesUnavailableCredentialReason } from '@/src/features/xero/use-xero-desktop-state/runtime-provider'
-import { getRuntimeStreamStatusLabel } from '@/src/lib/xero-model/runtime-stream'
-
-const LazyAgentRuntime = lazy(() =>
-  import('@/components/xero/agent-runtime').then((module) => ({ default: module.AgentRuntime })),
-)
 
 const AGENT_WORKSPACE_MAX_PANES = 6
 const COMPACT_DENSITY_PANE_THRESHOLD = 3
-const COMPACT_FIRST_RUN_STORAGE_KEY = 'xero.agentWorkspace.compactFirstRunSeen'
-
-function readCompactFirstRunSeen(): boolean {
-  if (typeof window === 'undefined') return true
-  try {
-    return window.localStorage?.getItem?.(COMPACT_FIRST_RUN_STORAGE_KEY) === '1'
-  } catch {
-    return true
-  }
-}
-
-function writeCompactFirstRunSeen(): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage?.setItem?.(COMPACT_FIRST_RUN_STORAGE_KEY, '1')
-  } catch {
-    /* storage unavailable — show again next time */
-  }
-}
 
 function getPaneAriaLabel(pane: AgentWorkspacePaneView, paneNumber: number): string {
   const sessionTitle = pane.agent.project.selectedAgentSession?.title?.trim()
@@ -73,44 +45,6 @@ function useShallowStableRecord<T extends object>(value: T): T {
     ref.current = value
   }
   return ref.current
-}
-
-function useAgentViewWithLiveRuntimeStream(
-  agent: AgentPaneView | null,
-  highChurnStore: XeroHighChurnStore,
-): AgentPaneView | null {
-  const projectId = agent?.project.id ?? null
-  const agentSessionId = agent?.project.selectedAgentSessionId ?? null
-  const streamSelector = useMemo(
-    () => selectRuntimeStreamForProject(projectId, agentSessionId),
-    [agentSessionId, projectId],
-  )
-  const runtimeStream = useXeroHighChurnStoreValue(highChurnStore, streamSelector)
-
-  return useMemo(() => {
-    if (!agent) {
-      return null
-    }
-
-    const streamStatus = runtimeStream?.status ?? 'idle'
-    return {
-      ...agent,
-      runtimeStream,
-      runtimeStreamStatus: streamStatus,
-      runtimeStreamStatusLabel: getRuntimeStreamStatusLabel(streamStatus),
-      runtimeStreamError: runtimeStream?.lastIssue ?? null,
-      runtimeStreamItems: runtimeStream?.items ?? [],
-      skillItems: runtimeStream?.skillItems ?? [],
-      activityItems: runtimeStream?.activityItems ?? [],
-      actionRequiredItems: runtimeStream?.actionRequired ?? [],
-      messagesUnavailableReason: getAgentMessagesUnavailableCredentialReason(
-        agent.runtimeSession ?? null,
-        runtimeStream,
-        agent.runtimeRun ?? null,
-        agent.agentRuntimeBlocked ?? false,
-      ),
-    }
-  }, [agent, runtimeStream])
 }
 
 type PaneAwareRuntimeHandlers = {
@@ -181,8 +115,6 @@ export interface AgentWorkspaceProps
       | 'onClosePane'
       | 'onFocusPane'
       | 'isPaneFocused'
-      | 'showCompactFirstRunTooltip'
-      | 'onAckCompactFirstRunTooltip'
       | 'onPaneCloseStateChange'
       | 'onStartAutonomousRun'
       | 'onInspectAutonomousRun'
@@ -211,28 +143,6 @@ export interface AgentWorkspaceProps
   onSplitterRatiosChange?: (arrangementKey: string, ratios: number[]) => void
   onPaneCloseStateChange?: (paneId: string, state: AgentPaneCloseState) => void
 }
-
-interface PaneRuntimeProps extends Omit<AgentRuntimeProps, 'agent'> {
-  pane: AgentWorkspacePaneView
-  highChurnStore: XeroHighChurnStore
-}
-
-const LiveAgentRuntime = memo(function LiveAgentRuntime({
-  pane,
-  highChurnStore,
-  ...props
-}: PaneRuntimeProps) {
-  const liveAgent = useAgentViewWithLiveRuntimeStream(pane.agent, highChurnStore)
-  if (!liveAgent) {
-    return null
-  }
-
-  return (
-    <Suspense fallback={<LoadingScreen />}>
-      <LazyAgentRuntime {...props} agent={liveAgent} />
-    </Suspense>
-  )
-})
 
 export const AgentWorkspace = memo(function AgentWorkspace({
   layout,
@@ -268,19 +178,6 @@ export const AgentWorkspace = memo(function AgentWorkspace({
     paneCount >= COMPACT_DENSITY_PANE_THRESHOLD ? 'compact' : 'comfortable'
   const spawnPaneDisabled = paneCount >= AGENT_WORKSPACE_MAX_PANES
 
-  const [compactFirstRunSeen, setCompactFirstRunSeen] = useState<boolean>(() =>
-    readCompactFirstRunSeen(),
-  )
-  const ackCompactFirstRunTooltip = useCallback(() => {
-    setCompactFirstRunSeen((prev) => {
-      if (prev) return prev
-      writeCompactFirstRunSeen()
-      return true
-    })
-  }, [])
-  const showCompactFirstRunTooltip =
-    density === 'compact' && !compactFirstRunSeen
-
   const slots = useMemo<PaneGridSlot[]>(
     () =>
       panes.map((pane, index) => ({
@@ -309,8 +206,6 @@ export const AgentWorkspace = memo(function AgentWorkspace({
           density={density}
           isFocused={slot.isFocused}
           spawnPaneDisabled={spawnPaneDisabled}
-          showCompactFirstRunTooltip={showCompactFirstRunTooltip && slot.isFocused}
-          onAckCompactFirstRunTooltip={ackCompactFirstRunTooltip}
           onSpawnPane={onSpawnPane}
           onClosePane={onClosePane}
           onFocusPane={onFocusPane}
@@ -336,7 +231,6 @@ export const AgentWorkspace = memo(function AgentWorkspace({
       )
     },
     [
-      ackCompactFirstRunTooltip,
       density,
       highChurnStore,
       onCancelAutonomousRun,
@@ -360,7 +254,6 @@ export const AgentWorkspace = memo(function AgentWorkspace({
       onUpsertNotificationRoute,
       paneCount,
       panes,
-      showCompactFirstRunTooltip,
       spawnPaneDisabled,
       stableRuntimeProps,
     ],
@@ -384,8 +277,6 @@ interface PaneRuntimeWrapperProps extends PaneAwareRuntimeHandlers {
   density: 'comfortable' | 'compact'
   isFocused: boolean
   spawnPaneDisabled: boolean
-  showCompactFirstRunTooltip: boolean
-  onAckCompactFirstRunTooltip: () => void
   onSpawnPane?: () => void
   onClosePane?: (paneId: string) => void
   onFocusPane?: (paneId: string) => void
@@ -401,8 +292,6 @@ interface PaneRuntimeWrapperProps extends PaneAwareRuntimeHandlers {
     | 'onClosePane'
     | 'onFocusPane'
     | 'isPaneFocused'
-    | 'showCompactFirstRunTooltip'
-    | 'onAckCompactFirstRunTooltip'
     | 'onPaneCloseStateChange'
     | 'onStartAutonomousRun'
     | 'onInspectAutonomousRun'
@@ -430,8 +319,6 @@ const PaneRuntime = memo(function PaneRuntime({
   density,
   isFocused,
   spawnPaneDisabled,
-  showCompactFirstRunTooltip,
-  onAckCompactFirstRunTooltip,
   onSpawnPane,
   onClosePane,
   onFocusPane,
@@ -559,10 +446,10 @@ const PaneRuntime = memo(function PaneRuntime({
   )
 
   return (
-    <LiveAgentRuntime
+    <LiveAgentRuntimeView
       {...runtimeProps}
       {...paneBoundHandlers}
-      pane={pane}
+      agent={pane.agent}
       highChurnStore={highChurnStore}
       density={density}
       paneId={paneId}
@@ -573,8 +460,6 @@ const PaneRuntime = memo(function PaneRuntime({
       spawnPaneDisabled={spawnPaneDisabled}
       onClosePane={handleClose}
       onFocusPane={handleFocus}
-      showCompactFirstRunTooltip={showCompactFirstRunTooltip}
-      onAckCompactFirstRunTooltip={onAckCompactFirstRunTooltip}
       onPaneCloseStateChange={handlePaneCloseStateChange}
     />
   )

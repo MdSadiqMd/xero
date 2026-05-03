@@ -386,6 +386,7 @@ export interface AgentPaneView {
 export interface AgentWorkspacePaneSlot {
   id: string
   agentSessionId: string | null
+  defaultRuntimeAgentId?: RuntimeAgentIdDto | null
 }
 
 export type AgentWorkspaceSidebarMode = 'pinned' | 'collapsed'

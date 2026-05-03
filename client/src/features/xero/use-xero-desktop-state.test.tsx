@@ -2084,6 +2084,9 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
         {state.agentWorkspaceLayout?.paneSlots.map((slot) => slot.agentSessionId ?? 'empty').join(',') ?? 'none'}
       </div>
       <div data-testid="workspace-pane-view-count">{String(state.agentWorkspacePanes.length)}</div>
+      <div data-testid="workspace-pane-runtime-agent-ids">
+        {state.agentWorkspacePanes.map((pane) => pane.agent.selectedRuntimeAgentId).join(',') || 'none'}
+      </div>
       <div data-testid="workspace-splitter-ratios">
         {state.agentWorkspaceLayout?.splitterRatios['1x2']?.join(',') ?? 'none'}
       </div>
@@ -3216,6 +3219,7 @@ describe('useXeroDesktopState', () => {
     }))
     await waitFor(() => expect(screen.getByTestId('workspace-pane-count')).toHaveTextContent('2'))
     expect(screen.getByTestId('workspace-pane-session-ids')).toHaveTextContent('agent-session-main,agent-session-2')
+    expect(screen.getByTestId('workspace-pane-runtime-agent-ids')).toHaveTextContent('ask,engineer')
 
     fireEvent.click(screen.getByRole('button', { name: 'Focus first pane' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save splitter ratios' }))
@@ -3231,6 +3235,7 @@ describe('useXeroDesktopState', () => {
 
     await waitFor(() => expect(screen.getByTestId('workspace-pane-count')).toHaveTextContent('2'))
     expect(screen.getByTestId('workspace-pane-session-ids')).toHaveTextContent('agent-session-main,agent-session-2')
+    expect(screen.getByTestId('workspace-pane-runtime-agent-ids')).toHaveTextContent('ask,engineer')
     expect(screen.getByTestId('workspace-splitter-ratios')).toHaveTextContent('2,1,1')
   })
 
@@ -3260,6 +3265,7 @@ describe('useXeroDesktopState', () => {
 
     expect(screen.getByTestId('workspace-pane-count')).toHaveTextContent('2')
     expect(screen.getByTestId('workspace-pane-session-ids')).toHaveTextContent('agent-session-main,empty')
+    expect(screen.getByTestId('workspace-pane-runtime-agent-ids')).toHaveTextContent('ask,engineer')
     expect(screen.getByTestId('workspace-focused-pane-id')).not.toHaveTextContent('agent-pane-project-1')
 
     createSession.resolve()
@@ -3269,6 +3275,7 @@ describe('useXeroDesktopState', () => {
         'agent-session-main,agent-session-delayed',
       ),
     )
+    expect(screen.getByTestId('workspace-pane-runtime-agent-ids')).toHaveTextContent('ask,engineer')
   })
 
   it('turns an archived loaded pane into an empty slot and reuses it on the next spawn', async () => {
@@ -3295,6 +3302,7 @@ describe('useXeroDesktopState', () => {
 
     await waitFor(() => expect(screen.getByTestId('workspace-pane-count')).toHaveTextContent('2'))
     expect(screen.getByTestId('workspace-pane-session-ids')).toHaveTextContent('agent-session-main,agent-session-3')
+    expect(screen.getByTestId('workspace-pane-runtime-agent-ids')).toHaveTextContent('ask,engineer')
     expect(setup.createAgentSession).toHaveBeenCalledTimes(2)
   })
 

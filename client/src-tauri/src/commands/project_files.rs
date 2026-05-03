@@ -67,7 +67,6 @@ pub async fn list_project_files<R: Runtime>(
     }
     let jobs = state.backend_jobs().clone();
     let project_id = request.project_id;
-    drop(state);
     drop(app);
 
     jobs.run_blocking_latest(
@@ -120,7 +119,6 @@ pub async fn read_project_file<R: Runtime>(
     let jobs = state.backend_jobs().clone();
     let asset_state = asset_state.inner().clone();
     let project_id = request.project_id;
-    drop(state);
     drop(app);
 
     jobs.run_blocking_latest(
@@ -693,7 +691,6 @@ pub async fn write_project_file<R: Runtime>(
     let jobs = state.backend_jobs().clone();
     let project_id = request.project_id;
     let content = request.content;
-    drop(state);
     drop(app);
 
     jobs.run_blocking_project_lane(
@@ -783,7 +780,6 @@ pub async fn create_project_entry<R: Runtime>(
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
     let jobs = state.backend_jobs().clone();
     let project_id = request.project_id.clone();
-    drop(state);
     drop(app);
 
     jobs.run_blocking_project_lane(project_id, "file", "project entry create", move || {
@@ -855,7 +851,6 @@ pub async fn rename_project_entry<R: Runtime>(
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
     let jobs = state.backend_jobs().clone();
     let project_id = request.project_id.clone();
-    drop(state);
     drop(app);
 
     jobs.run_blocking_project_lane(project_id, "file", "project entry rename", move || {
@@ -921,7 +916,6 @@ pub async fn move_project_entry<R: Runtime>(
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
     let jobs = state.backend_jobs().clone();
     let project_id = request.project_id.clone();
-    drop(state);
     drop(app);
 
     jobs.run_blocking_project_lane(project_id, "file", "project entry move", move || {
@@ -1023,7 +1017,6 @@ pub async fn delete_project_entry<R: Runtime>(
         resolve_virtual_path(&project_root, &request.path, "path", false)?;
     let jobs = state.backend_jobs().clone();
     let project_id = request.project_id;
-    drop(state);
     drop(app);
 
     jobs.run_blocking_project_lane(
@@ -1242,6 +1235,149 @@ pub(crate) fn is_skipped_project_directory_name(name: &str) -> bool {
     SKIPPED_DIRECTORY_NAMES.contains(&name)
 }
 
+pub(crate) fn read_metadata(path: &Path) -> CommandResult<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| match error.kind() {
+        ErrorKind::NotFound => CommandError::user_fixable(
+            "project_path_not_found",
+            format!(
+                "Xero could not find `{}` in the selected project.",
+                path.display()
+            ),
+        ),
+        _ => io_error(
+            "project_path_metadata_failed",
+            path,
+            format!(
+                "Xero could not inspect `{}` in the selected project: {error}",
+                path.display()
+            ),
+        ),
+    })?;
+
+    if metadata.file_type().is_symlink() {
+        return Err(CommandError::policy_denied(format!(
+            "Xero refuses to operate on symlinked project paths such as `{}`.",
+            path.display()
+        )));
+    }
+
+    Ok(metadata)
+}
+
+pub(crate) fn resolve_virtual_path(
+    project_root: &Path,
+    raw_path: &str,
+    field: &'static str,
+    allow_root: bool,
+) -> CommandResult<(PathBuf, String)> {
+    let segments = split_virtual_path(raw_path, field, allow_root)?;
+    let mut resolved = project_root.to_path_buf();
+    let mut normalized = String::from("/");
+
+    for segment in segments {
+        resolved.push(&segment);
+        if resolved.exists() {
+            let metadata = read_metadata(&resolved)?;
+            if metadata.file_type().is_symlink() {
+                return Err(CommandError::policy_denied(format!(
+                    "Xero refuses to follow symlinked project paths such as `{}`.",
+                    resolved.display()
+                )));
+            }
+        }
+
+        if normalized.len() > 1 {
+            normalized.push('/');
+        }
+        normalized.push_str(&segment);
+    }
+
+    Ok((resolved, normalized))
+}
+
+fn split_virtual_path(
+    raw_path: &str,
+    field: &'static str,
+    allow_root: bool,
+) -> CommandResult<Vec<String>> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::invalid_request(field));
+    }
+
+    if trimmed == "/" {
+        return if allow_root {
+            Ok(Vec::new())
+        } else {
+            Err(CommandError::policy_denied(
+                "Xero cannot operate on the repository root path directly.",
+            ))
+        };
+    }
+
+    let stripped = trimmed.strip_prefix('/').unwrap_or(trimmed);
+    let mut segments = Vec::new();
+    for segment in stripped.split('/') {
+        let normalized = validate_entry_name(segment, field)?;
+        segments.push(normalized);
+    }
+
+    if segments.is_empty() {
+        return Err(CommandError::invalid_request(field));
+    }
+
+    Ok(segments)
+}
+
+fn validate_entry_name(value: &str, field: &'static str) -> CommandResult<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CommandError::invalid_request(field));
+    }
+
+    if trimmed == "." || trimmed == ".." || trimmed.contains('/') || trimmed.contains('\\') {
+        return Err(CommandError::policy_denied(format!(
+            "Field `{field}` must not contain path traversal or path separator segments."
+        )));
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+fn child_virtual_path(parent_path: &str, child_name: &str) -> String {
+    if parent_path == "/" {
+        format!("/{child_name}")
+    } else {
+        format!("{parent_path}/{child_name}")
+    }
+}
+
+fn parent_virtual_path(path: &str) -> String {
+    let mut segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    segments.pop();
+    if segments.is_empty() {
+        "/".into()
+    } else {
+        format!("/{}", segments.join("/"))
+    }
+}
+
+fn io_error(code: &str, path: &Path, message: String) -> CommandError {
+    let normalized_message = if message.is_empty() {
+        format!(
+            "Xero hit an I/O error while working with {}.",
+            path.display()
+        )
+    } else {
+        message
+    };
+
+    CommandError::retryable(code, normalized_message)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1446,6 +1582,67 @@ mod tests {
     }
 
     #[test]
+    fn project_file_classification_detects_pdf_audio_and_video_as_renderable() {
+        let pdf = detect_project_file_type(std::path::Path::new("paper.pdf"), b"%PDF-1.7\n");
+        assert!(!pdf.is_text);
+        assert_eq!(pdf.mime_type, "application/pdf");
+        assert_eq!(pdf.renderer_kind, ProjectFileRendererKindDto::Pdf);
+
+        let audio = detect_project_file_type(std::path::Path::new("theme.mp3"), b"ID3\x03\x00");
+        assert!(!audio.is_text);
+        assert_eq!(audio.mime_type, "audio/mpeg");
+        assert_eq!(audio.renderer_kind, ProjectFileRendererKindDto::Audio);
+
+        let video = detect_project_file_type(
+            std::path::Path::new("demo.mp4"),
+            &[
+                0x00, 0x00, 0x00, 0x18, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm',
+            ],
+        );
+        assert!(!video.is_text);
+        assert_eq!(video.mime_type, "video/mp4");
+        assert_eq!(video.renderer_kind, ProjectFileRendererKindDto::Video);
+    }
+
+    #[test]
+    fn project_file_classification_keeps_unsafe_svg_text_backed() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let path = temp_dir.path().join("unsafe.svg");
+        fs::write(
+            &path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#,
+        )
+        .expect("write svg");
+
+        let response = read_project_file_at_path_with_limits(
+            "project-1".into(),
+            path.clone(),
+            "/unsafe.svg".into(),
+            read_metadata(&path).expect("metadata"),
+            crate::commands::project_assets::ProjectAssetState::default(),
+            FileContentLimits {
+                text_bytes: 1024,
+                preview_bytes: 1024,
+            },
+        )
+        .expect("classified response");
+
+        match response {
+            ReadProjectFileResponseDto::Text {
+                text,
+                renderer_kind,
+                mime_type,
+                ..
+            } => {
+                assert!(text.contains("<script>"));
+                assert_eq!(renderer_kind, ProjectFileRendererKindDto::Svg);
+                assert_eq!(mime_type, "image/svg+xml");
+            }
+            other => panic!("expected SVG text response, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn project_file_classification_enforces_text_size_limit() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let path = temp_dir.path().join("large.txt");
@@ -1471,147 +1668,36 @@ mod tests {
             other => panic!("expected unsupported response, got {other:?}"),
         }
     }
-}
 
-pub(crate) fn read_metadata(path: &Path) -> CommandResult<fs::Metadata> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| match error.kind() {
-        ErrorKind::NotFound => CommandError::user_fixable(
-            "project_path_not_found",
-            format!(
-                "Xero could not find `{}` in the selected project.",
-                path.display()
-            ),
-        ),
-        _ => io_error(
-            "project_path_metadata_failed",
-            path,
-            format!(
-                "Xero could not inspect `{}` in the selected project: {error}",
-                path.display()
-            ),
-        ),
-    })?;
+    #[test]
+    fn project_file_classification_enforces_preview_size_limit() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let path = temp_dir.path().join("large.png");
+        fs::write(&path, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]).expect("write image");
 
-    if metadata.file_type().is_symlink() {
-        return Err(CommandError::policy_denied(format!(
-            "Xero refuses to operate on symlinked project paths such as `{}`.",
-            path.display()
-        )));
-    }
-
-    Ok(metadata)
-}
-
-pub(crate) fn resolve_virtual_path(
-    project_root: &Path,
-    raw_path: &str,
-    field: &'static str,
-    allow_root: bool,
-) -> CommandResult<(PathBuf, String)> {
-    let segments = split_virtual_path(raw_path, field, allow_root)?;
-    let mut resolved = project_root.to_path_buf();
-    let mut normalized = String::from("/");
-
-    for segment in segments {
-        resolved.push(&segment);
-        if resolved.exists() {
-            let metadata = read_metadata(&resolved)?;
-            if metadata.file_type().is_symlink() {
-                return Err(CommandError::policy_denied(format!(
-                    "Xero refuses to follow symlinked project paths such as `{}`.",
-                    resolved.display()
-                )));
-            }
-        }
-
-        if normalized.len() > 1 {
-            normalized.push('/');
-        }
-        normalized.push_str(&segment);
-    }
-
-    Ok((resolved, normalized))
-}
-
-fn split_virtual_path(
-    raw_path: &str,
-    field: &'static str,
-    allow_root: bool,
-) -> CommandResult<Vec<String>> {
-    let trimmed = raw_path.trim();
-    if trimmed.is_empty() {
-        return Err(CommandError::invalid_request(field));
-    }
-
-    if trimmed == "/" {
-        return if allow_root {
-            Ok(Vec::new())
-        } else {
-            Err(CommandError::policy_denied(
-                "Xero cannot operate on the repository root path directly.",
-            ))
-        };
-    }
-
-    let stripped = trimmed.strip_prefix('/').unwrap_or(trimmed);
-    let mut segments = Vec::new();
-    for segment in stripped.split('/') {
-        let normalized = validate_entry_name(segment, field)?;
-        segments.push(normalized);
-    }
-
-    if segments.is_empty() {
-        return Err(CommandError::invalid_request(field));
-    }
-
-    Ok(segments)
-}
-
-fn validate_entry_name(value: &str, field: &'static str) -> CommandResult<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(CommandError::invalid_request(field));
-    }
-
-    if trimmed == "." || trimmed == ".." || trimmed.contains('/') || trimmed.contains('\\') {
-        return Err(CommandError::policy_denied(format!(
-            "Field `{field}` must not contain path traversal or path separator segments."
-        )));
-    }
-
-    Ok(trimmed.to_owned())
-}
-
-fn child_virtual_path(parent_path: &str, child_name: &str) -> String {
-    if parent_path == "/" {
-        format!("/{child_name}")
-    } else {
-        format!("{parent_path}/{child_name}")
-    }
-}
-
-fn parent_virtual_path(path: &str) -> String {
-    let mut segments = path
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    segments.pop();
-    if segments.is_empty() {
-        "/".into()
-    } else {
-        format!("/{}", segments.join("/"))
-    }
-}
-
-fn io_error(code: &str, path: &Path, message: String) -> CommandError {
-    let normalized_message = if message.is_empty() {
-        format!(
-            "Xero hit an I/O error while working with {}.",
-            path.display()
+        let response = read_project_file_at_path_with_limits(
+            "project-1".into(),
+            path.clone(),
+            "/large.png".into(),
+            read_metadata(&path).expect("metadata"),
+            crate::commands::project_assets::ProjectAssetState::default(),
+            FileContentLimits {
+                text_bytes: 1024,
+                preview_bytes: 3,
+            },
         )
-    } else {
-        message
-    };
+        .expect("classified response");
 
-    CommandError::retryable(code, normalized_message)
+        match response {
+            ReadProjectFileResponseDto::Unsupported {
+                reason,
+                renderer_kind,
+                ..
+            } => {
+                assert_eq!(reason, "too_large_for_preview");
+                assert_eq!(renderer_kind, Some(ProjectFileRendererKindDto::Image));
+            }
+            other => panic!("expected unsupported response, got {other:?}"),
+        }
+    }
 }

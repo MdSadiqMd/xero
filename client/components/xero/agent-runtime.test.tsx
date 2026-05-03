@@ -2096,6 +2096,27 @@ describe('AgentRuntime current UI', () => {
       expect(screen.queryByLabelText('Thinking level selector')).not.toBeInTheDocument()
     })
 
+    it('keeps a focused empty session condensed when exactly three panes are open', () => {
+      render(
+        <AgentRuntime
+          agent={makeAgent({
+            runtimeSession: makeRuntimeSession({ sessionId: 'session-1' }),
+          })}
+          density="compact"
+          paneCount={3}
+          paneNumber={2}
+          isPaneFocused
+        />,
+      )
+
+      const viewport = screen.getByLabelText('Agent conversation viewport')
+      expect(
+        screen.queryByRole('heading', { name: /What can we build together/i }),
+      ).not.toBeInTheDocument()
+      expect(within(viewport).getByRole('heading', { name: 'Xero' })).toBeVisible()
+      expect(within(viewport).getByRole('button', { name: 'Explore the codebase' })).toBeVisible()
+    })
+
     it('renders the comfortable composer variant with inline thinking selector when density is comfortable', () => {
       render(
         <AgentRuntime

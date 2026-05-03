@@ -14,6 +14,7 @@ import {
 } from 'react'
 import {
   Archive,
+  ArchiveRestore,
   ChevronRight,
   FileText,
   Loader2,
@@ -24,11 +25,22 @@ import {
   PinOff,
   Plus,
   Search,
+  Trash2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createFrameCoalescer } from '@/lib/frame-governance'
 import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
-import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Toggle } from '@/components/ui/toggle'
 import type { AgentSessionView } from '@/src/lib/xero-model'
@@ -41,7 +53,9 @@ interface AgentSessionsSidebarProps {
   onSelectSession: (agentSessionId: string) => void
   onCreateSession: () => void
   onArchiveSession: (agentSessionId: string) => void
-  onOpenArchivedSessions: () => void
+  onLoadArchivedSessions?: (projectId: string) => Promise<readonly AgentSessionView[]>
+  onRestoreSession?: (agentSessionId: string) => Promise<void>
+  onDeleteSession?: (agentSessionId: string) => Promise<void>
   onSearchSessions?: (query: string) => Promise<SessionTranscriptSearchResultSnippetDto[]>
   onOpenSearchResult?: (result: SessionTranscriptSearchResultSnippetDto) => void
   pendingSessionId?: string | null
@@ -59,6 +73,8 @@ interface AgentSessionsSidebarProps {
    */
   sessionPaneAssignments?: Record<string, number>
 }
+
+type ArchivedLoadStatus = 'idle' | 'loading' | 'loaded' | 'error'
 
 const PINNED_SESSIONS_STORAGE_PREFIX = 'xero:pinned-sessions:'
 const MIN_WIDTH = 220
@@ -140,7 +156,9 @@ export function AgentSessionsSidebar({
   onSelectSession,
   onCreateSession,
   onArchiveSession,
-  onOpenArchivedSessions,
+  onLoadArchivedSessions,
+  onRestoreSession,
+  onDeleteSession,
   onSearchSessions,
   onOpenSearchResult,
   pendingSessionId,
@@ -154,6 +172,9 @@ export function AgentSessionsSidebar({
   onReleasePeek,
   sessionPaneAssignments,
 }: AgentSessionsSidebarProps) {
+  const archiveSupported = Boolean(
+    onLoadArchivedSessions && onRestoreSession && onDeleteSession,
+  )
   const isStripMode = mode === 'collapsed' && collapsed
   const showOverlay = isStripMode && peeking
   const activeSessions = useMemo(
@@ -172,6 +193,15 @@ export function AgentSessionsSidebar({
   const [searchError, setSearchError] = useState<string | null>(null)
   const [optimisticSessionId, setOptimisticSessionId] = useState<string | null>(null)
   const [collapseGhostActive, setCollapseGhostActive] = useState(false)
+  const [archivedVisible, setArchivedVisible] = useState(false)
+  const [archivedSessions, setArchivedSessions] = useState<readonly AgentSessionView[]>([])
+  const [archivedStatus, setArchivedStatus] = useState<ArchivedLoadStatus>('idle')
+  const [archivedError, setArchivedError] = useState<string | null>(null)
+  const [pendingRestoreId, setPendingRestoreId] = useState<string | null>(null)
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const [confirmDeleteSession, setConfirmDeleteSession] =
+    useState<AgentSessionView | null>(null)
+  const [archivedActionError, setArchivedActionError] = useState<string | null>(null)
   const targetWidth = isStripMode ? STRIP_WIDTH : collapsed ? 0 : width
   const displayedSelectedSessionId = optimisticSessionId ?? selectedSessionId
   const widthMotion = useSidebarWidthMotion(targetWidth, {
@@ -306,6 +336,81 @@ export function AgentSessionsSidebar({
     }
     searchInputRef.current?.focus()
   }, [searchOpen])
+
+  const refreshArchivedSessions = useCallback(async () => {
+    if (!projectId || !onLoadArchivedSessions) {
+      setArchivedSessions([])
+      setArchivedStatus('idle')
+      return
+    }
+    setArchivedStatus('loading')
+    setArchivedError(null)
+    try {
+      const loaded = await onLoadArchivedSessions(projectId)
+      setArchivedSessions(loaded)
+      setArchivedStatus('loaded')
+    } catch (error) {
+      setArchivedSessions([])
+      setArchivedError(
+        error instanceof Error ? error.message : 'Failed to load archived sessions.',
+      )
+      setArchivedStatus('error')
+    }
+  }, [onLoadArchivedSessions, projectId])
+
+  useEffect(() => {
+    setArchivedVisible(false)
+  }, [projectId])
+
+  useEffect(() => {
+    if (!archivedVisible) {
+      setArchivedActionError(null)
+      setConfirmDeleteSession(null)
+      return
+    }
+    void refreshArchivedSessions()
+  }, [archivedVisible, refreshArchivedSessions])
+
+  const handleRestoreArchivedSession = useCallback(
+    async (session: AgentSessionView) => {
+      if (!onRestoreSession) return
+      setPendingRestoreId(session.agentSessionId)
+      setArchivedActionError(null)
+      try {
+        await onRestoreSession(session.agentSessionId)
+        setArchivedSessions((prev) =>
+          prev.filter((entry) => entry.agentSessionId !== session.agentSessionId),
+        )
+      } catch (error) {
+        setArchivedActionError(
+          error instanceof Error ? error.message : 'Failed to restore session.',
+        )
+      } finally {
+        setPendingRestoreId(null)
+      }
+    },
+    [onRestoreSession],
+  )
+
+  const handleConfirmDeleteArchivedSession = useCallback(async () => {
+    if (!confirmDeleteSession || !onDeleteSession) return
+    const targetId = confirmDeleteSession.agentSessionId
+    setPendingDeleteId(targetId)
+    setArchivedActionError(null)
+    try {
+      await onDeleteSession(targetId)
+      setArchivedSessions((prev) =>
+        prev.filter((entry) => entry.agentSessionId !== targetId),
+      )
+      setConfirmDeleteSession(null)
+    } catch (error) {
+      setArchivedActionError(
+        error instanceof Error ? error.message : 'Failed to delete session.',
+      )
+    } finally {
+      setPendingDeleteId(null)
+    }
+  }, [confirmDeleteSession, onDeleteSession])
 
   const handleResizeStart = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (collapsed || event.button !== 0) return
@@ -510,17 +615,21 @@ export function AgentSessionsSidebar({
               <Search className="h-3.5 w-3.5" />
             </Toggle>
           ) : null}
-          <button
-            aria-label="View archived sessions"
-            className={cn(
-              'flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors',
-              'hover:bg-primary/10 hover:text-primary',
-            )}
-            onClick={onOpenArchivedSessions}
-            type="button"
-          >
-            <Archive className="h-3.5 w-3.5" />
-          </button>
+          {archiveSupported ? (
+            <Toggle
+              aria-label={archivedVisible ? 'Hide archived sessions' : 'Show archived sessions'}
+              className={cn(
+                'h-6 w-6 min-w-6 p-0 text-muted-foreground transition-colors',
+                'hover:bg-primary/10 hover:text-primary',
+                'data-[state=on]:bg-primary/10 data-[state=on]:text-primary',
+              )}
+              onPressedChange={setArchivedVisible}
+              pressed={archivedVisible}
+              size="sm"
+            >
+              <Archive className="h-3.5 w-3.5" />
+            </Toggle>
+          ) : null}
           <button
             aria-label="New session"
             className={cn(
@@ -627,7 +736,7 @@ export function AgentSessionsSidebar({
         ) : null}
 
         <div className="flex-1 overflow-y-auto border-t border-border/60 scrollbar-thin">
-          {entries.length === 0 ? (
+          {entries.length === 0 && !archivedVisible ? (
             <div className="px-3 py-5 text-center text-[11px] leading-relaxed text-muted-foreground/80">
               No sessions yet. Start a new chat to begin.
             </div>
@@ -656,9 +765,90 @@ export function AgentSessionsSidebar({
                   </ul>
                 </div>
               ) : null}
+              {archivedVisible ? (
+                <div className="flex flex-col">
+                  <SidebarSectionHeader label="Archived" />
+                  {archivedStatus === 'loading' && archivedSessions.length === 0 ? (
+                    <div className="flex items-center gap-2 px-3 py-3 text-[11px] text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Loading archived sessions…
+                    </div>
+                  ) : archivedStatus === 'error' ? (
+                    <div className="flex flex-col gap-1.5 px-3 py-3 text-[11px] text-destructive">
+                      <span>{archivedError ?? 'Failed to load archived sessions.'}</span>
+                      <button
+                        className="self-start rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-secondary/60"
+                        onClick={() => void refreshArchivedSessions()}
+                        type="button"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : archivedSessions.length === 0 ? (
+                    <div className="px-3 py-3 text-[11px] leading-relaxed text-muted-foreground/80">
+                      No archived sessions.
+                    </div>
+                  ) : (
+                    <ul className="flex flex-col px-1.5 pb-1.5">
+                      {archivedSessions.map((session) => (
+                        <li key={session.agentSessionId}>
+                          <AgentArchivedSessionsSidebarItem
+                            session={session}
+                            isRestoring={pendingRestoreId === session.agentSessionId}
+                            isDeleting={pendingDeleteId === session.agentSessionId}
+                            isAnyActionPending={
+                              pendingRestoreId !== null || pendingDeleteId !== null
+                            }
+                            onRestore={handleRestoreArchivedSession}
+                            onRequestDelete={setConfirmDeleteSession}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {archivedActionError ? (
+                    <div className="px-3 pb-2 text-[11px] text-destructive">
+                      {archivedActionError}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </>
           )}
       </div>
+      {archiveSupported ? (
+        <AlertDialog
+          open={confirmDeleteSession !== null}
+          onOpenChange={(value) => {
+            if (!value) setConfirmDeleteSession(null)
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Permanently delete "{confirmDeleteSession?.title ?? ''}"?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently removes the session and all of its conversation history, runs, and
+                checkpoints. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={pendingDeleteId !== null}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className={buttonVariants({ variant: 'destructive' })}
+                disabled={pendingDeleteId !== null}
+                onClick={(event) => {
+                  event.preventDefault()
+                  void handleConfirmDeleteArchivedSession()
+                }}
+              >
+                {pendingDeleteId !== null ? 'Deleting…' : 'Delete'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
     </>
   )
 
@@ -1044,6 +1234,94 @@ export const AgentSessionsSidebarItem = memo(function AgentSessionsSidebarItem({
             )}
           </Button>
         ) : null}
+      </div>
+    </div>
+  )
+})
+
+interface AgentArchivedSessionsSidebarItemProps {
+  session: AgentSessionView
+  isRestoring: boolean
+  isDeleting: boolean
+  isAnyActionPending: boolean
+  onRestore: (session: AgentSessionView) => void | Promise<void>
+  onRequestDelete: (session: AgentSessionView) => void
+}
+
+const AgentArchivedSessionsSidebarItem = memo(function AgentArchivedSessionsSidebarItem({
+  session,
+  isRestoring,
+  isDeleting,
+  isAnyActionPending,
+  onRestore,
+  onRequestDelete,
+}: AgentArchivedSessionsSidebarItemProps) {
+  const stopActionPreview = (event: PointerEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+  }
+  return (
+    <div className="group relative">
+      <div
+        className={cn(
+          'flex w-full items-center rounded-md px-3 py-2 pr-[72px] text-left transition-colors',
+          'hover:bg-secondary/50',
+        )}
+        title={session.title}
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          <span className="truncate text-[12.5px] font-medium leading-tight text-foreground/85 group-hover:text-foreground">
+            {session.title}
+          </span>
+        </div>
+      </div>
+
+      <div
+        className={cn(
+          'absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5',
+          'opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100',
+          (isRestoring || isDeleting) && 'opacity-100',
+        )}
+      >
+        <Button
+          aria-label={`Restore ${session.title}`}
+          className="h-6 w-6 p-0 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          disabled={isAnyActionPending}
+          onClick={(event) => {
+            event.stopPropagation()
+            void onRestore(session)
+          }}
+          onPointerDown={stopActionPreview}
+          size="icon-sm"
+          title={`Restore ${session.title}`}
+          type="button"
+          variant="ghost"
+        >
+          {isRestoring ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ArchiveRestore className="h-3.5 w-3.5" />
+          )}
+        </Button>
+        <Button
+          aria-label={`Delete ${session.title} permanently`}
+          className="h-6 w-6 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          disabled={isAnyActionPending}
+          onClick={(event) => {
+            event.stopPropagation()
+            onRequestDelete(session)
+          }}
+          onPointerDown={stopActionPreview}
+          size="icon-sm"
+          title={`Delete ${session.title} permanently`}
+          type="button"
+          variant="ghost"
+        >
+          {isDeleting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="h-3.5 w-3.5" />
+          )}
+        </Button>
       </div>
     </div>
   )
