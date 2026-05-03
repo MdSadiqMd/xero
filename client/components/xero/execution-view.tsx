@@ -35,7 +35,7 @@ const LazyFindReplacePane = lazy(() =>
 export interface ExecutionViewProps {
   execution: ExecutionPaneView
   active?: boolean
-  listProjectFiles: (projectId: string) => Promise<ListProjectFilesResponseDto>
+  listProjectFiles: (projectId: string, path?: string) => Promise<ListProjectFilesResponseDto>
   readProjectFile: (projectId: string, path: string) => Promise<ReadProjectFileResponseDto>
   writeProjectFile: (projectId: string, path: string, content: string) => Promise<WriteProjectFileResponseDto>
   createProjectEntry: (request: CreateProjectEntryRequestDto) => Promise<CreateProjectEntryResponseDto>
@@ -73,8 +73,10 @@ function EditorView({
     cursor,
     setCursor,
     isTreeLoading,
+    loadingFolders,
     pendingFilePath,
     workspaceError,
+    treeBudgetInfo,
     renameTarget,
     setRenameTarget,
     deleteTarget,
@@ -286,9 +288,11 @@ function EditorView({
           searchQuery={searchQuery}
           isTreeLoading={isTreeLoading}
           workspaceError={workspaceError}
+          treeBudgetInfo={treeBudgetInfo}
           tree={tree}
           activePath={activePath}
           expandedFolders={expandedFolders}
+          loadingFolders={loadingFolders}
           dirtyPaths={dirtyPaths}
           creatingEntry={newChildTarget}
           onSearchQueryChange={setSearchQuery}

@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  createBackendRequestCoordinator,
+  isStaleBackendRequestError,
+  stableBackendRequestKey,
+} from '@/src/lib/backend-request-coordinator'
 import { getDesktopErrorMessage } from '@/src/lib/xero-desktop'
 import type {
   CreateProjectEntryRequestDto,
@@ -13,12 +18,22 @@ import type {
   WriteProjectFileResponseDto,
 } from '@/src/lib/xero-model'
 import {
-  createEmptyFileSystem,
+  applyProjectFileListing,
+  createEmptyProjectFileTreeStore,
+  DEFAULT_PROJECT_FILE_TREE_STORE_MAX_BYTES,
   findNode,
-  mapProjectFileTree,
+  getProjectFileTreeBudgetInfo,
+  isFolderLoaded,
+  materializeProjectFileTree,
+  trimProjectFileTreeStoreToBudget,
+  type ProjectFileTreeBudgetInfo,
+  type ProjectFileTreeStore,
   type FileSystemNode,
 } from '@/src/lib/file-system-tree'
 import { getLangFromPath } from '@/lib/language-detection'
+
+const EXECUTION_TREE_REQUEST_SCOPE = 'execution-project-tree'
+const EXECUTION_FILE_READ_REQUEST_SCOPE = 'execution-file-read'
 
 interface CursorPosition {
   line: number
@@ -43,7 +58,7 @@ interface NewChildTarget {
 interface UseExecutionWorkspaceControllerOptions {
   projectId: string
   active?: boolean
-  listProjectFiles: (projectId: string) => Promise<ListProjectFilesResponseDto>
+  listProjectFiles: (projectId: string, path?: string) => Promise<ListProjectFilesResponseDto>
   readProjectFile: (projectId: string, path: string) => Promise<ReadProjectFileResponseDto>
   writeProjectFile: (projectId: string, path: string, content: string) => Promise<WriteProjectFileResponseDto>
   createProjectEntry: (request: CreateProjectEntryRequestDto) => Promise<CreateProjectEntryResponseDto>
@@ -53,19 +68,7 @@ interface UseExecutionWorkspaceControllerOptions {
 }
 
 function defaultExpandedFolders(root: FileSystemNode): Set<string> {
-  const folders = new Set<string>(['/'])
-
-  for (const candidate of ['/src', '/app', '/components']) {
-    if (findNode(root, candidate)?.type === 'folder') {
-      folders.add(candidate)
-    }
-  }
-
-  if (folders.size === 1 && root.children?.length === 1 && root.children[0]?.type === 'folder') {
-    folders.add(root.children[0].path)
-  }
-
-  return folders
+  return root.type === 'folder' ? new Set<string>(['/']) : new Set<string>()
 }
 
 function remapPath(candidate: string, oldBase: string, newBase: string): string {
@@ -95,6 +98,14 @@ function childPath(parentPath: string, name: string): string {
   return parentPath === '/' ? `/${name}` : `${parentPath}/${name}`
 }
 
+function parentPathOf(path: string): string {
+  const segments = path.split('/').filter(Boolean)
+  if (segments.length <= 1) {
+    return '/'
+  }
+  return `/${segments.slice(0, -1).join('/')}`
+}
+
 function splitEntryPath(value: string): string[] {
   return value
     .trim()
@@ -120,9 +131,17 @@ export function useExecutionWorkspaceController({
   deleteProjectEntry,
 }: UseExecutionWorkspaceControllerOptions) {
   const loadEpochRef = useRef(0)
+  const treeRequestCoordinatorRef = useRef(createBackendRequestCoordinator())
+  const fileReadRequestCoordinatorRef = useRef(createBackendRequestCoordinator())
   const pendingInitialTreeLoadRef = useRef<string | null>(projectId)
 
-  const [tree, setTree] = useState<FileSystemNode>(createEmptyFileSystem)
+  const [treeStore, setTreeStoreState] = useState(createEmptyProjectFileTreeStore)
+  const treeStoreRef = useRef(treeStore)
+  const tree = useMemo(() => materializeProjectFileTree(treeStore), [treeStore])
+  const [treeBudgetInfo, setTreeBudgetInfo] = useState<ProjectFileTreeBudgetInfo>({
+    omittedEntryCount: 0,
+    truncated: false,
+  })
   const [savedContents, setSavedContents] = useState<Record<string, string>>({})
   const [fileContents, setFileContents] = useState<Record<string, string>>({})
   const [documentVersions, setDocumentVersions] = useState<Record<string, number>>({})
@@ -134,6 +153,7 @@ export function useExecutionWorkspaceController({
   const [searchQuery, setSearchQuery] = useState('')
   const [cursor, setCursor] = useState<CursorPosition>({ line: 1, column: 1 })
   const [isTreeLoading, setIsTreeLoading] = useState(false)
+  const [loadingFolders, setLoadingFolders] = useState<Set<string>>(new Set())
   const [pendingFilePath, setPendingFilePath] = useState<string | null>(null)
   const [savingPath, setSavingPath] = useState<string | null>(null)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
@@ -141,63 +161,129 @@ export function useExecutionWorkspaceController({
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [newChildTarget, setNewChildTarget] = useState<NewChildTarget | null>(null)
 
+  const commitTreeStore = useCallback((nextStore: ProjectFileTreeStore) => {
+    treeStoreRef.current = nextStore
+    setTreeStoreState(nextStore)
+  }, [])
+
   const openFile = useCallback((path: string) => {
     setOpenTabs((current) => (current.includes(path) ? current : [...current, path]))
     setActivePath(path)
   }, [])
 
-  const refreshTree = useCallback(
-    async (options: { preserveExpandedFolders?: boolean } = {}) => {
+  const refreshFolder = useCallback(
+    async (path = '/', options: { preserveExpandedFolders?: boolean } = {}) => {
+      const normalizedPath = path || '/'
+      const isRootLoad = normalizedPath === '/'
       const requestEpoch = loadEpochRef.current
-      setIsTreeLoading(true)
+      if (isRootLoad) {
+        setIsTreeLoading(true)
+      }
+      setLoadingFolders((current) => {
+        const next = new Set(current)
+        next.add(normalizedPath)
+        return next
+      })
       setWorkspaceError(null)
 
       try {
-        const response = await listProjectFiles(projectId)
+        const response = await treeRequestCoordinatorRef.current.runLatest(
+          `${EXECUTION_TREE_REQUEST_SCOPE}:${normalizedPath}`,
+          stableBackendRequestKey(['list_project_files', { path: normalizedPath, projectId }]),
+          () => (isRootLoad ? listProjectFiles(projectId) : listProjectFiles(projectId, normalizedPath)),
+        )
         if (requestEpoch !== loadEpochRef.current) {
           return
         }
 
-        const nextTree = mapProjectFileTree(response)
-        setTree(nextTree)
+        const nextStore = applyProjectFileListing(treeStoreRef.current, response)
+        const budgetedStore = trimProjectFileTreeStoreToBudget(nextStore, {
+          maxBytes: DEFAULT_PROJECT_FILE_TREE_STORE_MAX_BYTES,
+          protectedPaths: [normalizedPath, activePath],
+        }).store
+        const nextTree = materializeProjectFileTree(budgetedStore)
+        commitTreeStore(budgetedStore)
+        setTreeBudgetInfo(getProjectFileTreeBudgetInfo(response))
         setExpandedFolders((current) => {
-          if (!options.preserveExpandedFolders || current.size === 0) {
+          if (isRootLoad && (!options.preserveExpandedFolders || current.size === 0)) {
             return defaultExpandedFolders(nextTree)
           }
 
           const next = new Set(Array.from(current).filter((path) => findNode(nextTree, path)?.type === 'folder'))
           if (next.size === 0) {
-            return defaultExpandedFolders(nextTree)
+            const defaults = defaultExpandedFolders(nextTree)
+            if (!isRootLoad) {
+              defaults.add(normalizedPath)
+            }
+            return defaults
           }
 
           next.add('/')
+          if (!isRootLoad) {
+            next.add(normalizedPath)
+          }
           return next
         })
         setOpenTabs((current) => current.filter((path) => findNode(nextTree, path)?.type === 'file'))
         setActivePath((current) => (current && findNode(nextTree, current)?.type === 'file' ? current : null))
       } catch (error) {
+        if (isStaleBackendRequestError(error)) {
+          return
+        }
         if (requestEpoch !== loadEpochRef.current) {
           return
         }
 
-        setTree(createEmptyFileSystem())
-        setOpenTabs([])
-        setActivePath(null)
-        setExpandedFolders(new Set(['/']))
+        if (isRootLoad) {
+          const emptyStore = createEmptyProjectFileTreeStore()
+          commitTreeStore(emptyStore)
+          setTreeBudgetInfo({ omittedEntryCount: 0, truncated: false })
+          setOpenTabs([])
+          setActivePath(null)
+          setExpandedFolders(new Set(['/']))
+        }
         setWorkspaceError(getDesktopErrorMessage(error))
       } finally {
         if (requestEpoch === loadEpochRef.current) {
-          setIsTreeLoading(false)
+          if (isRootLoad) {
+            setIsTreeLoading(false)
+          }
+          setLoadingFolders((current) => {
+            if (!current.has(normalizedPath)) return current
+            const next = new Set(current)
+            next.delete(normalizedPath)
+            return next
+          })
         }
       }
     },
-    [listProjectFiles, projectId],
+    [activePath, commitTreeStore, listProjectFiles, projectId],
+  )
+
+  const refreshTree = useCallback(
+    (options: { preserveExpandedFolders?: boolean } = {}) => refreshFolder('/', options),
+    [refreshFolder],
+  )
+
+  const refreshFolderSet = useCallback(
+    async (paths: Iterable<string>) => {
+      const uniquePaths = Array.from(new Set(paths))
+        .filter(Boolean)
+        .sort((left, right) => left.split('/').length - right.split('/').length)
+      for (const path of uniquePaths) {
+        await refreshFolder(path, { preserveExpandedFolders: true })
+      }
+    },
+    [refreshFolder],
   )
 
   useEffect(() => {
     loadEpochRef.current += 1
+    treeRequestCoordinatorRef.current.cancelScope(EXECUTION_TREE_REQUEST_SCOPE)
+    fileReadRequestCoordinatorRef.current.cancelScope(EXECUTION_FILE_READ_REQUEST_SCOPE)
     pendingInitialTreeLoadRef.current = projectId
-    setTree(createEmptyFileSystem())
+    commitTreeStore(createEmptyProjectFileTreeStore())
+    setTreeBudgetInfo({ omittedEntryCount: 0, truncated: false })
     setSavedContents({})
     setFileContents({})
     setDocumentVersions({})
@@ -209,12 +295,13 @@ export function useExecutionWorkspaceController({
     setSearchQuery('')
     setCursor({ line: 1, column: 1 })
     setPendingFilePath(null)
+    setLoadingFolders(new Set())
     setSavingPath(null)
     setWorkspaceError(null)
     setRenameTarget(null)
     setDeleteTarget(null)
     setNewChildTarget(null)
-  }, [projectId])
+  }, [commitTreeStore, projectId])
 
   useEffect(() => {
     if (!active || pendingInitialTreeLoadRef.current !== projectId) {
@@ -249,7 +336,7 @@ export function useExecutionWorkspaceController({
   const handleSelectFile = useCallback(
     async (path: string) => {
       const node = findNode(tree, path)
-      if (!node || node.type !== 'file') {
+      if ((node && node.type !== 'file') || !path.startsWith('/')) {
         return
       }
 
@@ -263,7 +350,11 @@ export function useExecutionWorkspaceController({
       setWorkspaceError(null)
 
       try {
-        const response = await readProjectFile(projectId, path)
+        const response = await fileReadRequestCoordinatorRef.current.runLatest(
+          EXECUTION_FILE_READ_REQUEST_SCOPE,
+          stableBackendRequestKey(['read_project_file', { path, projectId }]),
+          () => readProjectFile(projectId, path),
+        )
         if (requestEpoch !== loadEpochRef.current) {
           return
         }
@@ -273,6 +364,9 @@ export function useExecutionWorkspaceController({
         setLineCounts((current) => ({ ...current, [path]: countLines(response.content) }))
         openFile(path)
       } catch (error) {
+        if (isStaleBackendRequestError(error)) {
+          return
+        }
         if (requestEpoch !== loadEpochRef.current) {
           return
         }
@@ -288,13 +382,25 @@ export function useExecutionWorkspaceController({
   )
 
   const handleToggleFolder = useCallback((path: string) => {
+    const node = findNode(tree, path)
+    if (node?.type !== 'folder') {
+      return
+    }
+
+    const shouldLoad = !expandedFolders.has(path) && !isFolderLoaded(treeStoreRef.current, path)
     setExpandedFolders((current) => {
       const next = new Set(current)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
+      if (next.has(path)) {
+        next.delete(path)
+      } else {
+        next.add(path)
+      }
       return next
     })
-  }, [])
+    if (shouldLoad) {
+      void refreshFolder(path, { preserveExpandedFolders: true })
+    }
+  }, [expandedFolders, refreshFolder, tree])
 
   const handleSnapshotChange = useCallback(
     (value: string) => {
@@ -461,8 +567,11 @@ export function useExecutionWorkspaceController({
       next.add(parentPath)
       return next
     })
+    if (!isFolderLoaded(treeStoreRef.current, parentPath)) {
+      void refreshFolder(parentPath, { preserveExpandedFolders: true })
+    }
     setNewChildTarget({ parentPath, type: 'file' })
-  }, [])
+  }, [refreshFolder])
 
   const handleRequestNewFolder = useCallback((parentPath: string) => {
     setExpandedFolders((current) => {
@@ -470,8 +579,11 @@ export function useExecutionWorkspaceController({
       next.add(parentPath)
       return next
     })
+    if (!isFolderLoaded(treeStoreRef.current, parentPath)) {
+      void refreshFolder(parentPath, { preserveExpandedFolders: true })
+    }
     setNewChildTarget({ parentPath, type: 'folder' })
-  }, [])
+  }, [refreshFolder])
 
   const handleCopyPath = useCallback((path: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -503,13 +615,16 @@ export function useExecutionWorkspaceController({
         setExpandedFolders((current) => new Set(Array.from(current).map((path) => remapPath(path, oldPath, newPath))))
         setActivePath((current) => (current ? remapPath(current, oldPath, newPath) : null))
         setWorkspaceError(null)
-        await refreshTree({ preserveExpandedFolders: true })
+        await refreshFolderSet([
+          parentPathOf(oldPath),
+          ...Array.from(expandedFolders).map((path) => remapPath(path, oldPath, newPath)),
+        ])
         return null
       } catch (error) {
         return getDesktopErrorMessage(error)
       }
     },
-    [projectId, refreshTree, renameProjectEntry, renameTarget],
+    [expandedFolders, projectId, refreshFolderSet, renameProjectEntry, renameTarget],
   )
 
   const handleDeleteSubmit = useCallback(async () => {
@@ -539,11 +654,11 @@ export function useExecutionWorkspaceController({
       setActivePath((current) => (current === deletedPath || current?.startsWith(deletedPrefix) ? null : current))
       setWorkspaceError(null)
       setDeleteTarget(null)
-      await refreshTree({ preserveExpandedFolders: true })
+      await refreshFolderSet([parentPathOf(deletedPath)])
     } catch (error) {
       setWorkspaceError(getDesktopErrorMessage(error))
     }
-  }, [deleteProjectEntry, deleteTarget, projectId, refreshTree])
+  }, [deleteProjectEntry, deleteTarget, projectId, refreshFolderSet])
 
   const handleCreateSubmit = useCallback(
     async (name: string): Promise<string | null> => {
@@ -615,13 +730,13 @@ export function useExecutionWorkspaceController({
         })
         setWorkspaceError(null)
         setNewChildTarget(null)
-        await refreshTree({ preserveExpandedFolders: true })
+        await refreshFolderSet(expandedPaths)
         return null
       } catch (error) {
         return getDesktopErrorMessage(error)
       }
     },
-    [createProjectEntry, newChildTarget, openFile, projectId, refreshTree, tree],
+    [createProjectEntry, newChildTarget, openFile, projectId, refreshFolderSet, tree],
   )
 
   const handleMoveEntry = useCallback(
@@ -651,12 +766,16 @@ export function useExecutionWorkspaceController({
         })
         setActivePath((current) => (current ? remapPath(current, path, newPath) : null))
         setWorkspaceError(null)
-        await refreshTree({ preserveExpandedFolders: true })
+        await refreshFolderSet([
+          parentPathOf(path),
+          targetParentPath,
+          ...Array.from(expandedFolders).map((candidate) => remapPath(candidate, path, newPath)),
+        ])
       } catch (error) {
         setWorkspaceError(getDesktopErrorMessage(error))
       }
     },
-    [moveProjectEntry, projectId, refreshTree],
+    [expandedFolders, moveProjectEntry, projectId, refreshFolderSet],
   )
 
   const activeNode = useMemo(() => (activePath ? findNode(tree, activePath) : null), [activePath, tree])
@@ -681,9 +800,11 @@ export function useExecutionWorkspaceController({
     cursor,
     setCursor,
     isTreeLoading,
+    loadingFolders,
     pendingFilePath,
     savingPath,
     workspaceError,
+    treeBudgetInfo,
     renameTarget,
     setRenameTarget,
     deleteTarget,

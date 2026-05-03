@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { useDeferredFilterQuery } from "@/lib/input-priority"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { createFrameCoalescer } from "@/lib/frame-governance"
 import { useSidebarMotion, useSidebarWidthMotion } from "@/lib/sidebar-motion"
 
 const MIN_WIDTH = 280
@@ -132,11 +134,12 @@ export function WorkflowsSidebar({ open }: WorkflowsSidebarProps) {
   const { contentTransition } = useSidebarMotion(isResizing)
   const widthRef = useRef(width)
   widthRef.current = width
+  const deferredQuery = useDeferredFilterQuery(query)
 
   const workflows = DEFAULT_WORKFLOWS
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = deferredQuery
     if (!q) return workflows
     return workflows.filter(
       (workflow) =>
@@ -144,13 +147,17 @@ export function WorkflowsSidebar({ open }: WorkflowsSidebarProps) {
         workflow.description.toLowerCase().includes(q) ||
         workflow.agents.some((agent) => agent.toLowerCase().includes(q)),
     )
-  }, [query, workflows])
+  }, [deferredQuery, workflows])
 
   const handleResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
     const startX = event.clientX
     const startWidth = widthRef.current
+    let latestWidth = startWidth
+    const widthUpdates = createFrameCoalescer<number>({
+      onFlush: setWidth,
+    })
     setIsResizing(true)
 
     const previousCursor = document.body.style.cursor
@@ -160,17 +167,18 @@ export function WorkflowsSidebar({ open }: WorkflowsSidebarProps) {
 
     const handleMove = (ev: PointerEvent) => {
       const delta = startX - ev.clientX
-      const next = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + delta))
-      setWidth(next)
+      latestWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startWidth + delta))
+      widthUpdates.schedule(latestWidth)
     }
     const handleUp = () => {
+      widthUpdates.flush()
       window.removeEventListener("pointermove", handleMove)
       window.removeEventListener("pointerup", handleUp)
       window.removeEventListener("pointercancel", handleUp)
       document.body.style.cursor = previousCursor
       document.body.style.userSelect = previousSelect
       setIsResizing(false)
-      writePersistedWidth(widthRef.current)
+      writePersistedWidth(latestWidth)
     }
 
     window.addEventListener("pointermove", handleMove)

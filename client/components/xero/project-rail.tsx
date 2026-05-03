@@ -10,6 +10,7 @@ import {
 import { Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
+import { createFrameCoalescer } from '@/lib/frame-governance'
 import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import {
   AlertDialog,
@@ -119,10 +120,6 @@ export function ProjectRail({
   }, [])
 
   useEffect(() => {
-    writePersistedWidth(width)
-  }, [width])
-
-  useEffect(() => {
     if (!optimisticProjectId) {
       return
     }
@@ -164,6 +161,10 @@ export function ProjectRail({
     const startX = event.clientX
     const startWidth = widthRef.current
     const ceiling = viewportMaxWidth()
+    let latestWidth = startWidth
+    const widthUpdates = createFrameCoalescer<number>({
+      onFlush: setWidth,
+    })
     setMaxWidth(ceiling)
     setIsResizing(true)
 
@@ -174,15 +175,18 @@ export function ProjectRail({
 
     const handleMove = (ev: globalThis.PointerEvent) => {
       const delta = ev.clientX - startX
-      setWidth(clampWidth(startWidth + delta, ceiling))
+      latestWidth = clampWidth(startWidth + delta, ceiling)
+      widthUpdates.schedule(latestWidth)
     }
     const handleUp = () => {
+      widthUpdates.flush()
       window.removeEventListener('pointermove', handleMove)
       window.removeEventListener('pointerup', handleUp)
       window.removeEventListener('pointercancel', handleUp)
       document.body.style.cursor = previousCursor
       document.body.style.userSelect = previousSelect
       setIsResizing(false)
+      writePersistedWidth(latestWidth)
     }
 
     window.addEventListener('pointermove', handleMove)
@@ -198,7 +202,9 @@ export function ProjectRail({
     setMaxWidth(ceiling)
     setWidth((current) => {
       const delta = event.key === 'ArrowRight' ? step : -step
-      return clampWidth(current + delta, ceiling)
+      const next = clampWidth(current + delta, ceiling)
+      writePersistedWidth(next)
+      return next
     })
   }, [collapsed])
 

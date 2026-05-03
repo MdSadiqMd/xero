@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { estimateUtf16Bytes } from '@/lib/byte-budget-cache'
 import { optionalIsoTimestampSchema } from './shared'
 import { runtimeProviderIdSchema } from './runtime'
 import {
@@ -273,6 +274,45 @@ export function hasProviderModelCatalogSnapshot(catalog: ProviderModelCatalogDto
   }
 
   return catalog.source !== 'unavailable' && catalog.models.length > 0
+}
+
+function estimateOptionalTextBytes(value: string | null | undefined): number {
+  return value ? estimateUtf16Bytes(value) : 0
+}
+
+export function estimateProviderModelCatalogBytes(
+  catalog: ProviderModelCatalogDto | null | undefined,
+): number {
+  if (!catalog) {
+    return 0
+  }
+
+  let bytes = 128
+  bytes += estimateUtf16Bytes(catalog.profileId)
+  bytes += estimateUtf16Bytes(catalog.providerId)
+  bytes += estimateUtf16Bytes(catalog.configuredModelId)
+  bytes += estimateUtf16Bytes(catalog.source)
+  bytes += estimateOptionalTextBytes(catalog.fetchedAt)
+  bytes += estimateOptionalTextBytes(catalog.lastSuccessAt)
+  if (catalog.lastRefreshError) {
+    bytes += estimateUtf16Bytes(catalog.lastRefreshError.code)
+    bytes += estimateUtf16Bytes(catalog.lastRefreshError.message)
+  }
+
+  for (const model of catalog.models) {
+    bytes += 96
+    bytes += estimateUtf16Bytes(model.modelId)
+    bytes += estimateUtf16Bytes(model.displayName)
+    bytes += estimateOptionalTextBytes(model.contextLimitFetchedAt)
+    bytes += estimateOptionalTextBytes(model.contextLimitSource)
+    bytes += estimateOptionalTextBytes(model.contextLimitConfidence)
+    bytes += estimateOptionalTextBytes(model.thinking.defaultEffort)
+    for (const effort of model.thinking.effortOptions) {
+      bytes += estimateUtf16Bytes(effort)
+    }
+  }
+
+  return bytes
 }
 
 export function createUnavailableProviderModelCatalog(

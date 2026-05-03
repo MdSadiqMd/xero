@@ -2,6 +2,7 @@ pub mod agent_definition;
 pub mod agent_session;
 pub mod agent_session_title;
 pub mod agent_task;
+pub mod backend_jobs;
 pub mod browser;
 pub mod cancel_autonomous_run;
 pub mod complete_oauth_callback;
@@ -11,6 +12,7 @@ pub mod dictation;
 pub mod doctor_report;
 pub mod emulator;
 pub mod environment_discovery;
+pub mod environment_user_tools;
 pub mod get_autonomous_run;
 pub mod get_project_snapshot;
 pub mod get_project_usage_summary;
@@ -28,6 +30,7 @@ pub mod list_notification_dispatches;
 pub mod list_notification_routes;
 pub mod list_projects;
 pub mod logout_runtime_session;
+pub mod payload_budget;
 pub mod platform;
 pub mod project_files;
 pub mod provider_credentials;
@@ -106,6 +109,9 @@ pub use environment_discovery::{
     get_environment_discovery_status, get_environment_profile_summary,
     refresh_environment_discovery, resolve_environment_permission_requests,
     start_environment_discovery,
+};
+pub use environment_user_tools::{
+    environment_remove_user_tool, environment_save_user_tool, environment_verify_user_tool,
 };
 pub use get_autonomous_run::get_autonomous_run;
 pub use get_project_snapshot::get_project_snapshot;

@@ -83,6 +83,56 @@ pub enum EnvironmentToolCategory {
     ShellUtility,
 }
 
+impl EnvironmentToolCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BaseDeveloperTool => "base_developer_tool",
+            Self::PackageManager => "package_manager",
+            Self::PlatformPackageManager => "platform_package_manager",
+            Self::LanguageRuntime => "language_runtime",
+            Self::ContainerOrchestration => "container_orchestration",
+            Self::MobileTooling => "mobile_tooling",
+            Self::CloudDeployment => "cloud_deployment",
+            Self::DatabaseCli => "database_cli",
+            Self::SolanaTooling => "solana_tooling",
+            Self::AgentAiCli => "agent_ai_cli",
+            Self::Editor => "editor",
+            Self::BuildTool => "build_tool",
+            Self::Linter => "linter",
+            Self::VersionManager => "version_manager",
+            Self::IacTool => "iac_tool",
+            Self::ShellUtility => "shell_utility",
+        }
+    }
+}
+
+pub fn parse_environment_tool_category(
+    value: &str,
+) -> EnvironmentProfileValidationResult<EnvironmentToolCategory> {
+    match value {
+        "base_developer_tool" => Ok(EnvironmentToolCategory::BaseDeveloperTool),
+        "package_manager" => Ok(EnvironmentToolCategory::PackageManager),
+        "platform_package_manager" => Ok(EnvironmentToolCategory::PlatformPackageManager),
+        "language_runtime" => Ok(EnvironmentToolCategory::LanguageRuntime),
+        "container_orchestration" => Ok(EnvironmentToolCategory::ContainerOrchestration),
+        "mobile_tooling" => Ok(EnvironmentToolCategory::MobileTooling),
+        "cloud_deployment" => Ok(EnvironmentToolCategory::CloudDeployment),
+        "database_cli" => Ok(EnvironmentToolCategory::DatabaseCli),
+        "solana_tooling" => Ok(EnvironmentToolCategory::SolanaTooling),
+        "agent_ai_cli" => Ok(EnvironmentToolCategory::AgentAiCli),
+        "editor" => Ok(EnvironmentToolCategory::Editor),
+        "build_tool" => Ok(EnvironmentToolCategory::BuildTool),
+        "linter" => Ok(EnvironmentToolCategory::Linter),
+        "version_manager" => Ok(EnvironmentToolCategory::VersionManager),
+        "iac_tool" => Ok(EnvironmentToolCategory::IacTool),
+        "shell_utility" => Ok(EnvironmentToolCategory::ShellUtility),
+        _ => Err(EnvironmentProfileValidationError::invalid(
+            "category",
+            format!("unknown environment tool category `{value}`"),
+        )),
+    }
+}
+
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EnvironmentToolSource {
@@ -168,6 +218,8 @@ pub struct EnvironmentToolRecord {
     pub id: String,
     pub category: EnvironmentToolCategory,
     pub command: String,
+    #[serde(default)]
+    pub custom: bool,
     pub present: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -234,6 +286,8 @@ pub struct EnvironmentProfilePayload {
 pub struct EnvironmentToolSummary {
     pub id: String,
     pub category: EnvironmentToolCategory,
+    #[serde(default)]
+    pub custom: bool,
     pub present: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -717,6 +771,7 @@ mod tests {
                 id: "node".into(),
                 category: EnvironmentToolCategory::LanguageRuntime,
                 command: "node".into(),
+                custom: false,
                 present: true,
                 path: Some("/opt/homebrew/bin/node".into()),
                 version: Some("v20.11.1".into()),
@@ -744,6 +799,7 @@ mod tests {
             tools: vec![EnvironmentToolSummary {
                 id: "node".into(),
                 category: EnvironmentToolCategory::LanguageRuntime,
+                custom: false,
                 present: true,
                 version: Some("v20.11.1".into()),
                 display_path: Some("~/bin/node".into()),

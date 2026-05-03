@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type WheelEven
 import { ArrowDown, ChevronRight, Loader2, Plus } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { useDebouncedValue } from '@/lib/input-priority'
 import { cn } from '@/lib/utils'
 import type {
   AgentPaneView,
@@ -447,17 +448,6 @@ function toContextMeterError(error: unknown): {
         : 'Xero could not refresh the context meter.',
     retryable: typeof candidate?.retryable === 'boolean' ? candidate.retryable : true,
   }
-}
-
-function useDebouncedValue<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value)
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setDebounced(value), delayMs)
-    return () => window.clearTimeout(timeout)
-  }, [delayMs, value])
-
-  return debounced
 }
 
 function useAgentContextMeterSnapshot(options: {

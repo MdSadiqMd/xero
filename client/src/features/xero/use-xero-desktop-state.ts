@@ -8,6 +8,8 @@ import {
   applyRuntimeRun,
   applyRuntimeSession,
   applyRepositoryStatus,
+  estimateProviderModelCatalogBytes,
+  estimateRuntimeStreamViewBytes,
   mapAutonomousRunInspection,
   mapProjectSnapshot,
   mapProjectSummary,
@@ -64,6 +66,7 @@ import {
   scheduleRuntimeMetadataRefresh as scheduleRuntimeMetadataRefreshHelper,
   type RuntimeMetadataRefreshSource,
 } from './use-xero-desktop-state/runtime-stream'
+import { trimRecordCacheToByteBudget } from './use-xero-desktop-state/memory-budget'
 import {
   buildAgentView,
   buildExecutionView,
@@ -151,6 +154,10 @@ export {
 
 const REPOSITORY_STATUS_POLL_MS = 5_000
 const PREFETCH_FALLBACK_DELAY_MS = 250
+const RUNTIME_STREAM_SESSION_CACHE_MAX_BYTES = 3 * 1024 * 1024
+const RUNTIME_STREAM_SESSION_CACHE_MAX_ENTRIES = 24
+const PROVIDER_MODEL_CATALOG_CACHE_MAX_BYTES = 2 * 1024 * 1024
+const PROVIDER_MODEL_CATALOG_CACHE_MAX_ENTRIES = 24
 
 type IdleWindow = Window & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
@@ -519,6 +526,18 @@ export function useXeroDesktopState(
   const runtimeRunRefreshKeyRef = useRef<Record<string, string>>({})
   const previousRuntimeAuthRef = useRef<Record<string, boolean>>({})
 
+  const trimRuntimeStreamSessionCache = useCallback((protectedKey: string | null = null) => {
+    runtimeStreamsBySessionRef.current = trimRecordCacheToByteBudget(
+      runtimeStreamsBySessionRef.current,
+      {
+        estimateBytes: estimateRuntimeStreamViewBytes,
+        maxBytes: RUNTIME_STREAM_SESSION_CACHE_MAX_BYTES,
+        maxEntries: RUNTIME_STREAM_SESSION_CACHE_MAX_ENTRIES,
+        protectedKeys: [protectedKey],
+      },
+    ).records
+  }, [])
+
   const setRepositoryStatus = useCallback(
     (action: SetStateAction<RepositoryStatusView | null>) => {
       const nextStatus = highChurnStore.setRepositoryStatus(action)
@@ -533,13 +552,13 @@ export function useXeroDesktopState(
     (action: SetStateAction<Record<string, RuntimeStreamView>>) => {
       const nextStreams = highChurnStore.setRuntimeStreams(action)
       for (const [projectId, runtimeStream] of Object.entries(nextStreams)) {
-        runtimeStreamsBySessionRef.current[
-          createAgentSessionStateKey(projectId, runtimeStream.agentSessionId)
-        ] = runtimeStream
+        const cacheKey = createAgentSessionStateKey(projectId, runtimeStream.agentSessionId)
+        runtimeStreamsBySessionRef.current[cacheKey] = runtimeStream
+        trimRuntimeStreamSessionCache(cacheKey)
       }
       return nextStreams
     },
-    [highChurnStore],
+    [highChurnStore, trimRuntimeStreamSessionCache],
   )
 
   useEffect(() => {
@@ -617,8 +636,9 @@ export function useXeroDesktopState(
     const runtimeStream = runtimeStreams[activeProjectId] ?? null
     if (runtimeStream?.agentSessionId === agentSessionId) {
       runtimeStreamsBySessionRef.current[cacheKey] = runtimeStream
+      trimRuntimeStreamSessionCache(cacheKey)
     }
-  }, [activeProject, activeProjectId, autonomousRuns, runtimeRuns, runtimeStreams])
+  }, [activeProject, activeProjectId, autonomousRuns, runtimeRuns, runtimeStreams, trimRuntimeStreamSessionCache])
 
   useEffect(() => {
     notificationRoutesRef.current = notificationRoutes
@@ -644,6 +664,44 @@ export function useXeroDesktopState(
   useEffect(() => {
     providerModelCatalogsRef.current = providerModelCatalogs
   }, [providerModelCatalogs])
+
+  useEffect(() => {
+    const protectedCatalogKeys = new Set<string>()
+    for (const credential of providerCredentials?.credentials ?? []) {
+      for (const key of getProviderModelCatalogStateKeys(credential.providerId)) {
+        protectedCatalogKeys.add(key)
+      }
+    }
+
+    const trimmed = trimRecordCacheToByteBudget(providerModelCatalogs, {
+      estimateBytes: estimateProviderModelCatalogBytes,
+      maxBytes: PROVIDER_MODEL_CATALOG_CACHE_MAX_BYTES,
+      maxEntries: PROVIDER_MODEL_CATALOG_CACHE_MAX_ENTRIES,
+      protectedKeys: protectedCatalogKeys,
+    })
+
+    if (trimmed.records === providerModelCatalogs) {
+      return
+    }
+
+    providerModelCatalogsRef.current = trimmed.records
+    setProviderModelCatalogs(trimmed.records)
+    const evictedKeys = new Set(trimmed.evictedKeys)
+    setProviderModelCatalogLoadStatuses((currentStatuses) => {
+      const nextStatuses = { ...currentStatuses }
+      for (const key of evictedKeys) {
+        delete nextStatuses[key]
+      }
+      return nextStatuses
+    })
+    setProviderModelCatalogLoadErrors((currentErrors) => {
+      const nextErrors = { ...currentErrors }
+      for (const key of evictedKeys) {
+        delete nextErrors[key]
+      }
+      return nextErrors
+    })
+  }, [providerCredentials, providerModelCatalogs])
 
   useEffect(() => {
     providerModelCatalogLoadStatusesRef.current = providerModelCatalogLoadStatuses

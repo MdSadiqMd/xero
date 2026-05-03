@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type MutableRefObject } from "react"
 import {
   ArrowDownToLine,
   ArrowUpFromLine,
@@ -29,11 +29,25 @@ import {
   type RepositoryStatusEntryView,
   type RepositoryStatusView,
 } from "@/src/lib/xero-model/project"
-import { getLangFromPath, tokenizeCode, type TokenizedLine } from "@/lib/shiki"
+import {
+  estimateCodeBytes,
+  getLangFromPath,
+  hashCodeContent,
+  shouldSkipTokenization,
+  tokenizeCode,
+  type TokenizedLine,
+} from "@/lib/shiki"
+import {
+  createByteBudgetCache,
+  estimateUtf16Bytes,
+  type ByteBudgetCache,
+  type ByteBudgetCacheStats,
+} from "@/lib/byte-budget-cache"
 import { useTheme } from "@/src/features/theme/theme-provider"
 import { useFixedVirtualizer } from "@/hooks/use-fixed-virtualizer"
 import { shouldVirtualizeRows } from "@/lib/virtual-list"
 import { cn } from "@/lib/utils"
+import { createFrameCoalescer } from "@/lib/frame-governance"
 import { useSidebarMotion } from "@/lib/sidebar-motion"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -42,10 +56,15 @@ const MIN_WIDTH = 600
 const DEFAULT_WIDTH_RATIO = 0.7
 const FILE_LIST_WIDTH = 300
 const MAX_DIFF_CACHE_ENTRIES = 80
+export const DIFF_PATCH_CACHE_MAX_BYTES = 4 * 1024 * 1024
 const VCS_FILE_ROW_HEIGHT = 28
 const VCS_FILE_VIRTUALIZATION_THRESHOLD = 180
 const DIFF_ROW_HEIGHT = 22
 const DIFF_VIRTUALIZATION_THRESHOLD = 320
+export const DIFF_LINE_HIGHLIGHT_BYTE_LIMIT = 8 * 1024
+export const DIFF_TOKENIZATION_BATCH_SIZE = 24
+const DIFF_PARSE_CACHE_MAX_ENTRIES = 80
+export const DIFF_PARSE_CACHE_MAX_BYTES = 4 * 1024 * 1024
 
 type ChangeKind = RepositoryStatusEntryView["staged"]
 
@@ -87,7 +106,7 @@ interface FileEntry extends VcsDiffScopeEntry {
   path: string
 }
 
-type DiffPatchCache = Map<string, string>
+type DiffPatchCache = ByteBudgetCache<string, string>
 
 type ActionKind =
   | "stage"
@@ -100,6 +119,14 @@ type ActionKind =
   | "fetch"
   | "pull"
   | "push"
+
+function useDiffPatchCacheRef(): MutableRefObject<DiffPatchCache> {
+  const ref = useRef<DiffPatchCache | null>(null)
+  if (!ref.current) {
+    ref.current = createDiffPatchCache()
+  }
+  return ref as MutableRefObject<DiffPatchCache>
+}
 
 function getFileEntrySignature(entry: RepositoryStatusEntryView): string {
   return `${entry.path}\u0000${entry.staged ?? ""}\u0000${entry.unstaged ?? ""}\u0000${entry.untracked ? "1" : "0"}`
@@ -120,15 +147,19 @@ function viewportMaxWidth(): number {
 }
 
 export const VcsSidebar = memo(function VcsSidebar(props: VcsSidebarProps) {
-  const { onClose, open, status } = props
+  const { onClose, open, projectId, status } = props
   const shouldRenderDiffPane = (status?.entries.length ?? 0) > 0
   const [width, setWidth] = useState<number>(() => defaultViewportWidth())
   const [isResizing, setIsResizing] = useState(false)
   const { contentTransition, widthTransition } = useSidebarMotion(isResizing)
-  const diffPatchCacheRef = useRef<DiffPatchCache>(new Map())
+  const diffPatchCacheRef = useDiffPatchCacheRef()
   const widthRef = useRef(width)
   widthRef.current = width
   const renderedWidth = shouldRenderDiffPane ? width : FILE_LIST_WIDTH
+
+  useEffect(() => {
+    diffPatchCacheRef.current.clear()
+  }, [diffPatchCacheRef, projectId])
 
   // Recompute the cap when the viewport resizes — keep the panel within
   // 95vw so users can always grab the resize handle.
@@ -165,6 +196,10 @@ export const VcsSidebar = memo(function VcsSidebar(props: VcsSidebarProps) {
     event.preventDefault()
     const startX = event.clientX
     const startWidth = widthRef.current
+    let latestWidth = startWidth
+    const widthUpdates = createFrameCoalescer<number>({
+      onFlush: setWidth,
+    })
     setIsResizing(true)
 
     const previousCursor = document.body.style.cursor
@@ -174,10 +209,11 @@ export const VcsSidebar = memo(function VcsSidebar(props: VcsSidebarProps) {
 
     const handleMove = (ev: PointerEvent) => {
       const delta = startX - ev.clientX
-      const next = Math.max(MIN_WIDTH, Math.min(viewportMaxWidth(), startWidth + delta))
-      setWidth(next)
+      latestWidth = Math.max(MIN_WIDTH, Math.min(viewportMaxWidth(), startWidth + delta))
+      widthUpdates.schedule(latestWidth)
     }
     const handleUp = () => {
+      widthUpdates.flush()
       window.removeEventListener("pointermove", handleMove)
       window.removeEventListener("pointerup", handleUp)
       window.removeEventListener("pointercancel", handleUp)
@@ -316,14 +352,15 @@ function VcsSidebarBody({
     onLoadDiffRef.current = onLoadDiff
   }, [onLoadDiff])
 
-  const stagedFiles = useMemo(
-    () => allEntries.filter((entry) => entry.staged !== null),
-    [allEntries],
-  )
-  const unstagedFiles = useMemo(
-    () => allEntries.filter((entry) => entry.unstaged !== null || entry.untracked),
-    [allEntries],
-  )
+  const { stagedFiles, unstagedFiles } = useMemo(() => {
+    const staged: FileEntry[] = []
+    const unstaged: FileEntry[] = []
+    for (const entry of allEntries) {
+      if (entry.staged !== null) staged.push(entry)
+      if (entry.unstaged !== null || entry.untracked) unstaged.push(entry)
+    }
+    return { stagedFiles: staged, unstagedFiles: unstaged }
+  }, [allEntries])
 
   const totalChanges = useMemo(() => {
     const set = new Set<string>()
@@ -343,7 +380,7 @@ function VcsSidebarBody({
 
     const cacheKey = createDiffPatchCacheKey(projectId, repositoryRevision, selectedScope, selectedPath)
     const cachedPatch = diffPatchCacheRef.current.get(cacheKey)
-    if (cachedPatch !== undefined) {
+    if (cachedPatch !== null) {
       setDiffPatch(cachedPatch)
       setDiffError(null)
       setDiffLoading(false)
@@ -412,30 +449,30 @@ function VcsSidebarBody({
     [onRefreshStatus],
   )
 
-  const handleStageOne = (path: string) => {
+  const handleStageOne = useCallback((path: string) => {
     if (!projectId) return
     void runAction("stage", () => onStage(projectId, [path]))
-  }
-  const handleUnstageOne = (path: string) => {
+  }, [onStage, projectId, runAction])
+  const handleUnstageOne = useCallback((path: string) => {
     if (!projectId) return
     void runAction("unstage", () => onUnstage(projectId, [path]))
-  }
-  const handleDiscardOne = (path: string) => {
+  }, [onUnstage, projectId, runAction])
+  const handleDiscardOne = useCallback((path: string) => {
     if (!projectId) return
     void runAction("discard", () => onDiscard(projectId, [path]))
-  }
-  const handleStageAll = () => {
+  }, [onDiscard, projectId, runAction])
+  const handleStageAll = useCallback(() => {
     if (!projectId || unstagedFiles.length === 0) return
     void runAction("stage-all", () => onStage(projectId, unstagedFiles.map((entry) => entry.path)))
-  }
-  const handleUnstageAll = () => {
+  }, [onStage, projectId, runAction, unstagedFiles])
+  const handleUnstageAll = useCallback(() => {
     if (!projectId || stagedFiles.length === 0) return
     void runAction(
       "unstage-all",
       () => onUnstage(projectId, stagedFiles.map((entry) => entry.path)),
     )
-  }
-  const handleCommit = () => {
+  }, [onUnstage, projectId, runAction, stagedFiles])
+  const handleCommit = useCallback(() => {
     if (!projectId) return
     const trimmed = commitMessage.trim()
     if (!trimmed) {
@@ -447,8 +484,8 @@ function VcsSidebarBody({
         if (result) setCommitMessage("")
       },
     )
-  }
-  const handleGenerateCommitMessage = () => {
+  }, [commitMessage, onCommit, projectId, runAction])
+  const handleGenerateCommitMessage = useCallback(() => {
     if (!projectId || !commitMessageModel || !onGenerateCommitMessage) return
     if (stagedFiles.length === 0) {
       setActionError("Stage changes before generating a commit message.")
@@ -466,18 +503,18 @@ function VcsSidebarBody({
           : "Commit message generated.",
       )
     })
-  }
-  const handleFetch = () => {
+  }, [commitMessageModel, onGenerateCommitMessage, projectId, runAction, stagedFiles.length])
+  const handleFetch = useCallback(() => {
     if (!projectId) return
     void runAction("fetch", () => onFetch(projectId), "Fetched from remote.")
-  }
-  const handlePull = () => {
+  }, [onFetch, projectId, runAction])
+  const handlePull = useCallback(() => {
     if (!projectId) return
     void runAction("pull", () => onPull(projectId)).then((result) => {
       if (result) setActionMessage(result.summary)
     })
-  }
-  const handlePush = () => {
+  }, [onPull, projectId, runAction])
+  const handlePush = useCallback(() => {
     if (!projectId) return
     void runAction("push", () => onPush(projectId)).then((result) => {
       if (result) {
@@ -485,7 +522,10 @@ function VcsSidebarBody({
         setActionMessage(allOk ? `Pushed ${result.branch}` : "Push completed with warnings.")
       }
     })
-  }
+  }, [onPush, projectId, runAction])
+  const handleCommitMessageChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
+    setCommitMessage(event.target.value)
+  }, [])
 
   const isBusy = actionKind !== null
   const shouldRenderDiffPane = allEntries.length > 0
@@ -601,7 +641,7 @@ function VcsSidebarBody({
               aria-label="Commit message"
               className="block h-16 w-full resize-none rounded-md border border-border/70 bg-background/50 px-2 py-1.5 text-[12px] text-foreground placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none"
               disabled={isBusy || !projectId}
-              onChange={(event) => setCommitMessage(event.target.value)}
+              onChange={handleCommitMessageChange}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                   event.preventDefault()
@@ -757,7 +797,7 @@ function createVcsFileListRows({
   return rows
 }
 
-function VcsFileList({
+const VcsFileList = memo(function VcsFileList({
   actionKind,
   busy,
   onDiscard,
@@ -892,7 +932,7 @@ function VcsFileList({
       {shouldVirtualize ? <div aria-hidden="true" style={{ height: virtualizer.range.afterSize }} /> : null}
     </div>
   )
-}
+})
 
 interface FileRowProps {
   busy: boolean
@@ -1098,6 +1138,155 @@ export interface DiffLine {
   newNo: number | null
 }
 
+interface DiffParseCacheEntry {
+  lines: DiffLine[]
+}
+
+interface DiffParsingStats extends ByteBudgetCacheStats {
+  parses: number
+}
+
+interface DiffTokenizationStats {
+  batchCount: number
+  lineRequestCount: number
+  skippedLargeLineCount: number
+}
+
+export interface DiffTokenizationBatchOptions {
+  batchSize?: number
+  indexes: number[]
+  lines: DiffLine[]
+  maxLineBytes?: number
+  tokenizedLineIndexes?: ReadonlySet<number>
+}
+
+const diffParseCache = createByteBudgetCache<string, DiffParseCacheEntry>({
+  maxBytes: DIFF_PARSE_CACHE_MAX_BYTES,
+  maxEntries: DIFF_PARSE_CACHE_MAX_ENTRIES,
+})
+const diffParsingStats = {
+  parses: 0,
+}
+const diffTokenizationStats = {
+  batchCount: 0,
+  lineRequestCount: 0,
+  skippedLargeLineCount: 0,
+}
+
+function createDiffParseKey(path: string, patch: string): string {
+  return [path, patch.length, hashCodeContent(patch)].join("\u0000")
+}
+
+function estimateDiffLinesBytes(patchKey: string, patch: string, lines: DiffLine[]): number {
+  let bytes = estimateUtf16Bytes(patchKey) + estimateUtf16Bytes(patch) + 32
+  for (const line of lines) {
+    bytes += 40
+    bytes += estimateUtf16Bytes(line.prefix)
+    bytes += estimateUtf16Bytes(line.text)
+  }
+  return bytes
+}
+
+export function parseDiffLinesForPatchKey(patchKey: string, patch: string): DiffLine[] {
+  const cached = diffParseCache.get(patchKey)
+  if (cached) {
+    return cached.lines
+  }
+
+  diffParsingStats.parses += 1
+  const lines = parseDiffLines(patch)
+  diffParseCache.set(patchKey, { lines }, estimateDiffLinesBytes(patchKey, patch, lines))
+
+  return lines
+}
+
+export function getDiffParsingStats(): DiffParsingStats {
+  const cacheStats = diffParseCache.getStats()
+  return {
+    ...cacheStats,
+    parses: diffParsingStats.parses,
+  }
+}
+
+export function getDiffTokenizationStats(): DiffTokenizationStats {
+  return { ...diffTokenizationStats }
+}
+
+export function resetDiffPerformanceStatsForTests(): void {
+  diffParseCache.clear()
+  diffParsingStats.parses = 0
+  diffTokenizationStats.batchCount = 0
+  diffTokenizationStats.lineRequestCount = 0
+  diffTokenizationStats.skippedLargeLineCount = 0
+}
+
+function isTokenizableDiffLine(line: DiffLine): boolean {
+  return line.kind === "add" || line.kind === "remove" || line.kind === "context"
+}
+
+export function createDiffTokenizationBatches({
+  batchSize = DIFF_TOKENIZATION_BATCH_SIZE,
+  indexes,
+  lines,
+  maxLineBytes = DIFF_LINE_HIGHLIGHT_BYTE_LIMIT,
+  tokenizedLineIndexes,
+}: DiffTokenizationBatchOptions): number[][] {
+  const batches: number[][] = []
+  let current: number[] = []
+
+  for (const index of indexes) {
+    if (tokenizedLineIndexes?.has(index)) continue
+    const line = lines[index]
+    if (!line || !isTokenizableDiffLine(line) || line.text.length === 0) continue
+    if (estimateCodeBytes(line.text) > maxLineBytes) {
+      diffTokenizationStats.skippedLargeLineCount += 1
+      continue
+    }
+
+    current.push(index)
+    if (current.length >= batchSize) {
+      batches.push(current)
+      current = []
+    }
+  }
+
+  if (current.length > 0) {
+    batches.push(current)
+  }
+
+  return batches
+}
+
+function recordDiffTokenizationBatch(lineCount: number): void {
+  diffTokenizationStats.batchCount += 1
+  diffTokenizationStats.lineRequestCount += lineCount
+}
+
+function scheduleDiffTokenizationWork(callback: () => void): () => void {
+  if (typeof window === "undefined") {
+    const id = setTimeout(callback, 0)
+    return () => clearTimeout(id)
+  }
+
+  const idleWindow = window as Window & {
+    cancelIdleCallback?: (handle: number) => void
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+  }
+
+  if (typeof idleWindow.requestIdleCallback === "function") {
+    const handle = idleWindow.requestIdleCallback(callback, { timeout: 48 })
+    return () => idleWindow.cancelIdleCallback?.(handle)
+  }
+
+  if (typeof window.requestAnimationFrame === "function") {
+    const handle = window.requestAnimationFrame(callback)
+    return () => window.cancelAnimationFrame(handle)
+  }
+
+  const id = window.setTimeout(callback, 0)
+  return () => window.clearTimeout(id)
+}
+
 export function parseDiffLines(patch: string): DiffLine[] {
   const lines = patch.split(/\r?\n/)
   const result: DiffLine[] = []
@@ -1167,7 +1356,8 @@ export function parseDiffLines(patch: string): DiffLine[] {
 function DiffView({ patch, path }: { patch: string; path: string }) {
   const { theme } = useTheme()
   const lang = useMemo(() => getLangFromPath(path), [path])
-  const lines = useMemo(() => parseDiffLines(patch), [patch])
+  const patchKey = useMemo(() => createDiffParseKey(path, patch), [path, patch])
+  const lines = useMemo(() => parseDiffLinesForPatchKey(patchKey, patch), [patchKey, patch])
   const shouldVirtualize = shouldVirtualizeRows(lines.length, DIFF_VIRTUALIZATION_THRESHOLD)
   const virtualizer = useFixedVirtualizer({
     enabled: shouldVirtualize,
@@ -1176,39 +1366,96 @@ function DiffView({ patch, path }: { patch: string; path: string }) {
     overscan: 24,
     initialViewportSize: 640,
   })
-  const renderedLineIndexes = shouldVirtualize
-    ? virtualizer.indexes
-    : lines.map((_, index) => index)
+  const renderedLineIndexes = useMemo(
+    () => (shouldVirtualize ? virtualizer.indexes : lines.map((_, index) => index)),
+    [lines, shouldVirtualize, virtualizer.indexes],
+  )
 
-  // Per-line shiki tokenization. We pass each non-header line through shiki
-  // independently — losing cross-line context (multiline strings, JSX, …)
-  // but matching what GitHub / VS Code do for unified-diff coloring.
-  const [tokenizedLines, setTokenizedLines] = useState<(TokenizedLine | null)[]>([])
+  // Per-line shiki tokenization. We only hydrate visible/overscan rows, in
+  // bounded batches, so large diffs paint plain text first instead of
+  // launching one highlighter task per line.
+  const tokenizationKey = `${patchKey}\u0000${lang ?? "text"}\u0000${theme.shiki}`
+  const tokenizedLinesRef = useRef<{
+    attempted: Set<number>
+    key: string
+    lines: Map<number, TokenizedLine>
+  }>({
+    attempted: new Set(),
+    key: tokenizationKey,
+    lines: new Map(),
+  })
+  const [tokenizedState, setTokenizedState] = useState<{
+    key: string
+    lines: Map<number, TokenizedLine>
+  }>(() => ({
+    key: tokenizationKey,
+    lines: new Map(),
+  }))
+  const tokenizedLines = tokenizedState.key === tokenizationKey ? tokenizedState.lines : new Map<number, TokenizedLine>()
 
   useEffect(() => {
-    setTokenizedLines([])
+    tokenizedLinesRef.current = { attempted: new Set(), key: tokenizationKey, lines: new Map() }
+    setTokenizedState({ key: tokenizationKey, lines: new Map() })
+  }, [tokenizationKey])
+
+  useEffect(() => {
     if (!lang) return
     let cancelled = false
+    let cancelScheduled: (() => void) | null = null
 
-    const sources = lines.map((line) =>
-      line.kind === "add" || line.kind === "remove" || line.kind === "context" ? line.text : null,
-    )
-
-    Promise.all(
-      sources.map((src) =>
-        src === null || src.length === 0
-          ? Promise.resolve(null)
-          : tokenizeCode(src, lang, theme.shiki).then((result) => result?.[0] ?? null),
-      ),
-    ).then((rendered) => {
+    const runNextBatch = () => {
       if (cancelled) return
-      setTokenizedLines(rendered)
-    })
+      const current = tokenizedLinesRef.current.key === tokenizationKey
+        ? tokenizedLinesRef.current
+        : { attempted: new Set<number>(), key: tokenizationKey, lines: new Map<number, TokenizedLine>() }
+      const batches = createDiffTokenizationBatches({
+        indexes: renderedLineIndexes,
+        lines,
+        tokenizedLineIndexes: current.attempted,
+      })
+      const batch = batches[0]
+      if (!batch || batch.length === 0) return
 
+      recordDiffTokenizationBatch(batch.length)
+      void Promise.all(
+        batch.map((lineIndex) => {
+          const line = lines[lineIndex]
+          if (!line) return Promise.resolve<[number, TokenizedLine | null]>([lineIndex, null])
+          return tokenizeCode(line.text, lang, theme.shiki, {
+            maxBytes: DIFF_LINE_HIGHLIGHT_BYTE_LIMIT,
+          }).then((result) => [lineIndex, result?.[0] ?? null] as [number, TokenizedLine | null])
+        }),
+      ).then((results) => {
+        if (cancelled) return
+        const latest = tokenizedLinesRef.current.key === tokenizationKey
+          ? tokenizedLinesRef.current
+          : { attempted: new Set<number>(), key: tokenizationKey, lines: new Map<number, TokenizedLine>() }
+        const next = new Map(latest.lines)
+        const attempted = new Set(latest.attempted)
+        let changed = false
+        for (const [lineIndex, tokens] of results) {
+          attempted.add(lineIndex)
+          if (!tokens || next.has(lineIndex)) continue
+          next.set(lineIndex, tokens)
+          changed = true
+        }
+        tokenizedLinesRef.current = { attempted, key: tokenizationKey, lines: next }
+        if (changed) {
+          setTokenizedState({ key: tokenizationKey, lines: next })
+        }
+
+        if (!cancelled) {
+          cancelScheduled = scheduleDiffTokenizationWork(runNextBatch)
+        }
+      })
+    }
+
+    cancelScheduled = scheduleDiffTokenizationWork(runNextBatch)
     return () => {
       cancelled = true
+      cancelScheduled?.()
     }
-  }, [lines, lang, theme.shiki])
+  }, [lang, lines, renderedLineIndexes, theme.shiki, tokenizationKey])
 
   return (
     <div
@@ -1220,7 +1467,11 @@ function DiffView({ patch, path }: { patch: string; path: string }) {
     >
       {shouldVirtualize ? <div aria-hidden="true" style={{ height: virtualizer.range.beforeSize }} /> : null}
       {renderedLineIndexes.map((lineIndex) => (
-        <DiffLineRow key={lineIndex} line={lines[lineIndex]} tokens={tokenizedLines[lineIndex] ?? null} />
+        <DiffLineRow
+          key={lineIndex}
+          line={lines[lineIndex]}
+          tokens={tokenizedLines.get(lineIndex) ?? null}
+        />
       ))}
       {shouldVirtualize ? <div aria-hidden="true" style={{ height: virtualizer.range.afterSize }} /> : null}
     </div>
@@ -1267,6 +1518,8 @@ function DiffLineRow({ line, tokens }: { line: DiffLine; tokens: TokenizedLine |
       : line.kind === "remove"
         ? "text-destructive"
         : "text-muted-foreground/30"
+  const renderedPlainBecauseLarge = isTokenizableDiffLine(line) &&
+    shouldSkipTokenization(line.text, DIFF_LINE_HIGHLIGHT_BYTE_LIMIT)
 
   return (
     <div className={cn("flex h-[22px] min-w-0 items-stretch", rowTone)}>
@@ -1279,7 +1532,10 @@ function DiffLineRow({ line, tokens }: { line: DiffLine; tokens: TokenizedLine |
         {lineNo ?? ""}
       </span>
       <span className={cn("w-5 shrink-0 select-none text-center", prefixClass)}>{line.prefix}</span>
-      <pre className="m-0 min-w-0 flex-1 whitespace-pre py-px pr-3">
+      <pre
+        className="m-0 min-w-0 flex-1 whitespace-pre py-px pr-3"
+        title={renderedPlainBecauseLarge ? "Large line rendered as plain text" : undefined}
+      >
         {tokens ? <ShikiTokens tokens={tokens} /> : line.text}
       </pre>
     </div>
@@ -1335,17 +1591,23 @@ function createDiffPatchCacheKey(
   return [projectId, revision, scope, path].join("\u0000")
 }
 
-function setCachedDiffPatch(cache: DiffPatchCache, key: string, patch: string): void {
-  if (cache.has(key)) {
-    cache.delete(key)
-  }
+export function createDiffPatchCache(): DiffPatchCache {
+  return createByteBudgetCache<string, string>({
+    maxBytes: DIFF_PATCH_CACHE_MAX_BYTES,
+    maxEntries: MAX_DIFF_CACHE_ENTRIES,
+  })
+}
 
-  cache.set(key, patch)
-  while (cache.size > MAX_DIFF_CACHE_ENTRIES) {
-    const oldestKey = cache.keys().next().value
-    if (oldestKey === undefined) return
-    cache.delete(oldestKey)
-  }
+function estimateDiffPatchBytes(key: string, patch: string): number {
+  return estimateUtf16Bytes(key) + estimateUtf16Bytes(patch) + 32
+}
+
+export function getDiffPatchCacheStats(cache: DiffPatchCache): ByteBudgetCacheStats {
+  return cache.getStats()
+}
+
+export function setCachedDiffPatch(cache: DiffPatchCache, key: string, patch: string): void {
+  cache.set(key, patch, estimateDiffPatchBytes(key, patch))
 }
 
 function cacheScopeDiffPatches(

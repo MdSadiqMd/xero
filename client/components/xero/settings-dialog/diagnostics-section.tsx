@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useDeferredValue, useMemo, useState, type ElementType, type ReactNode } from "react"
 import {
   AlertTriangle,
   ArrowRight,
@@ -8,9 +8,11 @@ import {
   Clipboard,
   CircleSlash,
   LoaderCircle,
+  Plus,
   Play,
   RotateCcw,
   Stethoscope,
+  X,
   XCircle,
 } from "lucide-react"
 import type {
@@ -26,17 +28,38 @@ import {
   type RunDoctorReportRequestDto,
   type EnvironmentCapabilityStateDto,
   type EnvironmentDiscoveryStatusDto,
+  type EnvironmentProbeReportDto,
   type EnvironmentProfileSummaryDto,
   type EnvironmentToolCategoryDto,
   type EnvironmentToolSummaryDto,
+  type VerifyUserToolRequestDto,
+  type VerifyUserToolResponseDto,
+  verifyUserToolRequestSchema,
 } from "@/src/lib/xero-model"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { SectionHeader } from "./section-header"
 
@@ -47,6 +70,9 @@ interface DiagnosticsSectionProps {
   environmentDiscoveryStatus?: EnvironmentDiscoveryStatusDto | null
   environmentProfileSummary?: EnvironmentProfileSummaryDto
   onRefreshEnvironmentDiscovery?: (options?: { force?: boolean }) => Promise<EnvironmentDiscoveryStatusDto | null>
+  onVerifyUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto | null>
+  onSaveUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<EnvironmentProbeReportDto | null>
+  onRemoveUserEnvironmentTool?: (id: string) => Promise<EnvironmentProbeReportDto | null>
   onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<XeroDoctorReportDto>
 }
 
@@ -79,7 +105,7 @@ const STATUS_ICON = {
   warning: AlertTriangle,
   failed: XCircle,
   skipped: CircleSlash,
-} satisfies Record<XeroDiagnosticStatusDto, React.ElementType>
+} satisfies Record<XeroDiagnosticStatusDto, ElementType>
 
 const STATUS_LABEL: Record<XeroDiagnosticStatusDto, string> = {
   passed: "Passed",
@@ -198,6 +224,9 @@ export function DiagnosticsSection({
   environmentDiscoveryStatus = null,
   environmentProfileSummary = null,
   onRefreshEnvironmentDiscovery,
+  onVerifyUserEnvironmentTool,
+  onSaveUserEnvironmentTool,
+  onRemoveUserEnvironmentTool,
   onRunDoctorReport,
 }: DiagnosticsSectionProps) {
   const [copied, setCopied] = useState(false)
@@ -237,6 +266,9 @@ export function DiagnosticsSection({
         summary={environmentProfileSummary}
         canRefresh={Boolean(onRefreshEnvironmentDiscovery)}
         onRefresh={refreshEnvironment}
+        onVerifyUserEnvironmentTool={onVerifyUserEnvironmentTool}
+        onSaveUserEnvironmentTool={onSaveUserEnvironmentTool}
+        onRemoveUserEnvironmentTool={onRemoveUserEnvironmentTool}
       />
 
       {doctorReportError ? (
@@ -338,16 +370,33 @@ function EnvironmentProfilePanel({
   summary,
   canRefresh,
   onRefresh,
+  onVerifyUserEnvironmentTool,
+  onSaveUserEnvironmentTool,
+  onRemoveUserEnvironmentTool,
 }: {
   status: EnvironmentDiscoveryStatusDto | null
   summary: EnvironmentProfileSummaryDto
   canRefresh: boolean
   onRefresh: () => void
+  onVerifyUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto | null>
+  onSaveUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<EnvironmentProbeReportDto | null>
+  onRemoveUserEnvironmentTool?: (id: string) => Promise<EnvironmentProbeReportDto | null>
 }) {
   const [showAllTools, setShowAllTools] = useState(false)
-  const presentTools = summary?.tools.filter((tool) => tool.present) ?? []
-  const attentionCapabilities =
-    summary?.capabilities.filter((capability) => capability.state !== "ready").slice(0, 4) ?? []
+  const [addToolOpen, setAddToolOpen] = useState(false)
+  const [removingToolId, setRemovingToolId] = useState<string | null>(null)
+  const deferredSummary = useDeferredValue(summary)
+  const presentTools = useMemo(
+    () => deferredSummary?.tools.filter((tool) => tool.present) ?? [],
+    [deferredSummary],
+  )
+  const attentionCapabilities = useMemo(
+    () =>
+      deferredSummary?.capabilities
+        .filter((capability) => capability.state !== "ready")
+        .slice(0, 4) ?? [],
+    [deferredSummary],
+  )
   const headlinerTools = useMemo(() => pickHeadlinerTools(presentTools), [presentTools])
   const headlinerIds = useMemo(() => new Set(headlinerTools.map((tool) => tool.id)), [headlinerTools])
   const remainingTools = useMemo(
@@ -357,9 +406,20 @@ function EnvironmentProfilePanel({
   const groupedRemaining = useMemo(() => groupToolsByCategory(remainingTools), [remainingTools])
   const isProbing = status?.status === "probing"
   const isStale = Boolean(status?.stale)
+  const canMutateUserTools = Boolean(onVerifyUserEnvironmentTool && onSaveUserEnvironmentTool)
 
   if (!summary && !isProbing && !status?.diagnostics.length) {
     return null
+  }
+
+  const removeTool = (tool: EnvironmentToolSummaryDto) => {
+    if (!tool.custom || !onRemoveUserEnvironmentTool || removingToolId) return
+    const confirmed = typeof window === "undefined" || window.confirm(`Remove custom tool "${tool.id}"?`)
+    if (!confirmed) return
+    setRemovingToolId(tool.id)
+    void onRemoveUserEnvironmentTool(tool.id)
+      .catch(() => undefined)
+      .finally(() => setRemovingToolId(null))
   }
 
   return (
@@ -395,12 +455,17 @@ function EnvironmentProfilePanel({
         </div>
       </header>
 
-      {presentTools.length > 0 ? (
+      {summary ? (
         <div className="flex flex-col gap-3 px-3.5 py-3">
           {headlinerTools.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
               {headlinerTools.map((tool) => (
-                <ToolChip key={tool.id} tool={tool} />
+                <ToolChip
+                  key={tool.id}
+                  tool={tool}
+                  removing={removingToolId === tool.id}
+                  onRemove={tool.custom ? removeTool : undefined}
+                />
               ))}
             </div>
           ) : null}
@@ -432,7 +497,12 @@ function EnvironmentProfilePanel({
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {group.tools.map((tool) => (
-                        <ToolChip key={tool.id} tool={tool} />
+                        <ToolChip
+                          key={tool.id}
+                          tool={tool}
+                          removing={removingToolId === tool.id}
+                          onRemove={tool.custom ? removeTool : undefined}
+                        />
                       ))}
                     </div>
                   </div>
@@ -440,7 +510,33 @@ function EnvironmentProfilePanel({
               </CollapsibleContent>
             </Collapsible>
           ) : null}
+
+          <div className="flex items-center justify-between gap-3 border-t border-border/40 pt-2">
+            <p className="text-[11px] text-muted-foreground">
+              Add a verified CLI that is not in the built-in catalog.
+            </p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-[11.5px]"
+              disabled={!canMutateUserTools}
+              onClick={() => setAddToolOpen(true)}
+            >
+              <Plus className="h-3 w-3" />
+              Add tool
+            </Button>
+          </div>
         </div>
+      ) : null}
+
+      {summary ? (
+        <AddToolDialog
+          open={addToolOpen}
+          onOpenChange={setAddToolOpen}
+          onVerify={onVerifyUserEnvironmentTool}
+          onSave={onSaveUserEnvironmentTool}
+        />
       ) : null}
 
       {attentionCapabilities.length > 0 ? (
@@ -484,16 +580,296 @@ function EnvironmentProfilePanel({
   )
 }
 
-function ToolChip({ tool }: { tool: EnvironmentToolSummaryDto }) {
+function ToolChip({
+  tool,
+  removing = false,
+  onRemove,
+}: {
+  tool: EnvironmentToolSummaryDto
+  removing?: boolean
+  onRemove?: (tool: EnvironmentToolSummaryDto) => void
+}) {
   const hoverDetail = [tool.version, tool.displayPath].filter(Boolean).join("\n") || tool.id
   return (
     <span
-      className="inline-flex items-center rounded-md border border-border/50 bg-secondary/30 px-1.5 py-0.5 text-[11px] font-medium text-foreground"
+      className={cn(
+        "group inline-flex h-[22px] items-center gap-1 rounded-md border border-border/50 bg-secondary/30 py-0.5 text-[11px] font-medium text-foreground",
+        onRemove ? "pl-1.5 pr-0.5" : "px-1.5",
+        removing && "opacity-60",
+      )}
       title={hoverDetail}
     >
-      {tool.id}
+      <span>{tool.id}</span>
+      {onRemove ? (
+        <button
+          type="button"
+          className="inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+          disabled={removing}
+          aria-label={`Remove ${tool.id}`}
+          title={`Remove ${tool.id}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            onRemove(tool)
+          }}
+        >
+          {removing ? <LoaderCircle className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+        </button>
+      ) : null}
     </span>
   )
+}
+
+function AddToolDialog({
+  open,
+  onOpenChange,
+  onVerify,
+  onSave,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onVerify?: (request: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto | null>
+  onSave?: (request: VerifyUserToolRequestDto) => Promise<EnvironmentProbeReportDto | null>
+}) {
+  const [id, setId] = useState("")
+  const [command, setCommand] = useState("")
+  const [argsText, setArgsText] = useState("--version")
+  const [category, setCategory] = useState<EnvironmentToolCategoryDto>("base_developer_tool")
+  const [verification, setVerification] = useState<VerifyUserToolResponseDto | null>(null)
+  const [verifiedRequestKey, setVerifiedRequestKey] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [isVerifying, setIsVerifying] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+
+  const request = useMemo(
+    () => ({
+      id: id.trim(),
+      category,
+      command: command.trim(),
+      args: parseVersionArgs(argsText),
+    }),
+    [argsText, category, command, id],
+  )
+  const requestKey = useMemo(() => JSON.stringify(request), [request])
+  const canSave =
+    Boolean(onSave) &&
+    verification?.record.probeStatus === "ok" &&
+    verification.record.present &&
+    verifiedRequestKey === requestKey &&
+    !isSaving
+  const consentCommand = [command.trim() || "<command>", ...parseVersionArgs(argsText)].join(" ")
+
+  const reset = () => {
+    setId("")
+    setCommand("")
+    setArgsText("--version")
+    setCategory("base_developer_tool")
+    setVerification(null)
+    setVerifiedRequestKey(null)
+    setFormError(null)
+    setIsVerifying(false)
+    setIsSaving(false)
+  }
+
+  const close = (nextOpen: boolean) => {
+    onOpenChange(nextOpen)
+    if (!nextOpen) reset()
+  }
+
+  const verify = () => {
+    const parsed = verifyUserToolRequestSchema.safeParse(request)
+    if (!parsed.success) {
+      setFormError(parsed.error.issues[0]?.message ?? "Check the custom tool fields.")
+      setVerification(null)
+      setVerifiedRequestKey(null)
+      return
+    }
+    if (!onVerify) return
+    setFormError(null)
+    setVerification(null)
+    setVerifiedRequestKey(null)
+    setIsVerifying(true)
+    void onVerify(parsed.data)
+      .then((response) => {
+        if (!response) return
+        setVerification(response)
+        setVerifiedRequestKey(JSON.stringify(parsed.data))
+      })
+      .catch((error) => {
+        setFormError(error instanceof Error ? error.message : "Verification failed.")
+      })
+      .finally(() => setIsVerifying(false))
+  }
+
+  const save = () => {
+    const parsed = verifyUserToolRequestSchema.safeParse(request)
+    if (!parsed.success || !onSave || !canSave) return
+    setIsSaving(true)
+    setFormError(null)
+    void onSave(parsed.data)
+      .then((report) => {
+        if (report) close(false)
+      })
+      .catch((error) => {
+        setFormError(error instanceof Error ? error.message : "Save failed.")
+      })
+      .finally(() => setIsSaving(false))
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={close}>
+      <DialogContent className="max-w-md gap-4 rounded-md p-4">
+        <DialogHeader className="gap-1.5">
+          <DialogTitle className="text-[14px]">Add developer tool</DialogTitle>
+          <DialogDescription className="text-[12px] leading-[1.5]">
+            Xero will run <span className="font-mono text-foreground">{consentCommand}</span> to verify the tool. The first non-empty line of output with secrets redacted is stored as the version.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-3">
+          <FieldRow label="Tool name">
+            <Input
+              value={id}
+              onChange={(event) => setId(event.target.value.toLowerCase())}
+              placeholder="terraform"
+              className="h-8 text-[12px]"
+              autoComplete="off"
+            />
+          </FieldRow>
+          <FieldRow label="Command">
+            <Input
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
+              placeholder="terraform"
+              className="h-8 text-[12px]"
+              autoComplete="off"
+            />
+          </FieldRow>
+          <FieldRow label="Version arguments">
+            <Input
+              value={argsText}
+              onChange={(event) => setArgsText(event.target.value)}
+              placeholder="--version"
+              className="h-8 text-[12px]"
+              autoComplete="off"
+            />
+          </FieldRow>
+          <FieldRow label="Category">
+            <Select value={category} onValueChange={(value) => setCategory(value as EnvironmentToolCategoryDto)}>
+              <SelectTrigger size="sm" className="h-8 w-full text-[12px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TOOL_CATEGORY_ORDER.map((option) => (
+                  <SelectItem key={option} value={option} className="text-[12px]">
+                    {TOOL_CATEGORY_LABEL[option]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldRow>
+        </div>
+
+        <VerifyResult result={verification} error={formError} command={command.trim()} />
+
+        <DialogFooter className="gap-2 sm:justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-[12px]"
+            disabled={!onVerify || isVerifying || isSaving}
+            onClick={verify}
+          >
+            {isVerifying ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+            Verify
+          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 text-[12px]"
+              onClick={() => close(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 gap-1.5 text-[12px]"
+              disabled={!canSave}
+              onClick={save}
+            >
+              {isSaving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              Save
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function FieldRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="grid gap-1.5">
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function VerifyResult({
+  result,
+  error,
+  command,
+}: {
+  result: VerifyUserToolResponseDto | null
+  error: string | null
+  command: string
+}) {
+  if (error) {
+    return (
+      <Alert variant="destructive" className="rounded-md px-3 py-2 text-[12px]">
+        <XCircle className="h-3.5 w-3.5" />
+        <AlertTitle className="text-[12px]">Verification failed</AlertTitle>
+        <AlertDescription className="text-[12px]">{error}</AlertDescription>
+      </Alert>
+    )
+  }
+  if (!result) return null
+
+  const { record } = result
+  if (record.probeStatus === "ok" && record.present) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-success/20 bg-success/10 px-3 py-2 text-[12px] text-success dark:text-success">
+        <Badge variant="outline" className="border-success/30 text-[11px] text-success dark:text-success">
+          Verified
+        </Badge>
+        <span className="min-w-0 truncate font-mono">{record.version ?? record.id}</span>
+        {record.displayPath ? <span className="text-success/75 dark:text-success/75">{record.displayPath}</span> : null}
+      </div>
+    )
+  }
+
+  const diagnostic = result.diagnostics.find((item) => item.toolId === record.id)
+  const message =
+    record.probeStatus === "missing"
+      ? `Could not find ${command || record.id} on PATH.`
+      : diagnostic?.message ?? "The version probe did not return usable output."
+
+  return (
+    <div className="rounded-md border border-warning/25 bg-warning/10 px-3 py-2 text-[12px] leading-[1.45] text-warning">
+      {message}
+    </div>
+  )
+}
+
+function parseVersionArgs(value: string): string[] {
+  return value
+    .split(/[,\s]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
 }
 
 function pickHeadlinerTools(presentTools: EnvironmentToolSummaryDto[]): EnvironmentToolSummaryDto[] {
@@ -541,7 +917,7 @@ function ModeCard({
 }: {
   title: string
   body: string
-  icon: React.ElementType
+  icon: ElementType
   variant: "default" | "outline"
   disabled: boolean
   onClick: () => void
@@ -582,7 +958,10 @@ function ReportView({
   onCopy: () => void
   onRun: (mode: RunDoctorReportRequestDto["mode"]) => void
 }) {
-  const populatedGroups = CHECK_GROUPS.filter(({ key }) => report[key].length > 0)
+  const populatedGroups = useMemo(
+    () => CHECK_GROUPS.filter(({ key }) => report[key].length > 0),
+    [report],
+  )
   const skippedGroupCount = CHECK_GROUPS.length - populatedGroups.length
 
   void skippedGroupCount

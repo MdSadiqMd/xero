@@ -1652,8 +1652,9 @@ function createMockAdapter(options?: {
     },
   )
 
-  const listProjectFiles = vi.fn(async (projectId: string) => ({
+  const listProjectFiles = vi.fn(async (projectId: string, path = '/') => ({
     projectId,
+    path,
     root: {
       name: 'root',
       path: '/',

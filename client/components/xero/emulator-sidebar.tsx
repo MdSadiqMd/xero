@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { createFrameCoalescer } from "@/lib/frame-governance"
 import {
   Select,
   SelectContent,
@@ -123,10 +124,6 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
   }, [])
 
   useEffect(() => {
-    writePersistedWidth(meta.storageKey, width)
-  }, [meta.storageKey, width])
-
-  useEffect(() => {
     // Default-select the first device when the list hydrates, or refresh the
     // selection if the previous one disappeared (e.g. AVD deleted).
     if (session.devices.length === 0) {
@@ -146,6 +143,10 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
       const startX = event.clientX
       const startWidth = widthRef.current
       const ceiling = viewportMaxWidth()
+      let latestWidth = startWidth
+      const widthUpdates = createFrameCoalescer<number>({
+        onFlush: setWidth,
+      })
       setMaxWidth(ceiling)
       setIsResizing(true)
 
@@ -156,23 +157,25 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
 
       const handleMove = (ev: PointerEvent) => {
         const delta = startX - ev.clientX
-        const next = Math.max(MIN_WIDTH, Math.min(ceiling, startWidth + delta))
-        setWidth(next)
+        latestWidth = Math.max(MIN_WIDTH, Math.min(ceiling, startWidth + delta))
+        widthUpdates.schedule(latestWidth)
       }
       const handleUp = () => {
+        widthUpdates.flush()
         window.removeEventListener("pointermove", handleMove)
         window.removeEventListener("pointerup", handleUp)
         window.removeEventListener("pointercancel", handleUp)
         document.body.style.cursor = previousCursor
         document.body.style.userSelect = previousSelect
         setIsResizing(false)
+        writePersistedWidth(meta.storageKey, latestWidth)
       }
 
       window.addEventListener("pointermove", handleMove)
       window.addEventListener("pointerup", handleUp)
       window.addEventListener("pointercancel", handleUp)
     },
-    [],
+    [meta.storageKey],
   )
 
   const handleResizeKey = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -183,9 +186,11 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
     setMaxWidth(ceiling)
     setWidth((current) => {
       const delta = event.key === "ArrowLeft" ? step : -step
-      return Math.max(MIN_WIDTH, Math.min(ceiling, current + delta))
+      const next = Math.max(MIN_WIDTH, Math.min(ceiling, current + delta))
+      writePersistedWidth(meta.storageKey, next)
+      return next
     })
-  }, [])
+  }, [meta.storageKey])
 
   const Icon = platform === "ios" ? Apple : Smartphone
 

@@ -12,6 +12,7 @@ use crate::commands::CommandError;
 pub mod environment_profile;
 pub mod migrations;
 pub mod permissions;
+pub mod user_added_tools;
 
 pub const GLOBAL_DATABASE_FILE_NAME: &str = "xero.db";
 
@@ -210,6 +211,7 @@ mod tests {
             "mcp_registry",
             "provider_model_catalog_cache",
             "environment_profile",
+            "user_added_environment_tools",
             "projects",
             "repositories",
         ];

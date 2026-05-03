@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
+import { createFrameCoalescer, isDocumentHidden, type FrameCoalescer } from "@/lib/frame-governance"
 
 export type EmulatorPlatform = "ios" | "android"
 
@@ -125,7 +126,19 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
   devicesRef.current = devices
   const currentDeviceRef = useRef<DeviceDescriptor | null>(null)
   currentDeviceRef.current = currentDevice
+  const activeRef = useRef(active)
+  activeRef.current = active
   const platformTag = platform === "ios" ? "ios" : "android"
+
+  const frameCoalescerRef = useRef<FrameCoalescer<EmulatorFrameInfo> | null>(null)
+  if (!frameCoalescerRef.current) {
+    frameCoalescerRef.current = createFrameCoalescer<EmulatorFrameInfo>({
+      getEnabled: () => activeRef.current && !isDocumentHidden(),
+      onFlush: (nextFrame) => setFrame(nextFrame),
+    })
+  }
+
+  useEffect(() => () => frameCoalescerRef.current?.dispose(), [])
 
   // Wire backend status + frame events while the sidebar is visible.
   useEffect(() => {
@@ -166,7 +179,7 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
 
     void listen<EmulatorFrameInfo>(EMULATOR_FRAME_EVENT, (event) => {
       if (cancelled) return
-      setFrame(event.payload)
+      frameCoalescerRef.current?.schedule(event.payload)
     }).then((unsub) => {
       if (cancelled) {
         unsub()
@@ -210,6 +223,7 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
 
     return () => {
       cancelled = true
+      frameCoalescerRef.current?.cancel()
       unsubs.forEach((unsub) => unsub())
     }
   }, [active, platformTag])

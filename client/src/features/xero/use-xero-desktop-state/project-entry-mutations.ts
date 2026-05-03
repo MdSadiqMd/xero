@@ -114,8 +114,10 @@ export function useProjectEntryMutations({
   )
 
   const listProjectFiles = useCallback(
-    async (projectId: string) => {
-      return await adapter.listProjectFiles(projectId)
+    async (projectId: string, path?: string) => {
+      return path === undefined
+        ? await adapter.listProjectFiles(projectId)
+        : await adapter.listProjectFiles(projectId, path)
     },
     [adapter],
   )

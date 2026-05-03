@@ -1,7 +1,23 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { deriveVcsDiffScope, parseDiffLines, VcsSidebar, type VcsSidebarProps } from './vcs-sidebar'
+import {
+  DIFF_PARSE_CACHE_MAX_BYTES,
+  DIFF_PATCH_CACHE_MAX_BYTES,
+  DIFF_LINE_HIGHLIGHT_BYTE_LIMIT,
+  DIFF_TOKENIZATION_BATCH_SIZE,
+  createDiffPatchCache,
+  createDiffTokenizationBatches,
+  deriveVcsDiffScope,
+  getDiffPatchCacheStats,
+  getDiffParsingStats,
+  parseDiffLines,
+  parseDiffLinesForPatchKey,
+  resetDiffPerformanceStatsForTests,
+  setCachedDiffPatch,
+  VcsSidebar,
+  type VcsSidebarProps,
+} from './vcs-sidebar'
 import {
   createRepositoryStatusDiffRevision,
   type RepositoryDiffResponseDto,
@@ -360,6 +376,66 @@ describe('VcsSidebar', () => {
 
     await waitFor(() => expect(screen.getByText('line-0000')).toBeInTheDocument())
     expect(screen.queryByText('line-0999')).not.toBeInTheDocument()
+  })
+
+  it('caches parsed diff lines by patch key', () => {
+    resetDiffPerformanceStatsForTests()
+    const patch = makeSingleFilePatch('cached parse')
+
+    const first = parseDiffLinesForPatchKey('project-1:file.txt:abc1234', patch)
+    const second = parseDiffLinesForPatchKey('project-1:file.txt:abc1234', patch)
+
+    expect(second).toBe(first)
+    expect(getDiffParsingStats()).toMatchObject({
+      hits: 1,
+      misses: 1,
+      parses: 1,
+    })
+  })
+
+  it('bounds parsed diff cache entries by retained bytes', () => {
+    resetDiffPerformanceStatsForTests()
+    const largePatch = makeSingleFilePatch('x'.repeat(Math.ceil(DIFF_PARSE_CACHE_MAX_BYTES / 5)))
+
+    parseDiffLinesForPatchKey('large-a', largePatch)
+    parseDiffLinesForPatchKey('large-b', largePatch.replace('x', 'y'))
+
+    const stats = getDiffParsingStats()
+    expect(stats.byteSize).toBeLessThanOrEqual(DIFF_PARSE_CACHE_MAX_BYTES)
+    expect(stats.evictions).toBeGreaterThan(0)
+  })
+
+  it('bounds selected diff patch cache entries by retained bytes', () => {
+    const cache = createDiffPatchCache()
+    const largePatch = 'x'.repeat(Math.ceil(DIFF_PATCH_CACHE_MAX_BYTES / 3))
+
+    setCachedDiffPatch(cache, 'patch-a', largePatch)
+    setCachedDiffPatch(cache, 'patch-b', largePatch.replace('x', 'y'))
+
+    const stats = getDiffPatchCacheStats(cache)
+    expect(stats.byteSize).toBeLessThanOrEqual(DIFF_PATCH_CACHE_MAX_BYTES)
+    expect(stats.evictions).toBeGreaterThan(0)
+  })
+
+  it('plans diff tokenization in visible bounded batches and skips very long lines', () => {
+    resetDiffPerformanceStatsForTests()
+    const lines = parseDiffLines(
+      [
+        'diff --git a/file.txt b/file.txt',
+        '--- a/file.txt',
+        '+++ b/file.txt',
+        '@@ -1,80 +1,80 @@',
+        ...Array.from({ length: 80 }, (_, index) =>
+          index === 7 ? `+${'x'.repeat(DIFF_LINE_HIGHLIGHT_BYTE_LIMIT / 2 + 1)}` : `+line-${index}`,
+        ),
+      ].join('\n'),
+    )
+    const indexes = Array.from({ length: lines.length }, (_, index) => index)
+    const batches = createDiffTokenizationBatches({ indexes, lines })
+
+    expect(batches.length).toBeGreaterThan(1)
+    expect(batches.every((batch) => batch.length <= DIFF_TOKENIZATION_BATCH_SIZE)).toBe(true)
+    expect(batches.flat()).not.toContain(11)
   })
 
   it('invalidates the selected diff cache when the repository revision changes', async () => {

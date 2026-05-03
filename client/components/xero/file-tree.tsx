@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
   ChevronRight,
@@ -14,6 +15,7 @@ import {
   FolderPlus,
   FolderOpen,
   Image as ImageIcon,
+  Loader2,
   Settings2,
   X,
 } from 'lucide-react'
@@ -32,6 +34,7 @@ interface FileTreeProps {
   root: FileSystemNode
   selectedPath: string | null
   expandedFolders: Set<string>
+  loadingFolders?: Set<string>
   dirtyPaths?: Set<string>
   searchQuery?: string
   creatingEntry?: { parentPath: string; type: 'file' | 'folder' } | null
@@ -62,6 +65,12 @@ export type FileTreeRowModel =
       kind: 'create'
       parentPath: string
       type: 'file' | 'folder'
+      level: number
+    }
+  | {
+      kind: 'continuation'
+      path: string
+      omittedEntryCount: number
       level: number
     }
 
@@ -151,10 +160,27 @@ export function flattenFileTreeRows({
     for (const child of node.children) {
       walk(child, level + 1)
     }
+
+    if (node.truncated && (node.omittedEntryCount ?? 0) > 0) {
+      rows.push({
+        kind: 'continuation',
+        path: node.path,
+        omittedEntryCount: node.omittedEntryCount ?? 0,
+        level: level + 1,
+      })
+    }
   }
 
   for (const child of root.children ?? []) {
     walk(child, 0)
+  }
+  if (root.truncated && (root.omittedEntryCount ?? 0) > 0) {
+    rows.push({
+      kind: 'continuation',
+      path: root.path,
+      omittedEntryCount: root.omittedEntryCount ?? 0,
+      level: 0,
+    })
   }
 
   return rows
@@ -164,6 +190,7 @@ export function FileTree({
   root,
   selectedPath,
   expandedFolders,
+  loadingFolders = new Set(),
   dirtyPaths,
   searchQuery = '',
   creatingEntry = null,
@@ -288,7 +315,14 @@ export function FileTree({
               draggingPath={draggingPath}
               dropTargetPath={dropTargetPath}
               expandedFolders={expandedFolders}
-              key={row.kind === 'node' ? row.node.id : `create:${row.parentPath}`}
+              loadingFolders={loadingFolders}
+              key={
+                row.kind === 'node'
+                  ? row.node.id
+                  : row.kind === 'create'
+                    ? `create:${row.parentPath}`
+                    : `continuation:${row.path}`
+              }
               onCancelCreate={onCancelCreate}
               onCopyPath={onCopyPath}
               onCreateEntry={onCreateEntry}
@@ -321,6 +355,7 @@ interface FileTreeRowProps {
   row: FileTreeRowModel
   selectedPath: string | null
   expandedFolders: Set<string>
+  loadingFolders: Set<string>
   dirtyPaths?: Set<string>
   search: MatchInfo | null
   draggingPath: string | null
@@ -345,6 +380,7 @@ interface TreeNodeProps {
   level: number
   selectedPath: string | null
   expandedFolders: Set<string>
+  loadingFolders: Set<string>
   dirtyPaths?: Set<string>
   search: MatchInfo | null
   draggingPath: string | null
@@ -376,6 +412,10 @@ function FileTreeRow({ row, ...props }: FileTreeRowProps) {
     )
   }
 
+  if (row.kind === 'continuation') {
+    return <ContinuationRow level={row.level} omittedEntryCount={row.omittedEntryCount} />
+  }
+
   const nodeProps = {
     ...props,
     node: row.node,
@@ -389,6 +429,7 @@ function FolderRow({
   node,
   level,
   expandedFolders,
+  loadingFolders,
   search,
   draggingPath,
   dropTargetPath,
@@ -404,6 +445,7 @@ function FolderRow({
   onCopyPath,
 }: TreeNodeProps) {
   const isExpanded = isFolderExpanded(node, expandedFolders, search)
+  const isLoading = loadingFolders.has(node.path)
   const isDropTarget =
     dropTargetPath === node.path &&
     draggingPath !== node.path &&
@@ -450,7 +492,13 @@ function FolderRow({
         style={{ paddingLeft: `${6 + level * 12}px` }}
       >
         <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground/70">
-          {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          {isLoading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : isExpanded ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
         </span>
         <span className="flex h-4 w-4 shrink-0 items-center justify-center text-chart-1">
           {isExpanded ? <FolderOpen className="h-3.5 w-3.5" /> : <Folder className="h-3.5 w-3.5" />}
@@ -516,6 +564,27 @@ function FileRow({
         ) : null}
       </button>
     </FileContextMenu>
+  )
+}
+
+function ContinuationRow({
+  level,
+  omittedEntryCount,
+}: {
+  level: number
+  omittedEntryCount: number
+}) {
+  return (
+    <div
+      className="flex h-[26px] w-full items-center gap-1 py-0 pr-2 text-[11px] leading-5 text-warning"
+      role="status"
+      style={{ paddingLeft: `${6 + level * 12}px` }}
+    >
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">
+        {omittedEntryCount.toLocaleString()} more entries omitted
+      </span>
+    </div>
   )
 }
 

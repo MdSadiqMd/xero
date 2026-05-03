@@ -4,14 +4,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use ignore::{DirEntry, WalkBuilder};
 use tauri::{AppHandle, Runtime, State};
 
 use crate::{
     commands::{
+        backend_jobs::BackendCancellationToken,
+        payload_budget::{
+            estimate_serialized_payload_bytes, payload_budget_diagnostic,
+            PROJECT_TREE_BUDGET_BYTES, PROJECT_TREE_NODE_BUDGET,
+        },
         validate_non_empty, CommandError, CommandResult, CreateProjectEntryRequestDto,
-        CreateProjectEntryResponseDto, DeleteProjectEntryResponseDto, ListProjectFilesResponseDto,
-        MoveProjectEntryRequestDto, MoveProjectEntryResponseDto, ProjectEntryKindDto,
-        ProjectFileNodeDto, ProjectFileRequestDto, ProjectIdRequestDto, ReadProjectFileResponseDto,
+        CreateProjectEntryResponseDto, DeleteProjectEntryResponseDto, ListProjectFilesRequestDto,
+        ListProjectFilesResponseDto, MoveProjectEntryRequestDto, MoveProjectEntryResponseDto,
+        ProjectEntryKindDto, ProjectFileNodeDto, ProjectFileRequestDto, ReadProjectFileResponseDto,
         RenameProjectEntryRequestDto, RenameProjectEntryResponseDto, WriteProjectFileRequestDto,
         WriteProjectFileResponseDto,
     },
@@ -33,24 +39,65 @@ const SKIPPED_DIRECTORY_NAMES: &[&str] = &[
 ];
 
 #[tauri::command]
-pub fn list_project_files<R: Runtime>(
+pub async fn list_project_files<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
-    request: ProjectIdRequestDto,
+    request: ListProjectFilesRequestDto,
 ) -> CommandResult<ListProjectFilesResponseDto> {
     validate_non_empty(&request.project_id, "projectId")?;
+    validate_non_empty(&request.path, "path")?;
 
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
-    let root = build_tree(&project_root)?;
+    let (folder_path, normalized_path) =
+        resolve_virtual_path(&project_root, &request.path, "path", true)?;
+    let metadata = read_metadata(&folder_path)?;
+    if !metadata.is_dir() {
+        return Err(CommandError::user_fixable(
+            "project_folder_required",
+            format!("Xero cannot list `{normalized_path}` because it is a file, not a folder."),
+        ));
+    }
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id;
+    drop(state);
+    drop(app);
 
-    Ok(ListProjectFilesResponseDto {
-        project_id: request.project_id,
-        root,
-    })
+    jobs.run_blocking_latest(
+        format!("project-tree:{project_id}:{normalized_path}"),
+        "project tree",
+        move |cancellation| {
+            let built_tree = build_folder_listing(
+                &folder_path,
+                &normalized_path,
+                PROJECT_TREE_NODE_BUDGET,
+                &cancellation,
+            )?;
+            let mut response = ListProjectFilesResponseDto {
+                project_id,
+                path: normalized_path,
+                root: built_tree.root,
+                truncated: built_tree.truncated,
+                omitted_entry_count: built_tree.omitted_entry_count,
+                payload_budget: None,
+            };
+            let observed_bytes = estimate_serialized_payload_bytes(&response);
+            response.payload_budget = payload_budget_diagnostic(
+                "project_tree",
+                "project tree",
+                PROJECT_TREE_BUDGET_BYTES,
+                observed_bytes,
+                response.truncated,
+                false,
+            );
+
+            Ok(response)
+        },
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn read_project_file<R: Runtime>(
+pub async fn read_project_file<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: ProjectFileRequestDto,
@@ -61,6 +108,27 @@ pub fn read_project_file<R: Runtime>(
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
     let (resolved_path, normalized_path) =
         resolve_virtual_path(&project_root, &request.path, "path", false)?;
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id;
+    drop(state);
+    drop(app);
+
+    jobs.run_blocking_latest(
+        "project-file-read:visible",
+        "project file read",
+        move |cancellation| {
+            cancellation.check_cancelled("project file read")?;
+            read_project_file_at_path(project_id, resolved_path, normalized_path)
+        },
+    )
+    .await
+}
+
+fn read_project_file_at_path(
+    project_id: String,
+    resolved_path: PathBuf,
+    normalized_path: String,
+) -> CommandResult<ReadProjectFileResponseDto> {
     let metadata = read_metadata(&resolved_path)?;
 
     if metadata.is_dir() {
@@ -89,14 +157,14 @@ pub fn read_project_file<R: Runtime>(
     })?;
 
     Ok(ReadProjectFileResponseDto {
-        project_id: request.project_id,
+        project_id,
         path: normalized_path,
         content,
     })
 }
 
 #[tauri::command]
-pub fn write_project_file<R: Runtime>(
+pub async fn write_project_file<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: WriteProjectFileRequestDto,
@@ -107,6 +175,27 @@ pub fn write_project_file<R: Runtime>(
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
     let (resolved_path, normalized_path) =
         resolve_virtual_path(&project_root, &request.path, "path", false)?;
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id;
+    let content = request.content;
+    drop(state);
+    drop(app);
+
+    jobs.run_blocking_project_lane(
+        project_id.clone(),
+        "file",
+        "project file write",
+        move || write_project_file_at_path(project_id, resolved_path, normalized_path, content),
+    )
+    .await
+}
+
+fn write_project_file_at_path(
+    project_id: String,
+    resolved_path: PathBuf,
+    normalized_path: String,
+    content: String,
+) -> CommandResult<WriteProjectFileResponseDto> {
     let metadata = read_metadata(&resolved_path)?;
 
     if metadata.is_dir() {
@@ -118,7 +207,7 @@ pub fn write_project_file<R: Runtime>(
         ));
     }
 
-    fs::write(&resolved_path, request.content).map_err(|error| match error.kind() {
+    fs::write(&resolved_path, content).map_err(|error| match error.kind() {
         ErrorKind::NotFound => CommandError::user_fixable(
             "project_file_not_found",
             format!("Xero could not find `{normalized_path}` in the selected project."),
@@ -131,13 +220,13 @@ pub fn write_project_file<R: Runtime>(
     })?;
 
     Ok(WriteProjectFileResponseDto {
-        project_id: request.project_id,
+        project_id,
         path: normalized_path,
     })
 }
 
 #[tauri::command]
-pub fn create_project_entry<R: Runtime>(
+pub async fn create_project_entry<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: CreateProjectEntryRequestDto,
@@ -147,6 +236,22 @@ pub fn create_project_entry<R: Runtime>(
     let entry_name = validate_entry_name(&request.name, "name")?;
 
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id.clone();
+    drop(state);
+    drop(app);
+
+    jobs.run_blocking_project_lane(project_id, "file", "project entry create", move || {
+        create_project_entry_at_root(project_root, request, entry_name)
+    })
+    .await
+}
+
+fn create_project_entry_at_root(
+    project_root: PathBuf,
+    request: CreateProjectEntryRequestDto,
+    entry_name: String,
+) -> CommandResult<CreateProjectEntryResponseDto> {
     let (parent_path, normalized_parent_path) =
         resolve_virtual_path(&project_root, &request.parent_path, "parentPath", true)?;
     let parent_metadata = read_metadata(&parent_path)?;
@@ -193,7 +298,7 @@ pub fn create_project_entry<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn rename_project_entry<R: Runtime>(
+pub async fn rename_project_entry<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: RenameProjectEntryRequestDto,
@@ -203,6 +308,22 @@ pub fn rename_project_entry<R: Runtime>(
     let new_name = validate_entry_name(&request.new_name, "newName")?;
 
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id.clone();
+    drop(state);
+    drop(app);
+
+    jobs.run_blocking_project_lane(project_id, "file", "project entry rename", move || {
+        rename_project_entry_at_root(project_root, request, new_name)
+    })
+    .await
+}
+
+fn rename_project_entry_at_root(
+    project_root: PathBuf,
+    request: RenameProjectEntryRequestDto,
+    new_name: String,
+) -> CommandResult<RenameProjectEntryResponseDto> {
     let (resolved_path, normalized_path) =
         resolve_virtual_path(&project_root, &request.path, "path", false)?;
     read_metadata(&resolved_path)?;
@@ -243,7 +364,7 @@ pub fn rename_project_entry<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn move_project_entry<R: Runtime>(
+pub async fn move_project_entry<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: MoveProjectEntryRequestDto,
@@ -253,6 +374,21 @@ pub fn move_project_entry<R: Runtime>(
     validate_non_empty(&request.target_parent_path, "targetParentPath")?;
 
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id.clone();
+    drop(state);
+    drop(app);
+
+    jobs.run_blocking_project_lane(project_id, "file", "project entry move", move || {
+        move_project_entry_at_root(project_root, request)
+    })
+    .await
+}
+
+fn move_project_entry_at_root(
+    project_root: PathBuf,
+    request: MoveProjectEntryRequestDto,
+) -> CommandResult<MoveProjectEntryResponseDto> {
     let (resolved_path, normalized_path) =
         resolve_virtual_path(&project_root, &request.path, "path", false)?;
     read_metadata(&resolved_path)?;
@@ -329,7 +465,7 @@ pub fn move_project_entry<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn delete_project_entry<R: Runtime>(
+pub async fn delete_project_entry<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopState>,
     request: ProjectFileRequestDto,
@@ -340,6 +476,25 @@ pub fn delete_project_entry<R: Runtime>(
     let project_root = resolve_project_root(&app, &state, &request.project_id)?;
     let (resolved_path, normalized_path) =
         resolve_virtual_path(&project_root, &request.path, "path", false)?;
+    let jobs = state.backend_jobs().clone();
+    let project_id = request.project_id;
+    drop(state);
+    drop(app);
+
+    jobs.run_blocking_project_lane(
+        project_id.clone(),
+        "file",
+        "project entry delete",
+        move || delete_project_entry_at_path(project_id, resolved_path, normalized_path),
+    )
+    .await
+}
+
+fn delete_project_entry_at_path(
+    project_id: String,
+    resolved_path: PathBuf,
+    normalized_path: String,
+) -> CommandResult<DeleteProjectEntryResponseDto> {
     let metadata = read_metadata(&resolved_path)?;
 
     if metadata.is_dir() {
@@ -365,7 +520,7 @@ pub fn delete_project_entry<R: Runtime>(
     }
 
     Ok(DeleteProjectEntryResponseDto {
-        project_id: request.project_id,
+        project_id,
         path: normalized_path,
     })
 }
@@ -401,76 +556,254 @@ pub(crate) fn resolve_project_root<R: Runtime>(
     resolved_root.ok_or_else(CommandError::project_not_found)
 }
 
-fn build_tree(project_root: &Path) -> CommandResult<ProjectFileNodeDto> {
-    Ok(ProjectFileNodeDto {
-        name: "root".into(),
-        path: "/".into(),
+struct BuiltProjectTree {
+    root: ProjectFileNodeDto,
+    truncated: bool,
+    omitted_entry_count: u32,
+}
+
+fn build_folder_listing(
+    directory: &Path,
+    parent_virtual_path: &str,
+    node_budget: usize,
+    cancellation: &BackendCancellationToken,
+) -> CommandResult<BuiltProjectTree> {
+    cancellation.check_cancelled("project tree")?;
+    let ListingChildren {
+        children,
+        truncated,
+        omitted_entry_count,
+    } = read_child_nodes(directory, parent_virtual_path, node_budget, cancellation)?;
+    let root = ProjectFileNodeDto {
+        name: if parent_virtual_path == "/" {
+            "root".into()
+        } else {
+            directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("folder")
+                .to_owned()
+        },
+        path: parent_virtual_path.into(),
         r#type: ProjectEntryKindDto::Folder,
-        children: read_child_nodes(project_root, "/")?,
+        children,
+        children_loaded: true,
+        truncated,
+        omitted_entry_count,
+    };
+
+    Ok(BuiltProjectTree {
+        root,
+        truncated,
+        omitted_entry_count,
     })
+}
+
+struct ListingChildren {
+    children: Vec<ProjectFileNodeDto>,
+    truncated: bool,
+    omitted_entry_count: u32,
 }
 
 fn read_child_nodes(
     directory: &Path,
     parent_virtual_path: &str,
-) -> CommandResult<Vec<ProjectFileNodeDto>> {
-    let mut children = fs::read_dir(directory)
-        .map_err(|error| {
-            io_error(
-                "project_tree_read_failed",
-                directory,
-                format!(
-                    "Xero could not read the selected project tree at {}: {error}",
-                    directory.display()
-                ),
-            )
-        })?
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| {
-            let file_name = entry.file_name();
-            let name = file_name.to_string_lossy().into_owned();
-            let entry_path = entry.path();
-            let metadata = fs::symlink_metadata(&entry_path).ok()?;
+    node_budget: usize,
+    cancellation: &BackendCancellationToken,
+) -> CommandResult<ListingChildren> {
+    cancellation.check_cancelled("project tree")?;
+    let mut walk_builder = WalkBuilder::new(directory);
+    walk_builder
+        .max_depth(Some(1))
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .parents(true)
+        .follow_links(false)
+        .filter_entry(|entry| !is_skipped_project_directory_entry(entry));
 
-            if metadata.file_type().is_symlink() {
-                return None;
-            }
+    let mut children = Vec::new();
+    for entry in walk_builder.build() {
+        cancellation.check_cancelled("project tree")?;
+        let Ok(entry) = entry else { continue };
+        if entry.depth() == 0 {
+            continue;
+        }
 
-            if metadata.is_dir() && SKIPPED_DIRECTORY_NAMES.contains(&name.as_str()) {
-                return None;
-            }
+        let Some(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
 
-            Some((name, entry_path, metadata.is_dir()))
-        })
-        .collect::<Vec<_>>();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_dir = file_type.is_dir();
+        children.push((name, is_dir));
+    }
 
-    children.sort_by(|left, right| match (left.2, right.2) {
+    children.sort_by(|left, right| match (left.1, right.1) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
         _ => left.0.to_lowercase().cmp(&right.0.to_lowercase()),
     });
 
-    children
+    let mut omitted_entry_count = 0_u32;
+    let nodes = children
         .into_iter()
-        .map(|(name, path, is_dir)| {
-            let virtual_path = child_virtual_path(parent_virtual_path, &name);
-            if is_dir {
-                Ok(ProjectFileNodeDto {
-                    name,
-                    path: virtual_path.clone(),
-                    r#type: ProjectEntryKindDto::Folder,
-                    children: read_child_nodes(&path, &virtual_path)?,
-                })
-            } else {
-                Ok(ProjectFileNodeDto {
-                    name,
-                    path: virtual_path,
-                    r#type: ProjectEntryKindDto::File,
-                    children: Vec::new(),
-                })
+        .enumerate()
+        .filter_map(|(index, (name, is_dir))| {
+            if index >= node_budget {
+                omitted_entry_count = omitted_entry_count.saturating_add(1);
+                return None;
             }
+
+            let virtual_path = child_virtual_path(parent_virtual_path, &name);
+            Some(ProjectFileNodeDto {
+                name,
+                path: virtual_path,
+                r#type: if is_dir {
+                    ProjectEntryKindDto::Folder
+                } else {
+                    ProjectEntryKindDto::File
+                },
+                children: Vec::new(),
+                children_loaded: !is_dir,
+                truncated: false,
+                omitted_entry_count: 0,
+            })
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    Ok(ListingChildren {
+        children: nodes,
+        truncated: omitted_entry_count > 0,
+        omitted_entry_count,
+    })
+}
+
+pub(crate) fn is_skipped_project_directory_entry(entry: &DirEntry) -> bool {
+    entry
+        .file_type()
+        .map(|file_type| {
+            file_type.is_dir()
+                && is_skipped_project_directory_name(&entry.file_name().to_string_lossy())
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) fn is_skipped_project_directory_name(name: &str) -> bool {
+    SKIPPED_DIRECTORY_NAMES.contains(&name)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use crate::commands::backend_jobs::BackendCancellationToken;
+
+    use super::{build_folder_listing, resolve_virtual_path};
+
+    #[test]
+    fn project_tree_lists_only_the_requested_folder() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir(temp_dir.path().join("src")).expect("src dir");
+        fs::write(temp_dir.path().join("src").join("main.rs"), "fn main() {}").expect("main");
+        fs::write(temp_dir.path().join("README.md"), "# Xero").expect("readme");
+
+        let root = build_folder_listing(
+            temp_dir.path(),
+            "/",
+            100,
+            &BackendCancellationToken::default(),
+        )
+        .expect("root listing");
+        let src = build_folder_listing(
+            &temp_dir.path().join("src"),
+            "/src",
+            100,
+            &BackendCancellationToken::default(),
+        )
+        .expect("src listing");
+
+        assert_eq!(
+            root.root
+                .children
+                .iter()
+                .map(|node| (node.path.as_str(), node.children_loaded))
+                .collect::<Vec<_>>(),
+            vec![("/src", false), ("/README.md", true)]
+        );
+        assert_eq!(
+            src.root
+                .children
+                .iter()
+                .map(|node| node.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/src/main.rs"]
+        );
+    }
+
+    #[test]
+    fn project_tree_applies_ignore_rules_and_skipped_directory_names() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        fs::write(
+            temp_dir.path().join(".gitignore"),
+            "ignored.txt\nignored_dir/\n",
+        )
+        .expect("gitignore");
+        fs::write(temp_dir.path().join("visible.txt"), "visible").expect("visible");
+        fs::write(temp_dir.path().join("ignored.txt"), "ignored").expect("ignored");
+        fs::create_dir(temp_dir.path().join("ignored_dir")).expect("ignored dir");
+        fs::create_dir(temp_dir.path().join("node_modules")).expect("node_modules");
+
+        let listing = build_folder_listing(
+            temp_dir.path(),
+            "/",
+            100,
+            &BackendCancellationToken::default(),
+        )
+        .expect("listing");
+        let paths = listing
+            .root
+            .children
+            .iter()
+            .map(|node| node.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, vec!["/visible.txt"]);
+    }
+
+    #[test]
+    fn project_tree_marks_payload_truncation_when_node_budget_is_exhausted() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        fs::write(temp_dir.path().join("a.txt"), "a").expect("write a");
+        fs::write(temp_dir.path().join("b.txt"), "b").expect("write b");
+        fs::write(temp_dir.path().join("c.txt"), "c").expect("write c");
+
+        let tree = build_folder_listing(
+            temp_dir.path(),
+            "/",
+            2,
+            &BackendCancellationToken::default(),
+        )
+        .expect("tree");
+
+        assert!(tree.truncated);
+        assert_eq!(tree.root.children.len(), 2);
+        assert_eq!(tree.omitted_entry_count, 1);
+        assert_eq!(tree.root.omitted_entry_count, 1);
+    }
+
+    #[test]
+    fn project_tree_rejects_unsafe_virtual_paths() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+
+        assert!(resolve_virtual_path(temp_dir.path(), "/../escape", "path", true).is_err());
+        assert!(resolve_virtual_path(temp_dir.path(), "/safe/../escape", "path", true).is_err());
+        assert!(resolve_virtual_path(temp_dir.path(), "/", "path", true).is_ok());
+    }
 }
 
 fn read_metadata(path: &Path) -> CommandResult<fs::Metadata> {

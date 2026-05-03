@@ -2,18 +2,54 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { Profiler } from 'react'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { Profiler, useMemo, useState } from 'react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 
 import { createBrowserResizeScheduler, type ViewportRect } from '@/components/xero/browser-resize-scheduler'
 import { createEditorFrameScheduler } from '@/components/xero/code-editor'
 import { flattenFileTreeRows } from '@/components/xero/file-tree'
-import { parseDiffLines, VcsSidebar, type VcsSidebarProps } from '@/components/xero/vcs-sidebar'
-import { calculateVirtualRange } from '@/lib/virtual-list'
-import type { FileSystemNode } from '@/src/lib/file-system-tree'
+import {
+  createSearchIndex,
+  filterSearchIndex,
+  useDeferredFilterQuery,
+} from '@/lib/input-priority'
+import {
+  DIFF_TOKENIZATION_BATCH_SIZE,
+  createDiffPatchCache,
+  createDiffTokenizationBatches,
+  getDiffParsingStats,
+  getDiffPatchCacheStats,
+  parseDiffLines,
+  parseDiffLinesForPatchKey,
+  setCachedDiffPatch,
+  VcsSidebar,
+  type VcsSidebarProps,
+} from '@/components/xero/vcs-sidebar'
+import {
+  Markdown,
+  getMarkdownSegmentStats,
+  resetMarkdownSegmentCacheForTests,
+} from '@/components/xero/agent-runtime/conversation-markdown'
+import {
+  getShikiTokenCacheStats,
+} from '@/lib/shiki'
+import {
+  getIpcPayloadBudgetMetrics,
+  recordIpcPayloadSample,
+  resetIpcPayloadBudgetMetricsForTests,
+} from '@/src/lib/ipc-payload-budget'
+import { createFrameCoalescer } from '@/lib/frame-governance'
+import { calculateVirtualRange, getVirtualIndexes } from '@/lib/virtual-list'
+import {
+  applyProjectFileListing,
+  createEmptyProjectFileTreeStore,
+  getProjectFileTreeStoreStats,
+  type FileSystemNode,
+} from '@/src/lib/file-system-tree'
 import {
   createRuntimeStreamEventBuffer,
+  mergeRuntimeStreamEvents,
 } from '@/src/features/xero/use-xero-desktop-state/runtime-stream'
 import {
   createXeroHighChurnStore,
@@ -22,9 +58,11 @@ import {
 } from '@/src/features/xero/use-xero-desktop-state/high-churn-store'
 import {
   createRuntimeStreamView,
+  estimateRuntimeStreamViewBytes,
   type RuntimeStreamEventDto,
   type RuntimeStreamView,
 } from '@/src/lib/xero-model/runtime-stream'
+import { estimateProviderModelCatalogBytes, type ProviderModelCatalogDto } from '@/src/lib/xero-model/provider-models'
 import {
   createRepositoryStatusDiffRevision,
   type GitCommitResponseDto,
@@ -261,6 +299,27 @@ function makeLargeDiffPatch(lineCount: number): string {
   ].join('\n')
 }
 
+function makeProviderModelCatalog(modelCount: number): ProviderModelCatalogDto {
+  return {
+    profileId: 'openrouter-default',
+    providerId: 'openrouter',
+    configuredModelId: 'model-0',
+    source: 'live',
+    fetchedAt: '2026-05-02T12:00:00Z',
+    lastSuccessAt: '2026-05-02T12:00:00Z',
+    lastRefreshError: null,
+    models: Array.from({ length: modelCount }, (_, index) => ({
+      modelId: `model-${index}`,
+      displayName: `Model ${index}`,
+      thinking: {
+        supported: index % 2 === 0,
+        effortOptions: index % 2 === 0 ? ['low' as const, 'medium' as const, 'high' as const] : [],
+        defaultEffort: index % 2 === 0 ? ('medium' as const) : null,
+      },
+    })),
+  }
+}
+
 function resolvedCommit(): Promise<GitCommitResponseDto> {
   return Promise.resolve({
     sha: 'def5678',
@@ -321,6 +380,37 @@ function RepositoryShellProbe({ store }: { store: XeroHighChurnStore }) {
   return <span data-testid="repository-status-count">{statusCount}</span>
 }
 
+interface LargeFilterItem {
+  id: string
+  name: string
+  detail: string
+}
+
+function LargeFilterProbe({ items }: { items: readonly LargeFilterItem[] }) {
+  const [query, setQuery] = useState('')
+  const deferredQuery = useDeferredFilterQuery(query)
+  const index = useMemo(
+    () => createSearchIndex(items, (item) => [item.name, item.detail]),
+    [items],
+  )
+  const filtered = useMemo(
+    () => filterSearchIndex(index, deferredQuery),
+    [deferredQuery, index],
+  )
+
+  return (
+    <label>
+      Large filter
+      <input
+        aria-label="Large filter"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+      <output data-testid="large-filter-count">{filtered.length}</output>
+    </label>
+  )
+}
+
 describe('UI latency performance smoke replays', () => {
   it('coalesces a high-volume runtime stream burst into one flush', async () => {
     await measureReplay('runtime-stream-burst', () => {
@@ -365,6 +455,7 @@ describe('UI latency performance smoke replays', () => {
 
       smokeReport.replays.runtimeStreamBurst = {
         enqueuedItems: 1_000,
+        retainedStreamBytes: stream ? estimateRuntimeStreamViewBytes(stream) : 0,
         scheduledFlushCount,
         streamUpdateCount: updateRuntimeStream.mock.calls.length,
         lastSequence: stream?.lastSequence ?? null,
@@ -451,6 +542,35 @@ describe('UI latency performance smoke replays', () => {
     })
   })
 
+  it('keeps large filter input responsive while projecting deferred results', async () => {
+    await measureReplay('large-filter-input-priority', async () => {
+      const items: LargeFilterItem[] = Array.from({ length: 5_000 }, (_, index) => ({
+        id: `item-${index}`,
+        name: `target-${index}`,
+        detail: index % 2 === 0 ? 'settings provider diagnostic' : 'runtime model catalog',
+      }))
+      let commitCount = 0
+
+      render(
+        <Profiler id="large-filter-probe" onRender={() => { commitCount += 1 }}>
+          <LargeFilterProbe items={items} />
+        </Profiler>,
+      )
+
+      const input = screen.getByRole('textbox', { name: 'Large filter' })
+      fireEvent.change(input, { target: { value: 'target-4999' } })
+
+      expect(input).toHaveValue('target-4999')
+      await waitFor(() => expect(screen.getByTestId('large-filter-count')).toHaveTextContent('1'))
+
+      smokeReport.replays.largeFilterInputPriority = {
+        indexedRows: items.length,
+        finalMatchedRows: 1,
+        profilerCommits: commitCount,
+      }
+    })
+  })
+
   it('bounds sidebar resize scheduling to one frame per resize burst', async () => {
     await measureReplay('sidebar-resize-scheduling', () => {
       const node = document.createElement('div')
@@ -487,6 +607,64 @@ describe('UI latency performance smoke replays', () => {
         resizeIpcCallsAfterBurst: 1,
         resizeIpcCallsAfterSteadyState: 1,
         resizeIpcCallsAfterForcedFrame: calls.length,
+      }
+    })
+  })
+
+  it('reports frame governance for pointer streams and hidden native frames', async () => {
+    await measureReplay('frame-pointer-governance', () => {
+      const pointerFrames = createFrameController()
+      const widthFlushes: number[] = []
+      const pointerCoalescer = createFrameCoalescer<number>({
+        cancelFrame: pointerFrames.cancelFrame,
+        onFlush: (value) => widthFlushes.push(value),
+        requestFrame: pointerFrames.requestFrame,
+      })
+
+      for (let index = 0; index < 240; index += 1) {
+        pointerCoalescer.schedule(320 + index)
+      }
+
+      const pointerRafLoopsAfterBurst = pointerFrames.pendingCount
+      expect(pointerRafLoopsAfterBurst).toBe(1)
+      pointerFrames.flushFrame()
+      expect(widthFlushes).toEqual([559])
+
+      const nativeFrames = createFrameController()
+      const renderedFrames: number[] = []
+      let visible = false
+      const nativeFrameCoalescer = createFrameCoalescer<number>({
+        cancelFrame: nativeFrames.cancelFrame,
+        getEnabled: () => visible,
+        onFlush: (seq) => renderedFrames.push(seq),
+        requestFrame: nativeFrames.requestFrame,
+      })
+
+      for (let seq = 1; seq <= 120; seq += 1) {
+        nativeFrameCoalescer.schedule(seq)
+      }
+      expect(nativeFrames.pendingCount).toBe(0)
+      expect(renderedFrames).toEqual([])
+
+      visible = true
+      for (let seq = 121; seq <= 240; seq += 1) {
+        nativeFrameCoalescer.schedule(seq)
+      }
+      expect(nativeFrames.pendingCount).toBe(1)
+      nativeFrames.flushFrame()
+      expect(renderedFrames).toEqual([240])
+
+      const pointerMetrics = pointerCoalescer.getMetrics()
+      const nativeFrameMetrics = nativeFrameCoalescer.getMetrics()
+
+      smokeReport.replays.frameGovernance = {
+        hiddenNativeFramesDropped: nativeFrameMetrics.disabledDrops,
+        nativeFrameEvents: nativeFrameMetrics.scheduledValues,
+        nativeFrameFlushes: nativeFrameMetrics.flushes,
+        pointerMoveEvents: pointerMetrics.scheduledValues,
+        pointerMoveFlushes: pointerMetrics.flushes,
+        pointerMovesCoalesced: pointerMetrics.coalescedDrops,
+        pointerRafLoopsAfterBurst,
       }
     })
   })
@@ -542,6 +720,200 @@ describe('UI latency performance smoke replays', () => {
         diffRows: diffLines.length,
         visibleDiffRows: diffRange.renderedCount,
       }
+    })
+  })
+
+  it('reports markdown parse reuse and visible diff tokenization batches', async () => {
+    await measureReplay('rich-text-bounds', () => {
+      resetMarkdownSegmentCacheForTests()
+      const markdown = [
+        'Assistant response with code:',
+        '```',
+        'plain code block',
+        '```',
+        'done',
+      ].join('\n')
+      const { rerender } = render(<Markdown messageId="smoke-turn-1" text={markdown} />)
+
+      for (let index = 0; index < 100; index += 1) {
+        rerender(<Markdown messageId="smoke-turn-1" text={markdown} />)
+      }
+      const markdownStatsAfterStableRenders = getMarkdownSegmentStats()
+
+      rerender(<Markdown messageId="smoke-turn-1" text={`${markdown}\nstreamed tail`} />)
+      const markdownStatsAfterRevision = getMarkdownSegmentStats()
+
+      const diffLines = parseDiffLines(makeLargeDiffPatch(2_000))
+      const diffRange = calculateVirtualRange({
+        itemCount: diffLines.length,
+        itemSize: 22,
+        viewportSize: 640,
+        scrollOffset: 0,
+        overscan: 24,
+      })
+      const diffBatches = createDiffTokenizationBatches({
+        indexes: getVirtualIndexes(diffRange),
+        lines: diffLines,
+      })
+
+      expect(markdownStatsAfterStableRenders.parses).toBe(1)
+      expect(markdownStatsAfterRevision.parses).toBe(2)
+      expect(diffBatches.length).toBeLessThanOrEqual(
+        Math.ceil(diffRange.renderedCount / DIFF_TOKENIZATION_BATCH_SIZE),
+      )
+
+      smokeReport.replays.richTextBounds = {
+        stableMarkdownRerenders: 100,
+        markdownCacheBytes: markdownStatsAfterRevision.byteSize,
+        markdownParsesAfterStableRenders: markdownStatsAfterStableRenders.parses,
+        markdownParsesAfterTextRevision: markdownStatsAfterRevision.parses,
+        visibleDiffRows: diffRange.renderedCount,
+        diffTokenizationBatchCount: diffBatches.length,
+        diffTokenizationBatchSize: DIFF_TOKENIZATION_BATCH_SIZE,
+      }
+    })
+  })
+
+  it('reports retained cache bytes for phase-17 memory budgets', async () => {
+    await measureReplay('cache-memory-budgets', () => {
+      resetMarkdownSegmentCacheForTests()
+      render(<Markdown messageId="cache-smoke" text={['Cache sample:', '```ts', 'const value = 1', '```'].join('\n')} />)
+
+      const patch = makeLargeDiffPatch(500)
+      parseDiffLinesForPatchKey('cache-smoke-diff', patch)
+
+      const diffPatchCache = createDiffPatchCache()
+      setCachedDiffPatch(diffPatchCache, 'project-1\u0000rev\u0000unstaged\u0000file.txt', patch)
+
+      const projectTreeStore = applyProjectFileListing(
+        createEmptyProjectFileTreeStore(),
+        {
+          projectId: 'project-1',
+          path: '/',
+          root: {
+            name: 'root',
+            path: '/',
+            type: 'folder',
+            childrenLoaded: true,
+            children: Array.from({ length: 400 }, (_, index) => ({
+              name: `file-${index}.ts`,
+              path: `/src/file-${index}.ts`,
+              type: 'file' as const,
+              childrenLoaded: true,
+            })),
+          },
+          truncated: false,
+          omittedEntryCount: 0,
+        },
+      )
+
+      const stream = mergeRuntimeStreamEvents(
+        makeRuntimeStream(),
+        Array.from({ length: 80 }, (_, index) =>
+          makeRuntimeStreamEvent(index + 1),
+        ),
+      )
+      const providerCatalog = makeProviderModelCatalog(250)
+
+      const markdownStats = getMarkdownSegmentStats()
+      const diffParsingStats = getDiffParsingStats()
+      const diffPatchStats = getDiffPatchCacheStats(diffPatchCache)
+      const projectTreeStats = getProjectFileTreeStoreStats(projectTreeStore)
+      const shikiStats = getShikiTokenCacheStats()
+
+      expect(markdownStats.byteSize).toBeGreaterThan(0)
+      expect(diffParsingStats.byteSize).toBeGreaterThan(0)
+      expect(diffPatchStats.byteSize).toBeGreaterThan(0)
+      expect(projectTreeStats.byteSize).toBeGreaterThan(0)
+
+      smokeReport.replays.cacheMemoryBudgets = {
+        diffParseCacheBytes: diffParsingStats.byteSize,
+        diffParseCacheEntries: diffParsingStats.entries,
+        diffPatchCacheBytes: diffPatchStats.byteSize,
+        diffPatchCacheEntries: diffPatchStats.entries,
+        markdownCacheBytes: markdownStats.byteSize,
+        markdownCacheEntries: markdownStats.entries,
+        projectTreeBytes: projectTreeStats.byteSize,
+        projectTreeNodes: projectTreeStats.nodeCount,
+        providerCatalogBytes: estimateProviderModelCatalogBytes(providerCatalog),
+        providerCatalogModels: providerCatalog.models.length,
+        runtimeStreamBytes: stream ? estimateRuntimeStreamViewBytes(stream) : 0,
+        shikiTokenCacheBytes: shikiStats.byteSize,
+        shikiTokenCacheEntries: shikiStats.entries,
+      }
+    })
+  })
+
+  it('reports IPC payload sizes for representative command and event DTOs', async () => {
+    await measureReplay('ipc-payload-budgets', () => {
+      resetIpcPayloadBudgetMetricsForTests()
+      const repositoryStatus = makeRepositoryStatus({
+        entries: Array.from({ length: 400 }, (_, index) => ({
+          path: `src/file-${String(index).padStart(4, '0')}.ts`,
+          staged: null,
+          unstaged: 'modified',
+          untracked: false,
+        })),
+      })
+      const projectTree = makeLargeFileTree(2_500)
+      const searchResults = {
+        projectId: 'project-1',
+        totalMatches: 500,
+        totalFiles: 50,
+        truncated: false,
+        files: Array.from({ length: 50 }, (_, fileIndex) => ({
+          path: `/src/file-${String(fileIndex).padStart(4, '0')}.ts`,
+          matches: Array.from({ length: 10 }, (_, matchIndex) => ({
+            line: matchIndex + 1,
+            column: 4,
+            previewPrefix: 'const result = ',
+            previewMatch: 'target',
+            previewSuffix: ' + value',
+          })),
+        })),
+      }
+
+      recordIpcPayloadSample({
+        boundary: 'event',
+        name: 'repository:status_changed',
+        payload: { projectId: 'project-1', repositoryId: 'repo-project-1', status: repositoryStatus },
+      })
+      recordIpcPayloadSample({
+        boundary: 'command',
+        name: 'list_project_files',
+        payload: { projectId: 'project-1', path: '/', root: projectTree, truncated: false, omittedEntryCount: 0 },
+      })
+      recordIpcPayloadSample({
+        boundary: 'command',
+        name: 'search_project',
+        payload: searchResults,
+      })
+      for (let sequence = 1; sequence <= 120; sequence += 1) {
+        recordIpcPayloadSample({
+          boundary: 'channel',
+          name: 'subscribe_runtime_stream:item',
+          payload: makeRuntimeStreamEvent(sequence).item,
+        })
+      }
+
+      const metrics = getIpcPayloadBudgetMetrics()
+      const byKey = Object.fromEntries(
+        metrics.map((metric) => [
+          metric.budgetKey,
+          {
+            largestBytes: metric.largestBytes,
+            overBudgetCount: metric.overBudgetCount,
+            sampleCount: metric.sampleCount,
+          },
+        ]),
+      )
+
+      expect(byKey.repositoryStatus).toBeDefined()
+      expect(byKey.projectTree).toBeDefined()
+      expect(byKey.projectSearchResults).toBeDefined()
+      expect(byKey.runtimeStreamItem).toBeDefined()
+
+      smokeReport.replays.ipcPayloadBudgets = byKey
     })
   })
 

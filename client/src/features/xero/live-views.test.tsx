@@ -537,6 +537,7 @@ describe('live views', () => {
         execution={makeExecution()}
         listProjectFiles={async () => ({
           projectId: 'project-1',
+          path: '/',
           root: {
             name: 'root',
             path: '/',

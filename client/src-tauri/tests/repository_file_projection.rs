@@ -49,13 +49,13 @@ fn list_files_with_app(
     app: &tauri::App<tauri::test::MockRuntime>,
     project_id: &str,
 ) -> Result<xero_desktop_lib::commands::ListProjectFilesResponseDto, CommandError> {
-    list_project_files(
+    tauri::async_runtime::block_on(list_project_files(
         app.handle().clone(),
         app.state::<DesktopState>(),
         ProjectIdRequestDto {
             project_id: project_id.to_owned(),
         },
-    )
+    ))
 }
 
 fn read_file_with_app(
@@ -63,14 +63,14 @@ fn read_file_with_app(
     project_id: &str,
     path: &str,
 ) -> Result<xero_desktop_lib::commands::ReadProjectFileResponseDto, CommandError> {
-    read_project_file(
+    tauri::async_runtime::block_on(read_project_file(
         app.handle().clone(),
         app.state::<DesktopState>(),
         ProjectFileRequestDto {
             project_id: project_id.to_owned(),
             path: path.to_owned(),
         },
-    )
+    ))
 }
 
 fn write_file_with_app(
@@ -79,7 +79,7 @@ fn write_file_with_app(
     path: &str,
     content: &str,
 ) -> Result<xero_desktop_lib::commands::WriteProjectFileResponseDto, CommandError> {
-    write_project_file(
+    tauri::async_runtime::block_on(write_project_file(
         app.handle().clone(),
         app.state::<DesktopState>(),
         WriteProjectFileRequestDto {
@@ -87,7 +87,7 @@ fn write_file_with_app(
             path: path.to_owned(),
             content: content.to_owned(),
         },
-    )
+    ))
 }
 
 fn create_entry_with_app(
@@ -97,7 +97,7 @@ fn create_entry_with_app(
     name: &str,
     entry_type: ProjectEntryKindDto,
 ) -> Result<xero_desktop_lib::commands::CreateProjectEntryResponseDto, CommandError> {
-    create_project_entry(
+    tauri::async_runtime::block_on(create_project_entry(
         app.handle().clone(),
         app.state::<DesktopState>(),
         CreateProjectEntryRequestDto {
@@ -106,7 +106,7 @@ fn create_entry_with_app(
             name: name.to_owned(),
             entry_type,
         },
-    )
+    ))
 }
 
 fn rename_entry_with_app(
@@ -115,7 +115,7 @@ fn rename_entry_with_app(
     path: &str,
     new_name: &str,
 ) -> Result<xero_desktop_lib::commands::RenameProjectEntryResponseDto, CommandError> {
-    rename_project_entry(
+    tauri::async_runtime::block_on(rename_project_entry(
         app.handle().clone(),
         app.state::<DesktopState>(),
         RenameProjectEntryRequestDto {
@@ -123,7 +123,7 @@ fn rename_entry_with_app(
             path: path.to_owned(),
             new_name: new_name.to_owned(),
         },
-    )
+    ))
 }
 
 fn delete_entry_with_app(
@@ -131,14 +131,14 @@ fn delete_entry_with_app(
     project_id: &str,
     path: &str,
 ) -> Result<xero_desktop_lib::commands::DeleteProjectEntryResponseDto, CommandError> {
-    delete_project_entry(
+    tauri::async_runtime::block_on(delete_project_entry(
         app.handle().clone(),
         app.state::<DesktopState>(),
         ProjectFileRequestDto {
             project_id: project_id.to_owned(),
             path: path.to_owned(),
         },
-    )
+    ))
 }
 
 fn init_git_repo() -> TempDir {
@@ -220,6 +220,9 @@ fn project_file_commands_list_read_write_create_rename_and_delete_real_repo_stat
     let project_id = imported.project.id;
 
     let tree = list_files_with_app(&app, &project_id).expect("project tree loads");
+    assert!(!tree.truncated);
+    assert_eq!(tree.omitted_entry_count, 0);
+    assert!(tree.payload_budget.is_none());
     assert!(find_node(&tree.root, "/README.md").is_some());
     assert!(find_node(&tree.root, "/src").is_some());
     assert!(find_node(&tree.root, "/src/App.tsx").is_some());

@@ -16,7 +16,10 @@ import type { DictationSettingsAdapter } from "@/components/xero/settings-dialog
 import type { SoulSettingsAdapter } from "@/components/xero/settings-dialog/soul-section"
 import type {
   EnvironmentDiscoveryStatusDto,
+  EnvironmentProbeReportDto,
   EnvironmentProfileSummaryDto,
+  VerifyUserToolRequestDto,
+  VerifyUserToolResponseDto,
   ImportMcpServersResponseDto,
   XeroDoctorReportDto,
   McpImportDiagnosticDto,
@@ -217,6 +220,9 @@ export interface SettingsDialogProps {
   environmentDiscoveryStatus?: EnvironmentDiscoveryStatusDto | null
   environmentProfileSummary?: EnvironmentProfileSummaryDto
   onRefreshEnvironmentDiscovery?: (options?: { force?: boolean }) => Promise<EnvironmentDiscoveryStatusDto | null>
+  onVerifyUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto | null>
+  onSaveUserEnvironmentTool?: (request: VerifyUserToolRequestDto) => Promise<EnvironmentProbeReportDto | null>
+  onRemoveUserEnvironmentTool?: (id: string) => Promise<EnvironmentProbeReportDto | null>
   onRunDoctorReport?: (request?: Partial<RunDoctorReportRequestDto>) => Promise<XeroDoctorReportDto>
   dictationAdapter?: DictationSettingsAdapter
   soulAdapter?: SoulSettingsAdapter
@@ -295,6 +301,9 @@ export function SettingsDialog({
   environmentDiscoveryStatus = null,
   environmentProfileSummary = null,
   onRefreshEnvironmentDiscovery,
+  onVerifyUserEnvironmentTool,
+  onSaveUserEnvironmentTool,
+  onRemoveUserEnvironmentTool,
   onRunDoctorReport,
   dictationAdapter,
   soulAdapter,
@@ -475,6 +484,9 @@ export function SettingsDialog({
                   environmentDiscoveryStatus={environmentDiscoveryStatus}
                   environmentProfileSummary={environmentProfileSummary}
                   onRefreshEnvironmentDiscovery={onRefreshEnvironmentDiscovery}
+                  onVerifyUserEnvironmentTool={onVerifyUserEnvironmentTool}
+                  onSaveUserEnvironmentTool={onSaveUserEnvironmentTool}
+                  onRemoveUserEnvironmentTool={onRemoveUserEnvironmentTool}
                   onRunDoctorReport={onRunDoctorReport}
                 />
               ) : section === "soul" ? (

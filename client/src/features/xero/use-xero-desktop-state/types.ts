@@ -468,7 +468,7 @@ export interface UseXeroDesktopStateResult {
   retry: () => Promise<void>
   showRepositoryDiff: (scope: RepositoryDiffScope, options?: { force?: boolean }) => Promise<void>
   retryActiveRepositoryDiff: () => Promise<void>
-  listProjectFiles: (projectId: string) => Promise<ListProjectFilesResponseDto>
+  listProjectFiles: (projectId: string, path?: string) => Promise<ListProjectFilesResponseDto>
   readProjectFile: (projectId: string, path: string) => Promise<ReadProjectFileResponseDto>
   writeProjectFile: (projectId: string, path: string, content: string) => Promise<WriteProjectFileResponseDto>
   createProjectEntry: (request: CreateProjectEntryRequestDto) => Promise<CreateProjectEntryResponseDto>

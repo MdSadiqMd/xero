@@ -11,7 +11,7 @@
  * passing.
  */
 
-import { useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import {
   AlertCircle,
   AlertTriangle,
@@ -21,6 +21,7 @@ import {
   Circle,
   Info,
   Loader2,
+  Terminal,
   User,
   XCircle,
 } from 'lucide-react'
@@ -118,7 +119,7 @@ function isHandoffCompletion(
   return Boolean(completion?.detail?.toLowerCase().includes(HANDOFF_COMPLETION_DETAIL_MARKER))
 }
 
-export function ConversationSection({
+export const ConversationSection = memo(function ConversationSection({
   runtimeRun,
   visibleTurns,
   streamIssue,
@@ -159,9 +160,9 @@ export function ConversationSection({
   )
 
   return (
-    <section aria-label="Agent conversation" className="flex flex-col gap-6">
+    <section aria-label="Agent conversation" className="flex flex-col gap-5">
       {showAnyTurn ? (
-        <ol aria-label="Agent conversation turns" className="flex flex-col gap-6">
+        <ol aria-label="Agent conversation turns" className="flex flex-col gap-5">
           {visibleTurns.map((turn, index) => (
             <ConversationTurnItem
               key={turn.id}
@@ -179,7 +180,7 @@ export function ConversationSection({
       ) : null}
 
       {showAnyNotice ? (
-        <ul aria-label="Agent run notices" className="flex flex-col gap-3">
+        <ul aria-label="Agent run notices" className="flex flex-col gap-2.5">
           {showHandoffNotice ? (
             <NoticeListItem>
               <NoticeRow
@@ -224,7 +225,7 @@ export function ConversationSection({
       ) : null}
     </section>
   )
-}
+})
 
 function NoticeListItem({ children }: { children: React.ReactNode }) {
   return <li className={TURN_ENTRY_CLASS}>{children}</li>
@@ -308,19 +309,19 @@ function ConversationTurnRow({
     return turn.role === 'user' ? (
       <UserMessage text={turn.text} accountAvatarUrl={accountAvatarUrl} accountLogin={accountLogin} />
     ) : (
-      <AssistantMessage text={turn.text} isStreaming={isStreaming} />
+      <AssistantMessage messageId={turn.id} text={turn.text} isStreaming={isStreaming} />
     )
   }
 
   if (turn.kind === 'thinking') {
     return (
-      <div className="flex gap-3">
+      <div className="flex gap-2.5">
         <AgentAvatar pulse={isStreaming} />
-        <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
-          <span className="px-0.5 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground/80">
+        <div className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
+          <span className="px-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
             Agent
           </span>
-          <ThinkingBlock text={turn.text} />
+          <ThinkingBlock messageId={turn.id} text={turn.text} />
         </div>
       </div>
     )
@@ -365,20 +366,27 @@ interface ActionCardProps {
 function ActionCard({ title, detail, detailRows, state }: ActionCardProps) {
   const [open, setOpen] = useState(false)
   const hasDetails = detailRows.length > 0
+  const isFailed = state === 'failed'
 
   return (
     <div
       className={cn(
-        'group rounded-xl border border-border/40 bg-card/30 px-3.5 py-2.5 transition-colors',
-        'hover:border-border/70 hover:bg-card/50',
+        'group rounded-lg border bg-card/25 transition-colors',
+        isFailed
+          ? 'border-destructive/30 bg-destructive/[0.04]'
+          : 'border-border/40 hover:border-border/70 hover:bg-card/45',
+        open && !isFailed ? 'border-border/70 bg-card/45' : null,
       )}
     >
       <Collapsible open={open} onOpenChange={setOpen}>
-        <div className="flex items-start gap-2.5">
-          <ToolStatusIcon state={state} className="mt-[3px]" />
+        <div className="flex items-start gap-2 px-3 py-2">
+          <ToolStatusIcon state={state} className="mt-[2.5px]" />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground" title={title}>
+              <span
+                className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground"
+                title={title}
+              >
                 {title}
               </span>
               <ToolStateLabel state={state} size="sm" />
@@ -388,13 +396,13 @@ function ActionCard({ title, detail, detailRows, state }: ActionCardProps) {
                     type="button"
                     aria-label={`${open ? 'Hide' : 'Show'} tool details for ${title}`}
                     className={cn(
-                      'flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/70',
+                      'flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded text-muted-foreground/60',
                       'hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
                     )}
                   >
                     <ChevronDown
                       className={cn(
-                        'h-3.5 w-3.5 transition-transform duration-200 ease-out',
+                        'h-3 w-3 transition-transform duration-200 ease-out',
                         open ? 'rotate-180' : 'rotate-0',
                       )}
                     />
@@ -402,42 +410,73 @@ function ActionCard({ title, detail, detailRows, state }: ActionCardProps) {
                 </CollapsibleTrigger>
               ) : null}
             </div>
-            <p
-              className="mt-0.5 truncate text-[12.5px] leading-relaxed text-muted-foreground"
-              title={detail}
-            >
-              {detail}
-            </p>
-            {hasDetails ? (
-              <CollapsibleContent
-                className={cn(
-                  'overflow-hidden',
-                  'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1',
-                  'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1',
-                  'data-[state=open]:duration-200 data-[state=closed]:duration-150',
-                )}
+            {detail.trim().length > 0 ? (
+              <p
+                className="mt-0.5 truncate text-[11.5px] leading-relaxed text-muted-foreground/90"
+                title={detail}
               >
-                <dl className="mt-2.5 grid gap-2 border-t border-border/40 pt-2.5">
-                  {detailRows.map((row, index) => (
-                    <div key={`${row.label}:${index}`} className="grid gap-0.5">
-                      <dt className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/80">
-                        {row.label}
-                      </dt>
-                      <dd
-                        className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-foreground/85"
-                        title={row.value}
-                      >
-                        {row.value}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              </CollapsibleContent>
+                {detail}
+              </p>
             ) : null}
           </div>
         </div>
+        {hasDetails ? (
+          <CollapsibleContent
+            className={cn(
+              'overflow-hidden',
+              'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1',
+              'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1',
+              'data-[state=open]:duration-200 data-[state=closed]:duration-150',
+            )}
+          >
+            <div className="border-t border-border/30 px-3 pb-2.5 pt-2">
+              <ToolDetailRows rows={detailRows} />
+            </div>
+          </CollapsibleContent>
+        ) : null}
       </Collapsible>
     </div>
+  )
+}
+
+interface ToolDetailRowsProps {
+  rows: Array<{ label: string; value: string }>
+}
+
+function ToolDetailRows({ rows }: ToolDetailRowsProps) {
+  return (
+    <dl className="grid gap-2">
+      {rows.map((row, index) => {
+        const isCommandLike =
+          /input|command|cmd/i.test(row.label) && /^[A-Za-z][\w./-]*\s/.test(row.value.trim())
+        return (
+          <div key={`${row.label}:${index}`} className="grid gap-1">
+            <dt className="text-[9.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
+              {row.label}
+            </dt>
+            <dd
+              className={cn(
+                'overflow-hidden rounded-md border border-border/40 bg-muted/25 px-2 py-1.5',
+                'whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground/85',
+              )}
+              title={row.value}
+            >
+              {isCommandLike ? (
+                <span className="flex items-start gap-1.5">
+                  <Terminal
+                    aria-hidden="true"
+                    className="mt-[1px] h-3 w-3 shrink-0 text-primary/70"
+                  />
+                  <span className="min-w-0 flex-1">{row.value}</span>
+                </span>
+              ) : (
+                row.value
+              )}
+            </dd>
+          </div>
+        )
+      })}
+    </dl>
   )
 }
 
@@ -448,12 +487,12 @@ interface ToolStateLabelProps {
 
 function ToolStateLabel({ state, size = 'sm' }: ToolStateLabelProps) {
   if (!state) return null
-  const sizeClass = size === 'sm' ? 'text-[11px]' : 'text-[10.5px]'
+  const sizeClass = size === 'sm' ? 'text-[10.5px]' : 'text-[10px]'
   return (
     <span
       key={state}
       className={cn(
-        'shrink-0 font-medium tabular-nums',
+        'shrink-0 font-medium uppercase tracking-[0.05em] tabular-nums',
         sizeClass,
         getToolStateTextClass(state),
         'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-200',
@@ -487,32 +526,38 @@ function ActionGroupCard({ title, detail, state, actions }: ActionGroupCardProps
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className="overflow-hidden rounded-xl border border-border/40 bg-card/30"
+      className={cn(
+        'overflow-hidden rounded-lg border bg-card/25 transition-colors',
+        open ? 'border-border/70 bg-card/45' : 'border-border/40 hover:border-border/70 hover:bg-card/45',
+      )}
     >
       <CollapsibleTrigger asChild>
         <button
           type="button"
           aria-label={`${open ? 'Hide' : 'Show'} grouped tool details for ${title}`}
           className={cn(
-            'flex w-full items-start gap-2.5 px-3.5 py-2.5 text-left transition-colors',
-            'hover:bg-card/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
+            'flex w-full items-start gap-2 px-3 py-2 text-left',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
           )}
         >
-          <ToolStatusIcon state={state} className="mt-[3px]" />
+          <ToolStatusIcon state={state} className="mt-[2.5px]" />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground" title={title}>
+              <span
+                className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground"
+                title={title}
+              >
                 {title}
               </span>
               <ChevronDown
                 className={cn(
-                  'h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-200 ease-out',
+                  'h-3 w-3 shrink-0 text-muted-foreground/60 transition-transform duration-200 ease-out',
                   open ? 'rotate-180' : 'rotate-0',
                 )}
               />
             </div>
             <p
-              className="mt-0.5 truncate text-[12.5px] leading-relaxed text-muted-foreground"
+              className="mt-0.5 truncate text-[11.5px] leading-relaxed text-muted-foreground/90"
               title={detail}
             >
               {detail}
@@ -528,25 +573,28 @@ function ActionGroupCard({ title, detail, state, actions }: ActionGroupCardProps
           'data-[state=open]:duration-200 data-[state=closed]:duration-150',
         )}
       >
-        <ol className="divide-y divide-border/30 border-t border-border/30">
+        <ol className="divide-y divide-border/25 border-t border-border/30">
           {actions.map((action) => (
             <li
               key={action.id}
               className={cn(
-                'flex items-start gap-2.5 px-3.5 py-2',
+                'flex items-start gap-2 px-3 py-1.5',
                 'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150 motion-safe:ease-out',
               )}
             >
-              <ToolStatusIcon state={action.state} className="mt-[3px]" />
+              <ToolStatusIcon state={action.state} className="mt-[2.5px]" />
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground" title={action.title}>
+                  <span
+                    className="min-w-0 flex-1 truncate text-[12px] text-foreground"
+                    title={action.title}
+                  >
                     {action.title}
                   </span>
                   <ToolStateLabel state={action.state} size="xs" />
                 </div>
                 <p
-                  className="mt-0.5 truncate text-[11.5px] leading-relaxed text-muted-foreground/90"
+                  className="mt-0.5 truncate text-[11px] leading-relaxed text-muted-foreground/85"
                   title={action.detail}
                 >
                   {action.detail}
@@ -572,17 +620,17 @@ interface UserMessageProps {
 
 function UserMessage({ text, accountAvatarUrl, accountLogin }: UserMessageProps) {
   return (
-    <div className="flex justify-end gap-3">
-      <div className="flex min-w-0 max-w-[82%] flex-col items-end gap-1.5">
-        <span className="px-1 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground/80">
+    <div className="flex justify-end gap-2.5">
+      <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-1">
+        <span className="px-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
           You
         </span>
         <div
           className={cn(
-            'rounded-2xl px-4 py-2.5',
+            'rounded-2xl px-3.5 py-2',
             'bg-primary/10 text-foreground',
             'ring-1 ring-inset ring-primary/15',
-            'whitespace-pre-wrap break-words text-sm leading-relaxed',
+            'whitespace-pre-wrap break-words text-[13px] leading-relaxed',
           )}
         >
           {text}
@@ -638,8 +686,16 @@ function splitAssistantText(text: string): AssistantSegment[] {
   return segments
 }
 
-function AssistantMessage({ text, isStreaming }: { text: string; isStreaming: boolean }) {
-  const segments = splitAssistantText(text)
+function AssistantMessage({
+  messageId,
+  text,
+  isStreaming,
+}: {
+  messageId: string
+  text: string
+  isStreaming: boolean
+}) {
+  const segments = useMemo(() => splitAssistantText(text), [text])
   const lastResponseIndex = (() => {
     for (let i = segments.length - 1; i >= 0; i -= 1) {
       if (segments[i].kind === 'response') return i
@@ -648,19 +704,20 @@ function AssistantMessage({ text, isStreaming }: { text: string; isStreaming: bo
   })()
 
   return (
-    <div className="flex gap-3">
+    <div className="flex gap-2.5">
       <AgentAvatar pulse={isStreaming} />
-      <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
-        <span className="px-0.5 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground/80">
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
+        <span className="px-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
           Agent
         </span>
-        <div className="flex w-full min-w-0 flex-col items-start gap-2.5">
+        <div className="flex w-full min-w-0 flex-col items-start gap-2">
           {segments.map((segment, index) =>
             segment.kind === 'thinking' ? (
-              <ThinkingBlock key={index} text={segment.text} />
+              <ThinkingBlock key={index} messageId={`${messageId}:thinking:${index}`} text={segment.text} />
             ) : (
               <ResponseBlock
                 key={index}
+                messageId={`${messageId}:response:${index}`}
                 text={segment.text}
                 showCaret={isStreaming && index === lastResponseIndex}
               />
@@ -672,10 +729,18 @@ function AssistantMessage({ text, isStreaming }: { text: string; isStreaming: bo
   )
 }
 
-function ResponseBlock({ text, showCaret = false }: { text: string; showCaret?: boolean }) {
+function ResponseBlock({
+  messageId,
+  text,
+  showCaret = false,
+}: {
+  messageId: string
+  text: string
+  showCaret?: boolean
+}) {
   return (
     <div className="w-full min-w-0 px-0.5 text-foreground">
-      <Markdown text={text} trailing={showCaret ? <StreamingCaret /> : null} />
+      <Markdown messageId={messageId} text={text} trailing={showCaret ? <StreamingCaret /> : null} />
     </div>
   )
 }
@@ -691,31 +756,36 @@ function StreamingCaret() {
   )
 }
 
-function ThinkingBlock({ text }: { text: string }) {
+function ThinkingBlock({ messageId, text }: { messageId?: string; text: string }) {
   const [open, setOpen] = useState(false)
   const normalizedText = text.trim()
   const allLines = normalizedText.split(/\r?\n/).filter((line) => line.trim().length > 0)
-  const previewText = allLines.slice(-4).join('\n')
-  const hiddenLineCount = Math.max(0, allLines.length - 4)
+  const previewText = allLines.slice(-3).join('\n')
+  const hiddenLineCount = Math.max(0, allLines.length - 3)
 
   return (
-    <div className="w-full max-w-full min-w-0 rounded-xl border border-dashed border-border/50 bg-muted/20 px-3 py-2">
+    <div
+      className={cn(
+        'relative w-full max-w-full min-w-0 rounded-lg border border-border/40 bg-muted/15 pl-3 pr-2.5 py-1.5',
+        'before:absolute before:inset-y-1.5 before:left-0 before:w-[2px] before:rounded-r-full before:bg-primary/35',
+      )}
+    >
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
         className={cn(
-          'flex w-full items-center gap-2 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground/90',
+          'flex w-full items-center gap-1.5 text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/85',
           'hover:text-foreground focus-visible:outline-none focus-visible:text-foreground',
         )}
       >
-        <Brain className="h-3.5 w-3.5 text-primary/80" />
+        <Brain className="h-3 w-3 text-primary/70" />
         <span>Thoughts</span>
         {!open && hiddenLineCount > 0 ? (
           <span
             key={hiddenLineCount}
             className={cn(
-              'rounded-full bg-muted px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-muted-foreground/80',
+              'rounded-full bg-muted/70 px-1.5 py-px text-[9.5px] normal-case tracking-normal text-muted-foreground/80',
               'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-90 motion-safe:duration-150',
             )}
           >
@@ -724,7 +794,7 @@ function ThinkingBlock({ text }: { text: string }) {
         ) : null}
         <ChevronDown
           className={cn(
-            'ml-auto h-3.5 w-3.5 transition-transform duration-200 ease-out',
+            'ml-auto h-3 w-3 transition-transform duration-200 ease-out',
             open ? 'rotate-180' : 'rotate-0',
           )}
         />
@@ -733,21 +803,21 @@ function ThinkingBlock({ text }: { text: string }) {
         <div
           key="open"
           className={cn(
-            'mt-2 border-t border-border/30 pt-2',
+            'mt-1.5 border-t border-border/25 pt-1.5',
             'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-1 motion-safe:duration-200',
           )}
         >
-          <Markdown text={text} muted />
+          <Markdown messageId={messageId ? `${messageId}:open` : null} text={text} muted compact />
         </div>
       ) : previewText.length > 0 ? (
         <div
           key={`preview:${previewText.length}`}
           className={cn(
-            'mt-2',
+            'mt-1',
             'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150',
           )}
         >
-          <Markdown text={previewText} muted compact />
+          <Markdown messageId={messageId ? `${messageId}:preview` : null} text={previewText} muted compact />
         </div>
       ) : null}
     </div>
@@ -758,7 +828,7 @@ function AgentActivityIndicator() {
   return (
     <div
       className={cn(
-        'flex items-start gap-3',
+        'flex items-start gap-2.5',
         'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-out',
       )}
       role="status"
@@ -767,11 +837,11 @@ function AgentActivityIndicator() {
       <AgentAvatar pulse />
       <div
         className={cn(
-          'mt-0.5 flex min-w-0 items-center gap-2 rounded-full border border-border/40 bg-card/35 px-3 py-1.5 text-[12.5px] font-medium text-muted-foreground shadow-sm',
+          'mt-0.5 flex min-w-0 items-center gap-1.5 rounded-full border border-border/40 bg-card/35 px-2.5 py-1 text-[12px] font-medium text-muted-foreground shadow-sm',
           'agent-activity-indicator',
         )}
       >
-        <Loader2 className="h-3.5 w-3.5 animate-spin text-primary/80" aria-hidden="true" />
+        <Loader2 className="h-3 w-3 animate-spin text-primary/80" aria-hidden="true" />
         <span>Thinking</span>
         <span className="flex items-center gap-0.5" aria-hidden="true">
           <span className="agent-thinking-dot h-1 w-1 rounded-full bg-muted-foreground/70 [animation-delay:0ms]" />
@@ -819,18 +889,18 @@ function NoticeRow({ tone, title, message, code }: NoticeRowProps) {
   return (
     <div
       className={cn(
-        'flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5',
+        'flex items-start gap-2 rounded-lg border px-3 py-2',
         toneStyles.card,
       )}
     >
-      <Icon className={cn('mt-[2px] h-4 w-4 shrink-0', toneStyles.icon)} />
+      <Icon className={cn('mt-[2px] h-3.5 w-3.5 shrink-0', toneStyles.icon)} />
       <div className="min-w-0 flex-1">
-        <p className="m-0 text-[13px] font-medium">{title}</p>
-        <p className="mt-0.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed">
+        <p className="m-0 text-[12.5px] font-medium">{title}</p>
+        <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] leading-relaxed">
           {message}
         </p>
         {code ? (
-          <p className={cn('mt-1 break-words font-mono text-[10.5px]', toneStyles.codeText)}>
+          <p className={cn('mt-1 break-words font-mono text-[10px]', toneStyles.codeText)}>
             code: {code}
           </p>
         ) : null}
@@ -845,14 +915,14 @@ function NoticeRow({ tone, title, message, code }: NoticeRowProps) {
 
 function FailureCard({ message, code }: { message: string; code: string }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-2.5 text-destructive">
-      <XCircle className="mt-[2px] h-4 w-4 shrink-0" />
+    <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-destructive">
+      <XCircle className="mt-[2px] h-3.5 w-3.5 shrink-0" />
       <div className="min-w-0 flex-1">
-        <p className="m-0 text-[13px] font-medium">Agent run failed</p>
-        <p className="mt-0.5 whitespace-pre-wrap break-words text-[12.5px] leading-relaxed">
+        <p className="m-0 text-[12.5px] font-medium">Agent run failed</p>
+        <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] leading-relaxed">
           {message}
         </p>
-        <p className="mt-1 break-words font-mono text-[10.5px] text-destructive/70">
+        <p className="mt-1 break-words font-mono text-[10px] text-destructive/70">
           code: {code}
         </p>
       </div>
@@ -878,7 +948,7 @@ function UserAvatar({ avatarUrl, login }: UserAvatarProps) {
       aria-hidden={showImage ? undefined : 'true'}
       aria-label={showImage && login ? `${login}'s avatar` : undefined}
       className={cn(
-        'mt-[18px] flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full',
+        'mt-[16px] flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full',
         showImage
           ? 'ring-1 ring-border/50'
           : 'bg-primary/15 text-primary ring-1 ring-primary/25',
@@ -892,7 +962,7 @@ function UserAvatar({ avatarUrl, login }: UserAvatarProps) {
           onError={() => setFailed(true)}
         />
       ) : (
-        <User className="h-3.5 w-3.5" />
+        <User className="h-3 w-3" />
       )}
     </span>
   )
@@ -903,11 +973,11 @@ function AgentAvatar({ pulse = false }: { pulse?: boolean }) {
     <span
       aria-hidden="true"
       className={cn(
-        'mt-[2px] relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-card/80 ring-1 ring-border/50',
+        'mt-[2px] relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-card/80 ring-1 ring-border/50',
         pulse && 'agent-avatar-pulse',
       )}
     >
-      <AppLogo className="h-3.5 w-3.5" />
+      <AppLogo className="h-3 w-3" />
     </span>
   )
 }
@@ -944,7 +1014,7 @@ function ToolStatusIcon({ state, className }: ToolStatusIconProps) {
       key={key}
       aria-hidden="true"
       className={cn(
-        'h-3.5 w-3.5 shrink-0',
+        'h-3 w-3 shrink-0',
         tone,
         state === 'running' && 'animate-spin',
         'motion-safe:animate-in motion-safe:fade-in-0',

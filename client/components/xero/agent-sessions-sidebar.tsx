@@ -27,6 +27,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { createFrameCoalescer } from '@/lib/frame-governance'
 import { useSidebarWidthMotion } from '@/lib/sidebar-motion'
 import { Button } from '@/components/ui/button'
 import {
@@ -208,10 +209,6 @@ export function AgentSessionsSidebar({
   }, [])
 
   useEffect(() => {
-    writePersistedWidth(width)
-  }, [width])
-
-  useEffect(() => {
     if (!optimisticSessionId) {
       return
     }
@@ -293,6 +290,10 @@ export function AgentSessionsSidebar({
     const startX = event.clientX
     const startWidth = widthRef.current
     const ceiling = viewportMaxWidth()
+    let latestWidth = startWidth
+    const widthUpdates = createFrameCoalescer<number>({
+      onFlush: setWidth,
+    })
     setMaxWidth(ceiling)
     setIsResizing(true)
 
@@ -303,15 +304,18 @@ export function AgentSessionsSidebar({
 
     const handleMove = (ev: globalThis.PointerEvent) => {
       const delta = ev.clientX - startX
-      setWidth(clampWidth(startWidth + delta, ceiling))
+      latestWidth = clampWidth(startWidth + delta, ceiling)
+      widthUpdates.schedule(latestWidth)
     }
     const handleUp = () => {
+      widthUpdates.flush()
       window.removeEventListener('pointermove', handleMove)
       window.removeEventListener('pointerup', handleUp)
       window.removeEventListener('pointercancel', handleUp)
       document.body.style.cursor = previousCursor
       document.body.style.userSelect = previousSelect
       setIsResizing(false)
+      writePersistedWidth(latestWidth)
     }
 
     window.addEventListener('pointermove', handleMove)
@@ -327,7 +331,9 @@ export function AgentSessionsSidebar({
     setMaxWidth(ceiling)
     setWidth((current) => {
       const delta = event.key === 'ArrowRight' ? step : -step
-      return clampWidth(current + delta, ceiling)
+      const next = clampWidth(current + delta, ceiling)
+      writePersistedWidth(next)
+      return next
     })
   }, [collapsed])
 

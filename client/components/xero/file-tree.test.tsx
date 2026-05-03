@@ -33,6 +33,12 @@ function makeFolder(path: string, children: FileSystemNode[]): FileSystemNode {
   }
 }
 
+function rowKey(row: ReturnType<typeof flattenFileTreeRows>[number]): string {
+  if (row.kind === 'node') return row.node.path
+  if (row.kind === 'create') return `create:${row.parentPath}`
+  return `continuation:${row.path}`
+}
+
 function renderFileTree(root: FileSystemNode, selectedPath: string | null = null) {
   return render(
     <FileTree
@@ -71,7 +77,7 @@ describe('FileTree virtualization', () => {
       creatingEntry: { parentPath: '/src', type: 'file' },
     })
 
-    expect(rows.map((row) => (row.kind === 'node' ? row.node.path : `create:${row.parentPath}`))).toEqual([
+    expect(rows.map(rowKey)).toEqual([
       '/src',
       'create:/src',
       '/src/app.tsx',
@@ -97,10 +103,28 @@ describe('FileTree virtualization', () => {
       creatingEntry: null,
     })
 
-    expect(rows.map((row) => (row.kind === 'node' ? row.node.path : row.parentPath))).toEqual([
+    expect(rows.map(rowKey)).toEqual([
       '/docs',
       '/docs/guide.md',
     ])
+  })
+
+  it('surfaces folder continuation rows when a listing is capped', () => {
+    const root = {
+      ...makeTree([makeFile('/a.ts')]),
+      truncated: true,
+      omittedEntryCount: 42,
+    }
+
+    const rows = flattenFileTreeRows({
+      root,
+      expandedFolders: new Set(['/']),
+      search: null,
+      creatingEntry: null,
+    })
+
+    expect(rows.map(rowKey)).toEqual(['/a.ts', 'continuation:/'])
+    expect(rows[rows.length - 1]).toMatchObject({ kind: 'continuation', omittedEntryCount: 42 })
   })
 
   it('windows large explorer trees instead of mounting every file row', () => {

@@ -43,6 +43,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import {
+  createSearchIndex,
+  filterSearchIndex,
+  useDeferredFilterQuery,
+} from '@/lib/input-priority'
 import { cn } from '@/lib/utils'
 import { SectionHeader } from './section-header'
 
@@ -172,24 +177,6 @@ function pluginPendingId(pluginId: string): string {
   return `plugin:${pluginId}`
 }
 
-function pluginMatchesQuery(plugin: PluginRegistryEntryDto, query: string): boolean {
-  const haystack = [
-    plugin.name,
-    plugin.pluginId,
-    plugin.description,
-    plugin.version,
-    plugin.rootId,
-    plugin.rootPath,
-    plugin.pluginRootPath,
-    ...plugin.skills.map((skill) => `${skill.contributionId} ${skill.skillId} ${skill.path}`),
-    ...plugin.commands.map((command) => `${command.contributionId} ${command.label} ${command.entry}`),
-  ]
-    .join(' ')
-    .toLowerCase()
-
-  return haystack.includes(query)
-}
-
 export function PluginsSection({
   agent: _agent,
   skillRegistry,
@@ -211,15 +198,28 @@ export function PluginsSection({
   const [rootErrors, setRootErrors] = useState<PluginRootErrors>({})
   const loading = skillRegistryLoadStatus === 'loading'
   const mutating = skillRegistryMutationStatus === 'running'
+  const deferredQuery = useDeferredFilterQuery(query)
 
-  const filteredPlugins = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
-    const plugins = skillRegistry?.plugins ?? []
-    if (!normalizedQuery) {
-      return plugins
-    }
-    return plugins.filter((plugin) => pluginMatchesQuery(plugin, normalizedQuery))
-  }, [query, skillRegistry?.plugins])
+  const pluginSearchIndex = useMemo(
+    () =>
+      createSearchIndex(skillRegistry?.plugins ?? [], (plugin) => [
+        plugin.name,
+        plugin.pluginId,
+        plugin.description,
+        plugin.version,
+        plugin.rootId,
+        plugin.rootPath,
+        plugin.pluginRootPath,
+        ...plugin.skills.map((skill) => `${skill.contributionId} ${skill.skillId} ${skill.path}`),
+        ...plugin.commands.map((command) => `${command.contributionId} ${command.label} ${command.entry}`),
+      ]),
+    [skillRegistry?.plugins],
+  )
+
+  const filteredPlugins = useMemo(
+    () => filterSearchIndex(pluginSearchIndex, deferredQuery),
+    [deferredQuery, pluginSearchIndex],
+  )
 
   const totalPlugins = skillRegistry?.plugins.length ?? 0
   const totalCommands = skillRegistry?.pluginCommands.length ?? 0

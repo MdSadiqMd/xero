@@ -22,6 +22,7 @@ use crate::{
         EnvironmentToolCategory, EnvironmentToolProbeStatus, EnvironmentToolRecord,
         EnvironmentToolSource, EnvironmentToolSummary, ENVIRONMENT_PROFILE_SCHEMA_VERSION,
     },
+    global_db::user_added_tools::UserAddedToolRow,
     runtime::redaction::find_prohibited_persistence_content,
 };
 
@@ -57,10 +58,11 @@ impl Default for EnvironmentProbeOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvironmentProbeCatalogEntry {
-    pub id: &'static str,
+    pub id: String,
     pub category: EnvironmentToolCategory,
-    pub command: &'static str,
-    pub args: &'static [&'static str],
+    pub command: String,
+    pub args: Vec<String>,
+    pub custom: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,10 +248,16 @@ impl EnvironmentCommandExecutor for SystemEnvironmentCommandExecutor {
 }
 
 pub fn probe_environment_profile() -> EnvironmentProbeResult<EnvironmentProbeReport> {
+    probe_environment_profile_with_user_tools(vec![])
+}
+
+pub fn probe_environment_profile_with_user_tools(
+    user_entries: Vec<UserAddedToolRow>,
+) -> EnvironmentProbeResult<EnvironmentProbeReport> {
     let resolver = Arc::new(SystemEnvironmentBinaryResolver::from_process());
     let executor = Arc::new(SystemEnvironmentCommandExecutor);
     probe_environment_profile_with(
-        environment_probe_catalog(),
+        merged_environment_probe_catalog(user_entries),
         resolver,
         executor,
         EnvironmentProbeOptions::default(),
@@ -304,6 +312,10 @@ pub fn probe_environment_profile_with(
 }
 
 pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
+    built_in_environment_probe_catalog()
+}
+
+pub fn built_in_environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
     use EnvironmentToolCategory::*;
 
     let mut entries = vec![
@@ -569,6 +581,24 @@ pub fn environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry> {
     entries
 }
 
+pub fn merged_environment_probe_catalog(
+    user_entries: Vec<UserAddedToolRow>,
+) -> Vec<EnvironmentProbeCatalogEntry> {
+    let mut entries = built_in_environment_probe_catalog();
+    entries.extend(user_entries.into_iter().map(user_tool_entry));
+    entries
+}
+
+fn user_tool_entry(row: UserAddedToolRow) -> EnvironmentProbeCatalogEntry {
+    EnvironmentProbeCatalogEntry {
+        id: row.id,
+        category: row.category,
+        command: row.command,
+        args: row.args,
+        custom: true,
+    }
+}
+
 fn entry(
     id: &'static str,
     category: EnvironmentToolCategory,
@@ -576,10 +606,11 @@ fn entry(
     args: &'static [&'static str],
 ) -> EnvironmentProbeCatalogEntry {
     EnvironmentProbeCatalogEntry {
-        id,
+        id: id.into(),
         category,
-        command,
-        args,
+        command: command.into(),
+        args: args.iter().map(|arg| (*arg).into()).collect(),
+        custom: false,
     }
 }
 
@@ -649,11 +680,12 @@ fn run_catalog_entry(
     executor: &dyn EnvironmentCommandExecutor,
     options: &EnvironmentProbeOptions,
 ) -> EnvironmentToolRecord {
-    let Some(resolved) = resolver.resolve(entry.command) else {
+    let Some(resolved) = resolver.resolve(&entry.command) else {
         return EnvironmentToolRecord {
-            id: entry.id.into(),
+            id: entry.id.clone(),
             category: entry.category,
-            command: entry.command.into(),
+            command: entry.command.clone(),
+            custom: entry.custom,
             present: false,
             path: None,
             version: None,
@@ -664,14 +696,9 @@ fn run_catalog_entry(
     };
 
     let started = Instant::now();
-    let args = entry
-        .args
-        .iter()
-        .map(|arg| (*arg).to_string())
-        .collect::<Vec<_>>();
     let execution = executor.run(
         &resolved.path,
-        &args,
+        &entry.args,
         options.timeout,
         &resolver.child_envs(),
     );
@@ -702,9 +729,10 @@ fn run_catalog_entry(
     };
 
     EnvironmentToolRecord {
-        id: entry.id.into(),
+        id: entry.id.clone(),
         category: entry.category,
-        command: entry.command.into(),
+        command: entry.command.clone(),
+        custom: entry.custom,
         present: true,
         path: safe_persisted_path(&resolved.path),
         version,
@@ -911,6 +939,7 @@ fn tool_summary(tool: &EnvironmentToolRecord) -> EnvironmentToolSummary {
     EnvironmentToolSummary {
         id: tool.id.clone(),
         category: tool.category,
+        custom: tool.custom,
         present: tool.present,
         version: tool.version.clone(),
         display_path: tool.path.as_deref().and_then(display_path),
@@ -1389,5 +1418,53 @@ mod tests {
             .expect("tauri capability");
         assert_eq!(capability.state, EnvironmentCapabilityState::Ready);
         assert!(capability.evidence.contains(&"protoc".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_probe_uses_executor_and_captures_version_line() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = tempfile::tempdir().expect("temp dir");
+        let script = tempdir.path().join("fixture-tool");
+        std::fs::write(&script, "#!/bin/sh\necho fixture-tool 1.2.3\n").expect("write fixture");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("fixture metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).expect("chmod fixture");
+
+        let mut binaries = HashMap::new();
+        binaries.insert(
+            "fixture-tool".into(),
+            ResolvedEnvironmentBinary {
+                path: script,
+                source: EnvironmentToolSource::Path,
+            },
+        );
+
+        let report = probe_environment_profile_with(
+            vec![EnvironmentProbeCatalogEntry {
+                id: "fixture_tool".into(),
+                category: EnvironmentToolCategory::ShellUtility,
+                command: "fixture-tool".into(),
+                args: vec!["--version".into()],
+                custom: true,
+            }],
+            Arc::new(FakeResolver { binaries }),
+            Arc::new(SystemEnvironmentCommandExecutor),
+            EnvironmentProbeOptions {
+                timeout: Duration::from_secs(1),
+                concurrency: 1,
+            },
+        )
+        .expect("probe report");
+
+        let tool = &report.payload.tools[0];
+        assert!(tool.custom);
+        assert!(tool.present);
+        assert_eq!(tool.version.as_deref(), Some("fixture-tool 1.2.3"));
+        assert_eq!(tool.probe_status, EnvironmentToolProbeStatus::Ok);
+        assert_eq!(report.summary.tools[0].custom, true);
     }
 }

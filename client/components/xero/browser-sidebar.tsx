@@ -15,7 +15,9 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { createFrameCoalescer } from "@/lib/frame-governance"
 import { useSidebarWidthMotion } from "@/lib/sidebar-motion"
+import { recordIpcPayloadSample } from "@/src/lib/ipc-payload-budget"
 import {
   useCookieImport,
   type CookieImportStatus,
@@ -76,6 +78,83 @@ interface BrowserLoadStatePayload {
 
 interface BrowserTabUpdatedPayload {
   tabs: BrowserTabMeta[]
+}
+
+type BrowserCoalescedEvent =
+  | { key: string; payload: BrowserLoadStatePayload; type: "load" }
+  | { key: string; payload: BrowserTabUpdatedPayload; type: "tabs" }
+  | { key: string; payload: BrowserUrlChangedPayload; type: "url" }
+
+interface BrowserEventCoalescerHandlers {
+  onLoadState: (payload: BrowserLoadStatePayload) => void
+  onTabUpdated: (payload: BrowserTabUpdatedPayload) => void
+  onUrlChanged: (payload: BrowserUrlChangedPayload) => void
+  schedule?: (callback: () => void) => () => void
+}
+
+function scheduleBrowserEventFlush(callback: () => void): () => void {
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    const frame = window.requestAnimationFrame(callback)
+    return () => window.cancelAnimationFrame(frame)
+  }
+
+  const timeout = setTimeout(callback, 0)
+  return () => clearTimeout(timeout)
+}
+
+export function createBrowserEventCoalescer({
+  onLoadState,
+  onTabUpdated,
+  onUrlChanged,
+  schedule = scheduleBrowserEventFlush,
+}: BrowserEventCoalescerHandlers) {
+  let pending: BrowserCoalescedEvent[] = []
+  let cancelScheduled: (() => void) | null = null
+  let disposed = false
+
+  const flush = () => {
+    if (disposed) return
+    cancelScheduled = null
+    const events = pending
+    pending = []
+    for (const event of events) {
+      if (event.type === "url") {
+        onUrlChanged(event.payload)
+      } else if (event.type === "load") {
+        onLoadState(event.payload)
+      } else {
+        onTabUpdated(event.payload)
+      }
+    }
+  }
+
+  const enqueue = (event: BrowserCoalescedEvent) => {
+    if (disposed) return
+    pending = pending.filter((candidate) => candidate.key !== event.key)
+    pending.push(event)
+    if (!cancelScheduled) {
+      cancelScheduled = schedule(flush)
+    }
+  }
+
+  return {
+    enqueueLoadState(payload: BrowserLoadStatePayload) {
+      enqueue({ key: `load:${payload.tabId}`, payload, type: "load" })
+    },
+    enqueueTabUpdated(payload: BrowserTabUpdatedPayload) {
+      enqueue({ key: "tabs", payload, type: "tabs" })
+    },
+    enqueueUrlChanged(payload: BrowserUrlChangedPayload) {
+      enqueue({ key: `url:${payload.tabId}`, payload, type: "url" })
+    },
+    dispose() {
+      disposed = true
+      pending = []
+      cancelScheduled?.()
+      cancelScheduled = null
+    },
+    flush,
+  }
 }
 
 function viewportDefaultWidth() {
@@ -272,64 +351,75 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
   useEffect(() => {
     if (!isTauri()) return
     const unsubs: UnlistenFn[] = []
-
-    void listen<BrowserUrlChangedPayload>("browser:url_changed", (event) => {
-      const payload = event.payload
-      setTabs((current) => {
-        const match = current.some((tab) => tab.id === payload.tabId)
-        if (!match) return current
-        return current.map((tab) =>
-          tab.id === payload.tabId
-            ? {
-                ...tab,
-                url: payload.url,
-                title: payload.title ?? tab.title,
-                canGoBack: payload.canGoBack,
-                canGoForward: payload.canGoForward,
-              }
-            : tab,
-        )
-      })
-      if (payload.tabId === activeTabId) {
-        if (!addressFocusedRef.current) {
+    const coalescer = createBrowserEventCoalescer({
+      onUrlChanged: (payload) => {
+        setTabs((current) => {
+          const match = current.some((tab) => tab.id === payload.tabId)
+          if (!match) return current
+          return current.map((tab) =>
+            tab.id === payload.tabId
+              ? {
+                  ...tab,
+                  url: payload.url,
+                  title: payload.title ?? tab.title,
+                  canGoBack: payload.canGoBack,
+                  canGoForward: payload.canGoForward,
+                }
+              : tab,
+          )
+        })
+        if (payload.tabId === activeTabIdRef.current && !addressFocusedRef.current) {
           setAddress(payload.url)
         }
-      }
+      },
+      onLoadState: (payload) => {
+        setTabs((current) =>
+          current.map((tab) =>
+            tab.id === payload.tabId
+              ? {
+                  ...tab,
+                  loading: payload.loading,
+                  url: payload.url ?? tab.url,
+                }
+              : tab,
+          ),
+        )
+        if (payload.tabId === activeTabIdRef.current) {
+          setLoading(payload.loading)
+          if (payload.url && !addressFocusedRef.current) {
+            setAddress(payload.url)
+          }
+        }
+      },
+      onTabUpdated: (payload) => {
+        setTabs(payload.tabs)
+        const active = payload.tabs.find((tab) => tab.active)
+        if (active) {
+          setActiveTabId(active.id)
+        }
+      },
+    })
+
+    void listen<BrowserUrlChangedPayload>("browser:url_changed", (event) => {
+      recordIpcPayloadSample({ boundary: "event", name: "browser:url_changed", payload: event.payload })
+      coalescer.enqueueUrlChanged(event.payload)
     }).then((unsub) => unsubs.push(unsub))
 
     void listen<BrowserLoadStatePayload>("browser:load_state", (event) => {
-      const payload = event.payload
-      setTabs((current) =>
-        current.map((tab) =>
-          tab.id === payload.tabId
-            ? {
-                ...tab,
-                loading: payload.loading,
-                url: payload.url ?? tab.url,
-              }
-            : tab,
-        ),
-      )
-      if (payload.tabId === activeTabId) {
-        setLoading(payload.loading)
-        if (payload.url && !addressFocusedRef.current) {
-          setAddress(payload.url)
-        }
-      }
+      recordIpcPayloadSample({ boundary: "event", name: "browser:load_state", payload: event.payload })
+      coalescer.enqueueLoadState(event.payload)
     }).then((unsub) => unsubs.push(unsub))
 
     void listen<BrowserTabUpdatedPayload>("browser:tab_updated", (event) => {
-      setTabs(event.payload.tabs)
-      const active = event.payload.tabs.find((tab) => tab.active)
-      if (active) {
-        setActiveTabId(active.id)
-      }
+      recordIpcPayloadSample({ boundary: "event", name: "browser:tab_updated", payload: event.payload })
+      coalescer.enqueueTabUpdated(event.payload)
     }).then((unsub) => unsubs.push(unsub))
 
     return () => {
+      coalescer.dispose()
       unsubs.forEach((unsub) => unsub())
     }
-  }, [activeTabId])
+  }, [])
 
   // Hydrate tabs when sidebar opens
   useEffect(() => {
@@ -356,6 +446,13 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
       const startX = event.clientX
       const startWidth = widthRef.current
       const ceiling = viewportMaxWidth()
+      let latestWidth = startWidth
+      const widthUpdates = createFrameCoalescer<number>({
+        onFlush: (next) => {
+          setWidth(next)
+          resizeScheduler.schedule()
+        },
+      })
       setMaxWidth(ceiling)
       setIsResizing(true)
 
@@ -366,11 +463,11 @@ export function BrowserSidebar({ open }: BrowserSidebarProps) {
 
       const handleMove = (ev: PointerEvent) => {
         const delta = startX - ev.clientX
-        const next = Math.max(MIN_WIDTH, Math.min(ceiling, startWidth + delta))
-        setWidth(next)
-        resizeScheduler.schedule()
+        latestWidth = Math.max(MIN_WIDTH, Math.min(ceiling, startWidth + delta))
+        widthUpdates.schedule(latestWidth)
       }
       const handleUp = () => {
+        widthUpdates.flush()
         window.removeEventListener("pointermove", handleMove)
         window.removeEventListener("pointerup", handleUp)
         window.removeEventListener("pointercancel", handleUp)

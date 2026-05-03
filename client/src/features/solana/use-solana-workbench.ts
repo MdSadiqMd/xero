@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { listen, type UnlistenFn } from "@tauri-apps/api/event"
 
@@ -1856,6 +1856,25 @@ function tauriInvoke<T>(
   return invoke<T>(command, args).catch(() => null)
 }
 
+function scheduleWorkbenchIdleTask(callback: () => void): () => void {
+  if (typeof window === "undefined") {
+    return () => {}
+  }
+
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+    cancelIdleCallback?: (handle: number) => void
+  }
+
+  if (typeof idleWindow.requestIdleCallback === "function") {
+    const handle = idleWindow.requestIdleCallback(callback, { timeout: 600 })
+    return () => idleWindow.cancelIdleCallback?.(handle)
+  }
+
+  const handle = window.setTimeout(callback, 80)
+  return () => window.clearTimeout(handle)
+}
+
 function errorMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {
     const message = (error as { message?: unknown }).message
@@ -3460,23 +3479,47 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     }
   }, [])
 
-  // Mount: probe toolchain + cluster catalogue + status + persona catalog.
+  // Activation: show the cluster/toolchain tab first, then hydrate optional
+  // workbench catalogs during idle slices so opening the sidebar stays light.
   useEffect(() => {
     if (!active || !isTauri()) return
+    let cancelled = false
+    let cancelIdleTask: (() => void) | null = null
+
     void refreshClusters()
     void refreshToolchain()
     void refreshToolchainInstallStatus()
     void refreshStatus()
-    void refreshSnapshots()
-    void refreshPersonaRoles()
-    void refreshScenarios()
-    void refreshReplayCatalog()
-    void refreshActiveLogSubscriptions()
-    void refreshExtensionMatrix()
-    void refreshWalletDescriptors()
-    void refreshSecretPatterns()
-    void refreshTrackedPrograms()
-    void refreshDocCatalog()
+
+    const backgroundRefreshes = [
+      refreshSnapshots,
+      refreshPersonaRoles,
+      refreshScenarios,
+      refreshActiveLogSubscriptions,
+      refreshReplayCatalog,
+      refreshExtensionMatrix,
+      refreshWalletDescriptors,
+      refreshSecretPatterns,
+      refreshTrackedPrograms,
+      refreshDocCatalog,
+    ]
+
+    const runNextBackgroundRefresh = () => {
+      if (cancelled || !activeRef.current) return
+      const refresh = backgroundRefreshes.shift()
+      if (!refresh) return
+      void refresh().finally(() => {
+        if (cancelled || !activeRef.current) return
+        cancelIdleTask = scheduleWorkbenchIdleTask(runNextBackgroundRefresh)
+      })
+    }
+
+    cancelIdleTask = scheduleWorkbenchIdleTask(runNextBackgroundRefresh)
+
+    return () => {
+      cancelled = true
+      cancelIdleTask?.()
+    }
   }, [
     active,
     refreshClusters,
@@ -3720,7 +3763,7 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     }
   }, [refreshStatus])
 
-  return {
+  return useMemo<UseSolanaWorkbench>(() => ({
     clusters,
     toolchain,
     toolchainLoading,
@@ -3860,5 +3903,142 @@ export function useSolanaWorkbench({ active }: Options): UseSolanaWorkbench {
     refreshCostSnapshot,
     resetCostLedger,
     refreshDocCatalog,
-  }
+  }), [
+    activeIdlWatches,
+    activeLogSubscriptions,
+    analyseBumpPda,
+    auditBusy,
+    auditEvents,
+    auditFindings,
+    buildProgram,
+    buildTx,
+    checkClusterDrift,
+    clearAuditFeed,
+    clearLogFeed,
+    clusters,
+    createPersona,
+    createSquadsProposal,
+    createToken,
+    decodedLogEvents,
+    deletePersona,
+    deployProgram,
+    derivePda,
+    docCatalog,
+    driftIdl,
+    error,
+    estimatePriorityFee,
+    explainTx,
+    extensionMatrix,
+    fetchIdl,
+    fetchRecentLogs,
+    fundPersona,
+    generateCodama,
+    generateWalletScaffold,
+    idlBusy,
+    idls,
+    indexerBusy,
+    installToolchain,
+    isStarting,
+    isStopping,
+    lastBuildReport,
+    lastCodamaReport,
+    lastCostSnapshot,
+    lastDeployProgress,
+    lastDeployResult,
+    lastDriftReport,
+    lastDriftReport2,
+    lastEvent,
+    lastExplanation,
+    lastExternalReport,
+    lastFuzzReport,
+    lastIdlEvent,
+    lastIndexerRun,
+    lastIndexerScaffold,
+    lastLogFetch,
+    lastMetaplexMint,
+    lastPersonaEvent,
+    lastPublishReport,
+    lastReplayReport,
+    lastRollback,
+    lastScenarioEvent,
+    lastScenarioRun,
+    lastScopeCheck,
+    lastSecretScan,
+    lastSend,
+    lastSimulation,
+    lastSquadsProposal,
+    lastStaticReport,
+    lastTokenCreate,
+    lastTxEvent,
+    lastTxPlan,
+    lastUpgradeSafety,
+    lastVerifiedBuild,
+    lastWalletScaffold,
+    loadIdl,
+    logBusy,
+    logEntries,
+    mintMetaplex,
+    personas,
+    personaBusy,
+    personaRoles,
+    predictPda,
+    programBusy,
+    publishIdl,
+    refreshActiveLogSubscriptions,
+    refreshCostSnapshot,
+    refreshDocCatalog,
+    refreshExtensionMatrix,
+    refreshPersonas,
+    refreshReplayCatalog,
+    refreshRpcHealth,
+    refreshScenarios,
+    refreshSecretPatterns,
+    refreshSnapshots,
+    refreshToolchain,
+    refreshTrackedPrograms,
+    refreshWalletDescriptors,
+    replayCatalog,
+    resetCostLedger,
+    resolveAlt,
+    resolveCpi,
+    rollbackProgram,
+    rpcHealth,
+    runCoverageAudit,
+    runExternalAudit,
+    runFuzzAudit,
+    runIndexer,
+    runReplay,
+    runScenario,
+    runScopeCheck,
+    runStaticAudit,
+    safetyBusy,
+    scanPda,
+    scanSecrets,
+    scaffoldFuzzHarness,
+    scaffoldIndexer,
+    scenarios,
+    scenarioBusy,
+    secretPatterns,
+    sendTx,
+    snapshots,
+    start,
+    startIdlWatch,
+    status,
+    stop,
+    stopIdlWatch,
+    subscribeLogs,
+    submitVerifiedBuild,
+    tokenBusy,
+    toolchain,
+    toolchainInstalling,
+    toolchainInstallEvent,
+    toolchainInstallStatus,
+    toolchainLoading,
+    trackedPrograms,
+    txBusy,
+    unsubscribeLogs,
+    upgradeCheck,
+    walletBusy,
+    walletDescriptors,
+  ])
 }

@@ -8,6 +8,10 @@ use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use crate::commands::{
+    payload_budget::{
+        estimate_serialized_payload_bytes, payload_budget_diagnostic,
+        REPOSITORY_STATUS_BUDGET_BYTES,
+    },
     BranchSummaryDto, BranchUpstreamSummaryDto, ChangeKind, CommandError, CommandResult,
     LastCommitSummaryDto, RepositoryStatusEntryDto, RepositoryStatusResponseDto,
     RepositorySummaryDto,
@@ -47,7 +51,7 @@ impl CanonicalRepository {
     }
 
     pub fn repository_status(&self) -> RepositoryStatusResponseDto {
-        RepositoryStatusResponseDto {
+        let mut response = RepositoryStatusResponseDto {
             repository: self.repository_summary(),
             branch: self.branch.clone(),
             last_commit: self.last_commit.clone(),
@@ -57,7 +61,18 @@ impl CanonicalRepository {
             has_untracked_changes: self.has_untracked_changes,
             additions: self.additions,
             deletions: self.deletions,
-        }
+            payload_budget: None,
+        };
+        let observed_bytes = estimate_serialized_payload_bytes(&response);
+        response.payload_budget = payload_budget_diagnostic(
+            "repository_status",
+            "repository status",
+            REPOSITORY_STATUS_BUDGET_BYTES,
+            observed_bytes,
+            false,
+            false,
+        );
+        response
     }
 }
 

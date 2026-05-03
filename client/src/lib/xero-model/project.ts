@@ -5,8 +5,10 @@ import {
   normalizeOptionalText,
   normalizeText,
   nullableTextSchema,
+  payloadBudgetDiagnosticSchema,
   phaseStatusSchema,
   safePercent,
+  type PayloadBudgetDiagnosticDto,
 } from './shared'
 import { providerModelThinkingEffortSchema } from './provider-models'
 
@@ -58,6 +60,9 @@ export interface ProjectFileNodeDto {
   path: string
   type: z.infer<typeof projectEntryKindSchema>
   children?: ProjectFileNodeDto[]
+  childrenLoaded?: boolean
+  truncated?: boolean
+  omittedEntryCount?: number
 }
 
 export const projectFileNodeSchema: z.ZodType<ProjectFileNodeDto> = z.lazy(() =>
@@ -67,9 +72,19 @@ export const projectFileNodeSchema: z.ZodType<ProjectFileNodeDto> = z.lazy(() =>
       path: projectTreePathSchema,
       type: projectEntryKindSchema,
       children: z.array(projectFileNodeSchema).optional(),
+      childrenLoaded: z.boolean().optional(),
+      truncated: z.boolean().optional(),
+      omittedEntryCount: z.number().int().nonnegative().optional(),
     })
     .strict(),
 )
+
+export const listProjectFilesRequestSchema = z
+  .object({
+    projectId: z.string().trim().min(1),
+    path: projectTreePathSchema.default('/'),
+  })
+  .strict()
 
 export const projectFileRequestSchema = z
   .object({
@@ -157,6 +172,7 @@ export const repositoryStatusResponseSchema = z.object({
   hasUntrackedChanges: z.boolean(),
   additions: z.number().int().nonnegative().optional(),
   deletions: z.number().int().nonnegative().optional(),
+  payloadBudget: payloadBudgetDiagnosticSchema.nullable().optional(),
 })
 
 export const repositoryDiffResponseSchema = z.object({
@@ -165,6 +181,7 @@ export const repositoryDiffResponseSchema = z.object({
   patch: z.string(),
   truncated: z.boolean(),
   baseRevision: nullableTextSchema,
+  payloadBudget: payloadBudgetDiagnosticSchema.nullable().optional(),
 })
 
 export const gitPathsRequestSchema = z
@@ -245,7 +262,11 @@ export const gitPushResponseSchema = z.object({
 export const listProjectFilesResponseSchema = z
   .object({
     projectId: z.string().trim().min(1),
+    path: projectTreePathSchema,
     root: projectFileNodeSchema,
+    truncated: z.boolean().optional(),
+    omittedEntryCount: z.number().int().nonnegative().optional(),
+    payloadBudget: payloadBudgetDiagnosticSchema.nullable().optional(),
   })
   .strict()
 
@@ -296,12 +317,14 @@ export const searchProjectRequestSchema = z
   .object({
     projectId: z.string().trim().min(1),
     query: z.string().min(1),
+    cursor: projectTreePathSchema.optional(),
     caseSensitive: z.boolean().default(false),
     wholeWord: z.boolean().default(false),
     regex: z.boolean().default(false),
     includeGlobs: z.array(z.string().trim().min(1)).default([]),
     excludeGlobs: z.array(z.string().trim().min(1)).default([]),
     maxResults: z.number().int().positive().optional(),
+    maxFiles: z.number().int().positive().optional(),
   })
   .strict()
 
@@ -328,6 +351,8 @@ export const searchProjectResponseSchema = z
     totalMatches: z.number().int().nonnegative(),
     totalFiles: z.number().int().nonnegative(),
     truncated: z.boolean(),
+    nextCursor: projectTreePathSchema.nullable().optional(),
+    payloadBudget: payloadBudgetDiagnosticSchema.nullable().optional(),
     files: z.array(searchFileResultSchema),
   })
   .strict()
@@ -374,6 +399,7 @@ export type ListProjectsResponseDto = z.infer<typeof listProjectsResponseSchema>
 export type RepositoryStatusResponseDto = z.infer<typeof repositoryStatusResponseSchema>
 export type RepositoryDiffResponseDto = z.infer<typeof repositoryDiffResponseSchema>
 export type ProjectEntryKindDto = z.infer<typeof projectEntryKindSchema>
+export type ListProjectFilesRequestDto = z.infer<typeof listProjectFilesRequestSchema>
 export type ProjectFileRequestDto = z.infer<typeof projectFileRequestSchema>
 export type WriteProjectFileRequestDto = z.infer<typeof writeProjectFileRequestSchema>
 export type CreateProjectEntryRequestDto = z.infer<typeof createProjectEntryRequestSchema>
@@ -469,6 +495,7 @@ export interface RepositoryStatusView {
   deletions: number
   hasChanges: boolean
   entries: RepositoryStatusEntryView[]
+  payloadBudget?: PayloadBudgetDiagnosticDto | null
 }
 
 export interface RepositoryDiffView {
@@ -479,6 +506,7 @@ export interface RepositoryDiffView {
   isEmpty: boolean
   truncated: boolean
   baseRevisionLabel: string
+  payloadBudget?: PayloadBudgetDiagnosticDto | null
 }
 
 export function mapProjectSummary(dto: ProjectSummaryDto): ProjectListItem {
@@ -582,6 +610,7 @@ export function mapRepositoryStatus(status: RepositoryStatusResponseDto): Reposi
     hasChanges:
       status.hasStagedChanges || status.hasUnstagedChanges || status.hasUntrackedChanges || uniquePaths.size > 0,
     entries,
+    payloadBudget: status.payloadBudget ?? null,
   }
 
   return {
@@ -603,6 +632,7 @@ export function mapRepositoryDiff(diff: RepositoryDiffResponseDto): RepositoryDi
     isEmpty: patch.length === 0,
     truncated: diff.truncated,
     baseRevisionLabel,
+    payloadBudget: diff.payloadBudget ?? null,
   }
 }
 

@@ -251,6 +251,7 @@ function makeDiff(projectId = 'project-1', scope: RepositoryDiffResponseDto['sco
 function makeProjectFiles(projectId = 'project-1'): ListProjectFilesResponseDto {
   return {
     projectId,
+    path: '/',
     root: {
       name: 'root',
       path: '/',
@@ -2241,6 +2242,29 @@ describe('XeroApp current UI', () => {
     expect(screen.queryByRole('heading', { name: /Welcome to Xero/i })).not.toBeInTheDocument()
   })
 
+  it('keeps the app shell hidden behind one boot loader while project state is loading', async () => {
+    let resolveListProjects!: (value: ListProjectsResponseDto) => void
+    const listProjectsPromise = new Promise<ListProjectsResponseDto>((resolve) => {
+      resolveListProjects = resolve
+    })
+    const { adapter } = createAdapter({
+      projects: [makeProjectSummary('project-1', 'Xero')],
+    })
+    adapter.listProjects = vi.fn(async () => listProjectsPromise)
+
+    render(<XeroApp adapter={adapter} />)
+
+    expect(screen.getByRole('status', { name: 'Loading' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Workflow' })).not.toBeInTheDocument()
+
+    await act(async () => {
+      resolveListProjects({ projects: [makeProjectSummary('project-1', 'Xero')] })
+      await listProjectsPromise
+    })
+
+    expect(await screen.findByRole('button', { name: 'Workflow' })).toBeVisible()
+  })
+
 
 
 
@@ -2629,7 +2653,9 @@ describe('XeroApp current UI', () => {
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Tools' }), { button: 0, ctrlKey: false })
     fireEvent.click(screen.getByRole('menuitem', { name: 'Open Solana workbench' }))
 
-    expect(screen.getByRole('button', { name: 'Tools' })).toHaveAttribute('aria-pressed', 'true')
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Tools' })).toHaveAttribute('aria-pressed', 'true'),
+    )
     const breadcrumb = await screen.findByRole('navigation', {
       name: 'Solana Workbench breadcrumb',
     })

@@ -482,6 +482,7 @@ mod tests {
             tools: vec![EnvironmentToolSummary {
                 id: "node".into(),
                 category: EnvironmentToolCategory::LanguageRuntime,
+                custom: false,
                 present: true,
                 version: Some("v20.11.1".into()),
                 display_path: Some("~/bin/node".into()),

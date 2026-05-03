@@ -371,8 +371,9 @@ function createWorkspaceHarness(options?: {
     ...(options?.fileContents ?? {}),
   }
 
-  const listProjectFiles = vi.fn(async (projectId: string) => ({
+  const listProjectFiles = vi.fn(async (projectId: string, path = '/') => ({
     projectId,
+    path,
     root: cloneNode(currentRoot),
   }))
   const readProjectFile = vi.fn(async (projectId: string, path: string) => ({
@@ -614,7 +615,7 @@ describe('ExecutionView', () => {
       />,
     )
 
-    expect(await screen.findByTestId('folder:/src')).toHaveTextContent('expanded')
+    expect(await screen.findByTestId('folder:/src')).toHaveTextContent('collapsed')
 
     fireEvent.click(screen.getByRole('button', { name: 'Open /src/main.tsx' }))
     await waitFor(() => expect(workspace.readProjectFile).toHaveBeenCalledWith('project-1', '/src/main.tsx'))
@@ -741,8 +742,9 @@ describe('ExecutionView', () => {
 
   it('ignores stale file reads after the selected project changes', async () => {
     const slowRead = createDeferred<ReadProjectFileResponseDto>()
-    const listProjectFiles = vi.fn(async (projectId: string) => ({
+    const listProjectFiles = vi.fn(async (projectId: string, path = '/') => ({
       projectId,
+      path,
       root:
         projectId === 'project-1'
           ? folder('root', '/', [file('README.md', '/README.md')])

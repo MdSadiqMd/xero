@@ -12,11 +12,21 @@
  * meaningful weight to the bundle for limited gain.
  */
 
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 
+import {
+  createByteBudgetCache,
+  estimateUtf16Bytes,
+  type ByteBudgetCacheStats,
+} from '@/lib/byte-budget-cache'
 import { cn } from '@/lib/utils'
-import { tokenizeCode, type TokenizedLine } from '@/lib/shiki'
+import {
+  hashCodeContent,
+  shouldSkipTokenization,
+  tokenizeCode,
+  type TokenizedLine,
+} from '@/lib/shiki'
 import { useTheme } from '@/src/features/theme/theme-provider'
 
 type Segment =
@@ -24,8 +34,49 @@ type Segment =
   | { kind: 'text'; text: string }
 
 const FENCE_RE = /(^|\n)```([^\n`]*)\n([\s\S]*?)(?:\n```|$)/g
+export const MARKDOWN_CODE_BLOCK_HIGHLIGHT_BYTE_LIMIT = 96 * 1024
+const MARKDOWN_SEGMENT_CACHE_MAX_ENTRIES = 240
+export const MARKDOWN_SEGMENT_CACHE_MAX_BYTES = 2 * 1024 * 1024
 
-function splitFencedSegments(input: string): Segment[] {
+interface MarkdownSegmentCacheEntry {
+  segments: Segment[]
+}
+
+interface MarkdownSegmentStats extends ByteBudgetCacheStats {
+  parses: number
+}
+
+const markdownSegmentCache = createByteBudgetCache<string, MarkdownSegmentCacheEntry>({
+  maxBytes: MARKDOWN_SEGMENT_CACHE_MAX_BYTES,
+  maxEntries: MARKDOWN_SEGMENT_CACHE_MAX_ENTRIES,
+})
+const markdownSegmentStats = {
+  parses: 0,
+}
+
+function createMarkdownSegmentCacheKey(input: string, messageId: string | null): string {
+  return [messageId ?? 'anonymous', input.length, hashCodeContent(input)].join('\u0000')
+}
+
+function estimateMarkdownSegmentBytes(
+  input: string,
+  messageId: string | null,
+  segments: Segment[],
+): number {
+  let bytes = estimateUtf16Bytes(input) + estimateUtf16Bytes(messageId ?? '') + 32
+  for (const segment of segments) {
+    bytes += 24
+    if (segment.kind === 'code') {
+      bytes += estimateUtf16Bytes(segment.lang ?? '')
+      bytes += estimateUtf16Bytes(segment.code)
+    } else {
+      bytes += estimateUtf16Bytes(segment.text)
+    }
+  }
+  return bytes
+}
+
+export function splitFencedSegments(input: string): Segment[] {
   const segments: Segment[] = []
   let lastIndex = 0
   let match: RegExpExecArray | null
@@ -52,9 +103,42 @@ function splitFencedSegments(input: string): Segment[] {
   return segments
 }
 
+function getCachedFencedSegments(input: string, messageId: string | null): Segment[] {
+  const key = createMarkdownSegmentCacheKey(input, messageId)
+  const cached = markdownSegmentCache.get(key)
+  if (cached) {
+    return cached.segments
+  }
+
+  markdownSegmentStats.parses += 1
+  const segments = splitFencedSegments(input)
+  markdownSegmentCache.set(
+    key,
+    { segments },
+    estimateMarkdownSegmentBytes(input, messageId, segments),
+  )
+
+  return segments
+}
+
+export function getMarkdownSegmentStats(): MarkdownSegmentStats {
+  const cacheStats = markdownSegmentCache.getStats()
+  return {
+    ...cacheStats,
+    parses: markdownSegmentStats.parses,
+  }
+}
+
+export function resetMarkdownSegmentCacheForTests(): void {
+  markdownSegmentCache.clear()
+  markdownSegmentStats.parses = 0
+}
+
 export interface MarkdownProps {
   /** Source text. */
   text: string
+  /** Stable transcript/message id used to keep fenced parsing reusable across renders. */
+  messageId?: string | null
   /** When true, renders as muted/italic — used inside thinking blocks. */
   muted?: boolean
   /** When true, renders at a smaller text size — used for collapsed previews. */
@@ -65,8 +149,8 @@ export interface MarkdownProps {
   trailing?: React.ReactNode
 }
 
-export function Markdown({ text, muted = false, compact = false, trailing }: MarkdownProps) {
-  const segments = splitFencedSegments(text)
+export function Markdown({ text, messageId = null, muted = false, compact = false, trailing }: MarkdownProps) {
+  const segments = useMemo(() => getCachedFencedSegments(text, messageId), [messageId, text])
   const lastTextSegmentIndex = (() => {
     for (let i = segments.length - 1; i >= 0; i -= 1) {
       if (segments[i].kind === 'text') return i
@@ -78,7 +162,7 @@ export function Markdown({ text, muted = false, compact = false, trailing }: Mar
     <div
       className={cn(
         'flex flex-col leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
-        compact ? 'gap-1.5 text-[11.5px]' : 'gap-2.5 text-sm',
+        compact ? 'gap-1 text-[11px]' : 'gap-2 text-[13px]',
         muted && 'text-muted-foreground italic',
       )}
     >
@@ -132,11 +216,11 @@ function renderTextBlock(text: string, trailing: React.ReactNode = null): React.
     ))
     blocks.push(
       listKind === 'ul' ? (
-        <ul key={blocks.length} className="m-0 list-disc space-y-1 pl-5">
+        <ul key={blocks.length} className="m-0 list-disc space-y-0.5 pl-4">
           {items}
         </ul>
       ) : (
-        <ol key={blocks.length} className="m-0 list-decimal space-y-1 pl-5">
+        <ol key={blocks.length} className="m-0 list-decimal space-y-0.5 pl-4">
           {items}
         </ol>
       ),
@@ -180,10 +264,10 @@ function renderTextBlock(text: string, trailing: React.ReactNode = null): React.
       const content = headingMatch[2]
       const sizeClass =
         level <= 1
-          ? 'text-base font-semibold'
+          ? 'text-[15px] font-semibold'
           : level === 2
-            ? 'text-[15px] font-semibold'
-            : 'text-sm font-semibold'
+            ? 'text-[14px] font-semibold'
+            : 'text-[13px] font-semibold'
       blocks.push(
         <p key={blocks.length} className={cn('m-0', sizeClass)}>
           {renderInline(content)}
@@ -358,23 +442,38 @@ function CodeBlock({ code, lang }: CodeBlockProps) {
   const { theme } = useTheme()
   const [tokens, setTokens] = useState<TokenizedLine[] | null>(null)
   const [copied, setCopied] = useState(false)
+  const [renderingPlain, setRenderingPlain] = useState(false)
+  const isTooLargeToHighlight = lang
+    ? shouldSkipTokenization(code, MARKDOWN_CODE_BLOCK_HIGHLIGHT_BYTE_LIMIT)
+    : false
 
   useEffect(() => {
     let cancelled = false
+    setTokens(null)
     if (!lang) {
-      setTokens(null)
+      setRenderingPlain(false)
       return () => {
         cancelled = true
       }
     }
-    tokenizeCode(code, lang, theme.shiki).then((result) => {
+    if (isTooLargeToHighlight) {
+      setRenderingPlain(true)
+      return () => {
+        cancelled = true
+      }
+    }
+    setRenderingPlain(false)
+    tokenizeCode(code, lang, theme.shiki, {
+      maxBytes: MARKDOWN_CODE_BLOCK_HIGHLIGHT_BYTE_LIMIT,
+    }).then((result) => {
       if (cancelled) return
       setTokens(result)
+      setRenderingPlain(result === null)
     })
     return () => {
       cancelled = true
     }
-  }, [code, lang, theme.shiki])
+  }, [code, isTooLargeToHighlight, lang, theme.shiki])
 
   useEffect(() => {
     if (!copied) return
@@ -394,35 +493,42 @@ function CodeBlock({ code, lang }: CodeBlockProps) {
   const displayLang = lang ?? 'text'
 
   return (
-    <div className="group relative my-1 overflow-hidden rounded-md border border-border/60 bg-card/60">
-      <div className="flex items-center justify-between border-b border-border/60 bg-muted/40 px-3 py-1">
-        <span className="select-none font-mono text-[10.5px] uppercase tracking-wider text-muted-foreground">
-          {displayLang}
+    <div className="group relative my-0.5 overflow-hidden rounded-md border border-border/60 bg-card/60">
+      <div className="flex items-center justify-between border-b border-border/60 bg-muted/40 px-2.5 py-0.5">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="select-none font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+            {displayLang}
+          </span>
+          {renderingPlain ? (
+            <span className="rounded border border-border/60 px-1 py-px text-[9.5px] font-medium text-muted-foreground">
+              Plain
+            </span>
+          ) : null}
         </span>
         <button
           type="button"
           onClick={handleCopy}
           aria-label={copied ? 'Copied to clipboard' : 'Copy code'}
           className={cn(
-            'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground transition-opacity',
+            'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-opacity',
             'hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none',
             copied ? 'opacity-100 text-success' : 'opacity-0 group-hover:opacity-100',
           )}
         >
           {copied ? (
             <>
-              <Check className="h-3 w-3" />
+              <Check className="h-2.5 w-2.5" />
               Copied
             </>
           ) : (
             <>
-              <Copy className="h-3 w-3" />
+              <Copy className="h-2.5 w-2.5" />
               Copy
             </>
           )}
         </button>
       </div>
-      <pre className="m-0 overflow-x-auto px-3 py-2 font-mono text-[12.5px] leading-[1.55]">
+      <pre className="m-0 overflow-x-auto px-2.5 py-1.5 font-mono text-[12px] leading-[1.55]">
         {tokens ? <ShikiTokens tokens={tokens} /> : <code>{code}</code>}
       </pre>
     </div>

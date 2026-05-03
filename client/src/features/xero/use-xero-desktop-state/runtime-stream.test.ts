@@ -6,6 +6,7 @@ import {
 } from './runtime-stream'
 import {
   createRuntimeStreamView,
+  estimateRuntimeStreamViewBytes,
   type RuntimeStreamEventDto,
   type RuntimeStreamView,
 } from '@/src/lib/xero-model/runtime-stream'
@@ -181,5 +182,15 @@ describe('runtime stream event coalescing', () => {
     expect(stream?.status).toBe('stale')
     expect(stream?.lastIssue?.code).toBe('runtime_stream_sequence_gap')
     expect(stream?.lastIssue?.message).toContain('expected 2, received 3')
+  })
+
+  it('estimates retained bytes for bounded session stream caches', () => {
+    const stream = mergeRuntimeStreamEvents(makeRuntimeStream(), [
+      makeRuntimeStreamEvent(1, { text: 'x'.repeat(256) }),
+      makeRuntimeStreamEvent(2, { text: 'y'.repeat(256) }),
+    ])
+
+    expect(estimateRuntimeStreamViewBytes(stream)).toBeGreaterThan(512)
+    expect(estimateRuntimeStreamViewBytes(null)).toBe(0)
   })
 })

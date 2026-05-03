@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   ChevronDown,
@@ -54,6 +54,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import {
+  createSearchIndex,
+  filterSearchIndex,
+  useDeferredFilterQuery,
+} from '@/lib/input-priority'
 import { cn } from '@/lib/utils'
 import { SectionHeader } from './section-header'
 
@@ -256,6 +261,8 @@ export function SkillsSection({
 
   const loading = skillRegistryLoadStatus === 'loading'
   const mutating = skillRegistryMutationStatus === 'running'
+  const deferredQuery = useDeferredFilterQuery(query)
+  const deferredSourceFilter = useDeferredValue(sourceFilter)
 
   useEffect(() => {
     if (!githubDirty) {
@@ -263,26 +270,25 @@ export function SkillsSection({
     }
   }, [githubDirty, skillRegistry])
 
-  const filteredEntries = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
-    return (skillRegistry?.entries ?? []).filter((entry) => {
-      if (sourceFilter !== 'all' && entry.sourceKind !== sourceFilter) {
-        return false
-      }
-
-      if (!normalizedQuery) {
-        return true
-      }
-
-      return [
+  const skillSearchIndex = useMemo(
+    () =>
+      createSearchIndex(skillRegistry?.entries ?? [], (entry) => [
         entry.name,
         entry.skillId,
         entry.description,
         entry.source.label,
         entry.sourceId,
-      ].some((value) => value.toLowerCase().includes(normalizedQuery))
-    })
-  }, [query, skillRegistry?.entries, sourceFilter])
+      ]),
+    [skillRegistry?.entries],
+  )
+
+  const filteredEntries = useMemo(
+    () =>
+      filterSearchIndex(skillSearchIndex, deferredQuery, (entry) =>
+        deferredSourceFilter === 'all' || entry.sourceKind === deferredSourceFilter,
+      ),
+    [deferredQuery, deferredSourceFilter, skillSearchIndex],
+  )
 
   const projectSourceEnabled = projectId
     ? skillRegistry?.sources.projects.find((project) => project.projectId === projectId)?.enabled ?? true

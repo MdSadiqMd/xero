@@ -24,9 +24,14 @@ import type {
   XeroDoctorReportDto,
   DictationSettingsDto,
   DictationStatusDto,
+  EnvironmentDiscoveryStatusDto,
+  EnvironmentProfileSummaryDto,
+  EnvironmentProbeReportDto,
   RuntimeSessionView,
   SkillRegistryDto,
   SoulSettingsDto,
+  VerifyUserToolRequestDto,
+  VerifyUserToolResponseDto,
 } from '@/src/lib/xero-model'
 
 type NotificationRouteRequest = Parameters<NonNullable<SettingsDialogProps['onUpsertNotificationRoute']>>[0]
@@ -218,6 +223,68 @@ function makeDoctorReport(): XeroDoctorReportDto {
       }),
     ],
   })
+}
+
+function makeEnvironmentStatus(
+  overrides: Partial<EnvironmentDiscoveryStatusDto> = {},
+): EnvironmentDiscoveryStatusDto {
+  return {
+    hasProfile: true,
+    status: 'ready',
+    stale: false,
+    shouldStart: false,
+    refreshedAt: '2026-05-02T12:00:00Z',
+    probeStartedAt: '2026-05-02T12:00:00Z',
+    probeCompletedAt: '2026-05-02T12:00:01Z',
+    permissionRequests: [],
+    diagnostics: [],
+    ...overrides,
+  }
+}
+
+function makeEnvironmentSummary(
+  overrides: Partial<NonNullable<EnvironmentProfileSummaryDto>> = {},
+): EnvironmentProfileSummaryDto {
+  return {
+    schemaVersion: 1,
+    status: 'ready',
+    platform: {
+      osKind: 'macos',
+      osVersion: null,
+      arch: 'aarch64',
+      defaultShell: null,
+    },
+    refreshedAt: '2026-05-02T12:00:01Z',
+    tools: [
+      {
+        id: 'node',
+        category: 'language_runtime',
+        custom: false,
+        present: true,
+        version: 'v22.0.0',
+        displayPath: 'node',
+        probeStatus: 'ok',
+      },
+    ],
+    capabilities: [],
+    permissionRequests: [],
+    diagnostics: [],
+    ...overrides,
+  }
+}
+
+function makeEnvironmentReport(
+  summary: EnvironmentProfileSummaryDto,
+): EnvironmentProbeReportDto {
+  if (!summary) {
+    throw new Error('environment report test helper requires a summary')
+  }
+  return {
+    status: summary.status,
+    summary,
+    startedAt: '2026-05-02T12:00:00Z',
+    completedAt: '2026-05-02T12:00:01Z',
+  }
 }
 
 function makeRuntimeSession(overrides: Partial<RuntimeSessionView> = {}): RuntimeSessionView {
@@ -775,6 +842,98 @@ describe('SettingsDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Extended' }))
 
     await waitFor(() => expect(onRunDoctorReport).toHaveBeenCalledWith({ mode: 'extended_network' }))
+  })
+
+  it('verifies user-added environment tools before saving and resets the form after save', async () => {
+    const environmentProfileSummary = makeEnvironmentSummary()
+    const verifiedSummary = makeEnvironmentSummary({
+      tools: [
+        ...environmentProfileSummary!.tools,
+        {
+          id: 'custom_cli',
+          category: 'shell_utility',
+          custom: true,
+          present: true,
+          version: 'custom-cli 1.0.0',
+          displayPath: 'custom-cli',
+          probeStatus: 'ok',
+        },
+      ],
+    })
+    const onVerifyUserEnvironmentTool = vi
+      .fn<(_: VerifyUserToolRequestDto) => Promise<VerifyUserToolResponseDto>>()
+      .mockResolvedValueOnce({
+        record: {
+          id: 'custom_cli',
+          category: 'shell_utility',
+          custom: true,
+          present: false,
+          version: null,
+          displayPath: null,
+          probeStatus: 'missing',
+        },
+        diagnostics: [],
+      })
+      .mockResolvedValueOnce({
+        record: {
+          id: 'custom_cli',
+          category: 'shell_utility',
+          custom: true,
+          present: true,
+          version: 'custom-cli 1.0.0',
+          displayPath: 'custom-cli',
+          probeStatus: 'ok',
+        },
+        diagnostics: [],
+      })
+    const onSaveUserEnvironmentTool = vi.fn(async () => makeEnvironmentReport(verifiedSummary))
+
+    render(
+      <SettingsDialog
+        {...makeSettingsDialogProps({
+          initialSection: 'diagnostics',
+          environmentDiscoveryStatus: makeEnvironmentStatus(),
+          environmentProfileSummary,
+          onVerifyUserEnvironmentTool,
+          onSaveUserEnvironmentTool,
+        })}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Diagnostics' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Add tool' }))
+    fireEvent.change(screen.getByLabelText('Tool name'), {
+      target: { value: 'custom_cli' },
+    })
+    fireEvent.change(screen.getByLabelText('Command'), {
+      target: { value: 'custom-cli' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
+
+    expect(await screen.findByText('Could not find custom-cli on PATH.')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
+
+    expect(await screen.findByText('custom-cli 1.0.0')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(onSaveUserEnvironmentTool).toHaveBeenCalledWith({
+        id: 'custom_cli',
+        category: 'base_developer_tool',
+        command: 'custom-cli',
+        args: ['--version'],
+      }),
+    )
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Add developer tool' })).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add tool' }))
+    expect(screen.getByLabelText('Tool name')).toHaveValue('')
   })
 
   it('loads macOS dictation settings and saves preference changes', async () => {

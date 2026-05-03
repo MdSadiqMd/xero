@@ -764,8 +764,9 @@ function createMockAdapter(options?: {
     getRepositoryDiff: vi.fn(async (projectId: string, scope: 'staged' | 'unstaged' | 'worktree') =>
       makeDiff(projectId, scope),
     ),
-    listProjectFiles: vi.fn(async (projectId: string) => ({
+    listProjectFiles: vi.fn(async (projectId: string, path = '/') => ({
       projectId,
+      path,
       root: {
         name: 'root',
         path: '/',
