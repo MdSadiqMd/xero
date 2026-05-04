@@ -150,6 +150,20 @@ impl HelperClient {
         Ok(())
     }
 
+    /// Get the accessibility tree from the Simulator process via AXUIElement.
+    /// Returns the raw JSON tree that `ios_ui::normalize_tree()` can parse.
+    pub fn accessibility_tree(&self) -> Result<serde_json::Value, CommandError> {
+        let resp = self.send_request("accessibility_tree", json!({}))?;
+        resp.get("tree")
+            .cloned()
+            .ok_or_else(|| {
+                CommandError::system_fault(
+                    "ios_helper_ax_no_tree",
+                    "helper returned no tree in accessibility_tree response".to_string(),
+                )
+            })
+    }
+
     /// Health check.
     pub fn ping(&self) -> Result<(), CommandError> {
         self.send_request("ping", json!({}))?;
@@ -157,6 +171,13 @@ impl HelperClient {
     }
 
     // MARK: - Request/response correlation
+
+    /// Send a raw request to the helper and return the JSON response.
+    /// Public so `emulator_inspector_element_at` can call AX inspection
+    /// directly without a typed wrapper.
+    pub fn send_request_raw(&self, method: &str, params: Value) -> Result<Value, CommandError> {
+        self.send_request(method, params)
+    }
 
     fn send_request(&self, method: &str, params: Value) -> Result<Value, CommandError> {
         let id = self.request_id.fetch_add(1, Ordering::Relaxed);

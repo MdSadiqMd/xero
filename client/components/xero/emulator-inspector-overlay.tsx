@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useRef } from "react"
-import { Crosshair, ExternalLink, X } from "lucide-react"
+import { Crosshair, ExternalLink, Search, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { ElementInfo, UseInspector } from "@/src/features/emulator/use-inspector"
 
@@ -11,21 +11,24 @@ interface InspectorOverlayProps {
   deviceHeight: number
   /** The inspector state from useInspector(). */
   inspector: UseInspector
-  /** Called when the user clicks an element to open source. */
+  /** Called when the user clicks an element to open source (RN only). */
   onOpenSource?: (file: string, line: number, column: number) => void
+  /** Called to search the project for a given AX identifier or label. */
+  onSearchProject?: (query: string) => void
 }
 
 /**
  * Transparent overlay rendered on top of the emulator frame when inspect
- * mode is active. Captures pointer events to query element-at-point via
- * the Metro inspector, renders a highlight rectangle on the matched
- * element, and shows a tooltip with component name + source location.
+ * mode is active. Captures ALL pointer events (suppresses touch input to
+ * the device). Queries element-at-point via Metro or AXUIElement, renders
+ * highlight rectangle and info tooltip.
  */
 export function InspectorOverlay({
   deviceWidth,
   deviceHeight,
   inspector,
   onOpenSource,
+  onSearchProject,
 }: InspectorOverlayProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
 
@@ -46,6 +49,9 @@ export function InspectorOverlay({
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
+      // Suppress event propagation so the device doesn't receive touch input.
+      e.stopPropagation()
+      e.preventDefault()
       const coords = toDeviceCoords(e)
       if (!coords) return
       inspector.elementAt(coords.x, coords.y)
@@ -53,25 +59,47 @@ export function InspectorOverlay({
     [toDeviceCoords, inspector],
   )
 
-  const handleClick = useCallback(
+  const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
-      e.preventDefault()
+      // Suppress all pointer events — inspect mode owns the viewport.
       e.stopPropagation()
+      e.preventDefault()
+    },
+    [],
+  )
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.stopPropagation()
+      e.preventDefault()
       const el = inspector.hoveredElement
-      if (el?.source && onOpenSource) {
+      if (!el) return
+
+      // RN apps: open source file.
+      if (el.source && onOpenSource) {
         onOpenSource(el.source.file, el.source.line, el.source.column)
+        return
+      }
+
+      // Native apps: search project for AX identifier or label.
+      const searchTerm = el.componentName || el.nativeType
+      if (searchTerm && onSearchProject) {
+        onSearchProject(searchTerm)
       }
     },
-    [inspector.hoveredElement, onOpenSource],
+    [inspector.hoveredElement, onOpenSource, onSearchProject],
   )
 
   const el = inspector.hoveredElement
+  const isNativeMode = el != null && el.source == null
 
   return (
     <div
       ref={overlayRef}
       className="absolute inset-0 z-20 cursor-crosshair"
+      onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerDown}
       onClick={handleClick}
     >
       {/* Highlight rectangle */}
@@ -85,13 +113,25 @@ export function InspectorOverlay({
 
       {/* Tooltip */}
       {el && (
-        <ElementTooltip element={el} hasSource={!!onOpenSource} />
+        <ElementTooltip
+          element={el}
+          hasSource={!!onOpenSource}
+          hasSearch={!!onSearchProject}
+          isNativeMode={isNativeMode}
+        />
       )}
 
       {/* Inspect mode badge */}
-      <div className="absolute left-2 top-2 flex items-center gap-1 rounded-md bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground shadow-sm">
-        <Crosshair className="h-3 w-3" />
-        Inspect
+      <div className="absolute left-2 top-2 flex items-center gap-1.5">
+        <div className="flex items-center gap-1 rounded-md bg-primary/90 px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground shadow-sm">
+          <Crosshair className="h-3 w-3" />
+          Inspect
+        </div>
+        {isNativeMode && (
+          <div className="rounded-md bg-muted/90 px-1.5 py-0.5 text-[9px] text-muted-foreground shadow-sm">
+            Accessibility view — source correlation is best-effort
+          </div>
+        )}
       </div>
     </div>
   )
@@ -125,30 +165,45 @@ function HighlightBox({
 function ElementTooltip({
   element,
   hasSource,
+  hasSearch,
+  isNativeMode,
 }: {
   element: ElementInfo
   hasSource: boolean
+  hasSearch: boolean
+  isNativeMode: boolean
 }) {
   return (
     <div className="absolute bottom-2 left-2 right-2 flex flex-col gap-0.5 rounded-md border border-border/60 bg-popover/95 px-2 py-1.5 text-[10px] shadow-md backdrop-blur-sm">
-      {/* Component name */}
+      {/* Element name + native type */}
       <div className="flex items-center gap-1.5">
         <span className="font-semibold text-foreground">
-          {"<"}
-          {element.componentName || "Unknown"}
-          {" />"}
+          {isNativeMode ? (
+            // Native: show AX role/type
+            <>{element.nativeType || "Unknown"}</>
+          ) : (
+            // RN: show component name
+            <>{"<"}{element.componentName || "Unknown"}{" />"}</>
+          )}
         </span>
-        {element.nativeType && (
+        {!isNativeMode && element.nativeType && (
           <span className="text-muted-foreground">({element.nativeType})</span>
         )}
       </div>
+
+      {/* Label (for native AX elements) */}
+      {isNativeMode && element.componentName && element.componentName !== element.nativeType && (
+        <div className="text-foreground/80">
+          Label: &ldquo;{element.componentName}&rdquo;
+        </div>
+      )}
 
       {/* Bounds */}
       <div className="text-muted-foreground">
         {element.bounds.w}×{element.bounds.h} at ({element.bounds.x}, {element.bounds.y})
       </div>
 
-      {/* Source location */}
+      {/* Source location (RN only) */}
       {element.source && (
         <div className="flex items-center gap-1 text-primary">
           <ExternalLink className="h-2.5 w-2.5" />
@@ -158,6 +213,17 @@ function ElementTooltip({
           {hasSource && (
             <span className="text-muted-foreground/60">(click to open)</span>
           )}
+        </div>
+      )}
+
+      {/* Search project (native AX — best-effort source correlation) */}
+      {isNativeMode && hasSearch && (element.componentName || element.nativeType) && (
+        <div className="flex items-center gap-1 text-primary">
+          <Search className="h-2.5 w-2.5" />
+          <span className="truncate">
+            Search project for &ldquo;{element.componentName || element.nativeType}&rdquo;
+          </span>
+          <span className="text-muted-foreground/60">(click)</span>
         </div>
       )}
     </div>
@@ -190,7 +256,7 @@ export function InspectModeButton({
       )}
       disabled={disabled}
       onClick={onClick}
-      title={connected ? "Inspect React Native elements" : "Connect Metro to inspect"}
+      title={connected ? "Inspect React Native elements" : "Inspect UI elements (Accessibility)"}
       type="button"
     >
       <Crosshair className="h-3 w-3" />

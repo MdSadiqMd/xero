@@ -28,7 +28,11 @@ pub struct HelperLaunch {
 impl HelperLaunch {
     pub fn new(binary: impl Into<PathBuf>, udid: impl Into<String>) -> Result<Self> {
         let udid = udid.into();
-        let socket_path = std::env::temp_dir().join(format!("xero-ios-helper-{udid}.sock"));
+        // macOS sockaddr_un.sun_path is 104 bytes. Use /tmp/ directly
+        // (not $TMPDIR which is a long path under /var/folders/) and
+        // truncate the UDID to keep the total under 104.
+        let short_id = &udid[..udid.len().min(8)];
+        let socket_path = PathBuf::from(format!("/tmp/xero-ih-{short_id}.sock"));
         // Remove stale socket from a previous crash.
         let _ = std::fs::remove_file(&socket_path);
         Ok(Self {

@@ -333,8 +333,14 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
   const Icon = platform === "ios" ? Apple : Smartphone
 
   const handleStart = useCallback(() => {
-    if (!selectedDeviceId) return
-    void session.start(selectedDeviceId)
+    // Use selected device, or auto-pick first available device.
+    const deviceId = selectedDeviceId ?? session.devices[0]?.id
+    if (!deviceId) {
+      // Force refresh devices then retry.
+      void session.refreshDevices()
+      return
+    }
+    void session.start(deviceId)
   }, [selectedDeviceId, session])
 
   const handleStop = useCallback(() => {
@@ -457,7 +463,7 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
         <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
           {meta.label}
         </span>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           {session.devices.length > 0 ? (
             <Select
               disabled={isActive}
@@ -517,7 +523,7 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
             <button
               aria-label="Start device"
               className="flex h-6 items-center gap-1 rounded-md border border-border/70 bg-background/60 px-2 text-[11px] text-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-60"
-              disabled={!selectedDeviceId || session.isStarting}
+              disabled={session.isStarting}
               onClick={handleStart}
               type="button"
             >
@@ -526,7 +532,7 @@ export function EmulatorSidebar({ open, platform }: EmulatorSidebarProps) {
               ) : (
                 <Play className="h-3 w-3" />
               )}
-              Start
+              {session.devices.length === 0 ? "Loading..." : "Start"}
             </button>
           )}
         </div>
@@ -736,6 +742,11 @@ function EmulatorViewport({
               deviceWidth={currentDevice.width}
               deviceHeight={currentDevice.height}
               inspector={inspector}
+              onSearchProject={(query) => {
+                // TODO: Wire to editor search command when available.
+                // For now, copy to clipboard as a bridging affordance.
+                navigator.clipboard?.writeText(query).catch(() => {})
+              }}
             />
           )}
           {isIos && !isTablet ? <DynamicIsland /> : null}

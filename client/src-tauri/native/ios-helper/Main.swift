@@ -19,6 +19,7 @@ struct XeroIosHelper {
         let connection = Connection(socketPath: parsed.socketPath)
         let frameCapture = FrameCapture(udid: parsed.udid)
         let hidBridge = HidBridge(udid: parsed.udid)
+        let axBridge = AccessibilityBridge()
 
         // Wire frame capture output to the connection.
         frameCapture.onFrame = { [weak connection] jpeg, width, height in
@@ -101,15 +102,43 @@ struct XeroIosHelper {
                     respond(result.map { ["ok": true] as [String: Any] })
                 }
 
+            case "accessibility_tree":
+                let result = axBridge.dumpTree()
+                switch result {
+                case .success(let tree):
+                    respond(.success(["ok": true, "tree": tree]))
+                case .failure(let err):
+                    respond(.failure(err))
+                }
+
+            case "accessibility_element_at":
+                guard let params = request.params,
+                      let x = (params["x"] as? NSNumber)?.floatValue,
+                      let y = (params["y"] as? NSNumber)?.floatValue else {
+                    respond(.failure(HelperError.invalidParams("accessibility_element_at requires x, y")))
+                    return
+                }
+                let result = axBridge.elementAtPoint(x: x, y: y)
+                switch result {
+                case .success(let element):
+                    respond(.success(["ok": true, "element": element]))
+                case .failure(let err):
+                    respond(.failure(err))
+                }
+
             default:
                 respond(.failure(HelperError.unknownMethod(request.method)))
             }
         }
 
-        // Accept a client connection, then serve until shutdown.
+        // Start accepting connections on a background thread.
+        // acceptAndServe() is non-blocking — it binds/listens synchronously
+        // then spawns a thread for accept(). This way RunLoop.main starts
+        // immediately, which is required for ScreenCaptureKit async callbacks.
         connection.acceptAndServe()
 
-        // RunLoop.main is required for ScreenCaptureKit async callbacks.
+        // Run the main RunLoop — required for ScreenCaptureKit, GCD, and
+        // any other framework that dispatches to the main queue.
         RunLoop.main.run()
 
         // Cleanup on exit.

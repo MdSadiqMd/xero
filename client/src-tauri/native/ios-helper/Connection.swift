@@ -75,6 +75,9 @@ class Connection {
 
     // MARK: - Server lifecycle
 
+    /// Bind and listen on the UDS, then accept a client on a background
+    /// thread. This does NOT block the main thread — RunLoop.main must
+    /// be running for ScreenCaptureKit async callbacks to fire.
     func acceptAndServe() {
         // Remove stale socket file.
         unlink(socketPath)
@@ -82,7 +85,7 @@ class Connection {
         serverFd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard serverFd >= 0 else {
             fputs("failed to create socket: \(errno)\n", stderr)
-            exit(1)
+            Foundation.exit(1)
         }
 
         var addr = sockaddr_un()
@@ -90,7 +93,7 @@ class Connection {
         let pathBytes = socketPath.utf8CString
         guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
             fputs("socket path too long\n", stderr)
-            exit(1)
+            Foundation.exit(1)
         }
         _ = withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
             pathBytes.withUnsafeBufferPointer { buf in
@@ -105,27 +108,33 @@ class Connection {
         }
         guard bindResult == 0 else {
             fputs("failed to bind \(socketPath): \(errno)\n", stderr)
-            exit(1)
+            Foundation.exit(1)
         }
 
         guard listen(serverFd, 1) == 0 else {
             fputs("failed to listen: \(errno)\n", stderr)
-            exit(1)
+            Foundation.exit(1)
         }
 
-        // Accept one client (blocking).
-        clientFd = accept(serverFd, nil, nil)
-        guard clientFd >= 0 else {
-            fputs("accept failed: \(errno)\n", stderr)
-            exit(1)
-        }
+        // Accept on a BACKGROUND thread so the main RunLoop stays free
+        // for ScreenCaptureKit / GCD callbacks.
+        let acceptThread = Thread {
+            let fd = accept(self.serverFd, nil, nil)
+            guard fd >= 0 else {
+                fputs("accept failed: \(errno)\n", stderr)
+                return
+            }
+            self.clientFd = fd
 
-        // Start background reader thread.
-        readThread = Thread {
-            self.readLoop()
+            // Start reader thread for incoming messages.
+            self.readThread = Thread {
+                self.readLoop()
+            }
+            self.readThread?.name = "xero-ios-helper-reader"
+            self.readThread?.start()
         }
-        readThread?.name = "xero-ios-helper-reader"
-        readThread?.start()
+        acceptThread.name = "xero-ios-helper-accept"
+        acceptThread.start()
     }
 
     func close() {

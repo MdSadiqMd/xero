@@ -320,6 +320,12 @@ impl IosSession {
         self.client.as_ref().map(Arc::clone)
     }
 
+    /// Expose the Swift helper client for accessibility tree queries
+    /// (Phase 3 AXUIElement inspection).
+    pub fn helper_client(&self) -> Option<Arc<HelperClient>> {
+        self.helper_client.as_ref().map(Arc::clone)
+    }
+
     pub fn shutdown(&mut self) {
         self.shutdown_flag.store(true, Ordering::Relaxed);
         if let Some(handle) = self.video.take() {
@@ -371,6 +377,8 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         device_id,
     } = args;
 
+    eprintln!("[ios-session] spawn starting for {device_id}");
+
     emit_status(
         &app,
         StatusPhase::Booting,
@@ -378,6 +386,7 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         Some(format!("booting simulator {device_id}")),
     );
 
+    eprintln!("[ios-session] calling xcrun boot...");
     xcrun::boot(&device_id, BOOT_TIMEOUT).map_err(|err| {
         CommandError::system_fault(
             "ios_boot_failed",
@@ -395,8 +404,10 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
     // dispatch. `open -g` keeps Xero frontmost on most recent macOS
     // releases; brief sleep gives the window server time to register the
     // new window before we hand control back to the frontend.
+    eprintln!("[ios-session] boot complete, focusing simulator...");
     let _ = xcrun::focus_simulator(&device_id);
     std::thread::sleep(Duration::from_millis(400));
+    eprintln!("[ios-session] focus done, attaching pipeline...");
 
     emit_status(
         &app,
@@ -408,10 +419,11 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
     // --- Try Swift helper (ScreenCaptureKit + IndigoHID) ---
     // The helper is preferred over idb_companion: it gives us 30 FPS
     // frames via ScreenCaptureKit and reliable touch/swipe via Indigo.
+    eprintln!("[ios-session] looking for helper binary...");
     let (ios_helper, ios_helper_client) = match helper::resolve_helper_binary(&app) {
         Some(binary) => {
             match helper::HelperLaunch::new(binary, device_id.clone())
-                .and_then(|launch| helper::spawn(launch, COMPANION_TIMEOUT))
+                .and_then(|launch| helper::spawn(launch, Duration::from_secs(5)))
             {
                 Ok(h) => {
                     match super::helper_client::HelperClient::connect(
@@ -441,6 +453,8 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         }
         None => (None, None),
     };
+
+    eprintln!("[ios-session] helper result: helper={}, client={}", ios_helper.is_some(), ios_helper_client.is_some());
 
     // `idb_companion` is best-effort: when it starts, HID input uses idb's
     // real simulator surface; when it does not, the session can still render
@@ -474,6 +488,9 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         .as_ref()
         .map(|c| Arc::new(IdbClient::new(c.grpc_port, device_id.clone())));
 
+    eprintln!("[ios-session] idb companion={}, client={}", companion.is_some(), client.is_some());
+    eprintln!("[ios-session] starting frame pump...");
+
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let (width, height, video_handle, fallback_thread) = start_frame_pump(
         &app,
@@ -484,6 +501,26 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         Arc::clone(&shutdown_flag),
     )?;
 
+    eprintln!("[ios-session] frame pump started: {width}x{height}");
+
+    // Minimize the Simulator.app window now that the frame pump is
+    // capturing it. The window must exist (ScreenCaptureKit / simctl
+    // needs it) but the user only needs the Xero sidebar view.
+    // Miniaturize via AppleScript — best effort, requires Accessibility.
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", r#"
+            tell application "System Events"
+                tell process "Simulator"
+                    try
+                        click (first button of first window whose subrole is "AXMinimizeButton")
+                    end try
+                end tell
+            end tell
+        "#])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
     emit_status(
         &app,
         StatusPhase::Streaming,
@@ -491,6 +528,7 @@ pub fn spawn<R: Runtime + 'static>(args: SpawnArgs<R>) -> Result<IosSession, Com
         Some(format!("streaming at {width}x{height}")),
     );
 
+    eprintln!("[ios-session] spawn complete, returning session");
     Ok(IosSession {
         device_id,
         device_name,
@@ -515,37 +553,39 @@ fn start_frame_pump<R: Runtime + 'static>(
     device_id: &str,
     shutdown: Arc<AtomicBool>,
 ) -> Result<FramePumpStart, CommandError> {
-    // If the Swift helper is connected, pump frames from its channel.
-    // This replaces both the H.264 decode path and the screenshot fallback
-    // with ScreenCaptureKit-captured JPEG frames at ~30 FPS.
+    eprintln!("[frame-pump] helper={}, idb={}", helper_client.is_some(), idb_client.is_some());
+
+    // If the Swift helper is connected, try ScreenCaptureKit frames.
+    // On failure (e.g., Screen Recording permission denied), fall through
+    // to the idb/screenshot path instead of hard-failing the session.
     if let Some(hc) = helper_client {
-        let (w, h) = hc.start_capture(30).map_err(|e| {
-            CommandError::system_fault(
-                "ios_helper_capture_start_failed",
-                format!("failed to start ScreenCaptureKit capture: {e}"),
-            )
-        })?;
-        let frame_rx = hc.take_frame_rx().ok_or_else(|| {
-            CommandError::system_fault(
-                "ios_helper_frame_rx_taken",
-                "frame receiver already taken by another pump".to_string(),
-            )
-        })?;
-        let bus2 = Arc::clone(bus);
-        let app2 = app.clone();
-        let flag = Arc::clone(&shutdown);
-        let thread = thread::spawn(move || {
-            while !flag.load(Ordering::Relaxed) {
-                match frame_rx.recv_timeout(Duration::from_secs(2)) {
-                    Ok(frame) => {
-                        publish_and_emit(&app2, &bus2, frame.width, frame.height, frame.jpeg);
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(_) => break, // Channel closed.
+        match hc.start_capture(30) {
+            Ok((w, h)) => {
+                if let Some(frame_rx) = hc.take_frame_rx() {
+                    let bus2 = Arc::clone(bus);
+                    let app2 = app.clone();
+                    let flag = Arc::clone(&shutdown);
+                    let thread = thread::spawn(move || {
+                        while !flag.load(Ordering::Relaxed) {
+                            match frame_rx.recv_timeout(Duration::from_secs(2)) {
+                                Ok(frame) => {
+                                    publish_and_emit(
+                                        &app2, &bus2, frame.width, frame.height, frame.jpeg,
+                                    );
+                                }
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                                Err(_) => break,
+                            }
+                        }
+                    });
+                    return Ok((w, h, None, Some(thread)));
                 }
             }
-        });
-        return Ok((w, h, None, Some(thread)));
+            Err(e) => {
+                eprintln!("xero: ScreenCaptureKit capture failed, falling back: {e}");
+                // Fall through to idb/screenshot path.
+            }
+        }
     }
 
     // Fallback: H.264 stream via idb_companion or screenshot polling.
@@ -650,10 +690,27 @@ fn spawn_screenshot_fallback<R: Runtime + 'static>(
     device_id: String,
     shutdown: Arc<AtomicBool>,
 ) -> Result<(u32, u32, JoinHandle<()>), CommandError> {
-    let png = xcrun::screenshot(&device_id).map_err(|err| {
+    // Retry the initial screenshot — iOS 26's display pipeline can take
+    // several seconds to attach after boot, causing ScreenshotError code=2.
+    let mut png = None;
+    for attempt in 0..10 {
+        match xcrun::screenshot(&device_id) {
+            Ok(data) => {
+                png = Some(data);
+                break;
+            }
+            Err(e) => {
+                eprintln!("[frame-pump] initial screenshot attempt {attempt} failed: {e}");
+                if attempt < 9 {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
+        }
+    }
+    let png = png.ok_or_else(|| {
         CommandError::system_fault(
             "ios_screenshot_failed",
-            format!("initial simctl screenshot failed: {err}"),
+            "initial simctl screenshot failed after 10 retries (display not ready)".to_string(),
         )
     })?;
     let initial =
@@ -671,7 +728,9 @@ fn spawn_screenshot_fallback<R: Runtime + 'static>(
         // shouldn't kill the whole frame pump. Exit only after the shutdown
         // flag is set or the failure streak clearly means the simulator is
         // gone.
-        const MAX_CONSECUTIVE_FAILURES: u32 = 10;
+        // iOS 26 cold boot can take 30+ seconds during which simctl
+        // screenshots fail with ScreenshotError code=2. Be very tolerant.
+        const MAX_CONSECUTIVE_FAILURES: u32 = 60;
         let mut consecutive_failures = 0u32;
         loop {
             if shutdown.load(Ordering::Relaxed) {

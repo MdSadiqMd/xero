@@ -170,6 +170,7 @@ fn compile_ios_helper() {
     println!("cargo:rerun-if-changed=native/ios-helper/FrameCapture.swift");
     println!("cargo:rerun-if-changed=native/ios-helper/HidBridge.swift");
     println!("cargo:rerun-if-changed=native/ios-helper/JpegEncoder.swift");
+    println!("cargo:rerun-if-changed=native/ios-helper/AccessibilityBridge.swift");
     println!("cargo:rerun-if-env-changed=XERO_SKIP_IOS_HELPER");
 
     if std::env::var_os("XERO_SKIP_IOS_HELPER").is_some() {
@@ -216,6 +217,7 @@ fn compile_ios_helper() {
         helper_dir.join("FrameCapture.swift"),
         helper_dir.join("HidBridge.swift"),
         helper_dir.join("JpegEncoder.swift"),
+        helper_dir.join("AccessibilityBridge.swift"),
     ];
 
     let status = Command::new(&swiftc)
@@ -235,6 +237,10 @@ fn compile_ios_helper() {
         .arg("Foundation")
         .arg("-framework")
         .arg("CoreMedia")
+        .arg("-framework")
+        .arg("ApplicationServices")
+        .arg("-framework")
+        .arg("AppKit")
         .arg("-o")
         .arg(&output)
         .args(sources.iter())
