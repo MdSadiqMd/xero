@@ -2,10 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   xeroDiagnosticCheckSchema,
   xeroDoctorReportSchema,
-  checkProviderProfileRequestSchema,
   createXeroDiagnosticCheck,
   createXeroDoctorReport,
-  providerProfileDiagnosticsSchema,
   renderXeroDoctorReport,
   runDoctorReportRequestSchema,
   sanitizeDiagnosticText,
@@ -195,101 +193,11 @@ describe('diagnostics contract', () => {
     expect(copiedJson).toContain('"redacted": true')
   })
 
-  it('accepts strict provider diagnostics and rejects cross-profile catalog payloads', () => {
+  it('accepts run-doctor-report mode defaults and overrides', () => {
     expect(runDoctorReportRequestSchema.parse({})).toEqual({ mode: 'quick_local' })
     expect(runDoctorReportRequestSchema.parse({ mode: 'extended_network' })).toEqual({
       mode: 'extended_network',
     })
-
-    expect(checkProviderProfileRequestSchema.parse({
-      profileId: ' openrouter-default ',
-      includeNetwork: true,
-      modelId: ' openai/gpt-4.1-mini ',
-    })).toEqual({
-      profileId: 'openrouter-default',
-      includeNetwork: true,
-      modelId: 'openai/gpt-4.1-mini',
-    })
-
-    const validationCheck = createXeroDiagnosticCheck({
-      subject: 'provider_credential',
-      status: 'failed',
-      severity: 'error',
-      retryable: false,
-      code: 'provider_credentials_missing',
-      message: 'OpenRouter is missing app-local credentials.',
-      affectedProfileId: 'openrouter-default',
-      affectedProviderId: 'openrouter',
-      remediation: 'Add credentials for OpenRouter in Providers settings.',
-    })
-    const reachabilityCheck = createXeroDiagnosticCheck({
-      subject: 'model_catalog',
-      status: 'warning',
-      severity: 'warning',
-      retryable: true,
-      code: 'openrouter_rate_limited',
-      message: 'OpenRouter rate limited model discovery.',
-      affectedProfileId: 'openrouter-default',
-      affectedProviderId: 'openrouter',
-      remediation: 'Xero is keeping the last successful model catalog visible.',
-    })
-    const capabilityCheck = createXeroDiagnosticCheck({
-      subject: 'model_catalog',
-      status: 'passed',
-      severity: 'info',
-      retryable: false,
-      code: 'provider_tool_call_capability_supported',
-      message: 'OpenRouter tool-call support is available for the selected model.',
-      affectedProfileId: 'openrouter-default',
-      affectedProviderId: 'openrouter',
-    })
-
-    const diagnostics = providerProfileDiagnosticsSchema.parse({
-      checkedAt: '2026-04-26T12:00:00Z',
-      profileId: 'openrouter-default',
-      providerId: 'openrouter',
-      validationChecks: [validationCheck],
-      reachabilityChecks: [reachabilityCheck],
-      capabilityChecks: [capabilityCheck],
-      modelCatalog: {
-        profileId: 'openrouter-default',
-        providerId: 'openrouter',
-        configuredModelId: 'openai/gpt-4.1-mini',
-        source: 'cache',
-        fetchedAt: '2026-04-26T12:00:00Z',
-        lastSuccessAt: '2026-04-26T12:00:00Z',
-        lastRefreshError: {
-          code: 'openrouter_rate_limited',
-          message: 'OpenRouter rate limited model discovery.',
-          retryable: true,
-        },
-        models: [
-          {
-            modelId: 'openai/gpt-4.1-mini',
-            displayName: 'OpenAI GPT-4.1 Mini',
-            thinking: {
-              supported: true,
-              effortOptions: ['minimal', 'low', 'medium', 'high', 'x_high'],
-              defaultEffort: 'medium',
-            },
-          },
-        ],
-      },
-    })
-
-    expect(diagnostics.validationChecks[0].code).toBe('provider_credentials_missing')
-    expect(diagnostics.reachabilityChecks[0].code).toBe('openrouter_rate_limited')
-    expect(diagnostics.capabilityChecks[0].code).toBe('provider_tool_call_capability_supported')
-
-    expect(() =>
-      providerProfileDiagnosticsSchema.parse({
-        ...diagnostics,
-        modelCatalog: {
-          ...diagnostics.modelCatalog,
-          profileId: 'another-profile',
-        },
-      }),
-    ).toThrow(/must belong/)
   })
 
   it('builds doctor reports with stable summaries, skipped checks, and copy-safe output modes', () => {

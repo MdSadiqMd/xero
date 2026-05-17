@@ -328,8 +328,8 @@ export function OnboardingFlow({
 
   return (
     <div className="relative flex min-h-full flex-1 flex-col overflow-hidden bg-background text-foreground">
-      <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 px-8 pt-5">
-        <div className="min-w-[72px]">
+      <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 px-5 pt-3">
+        <div className="min-w-[96px]">
           {currentStep.showIndicator ? (
             <StepIndicator total={indicatorSteps.length} currentIndex={indicatorIndex} />
           ) : null}
@@ -339,7 +339,7 @@ export function OnboardingFlow({
           variant="ghost"
           size="sm"
           onClick={onDismiss}
-          className="h-7 text-[12px] text-muted-foreground hover:text-foreground"
+          className="h-8 text-[13px] text-muted-foreground hover:text-foreground"
         >
           Skip setup
         </Button>

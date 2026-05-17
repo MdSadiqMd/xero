@@ -463,6 +463,88 @@ describe('runtime stream event coalescing', () => {
     )
   })
 
+  it('notifies when a live completion item is flushed', () => {
+    let stream: RuntimeStreamView | null = makeRuntimeStream()
+    const updateRuntimeStream = vi.fn(
+      (
+        _projectId: string,
+        _agentSessionId: string,
+        updater: (current: RuntimeStreamView | null) => RuntimeStreamView | null,
+      ) => {
+        stream = updater(stream)
+      },
+    )
+    const onRuntimeSessionCompleted = vi.fn()
+    const buffer = createRuntimeStreamEventBuffer({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      runtimeKind: 'openai_codex',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      flowId: 'flow-1',
+      subscribedItemKinds: ['complete'],
+      runtimeActionRefreshKeysRef: { current: {} },
+      updateRuntimeStream,
+      scheduleRuntimeMetadataRefresh: vi.fn(),
+      onRuntimeSessionCompleted,
+    })
+
+    buffer.enableCompletionNotifications()
+    buffer.enqueue(
+      makeRuntimeStreamEvent(3, {
+        kind: 'complete',
+        text: null,
+        detail: 'Done.',
+      }),
+    )
+
+    expect(stream?.status).toBe('complete')
+    expect(onRuntimeSessionCompleted).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      runId: 'run-1',
+      completedAt: '2026-04-16T13:30:03Z',
+    })
+  })
+
+  it('suppresses replayed completion items until the subscription is established', () => {
+    let stream: RuntimeStreamView | null = makeRuntimeStream()
+    const updateRuntimeStream = vi.fn(
+      (
+        _projectId: string,
+        _agentSessionId: string,
+        updater: (current: RuntimeStreamView | null) => RuntimeStreamView | null,
+      ) => {
+        stream = updater(stream)
+      },
+    )
+    const onRuntimeSessionCompleted = vi.fn()
+    const buffer = createRuntimeStreamEventBuffer({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-main',
+      runtimeKind: 'openai_codex',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      flowId: 'flow-1',
+      subscribedItemKinds: ['complete'],
+      runtimeActionRefreshKeysRef: { current: {} },
+      updateRuntimeStream,
+      scheduleRuntimeMetadataRefresh: vi.fn(),
+      onRuntimeSessionCompleted,
+    })
+
+    buffer.enqueue(
+      makeRuntimeStreamEvent(3, {
+        kind: 'complete',
+        text: null,
+        detail: 'Replayed completion.',
+      }),
+    )
+
+    expect(stream?.status).toBe('complete')
+    expect(onRuntimeSessionCompleted).not.toHaveBeenCalled()
+  })
+
   it('dedupes repeated stream item sequences inside a batch', () => {
     const stream = mergeRuntimeStreamEvents(makeRuntimeStream(), [
       makeRuntimeStreamEvent(1),

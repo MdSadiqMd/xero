@@ -229,8 +229,7 @@ export function buildSnapshotFromGraph(
   })
 
   // workflowStructure is optional. Only emit it when the canvas has at least
-  // one phase node, so definitions without an authored state machine keep the
-  // same shape they had before phases existed.
+  // one stage node, so definitions without an authored state machine stay lean.
   const workflowStructure = buildWorkflowStructure(nodes, edges)
 
   const headerDto = header.data.header
@@ -425,10 +424,9 @@ function buildWorkflowStructure(
       ?.map(cloneCheck)
       .filter((check): check is CustomAgentWorkflowGateDto => check !== null)
     const canvasBranches = canvasBranchesBySource.get(id)
-    // Canvas-drawn edges are the source of truth — they represent the user's
-    // current authoring intent. Fall back to the phase's authored branches
-    // when no edges target this phase id, so an existing workflow that's
-    // viewed without being edited round-trips cleanly.
+    // Canvas-drawn edges are the source of truth. Fall back to authored
+    // branches when no edge targets this stage, so view-only edits keep the
+    // current definition semantics.
     const branches = canvasBranches && canvasBranches.length > 0
       ? canvasBranches
       : dto.branches?.map(cloneAuthoredBranch)
@@ -457,8 +455,8 @@ function buildWorkflowStructure(
 }
 
 function phaseIdFromNodeId(nodeId: string): string | undefined {
-  if (!nodeId.startsWith('workflow-phase:')) return undefined
-  const value = nodeId.slice('workflow-phase:'.length).trim()
+  if (!nodeId.startsWith('stage:')) return undefined
+  const value = nodeId.slice('stage:'.length).trim()
   return value.length > 0 ? value : undefined
 }
 
@@ -549,9 +547,8 @@ function buildToolPolicy(
   if (advanced.subagentAllowed || inferred.flags.subagentAllowed) {
     policy.subagentAllowed = true
     // The validator requires allowedSubagentRoles to be non-empty when
-    // subagent delegation is on. Honour the user's picks from the granular
-    // policy editor; fall back to ['engineer'] only if nothing was picked
-    // (preserves the prior implicit default so legacy snapshots round-trip).
+    // subagent delegation is on. Use the user's picks from the granular policy
+    // editor, or the default engineering role when none was selected.
     policy.allowedSubagentRoles =
       advanced.allowedSubagentRoles.length > 0
         ? [...advanced.allowedSubagentRoles]

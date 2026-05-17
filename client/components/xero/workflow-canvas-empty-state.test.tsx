@@ -34,12 +34,19 @@ function template(definitionId: string, displayName: string): WorkflowAgentSumma
 }
 
 describe('WorkflowCanvasEmptyState', () => {
-  it('calls onCreateAgent directly when no template path is configured', () => {
+  it('opens the starting-point dialog before creating an agent', () => {
     const onCreateAgent = vi.fn()
 
     render(<WorkflowCanvasEmptyState onCreateAgent={onCreateAgent} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))
+    expect(onCreateAgent).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: 'Create agent' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /New agent/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /From template/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /New agent/ }))
+
     expect(onCreateAgent).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog')).toBeNull()
   })

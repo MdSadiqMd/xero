@@ -1121,6 +1121,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     pendingSkillSourceId,
     skillRegistryMutationError,
     isDesktopRuntime,
+    activeProjectUnreadCompletedSessionCount,
     selectProject,
     prefetchProject,
     importProject,
@@ -1150,7 +1151,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
     logoutRuntimeSession,
     resolveOperatorAction,
     resumeOperatorRun,
-    checkProviderProfile,
     runDoctorReport,
     refreshProviderCredentials,
     upsertProviderCredential,
@@ -1188,6 +1188,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     reorderPanes,
     openSessionInNewPane,
     setSplitterRatios,
+    acknowledgeCompletedAgentSessions,
   } = useXeroDesktopState({ adapter, subscribeRuntimeStreams: false })
 
   const {
@@ -1954,6 +1955,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           totalCostMicros: footerSpend.totalCostMicros,
         }
       : null,
+    notifications: activeProjectUnreadCompletedSessionCount,
     spendActive: usageOpen,
     onSpendClick: activeProjectId
       ? () => {
@@ -2034,6 +2036,29 @@ export function XeroApp({ adapter }: XeroAppProps) {
   }, [isLoading, onboardingDismissed, projects.length])
 
   const selectedAgentSessionId = activeProject?.selectedAgentSessionId ?? null
+  const visibleAgentSessionIds = useMemo(() => {
+    if (activeView !== 'agent') {
+      return []
+    }
+
+    const paneSessionIds =
+      agentWorkspaceLayout?.paneSlots
+        .map((slot) => slot.agentSessionId)
+        .filter((agentSessionId): agentSessionId is string => Boolean(agentSessionId)) ?? []
+
+    return paneSessionIds.length > 0
+      ? Array.from(new Set(paneSessionIds))
+      : selectedAgentSessionId
+        ? [selectedAgentSessionId]
+        : []
+  }, [activeView, agentWorkspaceLayout, selectedAgentSessionId])
+  useEffect(() => {
+    if (visibleAgentSessionIds.length === 0) {
+      return
+    }
+
+    acknowledgeCompletedAgentSessions(visibleAgentSessionIds)
+  }, [acknowledgeCompletedAgentSessions, visibleAgentSessionIds])
   const resolvePaneAgentSessionId = useCallback(
     (paneId: string): string | null => {
       const slot = agentWorkspaceLayout?.paneSlots.find((candidate) => candidate.id === paneId)
@@ -3634,7 +3659,6 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
                 onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
                 onStartOAuthLogin={(request) => startOAuthLogin(request)}
-                onCheckProviderProfile={(profileId, options) => checkProviderProfile(profileId, options)}
                 doctorReport={doctorReport}
                 doctorReportStatus={doctorReportStatus}
                 doctorReportError={doctorReportError}

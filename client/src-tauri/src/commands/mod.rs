@@ -48,7 +48,6 @@ pub mod project_records;
 pub mod project_runner;
 pub mod project_state;
 pub mod provider_credentials;
-pub mod provider_diagnostics;
 pub mod provider_model_catalog;
 pub mod provider_preflight;
 pub mod record_notification_dispatch_outcome;
@@ -229,7 +228,6 @@ pub use project_state::{
 pub use provider_credentials::{
     delete_provider_credential, list_provider_credentials, upsert_provider_credential,
 };
-pub use provider_diagnostics::check_provider_profile;
 pub use provider_model_catalog::get_provider_model_catalog;
 pub use provider_preflight::preflight_provider_profile;
 pub use record_notification_dispatch_outcome::record_notification_dispatch_outcome;

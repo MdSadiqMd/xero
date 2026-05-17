@@ -456,7 +456,7 @@ function validateWritableRuntimeSettingsProvider(
       code: z.ZodIssueCode.custom,
       path: ['providerId'],
       message:
-        'Xero only accepts runtime-settings compatibility writes for `openai_codex`, `openrouter`, or `anthropic`. Use provider profiles for other cloud providers.',
+        'Xero only accepts runtime-settings writes for `openai_codex`, `openrouter`, or `anthropic`. Use provider profiles for other cloud providers.',
     })
   }
 }

@@ -8,8 +8,9 @@ use std::{
 use crate::{
     commands::CommandError,
     db::{
-        configure_connection, is_database_too_far_ahead, migrations::migrations,
-        rebuild_incompatible_project_database,
+        configure_connection, is_database_too_far_ahead,
+        migrations::{migrations, PROJECT_DATABASE_SCHEMA_VERSION},
+        read_user_version, rebuild_incompatible_project_database,
     },
 };
 use rusqlite::Connection;
@@ -200,20 +201,24 @@ fn open_migrated_state_database(
         return Ok(connection);
     }
 
-    match migrations().to_latest(&mut connection) {
-        Ok(()) => {}
-        Err(error) if is_database_too_far_ahead(&error) => {
-            connection =
-                rebuild_incompatible_project_database(repo_root, database_path, connection)?;
-        }
-        Err(error) => {
-            return Err(CommandError::retryable(
-                migration_error_code,
-                format!(
-                    "{migration_error_message} at {}. The local project state may need to be reset: {error}",
-                    database_path.display()
-                ),
-            ));
+    if read_user_version(&connection) != PROJECT_DATABASE_SCHEMA_VERSION {
+        connection = rebuild_incompatible_project_database(repo_root, database_path, connection)?;
+    } else {
+        match migrations().to_latest(&mut connection) {
+            Ok(()) => {}
+            Err(error) if is_database_too_far_ahead(&error) => {
+                connection =
+                    rebuild_incompatible_project_database(repo_root, database_path, connection)?;
+            }
+            Err(error) => {
+                return Err(CommandError::retryable(
+                    migration_error_code,
+                    format!(
+                        "{migration_error_message} at {}. The local project state may need to be reset: {error}",
+                        database_path.display()
+                    ),
+                ));
+            }
         }
     }
     migrated_databases.insert(key);

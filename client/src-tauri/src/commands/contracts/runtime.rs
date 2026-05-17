@@ -1038,16 +1038,6 @@ pub struct GetProviderModelCatalogRequestDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CheckProviderProfileRequestDto {
-    pub profile_id: String,
-    #[serde(default)]
-    pub include_network: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreflightProviderProfileRequestDto {
     pub profile_id: String,
     #[serde(default)]
@@ -1062,22 +1052,6 @@ pub type ProviderPreflightSnapshotDto = ProviderPreflightSnapshot;
 
 fn default_provider_preflight_required_features() -> ProviderPreflightRequiredFeatures {
     ProviderPreflightRequiredFeatures::owned_agent_text_turn()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProviderProfileDiagnosticsDto {
-    pub checked_at: String,
-    pub profile_id: String,
-    pub provider_id: String,
-    pub validation_checks: Vec<crate::runtime::XeroDiagnosticCheck>,
-    pub reachability_checks: Vec<crate::runtime::XeroDiagnosticCheck>,
-    #[serde(default)]
-    pub capability_checks: Vec<crate::runtime::XeroDiagnosticCheck>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_catalog: Option<ProviderModelCatalogDto>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preflight: Option<ProviderPreflightSnapshotDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -103,10 +103,6 @@ export function WelcomeStep({ onContinue, onSkipAll }: WelcomeStepProps) {
           Skip
         </Button>
       </div>
-
-      <p className="mt-5 text-[10.5px] text-muted-foreground/70">
-        Takes about a minute · Your credentials stay on this device
-      </p>
     </div>
   )
 }

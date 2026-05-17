@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, type ElementType } from "react"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
-  Activity,
   AlertCircle,
   Check,
   ChevronDown,
@@ -23,7 +22,6 @@ import {
   OpenRouterIcon,
 } from "@/components/xero/brand-icons"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -38,23 +36,16 @@ import {
   type ProviderCredentialDto,
   type ProviderCredentialsSnapshotDto,
   type ProviderAuthSessionView,
-  type ProviderProfileDiagnosticsDto,
   type RuntimeProviderIdDto,
   type RuntimeSessionView,
   type UpsertProviderCredentialRequestDto,
-  type XeroDiagnosticCheckDto,
 } from "@/src/lib/xero-model"
-import { getProviderModelCatalogFreshnessLabel } from "@/src/lib/xero-model/provider-models"
 import { listCloudProviderPresets } from "@/src/lib/xero-model/provider-presets"
 
 type SupportedProviderId = RuntimeProviderIdDto
 
 type AuthPending = { providerId: SupportedProviderId } | null
 type SaveErrorState = { providerId: SupportedProviderId; message: string } | null
-type ProviderCheckState =
-  | { status: "running"; diagnostics: null; error: null }
-  | { status: "ready"; diagnostics: ProviderProfileDiagnosticsDto; error: null }
-  | { status: "error"; diagnostics: null; error: string }
 
 interface CredentialDraft {
   apiKey: string
@@ -149,7 +140,7 @@ function getStatus(credential: ProviderCredentialDto): StatusInfo {
     case "oauth_session":
       return {
         label: "Signed in",
-        detail: credential.oauthAccountId ? `@${credential.oauthAccountId}` : null,
+        detail: null,
       }
     case "stored_secret":
       return {
@@ -255,31 +246,6 @@ function validateDraft(
   return null
 }
 
-function collectProviderDiagnostics(
-  diagnostics: ProviderProfileDiagnosticsDto,
-): XeroDiagnosticCheckDto[] {
-  return [
-    ...diagnostics.validationChecks,
-    ...diagnostics.reachabilityChecks,
-    ...diagnostics.capabilityChecks,
-  ]
-}
-
-function summarizeProviderDiagnostics(diagnostics: ProviderProfileDiagnosticsDto) {
-  const checks = collectProviderDiagnostics(diagnostics)
-  return checks.reduce(
-    (summary, check) => {
-      summary.total += 1
-      if (check.status === "passed") summary.passed += 1
-      if (check.status === "warning") summary.warnings += 1
-      if (check.status === "failed") summary.failed += 1
-      if (check.status === "skipped") summary.skipped += 1
-      return summary
-    },
-    { passed: 0, warnings: 0, failed: 0, skipped: 0, total: 0 },
-  )
-}
-
 export interface ProviderCredentialsListProps {
   providerCredentials: ProviderCredentialsSnapshotDto | null
   providerCredentialsLoadStatus: ProviderCredentialsLoadStatus
@@ -298,10 +264,6 @@ export interface ProviderCredentialsListProps {
     providerId: SupportedProviderId
     originator?: string | null
   }) => Promise<ProviderAuthSessionView | null>
-  onCheckProviderProfile?: (
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ) => Promise<ProviderProfileDiagnosticsDto>
 }
 
 export function ProviderCredentialsList({
@@ -315,7 +277,6 @@ export function ProviderCredentialsList({
   onUpsertProviderCredential,
   onDeleteProviderCredential,
   onStartOAuthLogin,
-  onCheckProviderProfile,
 }: ProviderCredentialsListProps) {
   const presets = useMemo(() => listCloudProviderPresets(), [])
   const [openProviderId, setOpenProviderId] = useState<SupportedProviderId | null>(null)
@@ -325,7 +286,6 @@ export function ProviderCredentialsList({
   const [authPending, setAuthPending] = useState<AuthPending>(null)
   const [saveError, setSaveError] = useState<SaveErrorState>(null)
   const [openAuthError, setOpenAuthError] = useState<SaveErrorState>(null)
-  const [providerChecks, setProviderChecks] = useState<Partial<Record<SupportedProviderId, ProviderCheckState>>>({})
 
   useEffect(() => {
     if (providerCredentialsLoadStatus === "idle" && onRefreshProviderCredentials) {
@@ -431,36 +391,6 @@ export function ProviderCredentialsList({
     }
   }
 
-  const handleCheckProvider = async (
-    providerId: SupportedProviderId,
-    credential: ProviderCredentialDto | null,
-  ) => {
-    if (!onCheckProviderProfile) return
-    setProviderChecks((current) => ({
-      ...current,
-      [providerId]: { status: "running", diagnostics: null, error: null },
-    }))
-    try {
-      const diagnostics = await onCheckProviderProfile(providerId, {
-        includeNetwork: true,
-        modelId: credential?.defaultModelId ?? null,
-      })
-      setProviderChecks((current) => ({
-        ...current,
-        [providerId]: { status: "ready", diagnostics, error: null },
-      }))
-    } catch (error) {
-      setProviderChecks((current) => ({
-        ...current,
-        [providerId]: {
-          status: "error",
-          diagnostics: null,
-          error: errMsg(error, "Xero could not check this provider."),
-        },
-      }))
-    }
-  }
-
   const showLoadingState =
     providerCredentialsLoadStatus === "loading" && !providerCredentials
   const showLoadError = providerCredentialsLoadStatus === "error"
@@ -509,8 +439,6 @@ export function ProviderCredentialsList({
       !!runtimeSession?.isLoginInProgress &&
       runtimeSession.providerId === providerId
     const status = credential ? getStatus(credential) : null
-    const checkState = providerChecks[providerId] ?? null
-    const isChecking = checkState?.status === "running"
 
     return (
       <div
@@ -542,23 +470,6 @@ export function ProviderCredentialsList({
           </div>
 
           <div className="flex shrink-0 items-center gap-1.5">
-            {credential ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
-                onClick={() => handleCheckProvider(providerId, credential)}
-                disabled={!onCheckProviderProfile || isChecking}
-                aria-label={`Check ${preset.label}`}
-                title={`Check ${preset.label}`}
-              >
-                {isChecking ? (
-                  <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Activity className="h-3.5 w-3.5" />
-                )}
-              </Button>
-            ) : null}
             {isOAuth ? (
               isAuthenticated ? (
                 <Button
@@ -613,10 +524,6 @@ export function ProviderCredentialsList({
             )}
           </div>
         </div>
-
-        {checkState ? (
-          <ProviderCheckResult providerLabel={preset.label} state={checkState} />
-        ) : null}
 
         {localOpenAuthError ? (
           <div className="border-t border-border/60 px-3.5 py-2.5">
@@ -790,123 +697,6 @@ export function ProviderCredentialsList({
       >
         {available.map(renderRow)}
       </Group>
-    </div>
-  )
-}
-
-function ProviderCheckResult({
-  providerLabel,
-  state,
-}: {
-  providerLabel: string
-  state: ProviderCheckState
-}) {
-  if (state.status === "running") {
-    return (
-      <div className="border-t border-border/60 px-3.5 py-2.5">
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-          Checking {providerLabel} credentials, catalog, endpoint, and turn capabilities.
-        </div>
-      </div>
-    )
-  }
-
-  if (state.status === "error") {
-    return (
-      <div className="border-t border-border/60 px-3.5 py-2.5">
-        <Alert variant="destructive" className="border-destructive/40">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{state.error}</AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
-
-  const diagnostics = state.diagnostics
-  const summary = summarizeProviderDiagnostics(diagnostics)
-  const tone =
-    summary.failed > 0
-      ? "destructive"
-      : summary.warnings > 0
-        ? "warning"
-        : "success"
-  const catalog = diagnostics.modelCatalog ?? null
-  const catalogCapabilities = catalog?.capabilities ?? null
-  const requestPreview = catalogCapabilities?.requestPreview ?? null
-  const capabilityItems = catalogCapabilities
-    ? [
-        ["Stream", catalogCapabilities.capabilities.streaming.status],
-        ["Tools", catalogCapabilities.capabilities.toolCalls.status],
-        ["Reasoning", catalogCapabilities.capabilities.reasoning.status],
-        ["Files", catalogCapabilities.capabilities.attachments.status],
-        ["Context", catalogCapabilities.capabilities.contextLimits.status],
-      ]
-    : []
-  const headline =
-    summary.failed > 0
-      ? `${providerLabel} needs attention`
-      : summary.warnings > 0
-        ? `${providerLabel} is usable with warnings`
-        : `${providerLabel} is ready`
-
-  return (
-    <div className="border-t border-border/60 px-3.5 py-2.5">
-      <div
-        className={cn(
-          "rounded-md border px-3 py-2 text-[12px]",
-          tone === "destructive"
-            ? "border-destructive/35 bg-destructive/5 text-destructive"
-            : tone === "warning"
-              ? "border-warning/35 bg-warning/10 text-warning dark:text-warning"
-              : "border-success/30 bg-success/10 text-success dark:text-success",
-        )}
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="font-medium text-foreground">{headline}</span>
-            {catalog ? (
-              <span className="truncate text-muted-foreground">
-                {getProviderModelCatalogFreshnessLabel(catalog)}
-              </span>
-            ) : null}
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-1">
-            <Badge variant={summary.failed > 0 ? "destructive" : "outline"} className="h-5 text-[10.5px]">
-              {summary.failed} failed
-            </Badge>
-            <Badge variant="outline" className="h-5 text-[10.5px]">
-              {summary.warnings} warnings
-            </Badge>
-            <Badge variant="outline" className="h-5 text-[10.5px]">
-              {summary.passed} passed
-            </Badge>
-          </div>
-        </div>
-        {capabilityItems.length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {capabilityItems.map(([label, status]) => (
-              <Badge
-                key={label}
-                variant="outline"
-                className={cn(
-                  "h-5 border-border/70 bg-background/40 text-[10.5px] text-muted-foreground",
-                  status === "supported" || status === "probed" ? "text-success dark:text-success" : null,
-                  status === "unavailable" ? "text-destructive" : null,
-                  status === "unknown" ? "text-warning dark:text-warning" : null,
-                )}
-              >
-                {label}: {status.replace("_", " ")}
-              </Badge>
-            ))}
-            {requestPreview ? (
-              <Badge variant="outline" className="h-5 border-border/70 bg-background/40 text-[10.5px] text-muted-foreground">
-                {requestPreview.route}
-              </Badge>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
     </div>
   )
 }

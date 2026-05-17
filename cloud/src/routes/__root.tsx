@@ -4,10 +4,10 @@ import {
 	Link,
 	Scripts,
 } from "@tanstack/react-router";
-import { AppLogo } from "@xero/ui/components/app-logo";
 import { Button } from "@xero/ui/components/ui/button";
 import type { ReactNode } from "react";
 
+import { BrandLogo } from "#/components/brand-logo";
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -52,7 +52,7 @@ function RootDocument({ children }: { children: ReactNode }) {
 function CloudNotFound() {
 	return (
 		<main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-background px-6 py-10 text-center text-foreground">
-			<AppLogo className="size-20" aria-label="Xero" />
+			<BrandLogo className="size-20" aria-label="Xero" />
 			<div className="flex max-w-sm flex-col items-center gap-2">
 				<h1 className="text-xl font-medium">Page not found</h1>
 				<p className="text-sm text-muted-foreground">

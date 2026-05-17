@@ -745,12 +745,9 @@ function ConversationTurnRow({
 
   if (turn.kind === 'thinking') {
     return (
-      <div className="flex gap-2.5">
-        <AgentAvatar pulse={isStreaming} />
-        <div className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
-          <span className="sr-only">Agent</span>
-          <ThinkingBlock messageId={turn.id} text={turn.text} />
-        </div>
+      <div className="flex min-w-0 flex-col items-start gap-1.5">
+        <span className="sr-only">Agent</span>
+        <ThinkingBlock messageId={turn.id} text={turn.text} />
       </div>
     )
   }
@@ -1494,7 +1491,7 @@ function ActionCard({
   const isFailed = state === 'failed'
   const isRunning = state === 'running'
   const rowClass = cn(
-    'flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left transition-colors',
+    'flex w-full items-center gap-2 rounded-md py-0.5 text-left transition-colors',
     'hover:bg-foreground/[0.03]',
     isRunning && 'bg-primary/[0.025] agent-tool-running-row',
     isFailed && 'bg-destructive/[0.04]',
@@ -1509,6 +1506,12 @@ function ActionCard({
   return (
     <div className="group/tool relative">
       <ToolChainConnectors connectsTop={connectsTop} connectsBottom={connectsBottom} />
+      {hasDetails && open ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-[8px] top-[10px] bottom-0 w-px bg-border/25"
+        />
+      ) : null}
       <Collapsible open={open} onOpenChange={setOpen}>
         {hasDetails ? (
           <CollapsibleTrigger asChild>
@@ -1534,7 +1537,7 @@ function ActionCard({
               'data-[state=open]:duration-200 data-[state=closed]:duration-150',
             )}
           >
-            <div className="ml-[22px] border-l border-border/25 pl-3 pr-1 pb-1.5 pt-1">
+            <div className="ml-[22px] pl-3 pr-1 pb-1.5 pt-1">
               <ToolDetailRows rows={detailRows} />
             </div>
           </CollapsibleContent>
@@ -1600,9 +1603,9 @@ function ActionCardHeader({
  * connector in the middle of the gap.
  *
  * Positioning is hard-coded to match the row layout: outer wrapper has no
- * padding, the inner row uses `px-1` (4px) and a 16px status icon, putting
- * the icon center at x = 4 + 8 = 12px and y ≈ 10px (icon vertically centered
- * in a ~20px row with `items-center`).
+ * padding, the row has no horizontal padding, and the 16px status icon puts
+ * the icon center at x = 8px (and y ≈ 10px — icon vertically centered in a
+ * ~20px row with `items-center`).
  */
 function ToolChainConnectors({
   connectsTop,
@@ -1617,13 +1620,13 @@ function ToolChainConnectors({
       {connectsTop ? (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute left-[12px] -top-[10px] h-[20px] w-px bg-muted-foreground/35"
+          className="pointer-events-none absolute left-[8px] -top-[10px] h-[20px] w-px bg-muted-foreground/35"
         />
       ) : null}
       {connectsBottom ? (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute left-[12px] top-[10px] -bottom-[10px] w-px bg-muted-foreground/35"
+          className="pointer-events-none absolute left-[8px] top-[10px] -bottom-[10px] w-px bg-muted-foreground/35"
         />
       ) : null}
     </>
@@ -1990,12 +1993,18 @@ function ActionGroupCard({
       className="group/tool relative"
     >
       <ToolChainConnectors connectsTop={connectsTop} connectsBottom={connectsBottom} />
+      {open ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-[8px] top-[10px] bottom-0 w-px bg-border/60"
+        />
+      ) : null}
       <CollapsibleTrigger asChild>
         <button
           type="button"
           aria-label={`${open ? 'Hide' : 'Show'} grouped tool details for ${title}`}
           className={cn(
-            'flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left transition-colors',
+            'flex w-full items-center gap-2 rounded-md py-0.5 text-left transition-colors',
             'hover:bg-foreground/[0.03]',
             isRunning && 'bg-primary/[0.025] agent-tool-running-row',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
@@ -2036,7 +2045,7 @@ function ActionGroupCard({
           'data-[state=open]:duration-200 data-[state=closed]:duration-150',
         )}
       >
-        <ol className="ml-[12px] mt-0.5 flex flex-col gap-0.5 border-l border-border/60 pl-3">
+        <ol className="ml-[12px] mt-0.5 flex flex-col gap-0.5 pl-3">
           {actions.map((action, index) => (
             <ActionGroupItem key={action.id} action={action} index={index} />
           ))}
@@ -2056,7 +2065,7 @@ function ActionGroupItem({
   const [open, setOpen] = useState(false)
   const hasDetails = action.detailRows.length > 0
   const rowClass = cn(
-    'flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left transition-colors',
+    'flex w-full items-center gap-2 rounded-md py-0.5 text-left transition-colors',
     'hover:bg-foreground/[0.03]',
     action.state === 'running' && 'bg-primary/[0.025] agent-tool-running-row',
     action.state === 'failed' && 'bg-destructive/[0.04]',
@@ -2064,10 +2073,16 @@ function ActionGroupItem({
 
   return (
     <li
-      className="group/sub agent-stagger-child"
+      className="group/sub agent-stagger-child relative"
       style={{ ['--stagger-index' as string]: index }}
     >
       <Collapsible open={open} onOpenChange={setOpen}>
+        {hasDetails && open ? (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute left-[8px] top-[10px] bottom-0 w-px bg-border/25"
+          />
+        ) : null}
         {hasDetails ? (
           <CollapsibleTrigger asChild>
             <button
@@ -2092,7 +2107,7 @@ function ActionGroupItem({
               'data-[state=open]:duration-150 data-[state=closed]:duration-100',
             )}
           >
-            <div className="ml-[20px] border-l border-border/25 pb-1.5 pl-3 pr-1 pt-1">
+            <div className="ml-[20px] pb-1.5 pl-3 pr-1 pt-1">
               <ToolDetailRows rows={action.detailRows} />
             </div>
           </CollapsibleContent>
@@ -2307,43 +2322,40 @@ function AssistantMessage({
   })()
 
   return (
-    <div className="group/agent flex gap-2.5">
-      <AgentAvatar pulse={isStreaming} />
-      <div className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
-        <span className="sr-only">Agent</span>
-        <div className="flex w-full min-w-0 flex-col items-start gap-2">
-          {segments.map((segment, index) =>
-            segment.kind === 'thinking' ? (
-              <ThinkingBlock key={index} messageId={`${messageId}:thinking:${index}`} text={segment.text} />
-            ) : (
-              <ResponseBlock
-                key={index}
-                messageId={`${messageId}:response:${index}`}
-                text={segment.text}
-                isStreaming={isStreaming && index === lastResponseIndex}
-                showCaret={isStreaming && index === lastResponseIndex}
-              />
-            ),
-          )}
-        </div>
-        {responseCopyText.length > 0 ? (
-          <div
-            className={cn(
-              'flex h-4 items-center pl-0.5',
-              'opacity-0 transition-opacity duration-150',
-              'group-hover/agent:opacity-100 focus-within:opacity-100',
-            )}
-          >
-            <CopyTextButton
-              text={responseCopyText}
-              label="Copy agent response"
-              copiedLabel="Copied agent response"
-              tooltip="Copy"
-              className="h-4 w-4 text-muted-foreground/60 hover:text-foreground"
+    <div className="group/agent flex min-w-0 flex-col items-start gap-1.5">
+      <span className="sr-only">Agent</span>
+      <div className="flex w-full min-w-0 flex-col items-start gap-2">
+        {segments.map((segment, index) =>
+          segment.kind === 'thinking' ? (
+            <ThinkingBlock key={index} messageId={`${messageId}:thinking:${index}`} text={segment.text} />
+          ) : (
+            <ResponseBlock
+              key={index}
+              messageId={`${messageId}:response:${index}`}
+              text={segment.text}
+              isStreaming={isStreaming && index === lastResponseIndex}
+              showCaret={isStreaming && index === lastResponseIndex}
             />
-          </div>
-        ) : null}
+          ),
+        )}
       </div>
+      {responseCopyText.length > 0 ? (
+        <div
+          className={cn(
+            'flex h-4 items-center pl-0.5',
+            'opacity-0 transition-opacity duration-150',
+            'group-hover/agent:opacity-100 focus-within:opacity-100',
+          )}
+        >
+          <CopyTextButton
+            text={responseCopyText}
+            label="Copy agent response"
+            copiedLabel="Copied agent response"
+            tooltip="Copy"
+            className="h-4 w-4 text-muted-foreground/60 hover:text-foreground"
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -2383,63 +2395,15 @@ function StreamingCaret() {
 }
 
 function ThinkingBlock({ messageId, text }: { messageId?: string; text: string }) {
-  const [open, setOpen] = useState(false)
-  const normalizedText = text.trim()
-  const allLines = normalizedText.split(/\r?\n/).filter((line) => line.trim().length > 0)
-  const previewText = allLines.slice(-3).join('\n')
-  const hiddenLineCount = Math.max(0, allLines.length - 3)
-
   return (
-    <div
-      className={cn(
-        'relative w-full max-w-full min-w-0 rounded-lg border border-border/40 bg-muted/15 pl-3.5 pr-3 py-2',
-        'before:absolute before:inset-y-2 before:left-0 before:w-[2px] before:rounded-r-full before:bg-primary/35',
-      )}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        aria-expanded={open}
-        className={cn(
-          'flex w-full items-center gap-1.5 text-left text-[11.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/90',
-          'hover:text-foreground focus-visible:outline-none focus-visible:text-foreground',
-        )}
-      >
+    <div className="w-full max-w-full min-w-0">
+      <div className="flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/90">
         <Brain className="h-3.5 w-3.5 text-primary/70" />
         <span>Thoughts</span>
-        {!open && hiddenLineCount > 0 ? (
-          <span
-            key={hiddenLineCount}
-            className={cn(
-              'rounded-full bg-muted/70 px-1.5 py-px text-[10.5px] normal-case tracking-normal text-muted-foreground/85',
-              'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-90 motion-safe:duration-150',
-            )}
-          >
-            +{hiddenLineCount}
-          </span>
-        ) : null}
-        <ChevronDown
-          className={cn(
-            'ml-auto h-3.5 w-3.5 transition-transform duration-200 ease-out',
-            open ? 'rotate-180' : 'rotate-0',
-          )}
-        />
-      </button>
-      {open ? (
-        <div
-          key="open"
-          className={cn(
-            'mt-2 border-t border-border/25 pt-2',
-            'motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-1 motion-safe:duration-200',
-          )}
-        >
-          <Markdown messageId={messageId ? `${messageId}:open` : null} text={text} muted />
-        </div>
-      ) : previewText.length > 0 ? (
-        <div className="mt-1.5">
-          <Markdown messageId={messageId ? `${messageId}:preview` : null} text={previewText} muted compact />
-        </div>
-      ) : null}
+      </div>
+      <div className="mt-1.5">
+        <Markdown messageId={messageId ?? null} text={text} muted />
+      </div>
     </div>
   )
 }

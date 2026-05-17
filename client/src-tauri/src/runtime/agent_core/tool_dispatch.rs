@@ -1522,19 +1522,27 @@ fn persist_tool_dispatch_success(
         timeout_error,
         budget,
     );
-    append_event(
-        repo_root,
-        project_id,
-        run_id,
-        AgentRunEventKind::ToolCompleted,
-        json!({
+    let mut payload = json!({
             "toolCallId": success.tool_call_id.clone(),
             "toolName": success.tool_name.clone(),
             "ok": true,
             "summary": success.summary.clone(),
             "output": success.output.clone(),
             "dispatch": dispatch,
-        }),
+    });
+    if let Some(object) = payload.as_object_mut() {
+        insert_code_history_payload_from_telemetry(
+            object,
+            project_id,
+            &success.telemetry_attributes,
+        );
+    }
+    append_event(
+        repo_root,
+        project_id,
+        run_id,
+        AgentRunEventKind::ToolCompleted,
+        payload,
     )?;
     record_command_output_event_from_dispatch_success(
         repo_root,
@@ -1663,6 +1671,83 @@ fn dispatch_success_metadata_json(
         "postHook": success.post_hook_payload,
         "timeout": timeout_error.map(tool_execution_error_json),
     })
+}
+
+fn insert_code_history_payload_from_telemetry(
+    payload: &mut JsonMap<String, JsonValue>,
+    project_id: &str,
+    telemetry: &BTreeMap<String, String>,
+) {
+    let Some(change_group_id) = telemetry_text(telemetry, "xero.code_change_group_id") else {
+        return;
+    };
+    payload.insert("codeChangeGroupId".into(), json!(change_group_id));
+    if let Some(commit_id) = telemetry_text(telemetry, "xero.code_commit_id") {
+        payload.insert("codeCommitId".into(), json!(commit_id));
+    }
+    if let Some(workspace_epoch) = telemetry_u64(telemetry, "xero.code_workspace_epoch") {
+        payload.insert("codeWorkspaceEpoch".into(), json!(workspace_epoch));
+    }
+    if let Some(availability) =
+        code_patch_availability_payload_from_telemetry(project_id, change_group_id, telemetry)
+    {
+        payload.insert("codePatchAvailability".into(), availability);
+    }
+}
+
+fn code_patch_availability_payload_from_telemetry(
+    project_id: &str,
+    change_group_id: &str,
+    telemetry: &BTreeMap<String, String>,
+) -> Option<JsonValue> {
+    let available = telemetry_bool(telemetry, "xero.code_patch_available")?;
+    let affected_paths = telemetry_text(telemetry, "xero.code_patch_affected_paths")
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    let file_change_count = telemetry_u32(telemetry, "xero.code_patch_file_change_count")
+        .unwrap_or_else(|| affected_paths.len().try_into().unwrap_or(u32::MAX));
+    let text_hunk_count = telemetry_u32(telemetry, "xero.code_patch_text_hunk_count").unwrap_or(0);
+    let unavailable_reason =
+        telemetry_text(telemetry, "xero.code_patch_unavailable_reason").map(ToOwned::to_owned);
+
+    Some(json!({
+        "projectId": project_id,
+        "targetChangeGroupId": change_group_id,
+        "available": available,
+        "affectedPaths": affected_paths,
+        "fileChangeCount": file_change_count,
+        "textHunkCount": text_hunk_count,
+        "textHunks": [],
+        "unavailableReason": unavailable_reason,
+    }))
+}
+
+fn telemetry_text<'a>(telemetry: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    telemetry
+        .get(key)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn telemetry_bool(telemetry: &BTreeMap<String, String>, key: &str) -> Option<bool> {
+    match telemetry_text(telemetry, key)? {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+fn telemetry_u64(telemetry: &BTreeMap<String, String>, key: &str) -> Option<u64> {
+    telemetry_text(telemetry, key).and_then(|value| value.parse::<u64>().ok())
+}
+
+fn telemetry_u32(telemetry: &BTreeMap<String, String>, key: &str) -> Option<u32> {
+    telemetry_text(telemetry, key).and_then(|value| value.parse::<u32>().ok())
 }
 
 fn dispatch_failure_metadata_json(
@@ -2018,6 +2103,41 @@ mod tests {
     use crate::db::{
         configure_connection, migrations::migrations, register_project_database_path_for_tests,
     };
+
+    #[test]
+    fn tool_completed_payload_uses_canonical_code_history_fields() {
+        let mut payload = JsonMap::new();
+        let telemetry = BTreeMap::from([
+            ("xero.code_change_group_id".into(), "code-change-1".into()),
+            ("xero.code_commit_id".into(), "code-commit-1".into()),
+            ("xero.code_workspace_epoch".into(), "7".into()),
+            ("xero.code_patch_available".into(), "true".into()),
+            (
+                "xero.code_patch_affected_paths".into(),
+                r#"["src/app.ts"]"#.into(),
+            ),
+            ("xero.code_patch_file_change_count".into(), "1".into()),
+            ("xero.code_patch_text_hunk_count".into(), "2".into()),
+        ]);
+
+        insert_code_history_payload_from_telemetry(&mut payload, "project-1", &telemetry);
+
+        assert_eq!(
+            payload.get("codeChangeGroupId"),
+            Some(&json!("code-change-1"))
+        );
+        assert_eq!(payload.get("codeCommitId"), Some(&json!("code-commit-1")));
+        assert_eq!(payload.get("codeWorkspaceEpoch"), Some(&json!(7)));
+        let availability = payload
+            .get("codePatchAvailability")
+            .expect("code patch availability");
+        assert_eq!(availability["projectId"], json!("project-1"));
+        assert_eq!(availability["targetChangeGroupId"], json!("code-change-1"));
+        assert_eq!(availability["available"], json!(true));
+        assert_eq!(availability["affectedPaths"], json!(["src/app.ts"]));
+        assert_eq!(availability["fileChangeCount"], json!(1));
+        assert_eq!(availability["textHunkCount"], json!(2));
+    }
 
     fn create_project_database(repo_root: &Path, project_id: &str) {
         let database_path = repo_root

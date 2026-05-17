@@ -1,6 +1,4 @@
-//! Flat per-provider credential store. Replaces the legacy
-//! `provider_profiles` / `provider_profile_credentials` /
-//! `openai_codex_sessions` triplet with a single row per provider.
+//! Flat per-provider credential store with a single row per provider.
 
 pub mod readiness;
 pub mod sql;

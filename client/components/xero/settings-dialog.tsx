@@ -33,7 +33,6 @@ import type {
   McpRegistryDto,
   ProviderCredentialsSnapshotDto,
   ProviderAuthSessionView,
-  ProviderProfileDiagnosticsDto,
   RuntimeAgentIdDto,
   RuntimeProviderIdDto,
   RunDoctorReportRequestDto,
@@ -343,10 +342,6 @@ export interface SettingsDialogProps {
     providerId: RuntimeProviderIdDto
     originator?: string | null
   }) => Promise<ProviderAuthSessionView | null>
-  onCheckProviderProfile?: (
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ) => Promise<ProviderProfileDiagnosticsDto>
   doctorReport?: XeroDoctorReportDto | null
   doctorReportStatus?: DoctorReportRunStatus
   doctorReportError?: OperatorActionErrorView | null
@@ -469,7 +464,6 @@ export function SettingsDialog({
   onUpsertProviderCredential,
   onDeleteProviderCredential,
   onStartOAuthLogin,
-  onCheckProviderProfile,
   doctorReport = null,
   doctorReportStatus = "idle",
   doctorReportError = null,
@@ -673,7 +667,6 @@ export function SettingsDialog({
           onUpsertProviderCredential={onUpsertProviderCredential}
           onDeleteProviderCredential={onDeleteProviderCredential}
           onStartOAuthLogin={onStartOAuthLogin}
-          onCheckProviderProfile={onCheckProviderProfile}
         />
       )
     }

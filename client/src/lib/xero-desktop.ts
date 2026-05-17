@@ -381,11 +381,8 @@ import {
 } from '@/src/lib/xero-model/provider-models'
 import {
   xeroDoctorReportSchema,
-  checkProviderProfileRequestSchema,
-  providerProfileDiagnosticsSchema,
   runDoctorReportRequestSchema,
   type XeroDoctorReportDto,
-  type ProviderProfileDiagnosticsDto,
   type RunDoctorReportRequestDto,
 } from '@/src/lib/xero-model/diagnostics'
 import {
@@ -678,7 +675,6 @@ const COMMANDS = {
   getProviderModelCatalog: 'get_provider_model_catalog',
   preflightProviderProfile: 'preflight_provider_profile',
   runDoctorReport: 'run_doctor_report',
-  checkProviderProfile: 'check_provider_profile',
   listProviderCredentials: 'list_provider_credentials',
   upsertProviderCredential: 'upsert_provider_credential',
   deleteProviderCredential: 'delete_provider_credential',
@@ -1224,10 +1220,6 @@ export interface XeroDesktopAdapter {
     },
   ): Promise<ProviderPreflightSnapshotDto>
   runDoctorReport(request?: Partial<RunDoctorReportRequestDto>): Promise<XeroDoctorReportDto>
-  checkProviderProfile(
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ): Promise<ProviderProfileDiagnosticsDto>
   startOpenAiLogin(options?: StartOpenAiLoginOptions): Promise<ProviderAuthSessionDto>
   submitOpenAiCallback(
     flowId: string,
@@ -3108,18 +3100,6 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
       request: parsedRequest,
     })
   },
-
-  checkProviderProfile(profileId, options) {
-    const request = checkProviderProfileRequestSchema.parse({
-      profileId,
-      includeNetwork: options?.includeNetwork ?? false,
-      modelId: options?.modelId ?? null,
-    })
-    return invokeTyped(COMMANDS.checkProviderProfile, providerProfileDiagnosticsSchema, {
-      request,
-    })
-  },
-
 
   startOpenAiLogin(options = {}) {
     const request = startOpenAiLoginRequestSchema.parse({

@@ -373,7 +373,6 @@ pub fn configure_builder_with_state<R: tauri::Runtime + 'static>(
             commands::environment_user_tools::environment_verify_user_tool,
             commands::environment_user_tools::environment_save_user_tool,
             commands::environment_user_tools::environment_remove_user_tool,
-            commands::provider_diagnostics::check_provider_profile,
             commands::provider_credentials::list_provider_credentials,
             commands::provider_credentials::upsert_provider_credential,
             commands::provider_credentials::delete_provider_credential,

@@ -38,7 +38,6 @@ import {
   type ProjectUsageSummaryDto,
   type ProviderModelCatalogDto,
   type ProviderCredentialsSnapshotDto,
-  type ProviderProfileDiagnosticsDto,
   type RepositoryDiffScope,
   type RepositoryStatusView,
   type RuntimeRunView,
@@ -259,6 +258,133 @@ function getRuntimeRunProjectionKey(runtimeRun: RuntimeRunView | null | undefine
     selectedControls.queuedPrompt ?? '',
     selectedControls.queuedPromptAt ?? '',
   ].join('\u0000')
+}
+
+type CompletedAgentSessionNotificationRecords = Record<string, Record<string, string>>
+
+interface RuntimeSessionCompletionNotification {
+  projectId: string
+  agentSessionId: string
+  runId: string
+  completedAt: string
+}
+
+function countUnreadCompletedAgentSessions(
+  records: CompletedAgentSessionNotificationRecords,
+  projectId: string | null,
+): number {
+  if (!projectId) {
+    return 0
+  }
+
+  return Object.keys(records[projectId] ?? {}).length
+}
+
+function pruneCompletedAgentSessionNotifications(
+  records: CompletedAgentSessionNotificationRecords,
+  liveProjectIds: Set<string>,
+): CompletedAgentSessionNotificationRecords {
+  let changed = false
+  const nextRecords: CompletedAgentSessionNotificationRecords = {}
+
+  for (const [projectId, projectRecords] of Object.entries(records)) {
+    if (!liveProjectIds.has(projectId)) {
+      changed = true
+      continue
+    }
+
+    nextRecords[projectId] = projectRecords
+  }
+
+  return changed ? nextRecords : records
+}
+
+function pruneProjectCompletedAgentSessionNotifications(
+  records: CompletedAgentSessionNotificationRecords,
+  projectId: string,
+  liveAgentSessionIds: Set<string>,
+): CompletedAgentSessionNotificationRecords {
+  const projectRecords = records[projectId]
+  if (!projectRecords) {
+    return records
+  }
+
+  let changed = false
+  const nextProjectRecords: Record<string, string> = {}
+  for (const [agentSessionId, runId] of Object.entries(projectRecords)) {
+    if (!liveAgentSessionIds.has(agentSessionId)) {
+      changed = true
+      continue
+    }
+
+    nextProjectRecords[agentSessionId] = runId
+  }
+
+  if (!changed) {
+    return records
+  }
+
+  const nextRecords = { ...records }
+  if (Object.keys(nextProjectRecords).length === 0) {
+    delete nextRecords[projectId]
+  } else {
+    nextRecords[projectId] = nextProjectRecords
+  }
+  return nextRecords
+}
+
+function recordCompletedAgentSessionNotification(
+  records: CompletedAgentSessionNotificationRecords,
+  completion: RuntimeSessionCompletionNotification,
+): CompletedAgentSessionNotificationRecords {
+  const currentProjectRecords = records[completion.projectId] ?? {}
+  if (currentProjectRecords[completion.agentSessionId] === completion.runId) {
+    return records
+  }
+
+  return {
+    ...records,
+    [completion.projectId]: {
+      ...currentProjectRecords,
+      [completion.agentSessionId]: completion.runId,
+    },
+  }
+}
+
+function acknowledgeCompletedAgentSessionNotifications(
+  records: CompletedAgentSessionNotificationRecords,
+  projectId: string | null,
+  agentSessionIds: string[],
+): CompletedAgentSessionNotificationRecords {
+  if (!projectId || agentSessionIds.length === 0) {
+    return records
+  }
+
+  const projectRecords = records[projectId]
+  if (!projectRecords) {
+    return records
+  }
+
+  let changed = false
+  const nextProjectRecords = { ...projectRecords }
+  for (const agentSessionId of agentSessionIds) {
+    if (Object.prototype.hasOwnProperty.call(nextProjectRecords, agentSessionId)) {
+      delete nextProjectRecords[agentSessionId]
+      changed = true
+    }
+  }
+
+  if (!changed) {
+    return records
+  }
+
+  const nextRecords = { ...records }
+  if (Object.keys(nextProjectRecords).length === 0) {
+    delete nextRecords[projectId]
+  } else {
+    nextRecords[projectId] = nextProjectRecords
+  }
+  return nextRecords
 }
 
 function areRuntimeRunProjectionsEqual(
@@ -860,6 +986,8 @@ export function useXeroDesktopState(
     useState<Record<string, ProjectUsageSummaryDto>>({})
   const [usageSummaryLoadErrors, setUsageSummaryLoadErrors] =
     useState<Record<string, string | null>>({})
+  const [completedAgentSessionNotifications, setCompletedAgentSessionNotifications] =
+    useState<CompletedAgentSessionNotificationRecords>({})
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [refreshSource, setRefreshSource] = useState<RefreshSource>(null)
   const [runtimeStreamRetryToken, setRuntimeStreamRetryToken] = useState(0)
@@ -981,6 +1109,23 @@ export function useXeroDesktopState(
 
       projectDetailsRef.current[activeProject.id] = activeProject
     }
+  }, [activeProject])
+
+  useEffect(() => {
+    if (!activeProject) {
+      return
+    }
+
+    const liveAgentSessionIds = new Set(
+      activeProject.agentSessions.map((session) => session.agentSessionId),
+    )
+    setCompletedAgentSessionNotifications((currentNotifications) =>
+      pruneProjectCompletedAgentSessionNotifications(
+        currentNotifications,
+        activeProject.id,
+        liveAgentSessionIds,
+      ),
+    )
   }, [activeProject])
 
   useEffect(() => {
@@ -1119,6 +1264,9 @@ export function useXeroDesktopState(
     removeStaleSessionRecords(autonomousRunsBySessionRef.current)
     removeStaleSessionRecords(runtimeStreamsBySessionRef.current)
     removeStaleSessionRecords(agentSessionRuntimePrefetchInFlightRef.current)
+    setCompletedAgentSessionNotifications((currentNotifications) =>
+      pruneCompletedAgentSessionNotifications(currentNotifications, liveProjectIds),
+    )
     setAgentWorkspaceLayouts((currentLayouts) => {
       let changed = false
       const nextLayouts = { ...currentLayouts }
@@ -1311,6 +1459,39 @@ export function useXeroDesktopState(
 
         return nextStreams
       })
+    },
+    [],
+  )
+
+  const recordRuntimeSessionCompletion = useCallback(
+    (completion: RuntimeSessionCompletionNotification) => {
+      setCompletedAgentSessionNotifications((currentNotifications) =>
+        recordCompletedAgentSessionNotification(currentNotifications, completion),
+      )
+    },
+    [],
+  )
+
+  const acknowledgeCompletedAgentSessions = useCallback(
+    (agentSessionIds: string[]) => {
+      const normalizedSessionIds = Array.from(
+        new Set(
+          agentSessionIds
+            .map((agentSessionId) => agentSessionId.trim())
+            .filter((agentSessionId) => agentSessionId.length > 0),
+        ),
+      )
+      if (normalizedSessionIds.length === 0) {
+        return
+      }
+
+      setCompletedAgentSessionNotifications((currentNotifications) =>
+        acknowledgeCompletedAgentSessionNotifications(
+          currentNotifications,
+          activeProjectIdRef.current,
+          normalizedSessionIds,
+        ),
+      )
     },
     [],
   )
@@ -2268,38 +2449,6 @@ export function useXeroDesktopState(
         promise: loadPromise,
       }
       return loadPromise
-    },
-    [adapter],
-  )
-
-  const checkProviderProfile = useCallback(
-    async (
-      profileId: string,
-      options: { includeNetwork?: boolean; modelId?: string | null } = {},
-    ): Promise<ProviderProfileDiagnosticsDto> => {
-      const trimmedProfileId = profileId.trim()
-      const response = await adapter.checkProviderProfile(trimmedProfileId, {
-        includeNetwork: options.includeNetwork ?? true,
-        modelId: options.modelId ?? null,
-      })
-
-      const modelCatalog = response.modelCatalog
-      if (modelCatalog) {
-        setProviderModelCatalogs((currentCatalogs) => ({
-          ...currentCatalogs,
-          [response.profileId]: modelCatalog,
-        }))
-        setProviderModelCatalogLoadStatuses((currentStatuses) => ({
-          ...currentStatuses,
-          [response.profileId]: 'ready',
-        }))
-        setProviderModelCatalogLoadErrors((currentErrors) => ({
-          ...currentErrors,
-          [response.profileId]: null,
-        }))
-      }
-
-      return response
     },
     [adapter],
   )
@@ -3377,6 +3526,7 @@ export function useXeroDesktopState(
         runtimeActionRefreshKeysRef,
         updateRuntimeStream,
         scheduleRuntimeMetadataRefresh,
+        recordRuntimeSessionCompletion,
       }),
     )
     if (activeRuntimeSubscriptionTargets.length > 0) {
@@ -3392,6 +3542,7 @@ export function useXeroDesktopState(
     activeProjectId,
     activeRuntimeSubscriptionKey,
     adapter,
+    recordRuntimeSessionCompletion,
     scheduleRuntimeMetadataRefresh,
     updateRuntimeStream,
   ])
@@ -3448,6 +3599,10 @@ export function useXeroDesktopState(
     ? notificationSyncErrors[activeProject.id] ?? null
     : null
   const activeBlockedNotificationSyncPollTarget: BlockedNotificationSyncPollTarget | null = null
+  const activeProjectUnreadCompletedSessionCount = useMemo(
+    () => countUnreadCompletedAgentSessions(completedAgentSessionNotifications, activeProjectId),
+    [activeProjectId, completedAgentSessionNotifications],
+  )
 
   const workflowView = useMemo<WorkflowPaneView | null>(
     () =>
@@ -3819,6 +3974,7 @@ export function useXeroDesktopState(
     runtimeRunActionStatus,
     pendingRuntimeRunAction,
     runtimeRunActionError,
+    activeProjectUnreadCompletedSessionCount,
     selectProject,
     prefetchProject,
     importProject,
@@ -3849,7 +4005,6 @@ export function useXeroDesktopState(
     resolveOperatorAction,
     resumeOperatorRun,
     refreshProviderModelCatalog,
-    checkProviderProfile,
     runDoctorReport,
     refreshProviderCredentials,
     upsertProviderCredential,
@@ -3887,6 +4042,7 @@ export function useXeroDesktopState(
     reorderPanes,
     openSessionInNewPane,
     setSplitterRatios,
+    acknowledgeCompletedAgentSessions,
     usageSummaries,
     activeUsageSummary: activeProjectId ? (usageSummaries[activeProjectId] ?? null) : null,
     activeUsageSummaryLoadError: activeProjectId

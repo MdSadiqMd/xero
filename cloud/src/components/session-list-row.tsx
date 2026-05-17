@@ -46,8 +46,8 @@ export function SessionListRow({
 				"group relative flex w-full items-start gap-3 rounded-lg px-3 py-3 text-left transition-colors",
 				"focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
 				isActive
-					? "bg-accent/80 text-accent-foreground"
-					: "hover:bg-accent/40 active:bg-accent/60",
+					? "bg-accent text-accent-foreground"
+					: "hover:bg-accent/60 hover:text-accent-foreground active:bg-accent",
 			)}
 		>
 			<span
@@ -62,13 +62,13 @@ export function SessionListRow({
 					"mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md border transition-colors",
 					isActive
 						? "border-primary/30 bg-primary/10 text-primary"
-						: "border-border/70 bg-secondary/40 text-muted-foreground group-hover:text-foreground",
+						: "border-border bg-secondary text-muted-foreground group-hover:text-foreground",
 				)}
 			>
 				<Monitor className="h-4 w-4" />
 			</span>
 			<div className="flex flex-1 min-w-0 flex-col gap-0.5">
-				<p className="truncate text-[13.5px] font-medium leading-tight">
+				<p className="truncate text-[13px] font-medium leading-tight">
 					{summary.title || "Untitled session"}
 				</p>
 				<div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">

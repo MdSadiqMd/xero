@@ -1277,11 +1277,7 @@ pub fn run_transcript_from_agent_snapshot(
                 code_change_group_id: code_change_group_id.clone(),
                 code_commit_id: code_commit_id_from_payload(&payload),
                 code_workspace_epoch: code_workspace_epoch_from_payload(&payload),
-                code_patch_availability: code_patch_availability_from_payload(
-                    &payload,
-                    &event.project_id,
-                    code_change_group_id.as_deref(),
-                ),
+                code_patch_availability: code_patch_availability_from_payload(&payload),
                 checkpoint_kind: None,
                 action_id: payload_string(&payload, "actionId"),
                 redaction,
@@ -1885,9 +1881,7 @@ fn legacy_context_limit_resolution(budget_tokens: Option<u64>) -> SessionContext
             safety_reserve_tokens: 0,
             source: SessionContextLimitSourceDto::Heuristic,
             confidence: SessionContextLimitConfidenceDto::Low,
-            diagnostic: Some(
-                "Legacy budget value supplied without context-window metadata.".into(),
-            ),
+            diagnostic: Some("Budget value supplied without context-window metadata.".into()),
             fetched_at: None,
         },
         None => unknown_context_limit_resolution("legacy", "legacy"),
@@ -2577,142 +2571,27 @@ fn payload_string(payload: &JsonValue, key: &str) -> Option<String> {
 }
 
 fn code_commit_id_from_payload(payload: &JsonValue) -> Option<String> {
-    code_history_payload_string(payload, "codeCommitId", "xero.code_commit_id")
+    payload_string(payload, "codeCommitId")
 }
 
 fn code_change_group_id_from_payload(payload: &JsonValue) -> Option<String> {
-    code_history_payload_string(payload, "codeChangeGroupId", "xero.code_change_group_id")
+    payload_string(payload, "codeChangeGroupId")
 }
 
 fn code_workspace_epoch_from_payload(payload: &JsonValue) -> Option<u64> {
     payload
         .get("codeWorkspaceEpoch")
         .and_then(JsonValue::as_u64)
-        .or_else(|| {
-            code_history_payload_string(payload, "codeWorkspaceEpoch", "xero.code_workspace_epoch")
-                .and_then(|value| value.parse::<u64>().ok())
-        })
 }
 
-fn code_patch_availability_from_payload(
-    payload: &JsonValue,
-    project_id: &str,
-    change_group_id: Option<&str>,
-) -> Option<CodePatchAvailabilityDto> {
+fn code_patch_availability_from_payload(payload: &JsonValue) -> Option<CodePatchAvailabilityDto> {
     if let Some(value) = payload.get("codePatchAvailability") {
         if let Ok(availability) = serde_json::from_value::<CodePatchAvailabilityDto>(value.clone())
         {
             return Some(availability);
         }
     }
-
-    let available =
-        code_history_payload_bool(payload, "codePatchAvailable", "xero.code_patch_available")?;
-    let target_change_group_id = change_group_id?.to_string();
-    let affected_paths = code_patch_affected_paths_from_payload(payload);
-    let file_change_count = code_history_payload_u32(
-        payload,
-        "codePatchFileChangeCount",
-        "xero.code_patch_file_change_count",
-    )
-    .unwrap_or_else(|| affected_paths.len().try_into().unwrap_or(u32::MAX));
-    let text_hunk_count = code_history_payload_u32(
-        payload,
-        "codePatchTextHunkCount",
-        "xero.code_patch_text_hunk_count",
-    )
-    .unwrap_or(0);
-    let unavailable_reason = code_history_payload_string(
-        payload,
-        "codePatchUnavailableReason",
-        "xero.code_patch_unavailable_reason",
-    );
-
-    Some(CodePatchAvailabilityDto {
-        project_id: project_id.to_string(),
-        target_change_group_id,
-        available,
-        affected_paths,
-        file_change_count,
-        text_hunk_count,
-        text_hunks: Vec::new(),
-        unavailable_reason,
-    })
-}
-
-fn code_patch_affected_paths_from_payload(payload: &JsonValue) -> Vec<String> {
-    if let Some(paths) = payload
-        .get("codePatchAffectedPaths")
-        .and_then(JsonValue::as_array)
-    {
-        return paths
-            .iter()
-            .filter_map(JsonValue::as_str)
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-    }
-    code_history_payload_string(
-        payload,
-        "codePatchAffectedPaths",
-        "xero.code_patch_affected_paths",
-    )
-    .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
-    .unwrap_or_default()
-    .into_iter()
-    .map(|path| path.trim().to_string())
-    .filter(|path| !path.is_empty())
-    .collect()
-}
-
-fn code_history_payload_string(
-    payload: &JsonValue,
-    direct_key: &str,
-    telemetry_key: &str,
-) -> Option<String> {
-    payload_string(payload, direct_key).or_else(|| {
-        payload
-            .pointer(&format!("/dispatch/telemetry/{telemetry_key}"))
-            .and_then(JsonValue::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    })
-}
-
-fn code_history_payload_bool(
-    payload: &JsonValue,
-    direct_key: &str,
-    telemetry_key: &str,
-) -> Option<bool> {
-    payload
-        .get(direct_key)
-        .and_then(JsonValue::as_bool)
-        .or_else(|| {
-            code_history_payload_string(payload, direct_key, telemetry_key).and_then(|value| {
-                match value.as_str() {
-                    "true" => Some(true),
-                    "false" => Some(false),
-                    _ => None,
-                }
-            })
-        })
-}
-
-fn code_history_payload_u32(
-    payload: &JsonValue,
-    direct_key: &str,
-    telemetry_key: &str,
-) -> Option<u32> {
-    payload
-        .get(direct_key)
-        .and_then(JsonValue::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .or_else(|| {
-            code_history_payload_string(payload, direct_key, telemetry_key)
-                .and_then(|value| value.parse::<u32>().ok())
-        })
+    None
 }
 
 fn sanitize_context_text(value: &str) -> (String, SessionContextRedactionDto) {

@@ -25,7 +25,6 @@ import type {
   ProviderCredentialDto,
   ProviderCredentialsSnapshotDto,
   ProviderAuthSessionView,
-  ProviderProfileDiagnosticsDto,
   ReadProjectFileResponseDto,
   RenameProjectEntryRequestDto,
   RenameProjectEntryResponseDto,
@@ -492,6 +491,7 @@ export interface UseXeroDesktopStateResult {
   runtimeRunActionStatus: RuntimeRunActionStatus
   pendingRuntimeRunAction: RuntimeRunActionKind | null
   runtimeRunActionError: OperatorActionErrorView | null
+  activeProjectUnreadCompletedSessionCount: number
   selectProject: (projectId: string) => Promise<void>
   prefetchProject: (projectId: string) => void
   importProject: (path?: string) => Promise<boolean>
@@ -559,10 +559,6 @@ export interface UseXeroDesktopStateResult {
     profileId: string,
     options?: { force?: boolean },
   ) => Promise<ProviderModelCatalogDto>
-  checkProviderProfile: (
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ) => Promise<ProviderProfileDiagnosticsDto>
   runDoctorReport: (request?: Partial<RunDoctorReportRequestDto>) => Promise<XeroDoctorReportDto>
   refreshMcpRegistry: (options?: { force?: boolean }) => Promise<McpRegistryDto>
   upsertMcpServer: (request: UpsertMcpServerRequestDto) => Promise<McpRegistryDto>
@@ -603,6 +599,7 @@ export interface UseXeroDesktopStateResult {
     options?: { atIndex?: number },
   ) => 'opened' | 'focused' | 'rejected-max' | 'noop'
   setSplitterRatios: (arrangementKey: string, ratios: number[]) => void
+  acknowledgeCompletedAgentSessions: (agentSessionIds: string[]) => void
   usageSummaries: Record<string, ProjectUsageSummaryDto>
   activeUsageSummary: ProjectUsageSummaryDto | null
   activeUsageSummaryLoadError: string | null

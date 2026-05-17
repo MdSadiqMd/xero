@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import {
   ArrowLeft,
   Bot,
@@ -59,7 +59,9 @@ export function WorkflowCanvasEmptyState({
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogView, setDialogView] = useState<DialogView>('choice')
 
-  const templatesAvailable = Boolean(onCreateAgentFromTemplate)
+  const canStartBlank = Boolean(onCreateAgent)
+  const canPickTemplate = Boolean(onCreateAgentFromTemplate)
+  const canCreateAgent = canStartBlank || canPickTemplate
 
   const visibleTemplates = useMemo(
     () =>
@@ -76,21 +78,19 @@ export function WorkflowCanvasEmptyState({
   }
 
   function handleStartBlank() {
+    if (!onCreateAgent) return
     setDialogOpen(false)
-    onCreateAgent?.()
+    onCreateAgent()
   }
 
   function handlePickTemplate(ref: AgentRefDto) {
+    if (!onCreateAgentFromTemplate) return
     setDialogOpen(false)
-    onCreateAgentFromTemplate?.(ref)
+    onCreateAgentFromTemplate(ref)
   }
 
-  const createAgentHandler = templatesAvailable
-    ? openCreateAgentDialog
-    : onCreateAgent
-
   const actions: Action[] = [
-    { icon: Bot, label: 'Create agent', onSelect: createAgentHandler },
+    { icon: Bot, label: 'Create agent', onSelect: canCreateAgent ? openCreateAgentDialog : undefined },
     { icon: Plus, label: 'Create workflow', comingSoon: true },
     ...(onBrowseWorkflows
       ? [{ icon: Play, label: 'Run an existing workflow', comingSoon: true }]
@@ -167,12 +167,14 @@ export function WorkflowCanvasEmptyState({
         </ul>
       </div>
 
-      {templatesAvailable ? (
+      {canCreateAgent ? (
         <CreateAgentDialog
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           view={dialogView}
           onSetView={setDialogView}
+          canStartBlank={canStartBlank}
+          canPickTemplate={canPickTemplate}
           templates={visibleTemplates}
           templatesLoading={templatesLoading}
           templatesError={templatesError}
@@ -189,6 +191,8 @@ interface CreateAgentDialogProps {
   onOpenChange: (open: boolean) => void
   view: DialogView
   onSetView: (view: DialogView) => void
+  canStartBlank: boolean
+  canPickTemplate: boolean
   templates: WorkflowAgentSummaryDto[]
   templatesLoading: boolean
   templatesError: Error | null
@@ -201,6 +205,8 @@ function CreateAgentDialog({
   onOpenChange,
   view,
   onSetView,
+  canStartBlank,
+  canPickTemplate,
   templates,
   templatesLoading,
   templatesError,
@@ -240,13 +246,16 @@ function CreateAgentDialog({
                 title="New agent"
                 description="Open the canvas with an empty agent header."
                 onClick={onStartBlank}
+                disabled={!canStartBlank}
               />
-              <ChoiceCard
-                icon={<Copy className="h-4 w-4" />}
-                title="From template"
-                description="Copy a built-in or saved agent and tweak it."
-                onClick={() => onSetView('templates')}
-              />
+              {canPickTemplate ? (
+                <ChoiceCard
+                  icon={<Copy className="h-4 w-4" />}
+                  title="From template"
+                  description="Copy a built-in or saved agent and tweak it."
+                  onClick={() => onSetView('templates')}
+                />
+              ) : null}
             </div>
           ) : (
             <AgentTemplatePicker
@@ -305,21 +314,24 @@ function CreateAgentDialog({
 }
 
 interface ChoiceCardProps {
-  icon: React.ReactNode
+  icon: ReactNode
   title: string
   description: string
   onClick: () => void
+  disabled?: boolean
 }
 
-function ChoiceCard({ icon, title, description, onClick }: ChoiceCardProps) {
+function ChoiceCard({ icon, title, description, onClick, disabled = false }: ChoiceCardProps) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       className={cn(
         'group relative flex items-center gap-3 rounded-lg border border-border/60 bg-card/40 px-3.5 py-3 text-left transition-all',
-        'hover:border-primary/40 hover:bg-primary/[0.04]',
-        'focus-visible:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+        disabled
+          ? 'cursor-not-allowed opacity-50'
+          : 'hover:border-primary/40 hover:bg-primary/[0.04] focus-visible:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
       )}
     >
       <span
@@ -338,7 +350,7 @@ function ChoiceCard({ icon, title, description, onClick }: ChoiceCardProps) {
       <ChevronRight
         className={cn(
           'h-4 w-4 shrink-0 text-muted-foreground/50 transition-all',
-          'group-hover:translate-x-0.5 group-hover:text-primary',
+          !disabled && 'group-hover:translate-x-0.5 group-hover:text-primary',
         )}
       />
     </button>

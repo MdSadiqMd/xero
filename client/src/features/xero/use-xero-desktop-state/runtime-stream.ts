@@ -133,6 +133,7 @@ interface AttachRuntimeStreamSubscriptionArgs {
   runtimeActionRefreshKeysRef: MutableRefObject<Record<string, Set<string>>>
   updateRuntimeStream: UpdateRuntimeStream
   scheduleRuntimeMetadataRefresh: (projectId: string, source: RuntimeMetadataRefreshSource) => void
+  recordRuntimeSessionCompletion?: RuntimeStreamEventBufferArgs['onRuntimeSessionCompleted']
 }
 
 type ScheduledFlushCancel = () => void
@@ -149,6 +150,12 @@ interface RuntimeStreamEventBufferArgs {
   runtimeActionRefreshKeysRef: MutableRefObject<Record<string, Set<string>>>
   updateRuntimeStream: UpdateRuntimeStream
   scheduleRuntimeMetadataRefresh: (projectId: string, source: RuntimeMetadataRefreshSource) => void
+  onRuntimeSessionCompleted?: (completion: {
+    projectId: string
+    agentSessionId: string
+    runId: string
+    completedAt: string
+  }) => void
   scheduleFlush?: FlushScheduler
 }
 
@@ -173,6 +180,7 @@ export interface RuntimeRunUpdateBuffer {
 export interface RuntimeStreamEventBuffer {
   enqueue: (payload: RuntimeStreamChannelPayload) => void
   reportIssue: (issue: { code: string; message: string; retryable: boolean }) => void
+  enableCompletionNotifications: () => void
   flush: () => void
   dispose: () => void
 }
@@ -363,6 +371,39 @@ function scheduleRuntimeActionRefreshes(
   }
 }
 
+function notifyRuntimeStreamCompletions(
+  events: RuntimeStreamChannelPayload[],
+  onRuntimeSessionCompleted?: RuntimeStreamEventBufferArgs['onRuntimeSessionCompleted'],
+) {
+  if (!onRuntimeSessionCompleted) {
+    return
+  }
+
+  const notifiedRunIds = new Set<string>()
+  for (const event of events) {
+    const item = getRuntimeStreamPayloadItem(event)
+    if (item.kind !== 'complete') {
+      continue
+    }
+
+    const projectId = isRuntimeStreamPatch(event) ? event.snapshot.projectId : event.projectId
+    const agentSessionId = isRuntimeStreamPatch(event) ? event.snapshot.agentSessionId : event.agentSessionId
+    const runId = item.runId?.trim()
+    const completedAt = item.createdAt?.trim()
+    if (!projectId || !agentSessionId || !runId || !completedAt || notifiedRunIds.has(runId)) {
+      continue
+    }
+
+    notifiedRunIds.add(runId)
+    onRuntimeSessionCompleted({
+      projectId,
+      agentSessionId,
+      runId,
+      completedAt,
+    })
+  }
+}
+
 export function createRuntimeRunUpdateBuffer({
   activeProjectIdRef,
   applyRuntimeRunUpdate,
@@ -451,11 +492,13 @@ export function createRuntimeStreamEventBuffer({
   runtimeActionRefreshKeysRef,
   updateRuntimeStream,
   scheduleRuntimeMetadataRefresh,
+  onRuntimeSessionCompleted,
   scheduleFlush = scheduleRuntimeStreamFlush,
 }: RuntimeStreamEventBufferArgs): RuntimeStreamEventBuffer {
   const pendingEvents: RuntimeStreamChannelPayload[] = []
   let cancelScheduledFlush: ScheduledFlushCancel | null = null
   let disposed = false
+  let completionNotificationsEnabled = false
 
   const cancelFlush = () => {
     if (!cancelScheduledFlush) {
@@ -479,6 +522,9 @@ export function createRuntimeStreamEventBuffer({
 
     const events = pendingEvents.splice(0, pendingEvents.length)
     updateRuntimeStream(projectId, agentSessionId, (currentStream) => mergeRuntimeStreamEvents(currentStream, events))
+    if (completionNotificationsEnabled) {
+      notifyRuntimeStreamCompletions(events, onRuntimeSessionCompleted)
+    }
     scheduleRuntimeActionRefreshes(
       projectId,
       events,
@@ -543,6 +589,9 @@ export function createRuntimeStreamEventBuffer({
       schedule()
     },
     reportIssue,
+    enableCompletionNotifications: () => {
+      completionNotificationsEnabled = true
+    },
     flush,
     dispose: () => {
       disposed = true
@@ -883,6 +932,7 @@ export function attachRuntimeStreamSubscription({
   runtimeActionRefreshKeysRef,
   updateRuntimeStream,
   scheduleRuntimeMetadataRefresh,
+  recordRuntimeSessionCompletion,
 }: AttachRuntimeStreamSubscriptionArgs): () => void {
   if (!projectId || !agentSessionId) {
     return () => undefined
@@ -971,6 +1021,7 @@ export function attachRuntimeStreamSubscription({
     runtimeActionRefreshKeysRef,
     updateRuntimeStream,
     scheduleRuntimeMetadataRefresh,
+    onRuntimeSessionCompleted: recordRuntimeSessionCompletion,
   })
 
   void adapter
@@ -1010,6 +1061,7 @@ export function attachRuntimeStreamSubscription({
         return
       }
 
+      streamEventBuffer.enableCompletionNotifications()
       unsubscribe = subscription.unsubscribe
       updateRuntimeStream(projectId, agentSessionId, (currentStream) => {
         if (

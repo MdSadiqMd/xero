@@ -1307,7 +1307,7 @@ export function createContextBudget(estimatedTokens: number, budgetTokens?: numb
     knownProviderBudget: true,
     limitSource: 'heuristic',
     limitConfidence: 'low',
-    limitDiagnostic: 'Legacy budget value supplied without context-window metadata.',
+    limitDiagnostic: 'Budget value supplied without context-window metadata.',
     limitFetchedAt: null,
   }
 }

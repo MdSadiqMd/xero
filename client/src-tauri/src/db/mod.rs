@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     commands::{CommandError, ProjectOriginDto, ProjectSummaryDto, RepositorySummaryDto},
-    db::migrations::migrations,
+    db::migrations::{migrations, PROJECT_DATABASE_SCHEMA_VERSION},
     git::repository::CanonicalRepository,
     state::ImportFailpoints,
 };
@@ -167,23 +167,40 @@ pub fn import_project_with_origin(
             ));
         }
 
-        let connection = match migrations().to_latest(&mut connection) {
-            Ok(()) => connection,
-            Err(error) if database_existed && is_database_too_far_ahead(&error) => {
-                let observed_user_version = read_user_version(&connection);
-                let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-                drop(connection);
+        let observed_user_version = read_user_version(&connection);
+        let connection = if database_existed
+            && observed_user_version != PROJECT_DATABASE_SCHEMA_VERSION
+        {
+            let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+            drop(connection);
 
-                quarantine_incompatible_database(&database_path, observed_user_version)?;
+            quarantine_incompatible_database(&database_path, observed_user_version)?;
 
-                let mut reset_connection = open_database_connection(&database_path)?;
-                configure_connection(&reset_connection)?;
-                migrations()
-                    .to_latest(&mut reset_connection)
-                    .map_err(|error| state_database_migration_error(&database_path, error))?;
-                reset_connection
+            let mut reset_connection = open_database_connection(&database_path)?;
+            configure_connection(&reset_connection)?;
+            migrations()
+                .to_latest(&mut reset_connection)
+                .map_err(|error| state_database_migration_error(&database_path, error))?;
+            reset_connection
+        } else {
+            match migrations().to_latest(&mut connection) {
+                Ok(()) => connection,
+                Err(error) if database_existed && is_database_too_far_ahead(&error) => {
+                    let observed_user_version = read_user_version(&connection);
+                    let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                    drop(connection);
+
+                    quarantine_incompatible_database(&database_path, observed_user_version)?;
+
+                    let mut reset_connection = open_database_connection(&database_path)?;
+                    configure_connection(&reset_connection)?;
+                    migrations()
+                        .to_latest(&mut reset_connection)
+                        .map_err(|error| state_database_migration_error(&database_path, error))?;
+                    reset_connection
+                }
+                Err(error) => return Err(state_database_migration_error(&database_path, error)),
             }
-            Err(error) => return Err(state_database_migration_error(&database_path, error)),
         };
 
         persist_import_rows(&connection, repository, project_origin)?;
@@ -280,7 +297,7 @@ pub(crate) fn is_database_too_far_ahead(error: &MigrationError) -> bool {
     )
 }
 
-fn read_user_version(connection: &Connection) -> i64 {
+pub(crate) fn read_user_version(connection: &Connection) -> i64 {
     connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap_or(0)

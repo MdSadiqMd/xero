@@ -1008,6 +1008,59 @@ function makeRuntimeRun(projectId = 'project-1', overrides: Partial<RuntimeRunDt
   return runtimeRun
 }
 
+function makeRuntimeCompletionEvent(
+  projectId = 'project-1',
+  overrides: Omit<Partial<RuntimeStreamEventDto>, 'item'> & {
+    item?: Partial<RuntimeStreamEventDto['item']>
+  } = {},
+): RuntimeStreamEventDto {
+  const runId = overrides.runId ?? overrides.item?.runId ?? 'run-1'
+  const sessionId = overrides.sessionId ?? overrides.item?.sessionId ?? 'session-1'
+  const flowId = overrides.flowId ?? overrides.item?.flowId ?? null
+
+  return {
+    projectId,
+    agentSessionId: overrides.agentSessionId ?? 'agent-session-main',
+    runtimeKind: overrides.runtimeKind ?? 'openai_codex',
+    runId,
+    sessionId,
+    flowId,
+    subscribedItemKinds:
+      overrides.subscribedItemKinds ??
+      ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+    item: {
+      kind: 'complete',
+      runId,
+      sequence: overrides.item?.sequence ?? 10,
+      sessionId,
+      flowId,
+      text: null,
+      transcriptRole: null,
+      toolCallId: null,
+      toolName: null,
+      toolState: null,
+      toolSummary: null,
+      toolResultPreview: null,
+      skillId: null,
+      skillStage: null,
+      skillResult: null,
+      skillSource: null,
+      skillCacheStatus: null,
+      skillDiagnostic: null,
+      actionId: null,
+      boundaryId: null,
+      actionType: null,
+      title: null,
+      detail: 'Agent response complete.',
+      code: null,
+      message: null,
+      retryable: null,
+      createdAt: '2026-04-16T13:30:10Z',
+      ...overrides.item,
+    },
+  }
+}
+
 function makeAutonomousRunState(projectId = 'project-1', runId = 'auto-run-1'): AutonomousRunStateDto {
   return {
     run: {
@@ -2155,24 +2208,6 @@ function createAdapter(options?: {
         requiredFeatures: options?.requiredFeatures,
       })
     },
-    checkProviderProfile: async (profileId) => {
-      const currentProfile = currentProviderProfiles.profiles.find((profile) => profile.profileId === profileId)
-      if (!currentProfile) {
-        throw new Error(`Missing provider profile ${profileId}`)
-      }
-
-      const modelCatalog = currentProviderModelCatalogs[profileId] ?? buildProviderModelCatalog(currentProfile)
-      currentProviderModelCatalogs[profileId] = modelCatalog
-      return {
-        checkedAt: '2026-04-26T12:00:00Z',
-        profileId,
-        providerId: currentProfile.providerId,
-        validationChecks: [],
-        reachabilityChecks: [],
-        capabilityChecks: [],
-        modelCatalog,
-      }
-    },
     runDoctorReport: async (request) =>
       createXeroDoctorReport({
         reportId: 'doctor-test',
@@ -2989,11 +3024,31 @@ describe('XeroApp current UI', () => {
     // The "Create agent" affordance now opens a dialog so the user can pick
     // between starting blank and copying a template. The blank path should
     // land on the authoring canvas.
+    expect(await screen.findByRole('heading', { name: 'Create agent' })).toBeVisible()
     fireEvent.click(await screen.findByRole('button', { name: /New agent/ }))
 
     expect(await screen.findByLabelText('Agent authoring canvas')).toBeVisible()
     const dock = await screen.findByLabelText('Agent dock')
     await waitFor(() => expect(dock).toHaveAttribute('aria-hidden', 'false'))
+  })
+
+  it('opens the add-project dialog from the project rail', async () => {
+    const { adapter } = createAdapter()
+
+    render(<XeroApp adapter={adapter} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Loading desktop project state' })).not.toBeInTheDocument(),
+    )
+
+    const projectRail = screen.getByRole('complementary', { name: 'Projects' })
+    fireEvent.click(within(projectRail).getByRole('button', { name: 'Import repository' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Add a project' })
+
+    expect(within(dialog).getByRole('heading', { name: 'Add a project' })).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: /Open existing/ })).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: /Create new/ })).toBeVisible()
   })
 
   it('defaults the agent dock composer to Agent Create when opened from Workflow', async () => {
@@ -3390,6 +3445,31 @@ describe('XeroApp current UI', () => {
       expect(within(statusBar).getByText('1.05M tok')).toBeVisible()
       expect(within(statusBar).getByText('$1.50')).toBeVisible()
     })
+  })
+
+  it('shows completed session notifications in the footer until the session is viewed', async () => {
+    const { adapter, emitRuntimeStream, streamSubscriptions } = createAdapter({
+      runtimeRun: makeRuntimeRun('project-1', { runId: 'run-1' }),
+    })
+
+    render(<XeroApp adapter={adapter} />)
+
+    expect(await screen.findByRole('button', { name: 'Workflow' })).toBeVisible()
+    await waitFor(() => expect(streamSubscriptions).toHaveLength(1))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByLabelText('0 unread notifications')).toBeVisible()
+
+    act(() => {
+      emitRuntimeStream(0, makeRuntimeCompletionEvent('project-1'))
+    })
+
+    await waitFor(() => expect(screen.getByLabelText('1 unread notifications')).toBeVisible())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
+    expect(await screen.findByLabelText('Agent conversation viewport')).toBeVisible()
+    await waitFor(() => expect(screen.getByLabelText('0 unread notifications')).toBeVisible())
   })
 
   it('opens the project usage sidebar from the footer spend button on the first click', async () => {

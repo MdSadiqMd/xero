@@ -2338,12 +2338,8 @@ fn read_checkpoint_boundary_source(
         source_id: checkpoint_id.to_string(),
         run_id,
         created_at,
-        change_group_id: boundary_payload_string(
-            &payload,
-            "codeChangeGroupId",
-            "xero.code_change_group_id",
-        ),
-        commit_id: boundary_payload_string(&payload, "codeCommitId", "xero.code_commit_id"),
+        change_group_id: boundary_payload_string(&payload, "codeChangeGroupId"),
+        commit_id: boundary_payload_string(&payload, "codeCommitId"),
     })
 }
 
@@ -2376,17 +2372,13 @@ fn read_event_boundary_source(
         event_id,
         database_path,
     )?
-    .or_else(|| boundary_payload_string(&payload, "codeCommitId", "xero.code_commit_id"));
+    .or_else(|| boundary_payload_string(&payload, "codeCommitId"));
     Ok(CodeSessionBoundarySource {
         source_kind: CodeSessionBoundarySourceKind::Event,
         source_id: event_id.to_string(),
         run_id,
         created_at,
-        change_group_id: boundary_payload_string(
-            &payload,
-            "codeChangeGroupId",
-            "xero.code_change_group_id",
-        ),
+        change_group_id: boundary_payload_string(&payload, "codeChangeGroupId"),
         commit_id,
     })
 }
@@ -3098,14 +3090,10 @@ fn parse_boundary_payload(payload_json: &str, source_id: i64) -> CommandResult<O
         })
 }
 
-fn boundary_payload_string(
-    payload: &Option<JsonValue>,
-    primary_key: &str,
-    legacy_key: &str,
-) -> Option<String> {
+fn boundary_payload_string(payload: &Option<JsonValue>, key: &str) -> Option<String> {
     payload
         .as_ref()
-        .and_then(|payload| payload.get(primary_key).or_else(|| payload.get(legacy_key)))
+        .and_then(|payload| payload.get(key))
         .and_then(JsonValue::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())

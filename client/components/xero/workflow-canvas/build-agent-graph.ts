@@ -297,12 +297,8 @@ export function toolGroupFrameNodeId(groupKey: string): string {
   return `tool-group-frame:${groupKey}`
 }
 
-// DOM-level id prefix for stage nodes is intentionally kept as
-// `workflow-phase:` to preserve compatibility with any in-flight or persisted
-// canvas state authored before the rename. The decoder below detects the
-// same prefix.
 export function stageNodeId(phaseId: string): string {
-  return `workflow-phase:${phaseId}`
+  return `stage:${phaseId}`
 }
 
 // There is exactly one stage frame per agent (stages always live as a single
@@ -1615,8 +1611,8 @@ export function decodeAgentGraphNodeId(
   if (id.startsWith('consumed:')) {
     return { kind: 'consumed-artifact', artifactId: id.slice('consumed:'.length) }
   }
-  if (id.startsWith('workflow-phase:')) {
-    return { kind: 'stage', phaseId: id.slice('workflow-phase:'.length) }
+  if (id.startsWith('stage:')) {
+    return { kind: 'stage', phaseId: id.slice('stage:'.length) }
   }
   if (id.startsWith('tool-group-frame:')) {
     return { kind: 'tool-group-frame', groupKey: id.slice('tool-group-frame:'.length) }

@@ -7,7 +7,6 @@ import type {
 import type {
   ProviderCredentialsSnapshotDto,
   ProviderAuthSessionView,
-  ProviderProfileDiagnosticsDto,
   RuntimeProviderIdDto,
   UpsertProviderCredentialRequestDto,
 } from "@/src/lib/xero-model"
@@ -35,10 +34,6 @@ export interface ProvidersSectionProps {
     providerId: RuntimeProviderIdDto
     originator?: string | null
   }) => Promise<ProviderAuthSessionView | null>
-  onCheckProviderProfile?: (
-    profileId: string,
-    options?: { includeNetwork?: boolean; modelId?: string | null },
-  ) => Promise<ProviderProfileDiagnosticsDto>
 }
 
 export function ProvidersSection({
@@ -53,7 +48,6 @@ export function ProvidersSection({
   onUpsertProviderCredential,
   onDeleteProviderCredential,
   onStartOAuthLogin,
-  onCheckProviderProfile,
 }: ProvidersSectionProps) {
   return (
     <div className="flex flex-col gap-6">
@@ -73,7 +67,6 @@ export function ProvidersSection({
         onUpsertProviderCredential={onUpsertProviderCredential}
         onDeleteProviderCredential={onDeleteProviderCredential}
         onStartOAuthLogin={onStartOAuthLogin}
-        onCheckProviderProfile={onCheckProviderProfile}
       />
     </div>
   )

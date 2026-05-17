@@ -954,6 +954,11 @@ describe('AgentVisualization', () => {
     fireEvent.pointerDown(createAgent)
     fireEvent.click(createAgent)
 
+    expect(getByRole('heading', { name: 'Create agent' })).toBeVisible()
+    expect(onCreateAgent).not.toHaveBeenCalled()
+
+    fireEvent.click(getByRole('button', { name: /New agent/ }))
+
     expect(onCreateAgent).toHaveBeenCalledTimes(1)
   })
 

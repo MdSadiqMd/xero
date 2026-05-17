@@ -1,7 +1,8 @@
-import { AppLogo } from "@xero/ui/components/app-logo";
 import { Button } from "@xero/ui/components/ui/button";
 import { Menu, Plus } from "lucide-react";
 import type { ReactNode } from "react";
+
+import { BrandLogo } from "#/components/brand-logo";
 
 interface SessionTopBarProps {
 	title: string;
@@ -15,11 +16,11 @@ export function SessionTopBar({
 	drawerTrigger,
 }: SessionTopBarProps) {
 	return (
-		<header className="sticky top-0 z-20 flex items-center justify-between gap-3 bg-background px-5 py-4">
-			<div className="flex min-w-0 items-center gap-2.5">
-				<AppLogo className="size-6 shrink-0" aria-label="Xero" />
+		<header className="sticky top-0 z-20 flex items-center justify-between gap-3 bg-background px-4 py-3">
+			<div className="flex min-w-0 items-center gap-2">
+				<BrandLogo className="size-5 shrink-0" aria-label="Xero" />
 				<span
-					className="truncate text-base font-medium text-foreground/90"
+					className="truncate text-sm font-medium text-foreground"
 					title={title}
 				>
 					{title}
@@ -33,9 +34,9 @@ export function SessionTopBar({
 						size="icon"
 						aria-label="Start new session"
 						onClick={onNewSession}
-						className="size-10 text-muted-foreground hover:text-foreground [&_svg]:size-[22px]"
+						className="text-muted-foreground hover:text-foreground"
 					>
-						<Plus />
+						<Plus className="h-4 w-4" />
 					</Button>
 				) : null}
 				{drawerTrigger ?? (
@@ -44,9 +45,9 @@ export function SessionTopBar({
 						variant="ghost"
 						size="icon"
 						aria-label="Open sessions list"
-						className="size-10 text-muted-foreground hover:text-foreground [&_svg]:size-[22px]"
+						className="text-muted-foreground hover:text-foreground"
 					>
-						<Menu />
+						<Menu className="h-4 w-4" />
 					</Button>
 				)}
 			</div>

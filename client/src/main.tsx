@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ShortcutsProvider } from './features/shortcuts/shortcuts-provider'
 import { ThemeProvider } from './features/theme/theme-provider'
-import '@xero/ui/styles.css'
+import './styles.css'
 
 const container = document.getElementById('root')
 

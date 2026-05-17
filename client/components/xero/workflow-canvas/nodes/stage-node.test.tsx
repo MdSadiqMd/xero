@@ -10,7 +10,7 @@ function stageNode(
   flags: Partial<Pick<StageFlowNode['data'], 'isStart'>> = {},
 ): StageFlowNode {
   return {
-    id: 'workflow-phase:gather',
+    id: 'stage:gather',
     type: 'stage',
     position: { x: 0, y: 0 },
     data: {
@@ -65,7 +65,7 @@ describe('StageNode', () => {
     rerender(
       <ReactFlowProvider>
         <StageNode
-          id="workflow-phase:gather"
+          id="stage:gather"
           type="stage"
           data={stageNode({}, { isStart: true }).data}
           positionAbsoluteX={0}

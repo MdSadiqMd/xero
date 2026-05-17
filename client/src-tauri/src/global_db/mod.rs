@@ -67,31 +67,54 @@ pub fn open_global_database(database_path: &Path) -> Result<Connection, CommandE
         return Ok(connection);
     }
 
-    match migrations::migrations().to_latest(&mut connection) {
-        Ok(()) => {}
-        Err(error) if database_existed && is_database_too_far_ahead(&error) => {
-            let observed_user_version = read_user_version(&connection);
-            let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
-            drop(connection);
+    let observed_user_version = read_user_version(&connection);
+    if database_existed && observed_user_version != migrations::GLOBAL_DATABASE_SCHEMA_VERSION {
+        let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        drop(connection);
 
-            quarantine_incompatible_database(database_path, observed_user_version)?;
+        quarantine_incompatible_database(database_path, observed_user_version)?;
 
-            let mut reset_connection = Connection::open(database_path).map_err(|error| {
-                CommandError::retryable(
-                    "global_database_open_failed",
-                    format!(
-                        "Xero could not recreate the global database at {}: {error}",
-                        database_path.display()
-                    ),
-                )
-            })?;
-            configure_connection(&reset_connection)?;
-            migrations::migrations()
-                .to_latest(&mut reset_connection)
-                .map_err(|error| global_database_migration_error(database_path, error))?;
-            connection = reset_connection;
+        let mut reset_connection = Connection::open(database_path).map_err(|error| {
+            CommandError::retryable(
+                "global_database_open_failed",
+                format!(
+                    "Xero could not recreate the global database at {}: {error}",
+                    database_path.display()
+                ),
+            )
+        })?;
+        configure_connection(&reset_connection)?;
+        migrations::migrations()
+            .to_latest(&mut reset_connection)
+            .map_err(|error| global_database_migration_error(database_path, error))?;
+        connection = reset_connection;
+    } else {
+        match migrations::migrations().to_latest(&mut connection) {
+            Ok(()) => {}
+            Err(error) if database_existed && is_database_too_far_ahead(&error) => {
+                let observed_user_version = read_user_version(&connection);
+                let _ = connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+                drop(connection);
+
+                quarantine_incompatible_database(database_path, observed_user_version)?;
+
+                let mut reset_connection = Connection::open(database_path).map_err(|error| {
+                    CommandError::retryable(
+                        "global_database_open_failed",
+                        format!(
+                            "Xero could not recreate the global database at {}: {error}",
+                            database_path.display()
+                        ),
+                    )
+                })?;
+                configure_connection(&reset_connection)?;
+                migrations::migrations()
+                    .to_latest(&mut reset_connection)
+                    .map_err(|error| global_database_migration_error(database_path, error))?;
+                connection = reset_connection;
+            }
+            Err(error) => return Err(global_database_migration_error(database_path, error)),
         }
-        Err(error) => return Err(global_database_migration_error(database_path, error)),
     }
 
     migrated_databases.insert(migration_key);

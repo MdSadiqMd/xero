@@ -118,7 +118,6 @@ export const IPC_PAYLOAD_BUDGETS = {
 const COMMAND_BUDGET_KEYS: Record<string, IpcPayloadBudgetKey | undefined> = {
   browser_control_settings: 'settingsRegistry',
   browser_tab_list: 'browserTabEvent',
-  check_provider_profile: 'notificationDiagnosticsPage',
   get_environment_discovery_status: 'notificationDiagnosticsPage',
   get_environment_profile_summary: 'notificationDiagnosticsPage',
   get_provider_model_catalog: 'providerRegistry',

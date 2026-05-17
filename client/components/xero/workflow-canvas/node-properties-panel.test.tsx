@@ -332,7 +332,7 @@ function renderStageEditor(options: RenderStageEditorOptions = {}) {
   const buildNode = (): AgentGraphNode => {
     const phase = phaseStates.get(selectedId)!
     return {
-      id: `workflow-phase:${phase.id}`,
+      id: `stage:${phase.id}`,
       type: 'stage',
       position: { x: 0, y: 0 },
       data: { phase, isStart: phase.id === startPhaseId } as StageNodeData,

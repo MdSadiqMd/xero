@@ -1512,7 +1512,7 @@ fn workflow_agent_graph_projection_for_detail(
 }
 
 fn stage_node_id(phase_id: &str) -> String {
-    format!("workflow-phase:{phase_id}")
+    format!("stage:{phase_id}")
 }
 
 const STAGE_GROUP_FRAME_NODE_ID: &str = "stage-group-frame:stages";
@@ -4014,29 +4014,29 @@ mod tests {
             .collect();
         assert_eq!(
             stage_ids,
-            vec!["workflow-phase:survey", "workflow-phase:plan"],
+            vec!["stage:survey", "stage:plan"],
             "every workflow phase should appear as a stage node in the projection",
         );
 
         let survey_node = projection
             .nodes
             .iter()
-            .find(|node| node.id == "workflow-phase:survey")
+            .find(|node| node.id == "stage:survey")
             .expect("survey node");
         assert_eq!(survey_node.data.get("isStart"), Some(&json!(true)));
 
         let plan_node = projection
             .nodes
             .iter()
-            .find(|node| node.id == "workflow-phase:plan")
+            .find(|node| node.id == "stage:plan")
             .expect("plan node");
         assert_eq!(plan_node.data.get("isStart"), Some(&json!(false)));
 
         assert!(
             projection.edges.iter().any(|edge| {
                 edge.edge_type == "phase-branch"
-                    && edge.source == "workflow-phase:survey"
-                    && edge.target == "workflow-phase:plan"
+                    && edge.source == "stage:survey"
+                    && edge.target == "stage:plan"
             }),
             "phase-branch edges should connect declared branches",
         );
@@ -4066,7 +4066,7 @@ mod tests {
             .collect();
         assert_eq!(
             parented_stage_ids,
-            vec!["workflow-phase:survey", "workflow-phase:plan"],
+            vec!["stage:survey", "stage:plan"],
             "every stage node should be parented under the stage frame",
         );
     }
@@ -4152,9 +4152,9 @@ mod tests {
         assert_eq!(
             phase_branch_edges,
             vec![
-                ("workflow-phase:survey", "workflow-phase:plan"),
-                ("workflow-phase:plan", "workflow-phase:implement"),
-                ("workflow-phase:implement", "workflow-phase:verify"),
+                ("stage:survey", "stage:plan"),
+                ("stage:plan", "stage:implement"),
+                ("stage:implement", "stage:verify"),
             ],
             "phases without explicit branches should fall through to the next sequential phase",
         );

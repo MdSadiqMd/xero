@@ -590,8 +590,8 @@ describe('buildSnapshotFromGraph', () => {
       ...graph.edges,
       {
         id: 'e:phase-branch:gather->draft:0',
-        source: 'workflow-phase:gather',
-        target: 'workflow-phase:draft',
+        source: 'stage:gather',
+        target: 'stage:draft',
         type: 'phase-branch' as const,
         data: {
           category: 'phase-branch',

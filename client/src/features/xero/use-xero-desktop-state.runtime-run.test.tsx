@@ -492,6 +492,60 @@ function makeStreamResponse(
   }
 }
 
+function makeRuntimeStreamEvent(
+  projectId: string,
+  overrides: Omit<Partial<RuntimeStreamEventDto>, 'item'> & {
+    item?: Partial<RuntimeStreamEventDto['item']>
+  } = {},
+): RuntimeStreamEventDto {
+  const runId = overrides.runId ?? overrides.item?.runId ?? `run-${projectId}`
+  const sessionId = overrides.sessionId ?? overrides.item?.sessionId ?? 'session-1'
+  const flowId = overrides.flowId ?? overrides.item?.flowId ?? 'flow-1'
+  const kind = overrides.item?.kind ?? 'transcript'
+
+  return {
+    projectId,
+    agentSessionId: overrides.agentSessionId ?? 'agent-session-main',
+    runtimeKind: overrides.runtimeKind ?? 'openai_codex',
+    runId,
+    sessionId,
+    flowId,
+    subscribedItemKinds:
+      overrides.subscribedItemKinds ??
+      ['transcript', 'tool', 'skill', 'activity', 'action_required', 'complete', 'failure'],
+    item: {
+      kind,
+      runId,
+      sequence: overrides.item?.sequence ?? 1,
+      sessionId,
+      flowId,
+      text: kind === 'transcript' ? 'Assistant response.' : null,
+      transcriptRole: kind === 'transcript' ? 'assistant' : null,
+      toolCallId: null,
+      toolName: null,
+      toolState: null,
+      toolSummary: null,
+      toolResultPreview: null,
+      skillId: null,
+      skillStage: null,
+      skillResult: null,
+      skillSource: null,
+      skillCacheStatus: null,
+      skillDiagnostic: null,
+      actionId: null,
+      boundaryId: null,
+      actionType: null,
+      title: null,
+      detail: kind === 'complete' ? 'Runtime completed.' : null,
+      code: null,
+      message: null,
+      retryable: null,
+      createdAt: '2026-04-16T13:30:00Z',
+      ...overrides.item,
+    },
+  }
+}
+
 function makeNotificationSyncResponse(
   projectId: string,
   overrides: Partial<SyncNotificationAdaptersResponseDto> = {},
@@ -1228,6 +1282,9 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
       <div data-testid="runtime-run-error">{state.agentView?.runtimeRunErrorMessage ?? 'none'}</div>
       <div data-testid="runtime-run-action-error">{state.agentView?.runtimeRunActionError?.message ?? 'none'}</div>
       <div data-testid="runtime-run-reason">{state.agentView?.runtimeRunUnavailableReason ?? 'none'}</div>
+      <div data-testid="unread-completed-session-count">
+        {String(state.activeProjectUnreadCompletedSessionCount)}
+      </div>
       <div data-testid="autonomous-run-id">{state.agentView?.autonomousRun?.runId ?? 'none'}</div>
       <div data-testid="autonomous-run-provider-id">{state.agentView?.autonomousRun?.providerId ?? 'none'}</div>
       <div data-testid="autonomous-run-status">{state.agentView?.autonomousRun?.status ?? 'none'}</div>
@@ -1439,6 +1496,18 @@ function Harness({ adapter }: { adapter: XeroDesktopAdapter }) {
         type="button"
       >
         Disable telegram route
+      </button>
+      <button
+        onClick={() =>
+          state.acknowledgeCompletedAgentSessions(
+            state.activeProject?.selectedAgentSessionId
+              ? [state.activeProject.selectedAgentSessionId]
+              : [],
+          )
+        }
+        type="button"
+      >
+        View selected session
       </button>
     </div>
   )
@@ -2235,6 +2304,72 @@ describe('useXeroDesktopState runtime-run hydration', () => {
     expect(screen.getByTestId('stream-skill-first-id')).toHaveTextContent('find-skills')
     expect(screen.getByTestId('stream-skill-first-stage')).toHaveTextContent('invoke')
     expect(screen.getByTestId('stream-skill-first-result')).toHaveTextContent('failed')
+  })
+
+  it('counts completed runtime sessions until that session is viewed again', async () => {
+    const setup = createMockAdapter({
+      runtimeSessions: {
+        'project-1': makeRuntimeSession('project-1', {
+          phase: 'authenticated',
+          sessionId: 'session-1',
+          flowId: 'flow-1',
+          accountId: 'acct-1',
+          lastErrorCode: null,
+          lastError: null,
+        }),
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1', { runId: 'run-project-1' }),
+      },
+      subscribeResponses: {
+        'project-1': makeStreamResponse('project-1', {
+          runId: 'run-project-1',
+        }),
+      },
+    })
+
+    render(<Harness adapter={setup.adapter} />)
+
+    await waitFor(() => expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByTestId('unread-completed-session-count')).toHaveTextContent('0')
+
+    await act(async () => {
+      setup.emitRuntimeStream(0, makeRuntimeStreamEvent('project-1', {
+        runId: 'run-project-1',
+        item: {
+          kind: 'complete',
+          runId: 'run-project-1',
+          sequence: 8,
+          text: null,
+          detail: 'Agent response complete.',
+          createdAt: '2026-04-16T13:30:08Z',
+        },
+      }))
+    })
+
+    await waitFor(() => expect(screen.getByTestId('stream-status')).toHaveTextContent('complete'))
+    expect(screen.getByTestId('unread-completed-session-count')).toHaveTextContent('1')
+
+    await act(async () => {
+      setup.emitRuntimeStream(0, makeRuntimeStreamEvent('project-1', {
+        runId: 'run-project-1',
+        item: {
+          kind: 'complete',
+          runId: 'run-project-1',
+          sequence: 9,
+          text: null,
+          detail: 'Duplicate completion.',
+          createdAt: '2026-04-16T13:30:09Z',
+        },
+      }))
+    })
+    expect(screen.getByTestId('unread-completed-session-count')).toHaveTextContent('1')
+
+    fireEvent.click(screen.getByRole('button', { name: 'View selected session' }))
+    await waitFor(() => expect(screen.getByTestId('unread-completed-session-count')).toHaveTextContent('0'))
   })
 
   it('projects MCP capability tool summaries into the agent tool lane projection', async () => {
