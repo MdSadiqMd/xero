@@ -6,11 +6,14 @@ import {
 	type WebComposerSelectOption,
 } from "@xero/ui/components/composer";
 import { ConversationSection } from "@xero/ui/components/transcript/conversation-section";
+import { Button } from "@xero/ui/components/ui/button";
+import { Menu } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { EmptySessionState } from "#/components/empty-session-state";
 import { LoadingScreen } from "#/components/loading-screen";
 import { SessionDrawer } from "#/components/session-drawer";
+import { SessionSidebar } from "#/components/session-sidebar";
 import { SessionTopBar } from "#/components/session-top-bar";
 import type { CloudSession } from "#/lib/auth/session";
 import { signOut } from "#/lib/auth/session";
@@ -399,116 +402,145 @@ function SessionView() {
 		currentSessionSummary?.projectId ??
 		"this project";
 
+	const handleNavigateToSession = (
+		nextComputerId: string,
+		nextSessionId: string,
+	) => {
+		void navigate({
+			to: "/sessions/$computerId/$sessionId",
+			params: {
+				computerId: nextComputerId,
+				sessionId: nextSessionId,
+			},
+		});
+	};
+
 	return (
-		<main className="flex h-dvh flex-col bg-background text-foreground">
-			<SessionTopBar
-				title={sessionTitle}
+		<div className="flex h-dvh bg-background text-foreground">
+			<SessionSidebar
+				session={session as CloudSession}
+				visibleSessions={visibleSessions}
 				projects={projectsForCurrentComputer}
+				currentSessionKey={key}
+				onSelectSession={handleNavigateToSession}
 				onSelectProject={handleNewSession}
-				drawerTrigger={
-					<SessionDrawer
-						session={session as CloudSession}
-						visibleSessions={visibleSessions}
-						projects={projectsForCurrentComputer}
-						currentSessionKey={key}
-						onSelectSession={(nextComputerId, nextSessionId) => {
-							void navigate({
-								to: "/sessions/$computerId/$sessionId",
-								params: {
-									computerId: nextComputerId,
-									sessionId: nextSessionId,
-								},
-							});
-						}}
-						onSelectProject={handleNewSession}
-						onSetSessionRemoteVisibility={
-							remoteSessions.setSessionRemoteVisibility
-						}
-						onArchiveSession={remoteSessions.archiveSession}
-						onSignOut={handleSignOut}
-					/>
-				}
+				onSetSessionRemoteVisibility={remoteSessions.setSessionRemoteVisibility}
+				onArchiveSession={remoteSessions.archiveSession}
+				onSignOut={handleSignOut}
 			/>
-			<div className="relative min-h-0 flex-1">
-				<div
-					ref={conversationViewportRef}
-					onScroll={handleConversationScroll}
-					onWheel={handleConversationWheel}
-					className="absolute inset-0 overflow-y-auto px-4 pt-4 sm:px-6"
-				>
-					<div
-						ref={conversationContentRef}
-						className="mx-auto flex min-h-full max-w-3xl flex-col gap-4 pb-24"
-					>
-						{transcript ? (
-							turns.length === 0 ? (
-								<EmptySessionState
-									projectLabel={projectLabel}
-									onSelectSuggestion={setDraftPrompt}
-								/>
-							) : (
-								<ConversationSection
-									runtimeRun={null}
-									visibleTurns={turns}
-									streamIssue={null}
-									streamFailure={null}
-									showActivityIndicator={isLive}
-									accountAvatarUrl={session.avatarUrl ?? null}
-									accountLogin={session.githubLogin}
-								/>
-							)
-						) : (
-							<LoadingScreen className="flex-1" />
-						)}
-						<div aria-hidden="true" className="h-1 shrink-0" />
-					</div>
-				</div>
-				<div className="pointer-events-none absolute inset-x-0 bottom-0 bg-background px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] sm:px-6">
-					<div className="pointer-events-auto mx-auto max-w-3xl">
-						<WebComposer
-							draftPrompt={draftPrompt}
-							onDraftPromptChange={setDraftPrompt}
-							onSubmit={dispatchSend}
-							agentOptions={availableAgents}
-							selectedAgentId={resolvedAgentId}
-							onAgentChange={(agentId) =>
-								setSelectedControls((current) => ({
-									key,
-									agentId,
-									modelId: current.key === key ? current.modelId : null,
-									thinkingEffort:
-										current.key === key ? current.thinkingEffort : null,
-								}))
+			<main className="flex h-dvh min-w-0 flex-1 flex-col">
+				<SessionTopBar
+					title={sessionTitle}
+					projects={projectsForCurrentComputer}
+					onSelectProject={handleNewSession}
+					drawerTrigger={
+						<SessionDrawer
+							session={session as CloudSession}
+							visibleSessions={visibleSessions}
+							projects={projectsForCurrentComputer}
+							currentSessionKey={key}
+							onSelectSession={handleNavigateToSession}
+							onSelectProject={handleNewSession}
+							onSetSessionRemoteVisibility={
+								remoteSessions.setSessionRemoteVisibility
 							}
-							modelOptions={availableModels}
-							selectedModelId={resolvedModelId}
-							onModelChange={(modelId) =>
-								setSelectedControls((current) => ({
-									key,
-									agentId: current.key === key ? current.agentId : null,
-									modelId,
-									thinkingEffort: null,
-								}))
+							onArchiveSession={remoteSessions.archiveSession}
+							onSignOut={handleSignOut}
+							trigger={
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon"
+									aria-label="Open sessions list"
+									className="text-muted-foreground hover:text-foreground lg:hidden"
+								>
+									<Menu className="h-4 w-4" />
+								</Button>
 							}
-							thinkingOptions={thinkingComposerOptions}
-							selectedThinkingId={resolvedThinkingEffort}
-							onThinkingChange={(value) =>
-								setSelectedControls((current) => ({
-									key,
-									agentId: current.key === key ? current.agentId : null,
-									modelId: current.key === key ? current.modelId : null,
-									thinkingEffort: value as SessionThinkingEffort,
-								}))
-							}
-							pendingAttachments={attachmentsHook.pendingAttachments}
-							onAddFiles={attachmentsHook.addFiles}
-							onRemoveAttachment={attachmentsHook.removeAttachment}
-							contextMeter={contextMeter}
 						/>
+					}
+				/>
+				<div className="relative min-h-0 flex-1">
+					<div
+						ref={conversationViewportRef}
+						onScroll={handleConversationScroll}
+						onWheel={handleConversationWheel}
+						className="absolute inset-0 overflow-y-auto px-4 pt-4 sm:px-6"
+					>
+						<div
+							ref={conversationContentRef}
+							className="mx-auto flex min-h-full max-w-3xl flex-col gap-4 pb-24"
+						>
+							{transcript ? (
+								turns.length === 0 ? (
+									<EmptySessionState
+										projectLabel={projectLabel}
+										onSelectSuggestion={setDraftPrompt}
+									/>
+								) : (
+									<ConversationSection
+										runtimeRun={null}
+										visibleTurns={turns}
+										streamIssue={null}
+										streamFailure={null}
+										showActivityIndicator={isLive}
+										accountAvatarUrl={session.avatarUrl ?? null}
+										accountLogin={session.githubLogin}
+									/>
+								)
+							) : (
+								<LoadingScreen className="flex-1" />
+							)}
+							<div aria-hidden="true" className="h-1 shrink-0" />
+						</div>
+					</div>
+					<div className="pointer-events-none absolute inset-x-0 bottom-0 bg-background px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] sm:px-6">
+						<div className="pointer-events-auto mx-auto max-w-3xl">
+							<WebComposer
+								draftPrompt={draftPrompt}
+								onDraftPromptChange={setDraftPrompt}
+								onSubmit={dispatchSend}
+								agentOptions={availableAgents}
+								selectedAgentId={resolvedAgentId}
+								onAgentChange={(agentId) =>
+									setSelectedControls((current) => ({
+										key,
+										agentId,
+										modelId: current.key === key ? current.modelId : null,
+										thinkingEffort:
+											current.key === key ? current.thinkingEffort : null,
+									}))
+								}
+								modelOptions={availableModels}
+								selectedModelId={resolvedModelId}
+								onModelChange={(modelId) =>
+									setSelectedControls((current) => ({
+										key,
+										agentId: current.key === key ? current.agentId : null,
+										modelId,
+										thinkingEffort: null,
+									}))
+								}
+								thinkingOptions={thinkingComposerOptions}
+								selectedThinkingId={resolvedThinkingEffort}
+								onThinkingChange={(value) =>
+									setSelectedControls((current) => ({
+										key,
+										agentId: current.key === key ? current.agentId : null,
+										modelId: current.key === key ? current.modelId : null,
+										thinkingEffort: value as SessionThinkingEffort,
+									}))
+								}
+								pendingAttachments={attachmentsHook.pendingAttachments}
+								onAddFiles={attachmentsHook.addFiles}
+								onRemoveAttachment={attachmentsHook.removeAttachment}
+								contextMeter={contextMeter}
+							/>
+						</div>
 					</div>
 				</div>
-			</div>
-		</main>
+			</main>
+		</div>
 	);
 }
 

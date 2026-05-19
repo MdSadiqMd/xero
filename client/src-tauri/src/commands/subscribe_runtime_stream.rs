@@ -109,6 +109,10 @@ impl RuntimeStreamProjection {
         let patch_item = item.clone();
         self.last_item_at = Some(item.created_at.clone());
         self.last_sequence = Some(item.sequence);
+        let reopened_terminal_stream = runtime_stream_status_is_terminal(&self.status)
+            && runtime_item_reopens_terminal_stream(&item);
+        let keeps_terminal_stream =
+            runtime_stream_status_is_terminal(&self.status) && !reopened_terminal_stream;
 
         match &item.kind {
             RuntimeStreamItemKind::Complete => {
@@ -139,9 +143,12 @@ impl RuntimeStreamProjection {
                 self.failure = Some(item.clone());
             }
             _ => {
-                self.status = RuntimeStreamViewStatusDto::Live;
-                self.failure = None;
-                self.last_issue = None;
+                if !keeps_terminal_stream {
+                    self.status = RuntimeStreamViewStatusDto::Live;
+                    self.completion = None;
+                    self.failure = None;
+                    self.last_issue = None;
+                }
             }
         }
 
@@ -223,6 +230,28 @@ impl RuntimeStreamProjection {
             last_item_at: self.last_item_at.clone(),
             last_sequence: self.last_sequence,
         }
+    }
+}
+
+fn runtime_stream_status_is_terminal(status: &RuntimeStreamViewStatusDto) -> bool {
+    matches!(
+        status,
+        RuntimeStreamViewStatusDto::Complete
+            | RuntimeStreamViewStatusDto::Stale
+            | RuntimeStreamViewStatusDto::Error
+    )
+}
+
+fn runtime_item_reopens_terminal_stream(item: &RuntimeStreamItemDto) -> bool {
+    match &item.kind {
+        RuntimeStreamItemKind::Transcript
+        | RuntimeStreamItemKind::Tool
+        | RuntimeStreamItemKind::Skill
+        | RuntimeStreamItemKind::ActionRequired
+        | RuntimeStreamItemKind::Plan
+        | RuntimeStreamItemKind::SubagentLifecycle => true,
+        RuntimeStreamItemKind::Activity => is_reasoning_activity_item(item),
+        RuntimeStreamItemKind::Complete | RuntimeStreamItemKind::Failure => false,
     }
 }
 
@@ -3091,6 +3120,66 @@ mod tests {
         assert_eq!(reasoning[0].updated_sequence, Some(6));
         assert_eq!(reasoning[0].text.as_deref(), Some("Inspecting files"));
         assert_eq!(reasoning_patch.snapshot.last_sequence, Some(6));
+    }
+
+    #[test]
+    fn runtime_stream_projection_keeps_terminal_status_for_post_completion_bookkeeping() {
+        let mut projection = RuntimeStreamProjection::new(projection_context());
+
+        let complete = owned_agent_event_runtime_item(
+            event_with_id(
+                1,
+                AgentRunEventKind::RunCompleted,
+                r#"{"summary":"Owned agent run completed."}"#,
+            ),
+            "owned-agent:run-1",
+            None,
+        )
+        .expect("completion item");
+        projection.apply_item(complete);
+
+        let validation = owned_agent_event_runtime_item(
+            event_with_id(
+                2,
+                AgentRunEventKind::ValidationCompleted,
+                r#"{"label":"memory_extraction","outcome":"failed","message":"memory extraction finished after completion"}"#,
+            ),
+            "owned-agent:run-1",
+            None,
+        )
+        .expect("post-completion validation item");
+        let validation_patch = projection.apply_item(validation);
+
+        assert_eq!(
+            validation_patch.snapshot.status,
+            RuntimeStreamViewStatusDto::Complete
+        );
+        assert_eq!(
+            validation_patch
+                .snapshot
+                .completion
+                .as_ref()
+                .map(|item| item.sequence),
+            Some(1)
+        );
+
+        let next_user_turn = owned_agent_event_runtime_item(
+            event_with_id(
+                3,
+                AgentRunEventKind::MessageDelta,
+                r#"{"role":"user","text":"Continue with the next question"}"#,
+            ),
+            "owned-agent:run-1",
+            None,
+        )
+        .expect("next user turn item");
+        let reopened_patch = projection.apply_item(next_user_turn);
+
+        assert_eq!(
+            reopened_patch.snapshot.status,
+            RuntimeStreamViewStatusDto::Live
+        );
+        assert!(reopened_patch.snapshot.completion.is_none());
     }
 
     #[test]

@@ -24,8 +24,11 @@ export function SessionTopBar({
 	return (
 		<header className="sticky top-0 z-20 flex items-center justify-between gap-3 bg-background px-4 pb-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
 			<div className="flex min-w-0 items-center gap-2">
-				<BrandLogo className="size-4 shrink-0" aria-label="Xero" />
-				<span aria-hidden="true" className="text-sm text-muted-foreground/50">
+				<BrandLogo className="size-4 shrink-0 lg:hidden" aria-label="Xero" />
+				<span
+					aria-hidden="true"
+					className="text-sm text-muted-foreground/50 lg:hidden"
+				>
 					|
 				</span>
 				<span
@@ -37,11 +40,13 @@ export function SessionTopBar({
 			</div>
 			<div className="flex shrink-0 items-center gap-1">
 				{onSelectProject ? (
-					<NewSessionPicker
-						projects={projects}
-						onSelectProject={onSelectProject}
-						onPickerOpenChange={onPickerOpenChange}
-					/>
+					<div className="lg:hidden">
+						<NewSessionPicker
+							projects={projects}
+							onSelectProject={onSelectProject}
+							onPickerOpenChange={onPickerOpenChange}
+						/>
+					</div>
 				) : null}
 				{drawerTrigger ?? (
 					<Button
@@ -49,7 +54,7 @@ export function SessionTopBar({
 						variant="ghost"
 						size="icon"
 						aria-label="Open sessions list"
-						className="text-muted-foreground hover:text-foreground"
+						className="text-muted-foreground hover:text-foreground lg:hidden"
 					>
 						<Menu className="h-4 w-4" />
 					</Button>

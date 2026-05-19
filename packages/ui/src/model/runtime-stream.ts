@@ -952,6 +952,49 @@ function getRecoveredRuntimeStreamStatus(base: RuntimeStreamView): RuntimeStream
   return 'live'
 }
 
+function isRuntimeStreamTerminalStatus(status: RuntimeStreamStatus): boolean {
+  return status === 'complete' || status === 'stale' || status === 'error'
+}
+
+function shouldRuntimeStreamItemReopenTerminalStatus(item: RuntimeStreamViewItem): boolean {
+  switch (item.kind) {
+    case 'transcript':
+    case 'tool':
+    case 'skill':
+    case 'action_required':
+    case 'plan':
+    case 'subagent_lifecycle':
+      return true
+    case 'activity':
+      return isReasoningActivityItem(item)
+    case 'complete':
+    case 'failure':
+      return false
+  }
+}
+
+function getRuntimeStreamStatusForNextItem(
+  base: RuntimeStreamView,
+  nextItem: RuntimeStreamViewItem,
+): RuntimeStreamStatus {
+  if (nextItem.kind === 'complete') {
+    return 'complete'
+  }
+
+  if (nextItem.kind === 'failure') {
+    return nextItem.retryable ? 'stale' : 'error'
+  }
+
+  if (
+    isRuntimeStreamTerminalStatus(base.status) &&
+    !shouldRuntimeStreamItemReopenTerminalStatus(nextItem)
+  ) {
+    return base.status
+  }
+
+  return 'live'
+}
+
 function mergeRuntimeStreamMetadata(
   base: RuntimeStreamView,
   event: RuntimeStreamEventDto,
@@ -1476,6 +1519,15 @@ export function mergeRuntimeStreamEvent(
         )
       : base.actionRequired
   const nextPlan = nextItem.kind === 'plan' ? nextItem : base.plan
+  const nextStatus = getRuntimeStreamStatusForNextItem(base, nextItem)
+  const reopenedTerminalStream =
+    isRuntimeStreamTerminalStatus(base.status) &&
+    nextStatus === 'live' &&
+    shouldRuntimeStreamItemReopenTerminalStatus(nextItem)
+  const keepsTerminalStream =
+    isRuntimeStreamTerminalStatus(base.status) &&
+    nextStatus === base.status &&
+    !reopenedTerminalStream
 
   return {
     ...base,
@@ -1485,14 +1537,7 @@ export function mergeRuntimeStreamEvent(
     sessionId: normalizeOptionalText(event.sessionId) ?? base.sessionId,
     flowId: normalizeOptionalText(event.flowId) ?? base.flowId,
     subscribedItemKinds: uniqueRuntimeStreamKinds(event.subscribedItemKinds),
-    status:
-      nextItem.kind === 'complete'
-        ? 'complete'
-        : nextItem.kind === 'failure'
-          ? nextItem.retryable
-            ? 'stale'
-            : 'error'
-          : 'live',
+    status: nextStatus,
     items: nextItems,
     transcriptItems: nextTranscriptItems,
     toolCalls: nextToolCalls,
@@ -1500,8 +1545,18 @@ export function mergeRuntimeStreamEvent(
     activityItems: nextActivityItems,
     actionRequired: nextActionRequired,
     plan: nextPlan,
-    completion: nextItem.kind === 'complete' ? nextItem : base.completion,
-    failure: nextItem.kind === 'failure' ? nextItem : null,
+    completion:
+      nextItem.kind === 'complete'
+        ? nextItem
+        : keepsTerminalStream
+          ? base.completion
+          : null,
+    failure:
+      nextItem.kind === 'failure'
+        ? nextItem
+        : keepsTerminalStream
+          ? base.failure
+          : null,
     lastIssue:
       nextItem.kind === 'failure'
         ? {
@@ -1510,7 +1565,9 @@ export function mergeRuntimeStreamEvent(
             retryable: nextItem.retryable,
             observedAt: nextItem.createdAt,
           }
-        : null,
+        : keepsTerminalStream
+          ? base.lastIssue
+          : null,
     lastItemAt: nextItem.createdAt,
     lastSequence: nextItem.sequence,
   }

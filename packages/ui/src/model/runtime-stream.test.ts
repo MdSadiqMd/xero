@@ -199,6 +199,125 @@ describe('runtime stream contracts', () => {
     })
   })
 
+  it('keeps a completed stream complete when replay includes post-run bookkeeping activity', () => {
+    let stream = createRuntimeStreamView({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-complete-1',
+      sessionId: 'owned-agent:run-complete-1',
+      subscribedItemKinds: ['transcript', 'activity', 'complete'],
+    })
+
+    stream = mergeRuntimeStreamEvent(stream, {
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-complete-1',
+      sessionId: 'owned-agent:run-complete-1',
+      flowId: null,
+      subscribedItemKinds: ['transcript', 'activity', 'complete'],
+      item: {
+        kind: 'transcript',
+        runId: 'run-complete-1',
+        sequence: 1,
+        sessionId: 'owned-agent:run-complete-1',
+        text: 'What is this project?',
+        transcriptRole: 'user',
+        createdAt: '2026-05-19T10:00:00Z',
+      },
+    })
+    stream = mergeRuntimeStreamEvent(stream, {
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-complete-1',
+      sessionId: 'owned-agent:run-complete-1',
+      flowId: null,
+      subscribedItemKinds: ['transcript', 'activity', 'complete'],
+      item: {
+        kind: 'complete',
+        runId: 'run-complete-1',
+        sequence: 2,
+        sessionId: 'owned-agent:run-complete-1',
+        detail: 'Owned agent run completed.',
+        createdAt: '2026-05-19T10:00:01Z',
+      },
+    })
+    stream = mergeRuntimeStreamEvent(stream, {
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-complete-1',
+      sessionId: 'owned-agent:run-complete-1',
+      flowId: null,
+      subscribedItemKinds: ['transcript', 'activity', 'complete'],
+      item: {
+        kind: 'activity',
+        runId: 'run-complete-1',
+        sequence: 3,
+        sessionId: 'owned-agent:run-complete-1',
+        code: 'owned_agent_validation_completed',
+        title: 'Validation completed',
+        detail: 'Validation completed: memory_extraction.',
+        createdAt: '2026-05-19T10:00:02Z',
+      },
+    })
+
+    expect(stream.status).toBe('complete')
+    expect(stream.completion?.sequence).toBe(2)
+  })
+
+  it('reopens a completed stream when a new user transcript starts the next turn', () => {
+    let stream = createRuntimeStreamView({
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-complete-2',
+      sessionId: 'owned-agent:run-complete-2',
+      subscribedItemKinds: ['transcript', 'complete'],
+    })
+
+    stream = mergeRuntimeStreamEvent(stream, {
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-complete-2',
+      sessionId: 'owned-agent:run-complete-2',
+      flowId: null,
+      subscribedItemKinds: ['transcript', 'complete'],
+      item: {
+        kind: 'complete',
+        runId: 'run-complete-2',
+        sequence: 1,
+        sessionId: 'owned-agent:run-complete-2',
+        detail: 'Owned agent run completed.',
+        createdAt: '2026-05-19T10:01:00Z',
+      },
+    })
+    stream = mergeRuntimeStreamEvent(stream, {
+      projectId: 'project-1',
+      agentSessionId: 'agent-session-1',
+      runtimeKind: 'openai_codex',
+      runId: 'run-complete-2',
+      sessionId: 'owned-agent:run-complete-2',
+      flowId: null,
+      subscribedItemKinds: ['transcript', 'complete'],
+      item: {
+        kind: 'transcript',
+        runId: 'run-complete-2',
+        sequence: 2,
+        sessionId: 'owned-agent:run-complete-2',
+        text: 'What changed next?',
+        transcriptRole: 'user',
+        createdAt: '2026-05-19T10:01:01Z',
+      },
+    })
+
+    expect(stream.status).toBe('live')
+    expect(stream.completion).toBeNull()
+  })
+
   it('parses code history metadata and keeps it available on stream items', () => {
     const item = runtimeStreamItemSchema.parse({
       kind: 'activity',
