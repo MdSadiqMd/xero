@@ -6544,13 +6544,14 @@ fn headless_runtime_agent_allows_writes(runtime_agent_id: &str) -> bool {
 
 fn normalize_cli_thinking_effort(value: &str) -> Result<String, CliError> {
     match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok("none".into()),
         "minimal" => Ok("minimal".into()),
         "low" => Ok("low".into()),
         "medium" => Ok("medium".into()),
         "high" => Ok("high".into()),
         "x_high" | "xhigh" => Ok("xhigh".into()),
         _ => Err(CliError::usage(
-            "Invalid --thinking-effort. Use minimal, low, medium, high, or x_high.",
+            "Invalid --thinking-effort. Use none, minimal, low, medium, high, or x_high.",
         )),
     }
 }

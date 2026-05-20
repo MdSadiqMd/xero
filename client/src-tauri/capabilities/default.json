@@ -23,6 +23,8 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://auth.openai.com/*" },
+        { "url": "https://auth.x.ai/*" },
+        { "url": "https://accounts.x.ai/*" },
         { "url": "https://github.com/login/oauth/authorize*" }
       ]
     }

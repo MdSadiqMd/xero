@@ -4,9 +4,10 @@ use crate::{
     auth::{
         auth_flow_error_from_command_error, bind_anthropic_runtime_session,
         bind_openai_compatible_runtime_session, bind_openrouter_runtime_session,
-        load_latest_openai_codex_session, load_openai_codex_session_for_profile_link,
+        load_latest_openai_codex_session, load_latest_xai_session,
+        load_openai_codex_session_for_profile_link, load_xai_session_for_profile_link,
         reconcile_anthropic_runtime_session, reconcile_openai_compatible_runtime_session,
-        reconcile_openrouter_runtime_session, refresh_provider_auth_session,
+        reconcile_openrouter_runtime_session, refresh_provider_auth_session, remove_xai_session,
         sync_openai_profile_link, AnthropicBindOutcome, AnthropicReconcileOutcome,
         AnthropicRuntimeSessionBinding, AuthDiagnostic, AuthFlowError, OpenAiCompatibleBindOutcome,
         OpenAiCompatibleReconcileOutcome, OpenAiCompatibleRuntimeSessionBinding,
@@ -16,6 +17,7 @@ use crate::{
     commands::{get_runtime_settings::RuntimeSettingsSnapshot, RuntimeAuthPhase},
     provider_credentials::{
         ProviderCredentialLink, ProviderCredentialProfile, ProviderCredentialsView,
+        XAI_DEFAULT_PROFILE_ID,
     },
     state::DesktopState,
 };
@@ -26,6 +28,7 @@ pub const ANTHROPIC_PROVIDER_ID: &str = "anthropic";
 pub const GITHUB_MODELS_PROVIDER_ID: &str = "github_models";
 pub const OPENAI_API_PROVIDER_ID: &str = "openai_api";
 pub const DEEPSEEK_PROVIDER_ID: &str = "deepseek";
+pub const XAI_PROVIDER_ID: &str = "xai";
 pub const OLLAMA_PROVIDER_ID: &str = "ollama";
 pub const AZURE_OPENAI_PROVIDER_ID: &str = "azure_openai";
 pub const GEMINI_AI_STUDIO_PROVIDER_ID: &str = "gemini_ai_studio";
@@ -33,9 +36,12 @@ pub const BEDROCK_PROVIDER_ID: &str = "bedrock";
 pub const VERTEX_PROVIDER_ID: &str = "vertex";
 pub const OPENAI_COMPATIBLE_RUNTIME_KIND: &str = "openai_compatible";
 pub const DEEPSEEK_RUNTIME_KIND: &str = DEEPSEEK_PROVIDER_ID;
+pub const XAI_RUNTIME_KIND: &str = XAI_PROVIDER_ID;
 pub const GEMINI_RUNTIME_KIND: &str = "gemini";
 pub const ANTHROPIC_RUNTIME_KIND: &str = ANTHROPIC_PROVIDER_ID;
 pub const OPENAI_CODEX_DEFAULT_MODEL_ID: &str = "gpt-5.5";
+pub const XAI_DEFAULT_MODEL_ID: &str = "grok-4.3";
+pub const XAI_SUPPORTED_TEXT_MODEL_IDS: &[&str] = &["grok-4.3", "grok-4.3-latest"];
 pub const OPENAI_CODEX_SUPPORTED_MODEL_IDS: &[&str] = &[
     "gpt-5.2",
     "gpt-5.3-codex",
@@ -43,6 +49,20 @@ pub const OPENAI_CODEX_SUPPORTED_MODEL_IDS: &[&str] = &[
     "gpt-5.4",
     "gpt-5.5",
 ];
+const XAI_API_KEY_SESSION_ID: &str = "xai-api-key";
+const XAI_API_KEY_ACCOUNT_ID: &str = "xai-api-key";
+
+pub fn is_supported_xai_text_model_id(model_id: &str) -> bool {
+    let model_id = model_id
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(model_id)
+        .to_ascii_lowercase();
+    XAI_SUPPORTED_TEXT_MODEL_IDS
+        .iter()
+        .any(|supported| model_id == *supported)
+}
 
 pub fn normalize_openai_codex_model_id(model_id: &str) -> String {
     let model_id = model_id.trim();
@@ -60,6 +80,7 @@ pub enum RuntimeProviderFamily {
     Anthropic,
     OpenAiCompatible,
     DeepSeek,
+    Xai,
     Gemini,
 }
 
@@ -71,6 +92,7 @@ pub enum RuntimeProvider {
     GitHubModels,
     OpenAiApi,
     DeepSeek,
+    Xai,
     Ollama,
     AzureOpenAi,
     GeminiAiStudio,
@@ -88,6 +110,7 @@ impl RuntimeProvider {
                 RuntimeProviderFamily::OpenAiCompatible
             }
             Self::DeepSeek => RuntimeProviderFamily::DeepSeek,
+            Self::Xai => RuntimeProviderFamily::Xai,
             Self::GeminiAiStudio => RuntimeProviderFamily::Gemini,
             Self::Bedrock | Self::Vertex => RuntimeProviderFamily::Anthropic,
         }
@@ -130,6 +153,12 @@ impl RuntimeProvider {
                 family: RuntimeProviderFamily::DeepSeek,
                 provider_id: DEEPSEEK_PROVIDER_ID,
                 runtime_kind: DEEPSEEK_RUNTIME_KIND,
+            },
+            Self::Xai => ResolvedRuntimeProvider {
+                provider: Self::Xai,
+                family: RuntimeProviderFamily::Xai,
+                provider_id: XAI_PROVIDER_ID,
+                runtime_kind: XAI_RUNTIME_KIND,
             },
             Self::Ollama => ResolvedRuntimeProvider {
                 provider: Self::Ollama,
@@ -218,6 +247,10 @@ pub const fn deepseek_provider() -> ResolvedRuntimeProvider {
     RuntimeProvider::DeepSeek.resolve()
 }
 
+pub const fn xai_provider() -> ResolvedRuntimeProvider {
+    RuntimeProvider::Xai.resolve()
+}
+
 pub const fn ollama_provider() -> ResolvedRuntimeProvider {
     RuntimeProvider::Ollama.resolve()
 }
@@ -302,6 +335,7 @@ pub(crate) fn bind_provider_runtime_session<R: Runtime>(
         RuntimeProvider::OpenAiCodex => {
             bind_openai_codex_runtime_session(app, state, provider, account_id, provider_profiles)
         }
+        RuntimeProvider::Xai => bind_xai_runtime_session(app, state, provider, provider_profiles),
         RuntimeProvider::OpenRouter => {
             let settings = settings.ok_or_else(|| {
                 AuthFlowError::terminal(
@@ -389,6 +423,9 @@ pub(crate) fn reconcile_provider_runtime_session<R: Runtime>(
             session_id,
             provider_profiles,
         ),
+        RuntimeProvider::Xai => {
+            reconcile_xai_runtime_session(app, state, provider, provider_profiles)
+        }
         RuntimeProvider::OpenRouter => {
             let settings = settings.ok_or_else(|| {
                 AuthFlowError::terminal(
@@ -492,6 +529,15 @@ pub fn logout_provider_runtime_session<R: Runtime>(
             crate::auth::clear_openai_codex_sessions(&auth_store_path)?;
             sync_openai_profile_link(app, state, None, None)
         }
+        RuntimeProvider::Xai => {
+            if account_id == XAI_API_KEY_ACCOUNT_ID {
+                return Ok(());
+            }
+            let auth_store_path = state
+                .global_db_path(app)
+                .map_err(auth_flow_error_from_command_error)?;
+            remove_xai_session(&auth_store_path)
+        }
         RuntimeProvider::OpenRouter
         | RuntimeProvider::Anthropic
         | RuntimeProvider::GitHubModels
@@ -580,6 +626,106 @@ fn reconcile_openai_codex_runtime_session<R: Runtime>(
     ))
 }
 
+fn bind_xai_runtime_session<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    provider: ResolvedRuntimeProvider,
+    provider_profiles: Option<&ProviderCredentialsView>,
+) -> Result<RuntimeProviderBindOutcome, AuthFlowError> {
+    let Some(profile) = active_xai_profile(provider_profiles)? else {
+        return Ok(RuntimeProviderBindOutcome::SignedOut(
+            missing_xai_session_diagnostic(),
+        ));
+    };
+
+    match profile.credential_link.as_ref() {
+        Some(ProviderCredentialLink::ApiKey { updated_at }) => Ok(
+            RuntimeProviderBindOutcome::Ready(binding_from_stored_xai_session(
+                provider,
+                XAI_API_KEY_SESSION_ID,
+                XAI_API_KEY_ACCOUNT_ID,
+                updated_at,
+            )),
+        ),
+        Some(ProviderCredentialLink::Xai { .. }) => {
+            let auth_store_path = state
+                .global_db_path(app)
+                .map_err(auth_flow_error_from_command_error)?;
+            let Some(stored) = load_global_xai_session_for_profile(
+                &auth_store_path,
+                profile.credential_link.as_ref(),
+            )?
+            else {
+                return Ok(RuntimeProviderBindOutcome::SignedOut(
+                    missing_xai_session_diagnostic(),
+                ));
+            };
+            let binding = binding_from_stored_xai_session(
+                provider,
+                &stored.session_id,
+                &stored.account_id,
+                &stored.updated_at,
+            );
+            if stored.expires_at <= current_unix_timestamp() {
+                return Ok(RuntimeProviderBindOutcome::RefreshRequired(binding));
+            }
+            Ok(RuntimeProviderBindOutcome::Ready(binding))
+        }
+        _ => Ok(RuntimeProviderBindOutcome::SignedOut(
+            invalid_xai_profile_diagnostic(),
+        )),
+    }
+}
+
+fn reconcile_xai_runtime_session<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    provider: ResolvedRuntimeProvider,
+    provider_profiles: Option<&ProviderCredentialsView>,
+) -> Result<RuntimeProviderReconcileOutcome, AuthFlowError> {
+    let Some(profile) = active_xai_profile(provider_profiles)? else {
+        return Ok(RuntimeProviderReconcileOutcome::SignedOut(
+            missing_xai_session_diagnostic(),
+        ));
+    };
+
+    match profile.credential_link.as_ref() {
+        Some(ProviderCredentialLink::ApiKey { updated_at }) => Ok(
+            RuntimeProviderReconcileOutcome::Authenticated(binding_from_stored_xai_session(
+                provider,
+                XAI_API_KEY_SESSION_ID,
+                XAI_API_KEY_ACCOUNT_ID,
+                updated_at,
+            )),
+        ),
+        Some(ProviderCredentialLink::Xai { .. }) => {
+            let auth_store_path = state
+                .global_db_path(app)
+                .map_err(auth_flow_error_from_command_error)?;
+            let Some(stored) = load_global_xai_session_for_profile(
+                &auth_store_path,
+                profile.credential_link.as_ref(),
+            )?
+            else {
+                return Ok(RuntimeProviderReconcileOutcome::SignedOut(
+                    missing_xai_session_diagnostic(),
+                ));
+            };
+            Ok(RuntimeProviderReconcileOutcome::Authenticated(
+                binding_from_stored_xai_session(
+                    provider,
+                    &stored.session_id,
+                    &stored.account_id,
+                    &stored.updated_at,
+                ),
+            ))
+        }
+        _ => Ok(RuntimeProviderReconcileOutcome::SignedOut(
+            invalid_xai_profile_diagnostic(),
+        )),
+    }
+}
+
 fn active_openai_profile(
     provider_profiles: Option<&ProviderCredentialsView>,
 ) -> Result<&ProviderCredentialProfile, AuthFlowError> {
@@ -613,6 +759,27 @@ fn active_openai_profile(
     Ok(profile)
 }
 
+fn active_xai_profile(
+    provider_profiles: Option<&ProviderCredentialsView>,
+) -> Result<Option<&ProviderCredentialProfile>, AuthFlowError> {
+    let provider_profiles = provider_profiles.ok_or_else(|| {
+        AuthFlowError::terminal(
+            "provider_credentials_missing",
+            RuntimeAuthPhase::Failed,
+            "Xero could not resolve the active xAI credential because the provider credential snapshot was missing.",
+        )
+    })?;
+
+    Ok(provider_profiles
+        .profile(XAI_DEFAULT_PROFILE_ID)
+        .or_else(|| {
+            provider_profiles
+                .profiles()
+                .iter()
+                .find(|profile| profile.provider_id == XAI_PROVIDER_ID)
+        }))
+}
+
 fn load_global_openai_codex_session_for_profile(
     auth_store_path: &std::path::Path,
     link: Option<&ProviderCredentialLink>,
@@ -623,7 +790,34 @@ fn load_global_openai_codex_session_for_profile(
     }
 }
 
+fn load_global_xai_session_for_profile(
+    auth_store_path: &std::path::Path,
+    link: Option<&ProviderCredentialLink>,
+) -> Result<Option<crate::auth::StoredXaiSession>, AuthFlowError> {
+    match link {
+        Some(link @ ProviderCredentialLink::Xai { .. }) => {
+            load_xai_session_for_profile_link(auth_store_path, link)
+        }
+        Some(ProviderCredentialLink::ApiKey { .. }) => Ok(None),
+        _ => load_latest_xai_session(auth_store_path),
+    }
+}
+
 fn binding_from_stored_openai_session(
+    provider: ResolvedRuntimeProvider,
+    session_id: &str,
+    account_id: &str,
+    updated_at: &str,
+) -> RuntimeProviderSessionBinding {
+    RuntimeProviderSessionBinding {
+        provider,
+        session_id: session_id.to_owned(),
+        account_id: account_id.to_owned(),
+        updated_at: updated_at.to_owned(),
+    }
+}
+
+fn binding_from_stored_xai_session(
     provider: ResolvedRuntimeProvider,
     session_id: &str,
     account_id: &str,
@@ -646,6 +840,26 @@ fn binding_from_runtime_auth_session(
         session_id: session.session_id,
         account_id: session.account_id,
         updated_at: session.updated_at,
+    }
+}
+
+fn missing_xai_session_diagnostic() -> AuthDiagnostic {
+    AuthDiagnostic {
+        code: "auth_session_not_found".into(),
+        message:
+            "Xero does not have an app-local xAI credential. Sign in to xAI or save an xAI API key from Providers settings."
+                .into(),
+        retryable: false,
+    }
+}
+
+fn invalid_xai_profile_diagnostic() -> AuthDiagnostic {
+    AuthDiagnostic {
+        code: "provider_credentials_invalid".into(),
+        message:
+            "Xero rejected the active xAI provider profile because it does not contain an xAI OAuth session or API key."
+                .into(),
+        retryable: false,
     }
 }
 
@@ -679,6 +893,7 @@ fn parse_provider_id(value: &str) -> Result<RuntimeProvider, AuthDiagnostic> {
         GITHUB_MODELS_PROVIDER_ID => Ok(RuntimeProvider::GitHubModels),
         OPENAI_API_PROVIDER_ID => Ok(RuntimeProvider::OpenAiApi),
         DEEPSEEK_PROVIDER_ID => Ok(RuntimeProvider::DeepSeek),
+        XAI_PROVIDER_ID => Ok(RuntimeProvider::Xai),
         OLLAMA_PROVIDER_ID => Ok(RuntimeProvider::Ollama),
         AZURE_OPENAI_PROVIDER_ID => Ok(RuntimeProvider::AzureOpenAi),
         GEMINI_AI_STUDIO_PROVIDER_ID => Ok(RuntimeProvider::GeminiAiStudio),
@@ -695,6 +910,7 @@ fn parse_runtime_reference(value: &str) -> Result<RuntimeReference, AuthDiagnost
         ANTHROPIC_PROVIDER_ID => Ok(RuntimeReference::Family(RuntimeProviderFamily::Anthropic)),
         OPENAI_API_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::OpenAiApi)),
         DEEPSEEK_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::DeepSeek)),
+        XAI_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::Xai)),
         OLLAMA_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::Ollama)),
         AZURE_OPENAI_PROVIDER_ID => Ok(RuntimeReference::Actual(RuntimeProvider::AzureOpenAi)),
         GEMINI_AI_STUDIO_PROVIDER_ID => {
@@ -714,7 +930,7 @@ fn unknown_runtime_provider_diagnostic(value: &str) -> AuthDiagnostic {
     AuthDiagnostic {
         code: "runtime_provider_unknown".into(),
         message: format!(
-            "Xero does not support runtime provider `{value}`. Allowed providers: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}, {ANTHROPIC_PROVIDER_ID}, {GITHUB_MODELS_PROVIDER_ID}, {OPENAI_API_PROVIDER_ID}, {DEEPSEEK_PROVIDER_ID}, {OLLAMA_PROVIDER_ID}, {AZURE_OPENAI_PROVIDER_ID}, {GEMINI_AI_STUDIO_PROVIDER_ID}, {BEDROCK_PROVIDER_ID}, {VERTEX_PROVIDER_ID}. Allowed runtime kinds: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}, {ANTHROPIC_RUNTIME_KIND}, {OPENAI_COMPATIBLE_RUNTIME_KIND}, {DEEPSEEK_RUNTIME_KIND}, {GEMINI_RUNTIME_KIND}."
+            "Xero does not support runtime provider `{value}`. Allowed providers: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}, {ANTHROPIC_PROVIDER_ID}, {GITHUB_MODELS_PROVIDER_ID}, {OPENAI_API_PROVIDER_ID}, {DEEPSEEK_PROVIDER_ID}, {XAI_PROVIDER_ID}, {OLLAMA_PROVIDER_ID}, {AZURE_OPENAI_PROVIDER_ID}, {GEMINI_AI_STUDIO_PROVIDER_ID}, {BEDROCK_PROVIDER_ID}, {VERTEX_PROVIDER_ID}. Allowed runtime kinds: {OPENAI_CODEX_PROVIDER_ID}, {OPENROUTER_PROVIDER_ID}, {ANTHROPIC_RUNTIME_KIND}, {OPENAI_COMPATIBLE_RUNTIME_KIND}, {DEEPSEEK_RUNTIME_KIND}, {XAI_RUNTIME_KIND}, {GEMINI_RUNTIME_KIND}."
         ),
         retryable: false,
     }
@@ -804,6 +1020,28 @@ mod tests {
             Some(OPENAI_COMPATIBLE_RUNTIME_KIND),
         )
         .expect_err("DeepSeek should not resolve through the generic runtime kind");
+
+        assert_eq!(diagnostic.code, "runtime_provider_mismatch");
+    }
+
+    #[test]
+    fn xai_provider_identity_resolves_as_native_runtime() {
+        let provider =
+            resolve_runtime_provider_identity(Some(XAI_PROVIDER_ID), Some(XAI_RUNTIME_KIND))
+                .expect("xAI provider should resolve");
+
+        assert_eq!(provider.provider_id, XAI_PROVIDER_ID);
+        assert_eq!(provider.runtime_kind, XAI_RUNTIME_KIND);
+        assert_eq!(provider.family, RuntimeProviderFamily::Xai);
+    }
+
+    #[test]
+    fn xai_provider_identity_rejects_openai_compatible_runtime_kind() {
+        let diagnostic = resolve_runtime_provider_identity(
+            Some(XAI_PROVIDER_ID),
+            Some(OPENAI_COMPATIBLE_RUNTIME_KIND),
+        )
+        .expect_err("xAI should not resolve through the generic runtime kind");
 
         assert_eq!(diagnostic.code, "runtime_provider_mismatch");
     }

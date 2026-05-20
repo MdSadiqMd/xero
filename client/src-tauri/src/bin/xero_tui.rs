@@ -954,6 +954,7 @@ fn parse_runtime_agent_id(value: &str) -> RuntimeAgentIdDto {
 
 fn parse_thinking_effort(value: &str) -> Result<ProviderModelThinkingEffortDto, CommandError> {
     match value.trim().replace('-', "_").to_ascii_lowercase().as_str() {
+        "none" => Ok(ProviderModelThinkingEffortDto::None),
         "minimal" => Ok(ProviderModelThinkingEffortDto::Minimal),
         "low" => Ok(ProviderModelThinkingEffortDto::Low),
         "medium" => Ok(ProviderModelThinkingEffortDto::Medium),
@@ -962,7 +963,7 @@ fn parse_thinking_effort(value: &str) -> Result<ProviderModelThinkingEffortDto, 
         other => Err(CommandError::user_fixable(
             "xero_tui_thinking_effort_invalid",
             format!(
-                "Unknown thinking effort `{other}`. Use minimal, low, medium, high, or x_high."
+                "Unknown thinking effort `{other}`. Use none, minimal, low, medium, high, or x_high."
             ),
         )),
     }

@@ -4,10 +4,12 @@ pub mod openai_compatible;
 pub mod openrouter;
 pub mod sql;
 pub mod store;
+pub mod xai;
 
 pub use crate::runtime::{
-    anthropic_provider, openai_codex_provider, openrouter_provider, ResolvedRuntimeProvider,
-    RuntimeProvider, ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
+    anthropic_provider, openai_codex_provider, openrouter_provider, xai_provider,
+    ResolvedRuntimeProvider, RuntimeProvider, ANTHROPIC_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID,
+    OPENROUTER_PROVIDER_ID,
 };
 pub(crate) use anthropic::{bind_anthropic_runtime_session, reconcile_anthropic_runtime_session};
 pub use anthropic::{
@@ -35,6 +37,13 @@ pub use store::{
     load_openai_codex_session, load_openai_codex_session_for_profile_link,
     persist_openai_codex_session, remove_openai_codex_session, sync_openai_profile_link,
     StoredOpenAiCodexSession,
+};
+pub use xai::{
+    cancel_xai_flow, complete_xai_flow, ensure_xai_profile_target, load_latest_xai_session,
+    load_xai_session, load_xai_session_for_profile_link, poll_xai_device_code_flow,
+    refresh_xai_session, remove_xai_session, start_xai_device_code_flow, start_xai_flow,
+    StartedXaiFlow, StoredXaiSession, XaiAuthConfig, XaiAuthSession, XaiDeviceCodeFlowRegistry,
+    XaiDeviceCodeLogin,
 };
 
 use std::{
@@ -166,24 +175,28 @@ pub struct RuntimeAuthSession {
 #[derive(Debug, Clone)]
 pub enum ActiveAuthFlow {
     OpenAiCodex(openai_codex::ActiveOpenAiCodexFlow),
+    Xai(xai::ActiveXaiFlow),
 }
 
 impl ActiveAuthFlow {
     pub fn provider(&self) -> ResolvedRuntimeProvider {
         match self {
             Self::OpenAiCodex(_) => openai_codex_provider(),
+            Self::Xai(_) => xai_provider(),
         }
     }
 
     pub fn flow_id(&self) -> &str {
         match self {
             Self::OpenAiCodex(flow) => flow.flow_id(),
+            Self::Xai(flow) => flow.flow_id(),
         }
     }
 
     pub fn snapshot(&self) -> RuntimeAuthStateSnapshot {
         match self {
             Self::OpenAiCodex(flow) => flow.snapshot(),
+            Self::Xai(flow) => flow.snapshot(),
         }
     }
 }
@@ -191,6 +204,12 @@ impl ActiveAuthFlow {
 impl From<openai_codex::ActiveOpenAiCodexFlow> for ActiveAuthFlow {
     fn from(flow: openai_codex::ActiveOpenAiCodexFlow) -> Self {
         Self::OpenAiCodex(flow)
+    }
+}
+
+impl From<xai::ActiveXaiFlow> for ActiveAuthFlow {
+    fn from(flow: xai::ActiveXaiFlow) -> Self {
+        Self::Xai(flow)
     }
 }
 
@@ -212,6 +231,34 @@ impl From<StartedOpenAiCodexFlow> for StartedRuntimeAuthFlow {
 
 impl From<OpenAiCodexAuthSession> for RuntimeAuthSession {
     fn from(session: OpenAiCodexAuthSession) -> Self {
+        Self {
+            provider_id: session.provider_id,
+            session_id: session.session_id,
+            account_id: session.account_id,
+            expires_at: session.expires_at,
+            updated_at: session.updated_at,
+        }
+    }
+}
+
+impl From<StartedXaiFlow> for StartedRuntimeAuthFlow {
+    fn from(flow: StartedXaiFlow) -> Self {
+        Self {
+            provider_id: xai_provider().provider_id.into(),
+            flow_id: flow.flow_id,
+            authorization_url: flow.authorization_url,
+            redirect_uri: flow.redirect_uri,
+            expected_state: flow.expected_state,
+            phase: flow.phase,
+            callback_bound: flow.callback_bound,
+            last_error_code: flow.last_error_code,
+            updated_at: flow.updated_at,
+        }
+    }
+}
+
+impl From<XaiAuthSession> for RuntimeAuthSession {
+    fn from(session: XaiAuthSession) -> Self {
         Self {
             provider_id: session.provider_id,
             session_id: session.session_id,
@@ -279,6 +326,13 @@ pub fn start_provider_auth_flow(
             profile_id,
             state.openai_auth_config(),
             originator,
+        )
+        .map(Into::into),
+        RuntimeProvider::Xai => xai::start_xai_flow(
+            state,
+            scope_id,
+            profile_id,
+            state.xai_auth_config(),
         )
         .map(Into::into),
         RuntimeProvider::OpenRouter => Err(AuthFlowError::terminal(
@@ -354,6 +408,14 @@ pub fn complete_provider_auth_flow<R: Runtime>(
             &state.openai_auth_config(),
         )
         .map(Into::into),
+        RuntimeProvider::Xai => xai::complete_xai_flow(
+            app,
+            state,
+            flow_id,
+            manual_input,
+            &state.xai_auth_config(),
+        )
+        .map(Into::into),
         RuntimeProvider::OpenRouter => Err(AuthFlowError::terminal(
             "auth_flow_unavailable",
             RuntimeAuthPhase::Failed,
@@ -393,6 +455,10 @@ pub fn refresh_provider_auth_session<R: Runtime>(
             &state.openai_auth_config(),
         )
         .map(Into::into),
+        RuntimeProvider::Xai => {
+            xai::refresh_xai_session(app, state, account_id, &state.xai_auth_config())
+                .map(Into::into)
+        }
         RuntimeProvider::OpenRouter => Err(AuthFlowError::terminal(
             "auth_refresh_unavailable",
             RuntimeAuthPhase::Failed,

@@ -860,7 +860,7 @@ function KeyRayVisual() {
 
       {/* Caption */}
       <text x={cx} y="190" textAnchor="middle" fontFamily="var(--font-mono)" fontSize="8.5" fill="var(--muted-foreground)" opacity="0.7" letterSpacing="2">
-        keys local · 10 providers · no relay
+        keys local · 11 providers · no relay
       </text>
     </svg>
   )

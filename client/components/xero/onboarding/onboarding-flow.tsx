@@ -25,6 +25,7 @@ import {
   type RuntimeSessionView,
   type UpsertNotificationRouteRequestDto,
   type UpsertProviderCredentialRequestDto,
+  type XaiDeviceCodeLoginDto,
 } from "@/src/lib/xero-model"
 import type {
   EnvironmentDiscoveryStatusDto,
@@ -161,6 +162,11 @@ export interface OnboardingFlowProps {
     providerId: RuntimeProviderIdDto
     originator?: string | null
   }) => Promise<ProviderAuthSessionView | null>
+  onStartXaiDeviceCodeLogin?: (request: { providerId: "xai" }) => Promise<XaiDeviceCodeLoginDto>
+  onPollXaiDeviceCodeLogin?: (request: {
+    providerId: "xai"
+    flowId: string
+  }) => Promise<XaiDeviceCodeLoginDto>
   onUpsertNotificationRoute: (
     request: Omit<UpsertNotificationRouteRequestDto, "projectId">,
   ) => Promise<unknown>
@@ -191,6 +197,8 @@ export function OnboardingFlow({
   onUpsertProviderCredential,
   onDeleteProviderCredential,
   onStartOAuthLogin,
+  onStartXaiDeviceCodeLogin,
+  onPollXaiDeviceCodeLogin,
   onUpsertNotificationRoute,
   onComplete,
   onDismiss,
@@ -371,6 +379,8 @@ export function OnboardingFlow({
               onUpsertProviderCredential={onUpsertProviderCredential}
               onDeleteProviderCredential={onDeleteProviderCredential}
               onStartOAuthLogin={onStartOAuthLogin}
+              onStartXaiDeviceCodeLogin={onStartXaiDeviceCodeLogin}
+              onPollXaiDeviceCodeLogin={onPollXaiDeviceCodeLogin}
             />
           ) : null}
           {currentStep.id === "project" ? (

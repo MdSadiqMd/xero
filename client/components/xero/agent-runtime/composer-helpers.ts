@@ -72,6 +72,11 @@ function formatComposerRevision(value: number | null | undefined): string {
   return Number.isFinite(value) && typeof value === 'number' && value > 0 ? `revision ${value}` : 'revision unavailable'
 }
 
+function getComposerModelDisplayLabel(model: AgentPaneView['providerModelCatalog']['models'][number]): string {
+  const displayName = model.displayName.trim()
+  return displayName.length > 0 ? displayName : model.label
+}
+
 export function getComposerModelGroups(
   models: AgentPaneView['providerModelCatalog']['models'],
   currentSelectionKey: string | null | undefined = null,
@@ -85,9 +90,10 @@ export function getComposerModelGroups(
 
   for (const model of visibleModels) {
     const existingGroup = groups.get(model.groupId)
+    const modelLabel = getComposerModelDisplayLabel(model)
     const nextItem: ComposerModelOption = {
       value: model.selectionKey,
-      label: model.availability === 'orphaned' ? `${model.label} · unavailable` : model.label,
+      label: model.availability === 'orphaned' ? `${modelLabel} · unavailable` : modelLabel,
     }
 
     if (existingGroup) {
@@ -302,7 +308,7 @@ export function getComposerCatalogStatusCopy(
     return {
       catalogLabel: catalog.stateLabel,
       catalogDetail: catalog.detail,
-      thinkingDetail: `${selectedModel.label} is not present in the latest ${catalog.providerLabel} catalog, so thinking options stay unavailable until discovery confirms it.`,
+      thinkingDetail: `${getComposerModelDisplayLabel(selectedModel)} is not present in the latest ${catalog.providerLabel} catalog, so thinking options stay unavailable until discovery confirms it.`,
     }
   }
 
@@ -310,7 +316,7 @@ export function getComposerCatalogStatusCopy(
     return {
       catalogLabel: catalog.stateLabel,
       catalogDetail: catalog.detail,
-      thinkingDetail: `${selectedModel.label} does not expose configurable thinking for this provider catalog.`,
+      thinkingDetail: `${getComposerModelDisplayLabel(selectedModel)} does not expose configurable thinking for this provider catalog.`,
     }
   }
 

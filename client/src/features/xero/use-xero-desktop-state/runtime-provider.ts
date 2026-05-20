@@ -115,6 +115,73 @@ function defaultThinkingEffortFor(
   return options[0] ?? null
 }
 
+export function isSelectableXaiComposerModelId(modelId: string): boolean {
+  const normalized = modelId.trim().split('/').pop()?.toLowerCase() ?? ''
+  return normalized === 'grok-4.3' || normalized === 'grok-4.3-latest'
+}
+
+export function displayNameForProviderModel(
+  providerId: ProviderCredentialDto['providerId'],
+  model: Pick<ProviderModelDto, 'modelId' | 'displayName'>,
+): string {
+  if (providerId === 'xai') {
+    return xaiModelDisplayName(model.modelId)
+  }
+  return model.displayName.trim() || model.modelId.trim()
+}
+
+function xaiModelDisplayName(modelId: string): string {
+  const raw = modelId.trim()
+  if (!raw) return modelId
+
+  const parts = raw
+    .split(/[-_]+/u)
+    .map((part) => part.trim())
+    .filter(Boolean)
+
+  if (parts.length === 0) return raw
+
+  const out: string[] = []
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]
+    const lower = part.toLowerCase()
+    if (/^\d{4}$/u.test(part)) continue
+    const next = parts[index + 1]?.toLowerCase()
+    if (lower === 'non' && next === 'reasoning') {
+      out.push('Non-reasoning')
+      index += 1
+      continue
+    }
+    if (lower === 'multi' && next === 'agent') {
+      out.push('Multi-agent')
+      index += 1
+      continue
+    }
+    if (lower === 'grok') {
+      out.push('Grok')
+      continue
+    }
+    if (lower === 'xai') {
+      out.push('xAI')
+      continue
+    }
+    if (/^\d+(?:\.\d+)?$/u.test(part)) {
+      out.push(normalizeXaiVersion(part))
+      continue
+    }
+    out.push(`${lower.charAt(0).toUpperCase()}${lower.slice(1)}`)
+  }
+
+  return out.join(' ') || raw
+}
+
+function normalizeXaiVersion(part: string): string {
+  const [major, minor] = part.split('.')
+  if (!minor) return part
+  const normalizedMinor = minor.replace(/0+$/u, '') || '0'
+  return `${major}.${normalizedMinor}`
+}
+
 export function getProviderModelCatalogForProvider(
   catalogs: Record<string, ProviderModelCatalogDto> | null | undefined,
   providerId: ProviderCredentialDto['providerId'] | null | undefined,
@@ -162,6 +229,7 @@ export function buildComposerModelOptions(
     for (const model of catalog.models) {
       const modelId = model.modelId.trim()
       if (modelId.length === 0) continue
+      if (credential.providerId === 'xai' && !isSelectableXaiComposerModelId(modelId)) continue
       const thinkingEffortOptions = thinkingEffortListFor(model)
       options.push({
         selectionKey: buildComposerModelSelectionKey(credential.providerId, modelId),
@@ -169,7 +237,7 @@ export function buildComposerModelOptions(
         providerId: credential.providerId,
         providerLabel,
         modelId,
-        displayName: model.displayName.trim() || modelId,
+        displayName: displayNameForProviderModel(credential.providerId, model),
         thinking: model.thinking,
         thinkingEffortOptions,
         defaultThinkingEffort: defaultThinkingEffortFor(model, thinkingEffortOptions),

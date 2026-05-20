@@ -32,13 +32,15 @@ use crate::{
         CommandResult, SessionContextLimitConfidenceDto, SessionContextLimitSourceDto,
     },
     provider_credentials::{
-        ProviderCredentialProfile, ProviderCredentialReadinessStatus, ProviderCredentialsView,
+        ProviderCredentialKind, ProviderCredentialProfile, ProviderCredentialReadinessStatus,
+        ProviderCredentialsView,
     },
     runtime::{
-        ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, DEEPSEEK_PROVIDER_ID,
-        GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
-        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENAI_CODEX_SUPPORTED_MODEL_IDS,
-        OPENROUTER_PROVIDER_ID, VERTEX_PROVIDER_ID,
+        is_supported_xai_text_model_id, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID,
+        BEDROCK_PROVIDER_ID, DEEPSEEK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
+        GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
+        OPENAI_CODEX_PROVIDER_ID, OPENAI_CODEX_SUPPORTED_MODEL_IDS, OPENROUTER_PROVIDER_ID,
+        VERTEX_PROVIDER_ID, XAI_DEFAULT_MODEL_ID, XAI_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -55,6 +57,7 @@ pub enum ProviderModelCatalogSource {
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderModelThinkingEffort {
+    None,
     Minimal,
     Low,
     Medium,
@@ -221,6 +224,7 @@ struct ProviderModelCatalogCacheLoad {
 #[derive(Debug, Clone)]
 enum ProviderModelCatalogRefreshTarget {
     OpenAiCodex,
+    Xai,
     OpenRouter,
     Anthropic,
     AnthropicAmbient,
@@ -240,6 +244,7 @@ impl ProviderModelCatalogRefreshTarget {
                     OpenAiCompatibleModelListStrategy::Manual => "manual".into(),
                 }),
             },
+            Self::Xai => CachedProviderModelCatalogScope::default(),
             _ => CachedProviderModelCatalogScope::default(),
         }
     }
@@ -415,6 +420,21 @@ fn refresh_provider_model_catalog(
 ) -> ProviderModelCatalog {
     let live_models = match refresh_target {
         ProviderModelCatalogRefreshTarget::OpenAiCodex => Ok(openai_codex_projection()),
+        ProviderModelCatalogRefreshTarget::Xai => {
+            let Some(token) = xai_catalog_bearer_token(profile, provider_profiles) else {
+                let diagnostic = missing_xai_credential_diagnostic(profile);
+                return match refresh_context.cached_row.as_ref() {
+                    Some(cached) => catalog_from_cached_row(profile, cached, Some(diagnostic)),
+                    None => {
+                        unavailable_or_manual_catalog(profile, refresh_target, Some(diagnostic))
+                    }
+                };
+            };
+
+            fetch_xai_models(&token, &state.xai_auth_config())
+                .map(normalize_xai_models)
+                .map_err(diagnostic_from_auth_error)
+        }
         ProviderModelCatalogRefreshTarget::OpenRouter => {
             let Some(secret) =
                 provider_profiles.matched_api_key_credential_for_profile(&profile.profile_id)
@@ -588,6 +608,231 @@ fn openai_codex_projection() -> Vec<ProviderModelRecord> {
         .collect()
 }
 
+fn xai_projection() -> Vec<ProviderModelRecord> {
+    vec![xai_model_record(XAI_DEFAULT_MODEL_ID.into())]
+}
+
+fn xai_model_record(model_id: String) -> ProviderModelRecord {
+    provider_model_record(
+        XAI_PROVIDER_ID,
+        model_id.clone(),
+        xai_display_name(&model_id),
+        xai_thinking_capability(&model_id),
+        xai_context_window_tokens(&model_id),
+        None,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct XaiModelListResponse {
+    #[serde(default)]
+    data: Vec<XaiModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct XaiModelEntry {
+    id: String,
+}
+
+fn fetch_xai_models(
+    bearer_token: &str,
+    config: &crate::auth::XaiAuthConfig,
+) -> Result<Vec<XaiModelEntry>, crate::auth::AuthFlowError> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(config.timeout)
+        .build()
+        .map_err(|error| {
+            crate::auth::AuthFlowError::terminal(
+                "xai_model_catalog_http_client_unavailable",
+                crate::commands::RuntimeAuthPhase::Failed,
+                format!("Xero could not build the xAI model catalog HTTP client: {error}"),
+            )
+        })?;
+    let response = client
+        .get("https://api.x.ai/v1/models")
+        .bearer_auth(bearer_token.trim())
+        .send()
+        .map_err(|error| {
+            crate::auth::AuthFlowError::retryable(
+                "xai_model_catalog_unreachable",
+                crate::commands::RuntimeAuthPhase::Failed,
+                format!("Xero could not reach the xAI model catalog: {error}"),
+            )
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(crate::auth::AuthFlowError::new(
+            if matches!(status.as_u16(), 401 | 403) {
+                "xai_model_catalog_auth_failed"
+            } else if status.is_server_error() {
+                "xai_model_catalog_unavailable"
+            } else {
+                "xai_model_catalog_rejected"
+            },
+            crate::commands::RuntimeAuthPhase::Failed,
+            format!(
+                "xAI returned HTTP {} while discovering models.{}",
+                status.as_u16(),
+                if body.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" Response: {}", body.trim())
+                }
+            ),
+            status.is_server_error(),
+        ));
+    }
+
+    let payload: XaiModelListResponse = response.json().map_err(|error| {
+        crate::auth::AuthFlowError::terminal(
+            "xai_model_catalog_decode_failed",
+            crate::commands::RuntimeAuthPhase::Failed,
+            format!("Xero could not decode the xAI model catalog response: {error}"),
+        )
+    })?;
+    Ok(payload.data)
+}
+
+fn normalize_xai_models(models: Vec<XaiModelEntry>) -> Vec<ProviderModelRecord> {
+    let normalized = models
+        .into_iter()
+        .filter_map(|model| {
+            let model_id = model.id.trim().to_owned();
+            if model_id.is_empty() || !is_supported_xai_text_model_id(&model_id) {
+                return None;
+            }
+            Some(xai_model_record(model_id))
+        })
+        .collect::<Vec<_>>();
+
+    finalize_xai_models(normalized)
+}
+
+fn xai_cached_models(models: &[ProviderModelRecord]) -> Vec<ProviderModelRecord> {
+    let normalized = models
+        .iter()
+        .filter_map(|model| {
+            let model_id = model.model_id.trim().to_owned();
+            if model_id.is_empty() || !is_supported_xai_text_model_id(&model_id) {
+                return None;
+            }
+            Some(xai_model_record(model_id))
+        })
+        .collect::<Vec<_>>();
+
+    finalize_xai_models(normalized)
+}
+
+fn finalize_xai_models(mut normalized: Vec<ProviderModelRecord>) -> Vec<ProviderModelRecord> {
+    if !normalized
+        .iter()
+        .any(|model| model.model_id == XAI_DEFAULT_MODEL_ID)
+    {
+        normalized.extend(xai_projection());
+    }
+    normalized.sort_by(|left, right| {
+        left.display_name
+            .cmp(&right.display_name)
+            .then(left.model_id.cmp(&right.model_id))
+    });
+    normalized.dedup_by(|left, right| left.model_id == right.model_id);
+    normalized
+}
+
+fn xai_display_name(model_id: &str) -> String {
+    match model_id {
+        XAI_DEFAULT_MODEL_ID => "Grok 4.3".into(),
+        other => {
+            let parts = other
+                .split(['-', '_'])
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            let mut out = Vec::new();
+            let mut index = 0;
+            while index < parts.len() {
+                let part = parts[index];
+                let lower = part.to_ascii_lowercase();
+                if part.len() == 4 && part.chars().all(|c| c.is_ascii_digit()) {
+                    index += 1;
+                    continue;
+                }
+                let next = parts.get(index + 1).map(|value| value.to_ascii_lowercase());
+                if lower == "non" && next.as_deref() == Some("reasoning") {
+                    out.push("Non-reasoning".to_owned());
+                    index += 2;
+                    continue;
+                }
+                if lower == "multi" && next.as_deref() == Some("agent") {
+                    out.push("Multi-agent".to_owned());
+                    index += 2;
+                    continue;
+                }
+                if lower == "grok" {
+                    out.push("Grok".to_owned());
+                    index += 1;
+                    continue;
+                }
+                if lower == "xai" {
+                    out.push("xAI".to_owned());
+                    index += 1;
+                    continue;
+                }
+                if part.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                    out.push(normalize_xai_version_part(part));
+                    index += 1;
+                    continue;
+                }
+                let mut chars = lower.chars();
+                if let Some(first) = chars.next() {
+                    out.push(format!("{}{}", first.to_ascii_uppercase(), chars.as_str()));
+                }
+                index += 1;
+            }
+            if out.is_empty() {
+                other.into()
+            } else {
+                out.join(" ")
+            }
+        }
+    }
+}
+
+fn normalize_xai_version_part(part: &str) -> String {
+    let Some((major, minor)) = part.split_once('.') else {
+        return part.to_owned();
+    };
+    let normalized_minor = minor.trim_end_matches('0');
+    format!(
+        "{major}.{}",
+        if normalized_minor.is_empty() {
+            "0"
+        } else {
+            normalized_minor
+        }
+    )
+}
+
+fn xai_thinking_capability(model_id: &str) -> ProviderModelThinkingCapability {
+    if is_supported_xai_text_model_id(model_id) {
+        supported_thinking_capability_with_default(
+            vec![
+                ProviderModelThinkingEffort::None,
+                ProviderModelThinkingEffort::Low,
+                ProviderModelThinkingEffort::Medium,
+                ProviderModelThinkingEffort::High,
+            ],
+            ProviderModelThinkingEffort::Low,
+        )
+    } else {
+        unsupported_thinking_capability()
+    }
+}
+
+fn xai_context_window_tokens(model_id: &str) -> Option<u64> {
+    is_supported_xai_text_model_id(model_id).then_some(1_000_000)
+}
+
 fn openai_codex_thinking_capability(model_id: &str) -> ProviderModelThinkingCapability {
     let mut effort_options = vec![
         ProviderModelThinkingEffort::Minimal,
@@ -696,6 +941,7 @@ fn catalog_source_string(source: &ProviderModelCatalogSource) -> &'static str {
 
 fn provider_model_thinking_effort_string(effort: &ProviderModelThinkingEffort) -> String {
     match effort {
+        ProviderModelThinkingEffort::None => "none",
         ProviderModelThinkingEffort::Minimal => "minimal",
         ProviderModelThinkingEffort::Low => "low",
         ProviderModelThinkingEffort::Medium => "medium",
@@ -948,12 +1194,19 @@ fn supports_openrouter_reasoning(supported_parameters: &[String]) -> bool {
 fn supported_thinking_capability(
     effort_options: Vec<ProviderModelThinkingEffort>,
 ) -> ProviderModelThinkingCapability {
+    supported_thinking_capability_with_default(effort_options, ProviderModelThinkingEffort::Medium)
+}
+
+fn supported_thinking_capability_with_default(
+    effort_options: Vec<ProviderModelThinkingEffort>,
+    preferred_default: ProviderModelThinkingEffort,
+) -> ProviderModelThinkingCapability {
     ProviderModelThinkingCapability {
         supported: true,
         default_effort: effort_options
             .iter()
             .copied()
-            .find(|effort| *effort == ProviderModelThinkingEffort::Medium)
+            .find(|effort| *effort == preferred_default)
             .or_else(|| effort_options.first().copied()),
         effort_options,
     }
@@ -972,6 +1225,11 @@ fn catalog_from_cached_row(
     cached: &CachedProviderModelCatalogRow,
     diagnostic: Option<ProviderModelCatalogDiagnostic>,
 ) -> ProviderModelCatalog {
+    let models = if profile.provider_id == XAI_PROVIDER_ID {
+        xai_cached_models(&cached.models)
+    } else {
+        cached.models.clone()
+    };
     ProviderModelCatalog {
         profile_id: profile.profile_id.clone(),
         provider_id: profile.provider_id.clone(),
@@ -980,7 +1238,7 @@ fn catalog_from_cached_row(
         fetched_at: Some(cached.fetched_at.clone()),
         last_success_at: Some(cached.last_success_at.clone()),
         last_refresh_error: diagnostic,
-        models: cached.models.clone(),
+        models,
     }
 }
 
@@ -990,6 +1248,16 @@ fn unavailable_or_manual_catalog(
     diagnostic: Option<ProviderModelCatalogDiagnostic>,
 ) -> ProviderModelCatalog {
     match refresh_target {
+        ProviderModelCatalogRefreshTarget::Xai => ProviderModelCatalog {
+            profile_id: profile.profile_id.clone(),
+            provider_id: profile.provider_id.clone(),
+            configured_model_id: profile.model_id.clone(),
+            source: ProviderModelCatalogSource::Manual,
+            fetched_at: Some(profile.updated_at.clone()),
+            last_success_at: Some(profile.updated_at.clone()),
+            last_refresh_error: diagnostic,
+            models: xai_projection(),
+        },
         ProviderModelCatalogRefreshTarget::AnthropicAmbient
         | ProviderModelCatalogRefreshTarget::OpenAiCompatible(ResolvedOpenAiCompatibleEndpoint {
             model_list_strategy: OpenAiCompatibleModelListStrategy::Manual,
@@ -1030,6 +1298,7 @@ fn resolve_provider_model_catalog_refresh_target(
 ) -> Result<ProviderModelCatalogRefreshTarget, ProviderModelCatalogDiagnostic> {
     match profile.provider_id.as_str() {
         OPENAI_CODEX_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::OpenAiCodex),
+        XAI_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::Xai),
         OPENROUTER_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::OpenRouter),
         ANTHROPIC_PROVIDER_ID => Ok(ProviderModelCatalogRefreshTarget::Anthropic),
         BEDROCK_PROVIDER_ID | VERTEX_PROVIDER_ID => {
@@ -1269,6 +1538,7 @@ fn readiness_diagnostic(
             | ANTHROPIC_PROVIDER_ID
             | BEDROCK_PROVIDER_ID
             | VERTEX_PROVIDER_ID
+            | XAI_PROVIDER_ID
             | OPENAI_API_PROVIDER_ID
             | DEEPSEEK_PROVIDER_ID
             | OLLAMA_PROVIDER_ID
@@ -1284,6 +1554,7 @@ fn readiness_diagnostic(
         ProviderCredentialReadinessStatus::Ready => None,
         ProviderCredentialReadinessStatus::Missing => Some(match profile.provider_id.as_str() {
             OPENROUTER_PROVIDER_ID => missing_openrouter_credential_diagnostic(profile),
+            XAI_PROVIDER_ID => missing_xai_credential_diagnostic(profile),
             ANTHROPIC_PROVIDER_ID => missing_anthropic_credential_diagnostic(profile),
             BEDROCK_PROVIDER_ID => missing_bedrock_ambient_diagnostic(profile),
             VERTEX_PROVIDER_ID => missing_vertex_ambient_diagnostic(profile),
@@ -1308,6 +1579,14 @@ fn readiness_diagnostic(
                 code: "provider_credentials_unavailable".into(),
                 message: format!(
                     "Xero cannot discover OpenRouter models for provider `{}` because the redacted credential metadata no longer matches the saved app-local secret state.",
+                    profile.provider_id
+                ),
+                retryable: false,
+            },
+            XAI_PROVIDER_ID => ProviderModelCatalogDiagnostic {
+                code: "provider_credentials_unavailable".into(),
+                message: format!(
+                    "Xero cannot discover xAI models for provider `{}` because the redacted credential metadata no longer matches the saved app-local secret state.",
                     profile.provider_id
                 ),
                 retryable: false,
@@ -1354,6 +1633,23 @@ fn is_local_openai_compatible_base_url(base_url: &str) -> bool {
         .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
 }
 
+fn xai_catalog_bearer_token(
+    profile: &ProviderCredentialProfile,
+    provider_profiles: &ProviderCredentialsView,
+) -> Option<String> {
+    provider_profiles
+        .matched_api_key_credential_for_profile(&profile.profile_id)
+        .map(|entry| entry.api_key.clone())
+        .or_else(|| {
+            provider_profiles
+                .record_for_provider(XAI_PROVIDER_ID)
+                .filter(|record| record.kind == ProviderCredentialKind::OAuthSession)
+                .and_then(|record| record.oauth_access_token.clone())
+        })
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
+}
+
 fn anthropic_family_profile_input(
     profile: &ProviderCredentialProfile,
     provider_profiles: &ProviderCredentialsView,
@@ -1370,6 +1666,19 @@ fn anthropic_family_profile_input(
         api_key_updated_at: provider_profiles
             .matched_api_key_credential_for_profile(&profile.profile_id)
             .map(|entry| entry.updated_at.clone()),
+    }
+}
+
+fn missing_xai_credential_diagnostic(
+    profile: &ProviderCredentialProfile,
+) -> ProviderModelCatalogDiagnostic {
+    ProviderModelCatalogDiagnostic {
+        code: "xai_credential_missing".into(),
+        message: format!(
+            "Xero cannot discover xAI models for provider `{}` because no xAI OAuth session or app-local API key is configured.",
+            profile.provider_id
+        ),
+        retryable: false,
     }
 }
 
@@ -1545,6 +1854,73 @@ mod tests {
                 ProviderModelThinkingEffort::Medium,
                 ProviderModelThinkingEffort::High,
                 ProviderModelThinkingEffort::XHigh,
+            ]
+        );
+    }
+
+    #[test]
+    fn xai_projection_seeds_grok_4_3_with_reasoning_and_context() {
+        let models = xai_projection();
+        let grok = models
+            .iter()
+            .find(|model| model.model_id == XAI_DEFAULT_MODEL_ID)
+            .expect("grok-4.3 model choice");
+
+        assert_eq!(grok.display_name, "Grok 4.3");
+        assert_eq!(grok.context_window_tokens, Some(1_000_000));
+        assert_eq!(
+            grok.thinking.effort_options,
+            vec![
+                ProviderModelThinkingEffort::None,
+                ProviderModelThinkingEffort::Low,
+                ProviderModelThinkingEffort::Medium,
+                ProviderModelThinkingEffort::High,
+            ]
+        );
+        assert_eq!(
+            grok.thinking.default_effort,
+            Some(ProviderModelThinkingEffort::Low)
+        );
+    }
+
+    #[test]
+    fn xai_catalog_only_exposes_grok_4_3_text_models() {
+        let models = normalize_xai_models(vec![
+            XaiModelEntry {
+                id: "grok-4.20-0309-non-reasoning".into(),
+            },
+            XaiModelEntry {
+                id: "grok-4.20-0309-reasoning".into(),
+            },
+            XaiModelEntry {
+                id: "grok-4.20-multi-agent-0309".into(),
+            },
+            XaiModelEntry {
+                id: "grok-imagine-image-quality".into(),
+            },
+            XaiModelEntry {
+                id: "grok-imagine-video".into(),
+            },
+            XaiModelEntry {
+                id: "grok-latest".into(),
+            },
+            XaiModelEntry {
+                id: "grok-4.3-latest".into(),
+            },
+        ]);
+
+        let model_ids = models
+            .iter()
+            .map(|model| model.model_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(model_ids, vec!["grok-4.3", "grok-4.3-latest"]);
+        assert_eq!(
+            models[1].thinking.effort_options,
+            vec![
+                ProviderModelThinkingEffort::None,
+                ProviderModelThinkingEffort::Low,
+                ProviderModelThinkingEffort::Medium,
+                ProviderModelThinkingEffort::High,
             ]
         );
     }

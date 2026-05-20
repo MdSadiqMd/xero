@@ -11,10 +11,11 @@ use xero_agent_core::{
 
 use crate::{
     auth::{
-        load_latest_openai_codex_session, load_openai_codex_session,
-        load_openai_codex_session_for_profile_link, now_timestamp,
+        load_latest_openai_codex_session, load_latest_xai_session, load_openai_codex_session,
+        load_openai_codex_session_for_profile_link, load_xai_session,
+        load_xai_session_for_profile_link, now_timestamp,
         openai_compatible::resolve_openai_compatible_endpoint_for_profile,
-        refresh_provider_auth_session, StoredOpenAiCodexSession,
+        refresh_provider_auth_session, StoredOpenAiCodexSession, StoredXaiSession,
     },
     commands::{
         agent_tooling_settings::resolve_agent_tool_application_style, default_runtime_agent_id,
@@ -40,10 +41,11 @@ use crate::{
         AgentProviderConfig, AnthropicProviderConfig, AutonomousToolRuntime, BedrockProviderConfig,
         DeepSeekProviderConfig, OpenAiCodexResponsesProviderConfig, OpenAiCompatibleProviderConfig,
         OpenAiResponsesProviderConfig, OwnedAgentRunRequest, RuntimeProvider, VertexProviderConfig,
-        ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, DEEPSEEK_PROVIDER_ID,
-        GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
-        OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
-        OWNED_AGENT_RUNTIME_KIND, OWNED_AGENT_SUPERVISOR_KIND, VERTEX_PROVIDER_ID,
+        XaiResponsesProviderConfig, ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID,
+        BEDROCK_PROVIDER_ID, DEEPSEEK_PROVIDER_ID, GEMINI_AI_STUDIO_PROVIDER_ID,
+        GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID, OPENAI_API_PROVIDER_ID,
+        OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID, OWNED_AGENT_RUNTIME_KIND,
+        OWNED_AGENT_SUPERVISOR_KIND, VERTEX_PROVIDER_ID, XAI_PROVIDER_ID,
     },
     state::DesktopState,
 };
@@ -53,6 +55,7 @@ use super::{project::resolve_project_root, session::command_error_from_auth};
 const DEFAULT_OPENAI_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const OPENAI_CODEX_REFRESH_SKEW_SECONDS: i64 = 60;
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
 
 pub(crate) struct RuntimeRunLaunchOutcome {
     pub repo_root: PathBuf,
@@ -721,6 +724,52 @@ pub(crate) fn resolve_owned_agent_provider_config<R: Runtime>(
                 ))
             }
         }
+        XAI_PROVIDER_ID => match active_profile.credential_link.as_ref() {
+            Some(crate::provider_credentials::ProviderCredentialLink::ApiKey { .. }) => {
+                let api_key = runtime_settings.provider_api_key.clone().ok_or_else(|| {
+                    CommandError::user_fixable(
+                        "xai_api_key_missing",
+                        "Xero cannot start the owned xAI adapter because no xAI API key is configured.",
+                    )
+                })?;
+                Ok(AgentProviderConfig::XaiResponses(
+                    XaiResponsesProviderConfig {
+                        provider_id: XAI_PROVIDER_ID.into(),
+                        model_id,
+                        base_url: XAI_API_BASE_URL.into(),
+                        bearer_token: api_key,
+                        timeout_ms: 0,
+                    },
+                ))
+            }
+            Some(link @ crate::provider_credentials::ProviderCredentialLink::Xai { .. }) => {
+                let auth_store_path = state.global_db_path(app)?;
+                let session = load_xai_session_for_profile_link(&auth_store_path, link)
+                    .map_err(command_error_from_auth)?
+                    .ok_or_else(|| {
+                        CommandError::user_fixable(
+                            "xai_auth_missing",
+                            "Xero cannot start the owned xAI adapter because no app-local xAI OAuth session is available.",
+                        )
+                    })?;
+                let session = refresh_xai_session_before_run(app, state, session)?;
+                Ok(xai_provider_config_from_session(model_id.as_str(), session))
+            }
+            _ => {
+                let auth_store_path = state.global_db_path(app)?;
+                if let Some(session) =
+                    load_latest_xai_session(&auth_store_path).map_err(command_error_from_auth)?
+                {
+                    let session = refresh_xai_session_before_run(app, state, session)?;
+                    Ok(xai_provider_config_from_session(model_id.as_str(), session))
+                } else {
+                    Err(CommandError::user_fixable(
+                        "xai_auth_missing",
+                        "Xero cannot start the owned xAI adapter because no xAI OAuth session or API key is configured.",
+                    ))
+                }
+            }
+        },
         OPENROUTER_PROVIDER_ID => {
             let api_key = runtime_settings
                 .provider_api_key
@@ -895,6 +944,37 @@ fn openai_codex_session_needs_refresh(session: &StoredOpenAiCodexSession, now: i
     session.expires_at <= now.saturating_add(OPENAI_CODEX_REFRESH_SKEW_SECONDS)
 }
 
+fn refresh_xai_session_before_run<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopState,
+    session: StoredXaiSession,
+) -> CommandResult<StoredXaiSession> {
+    if !xai_session_needs_refresh(&session, current_unix_timestamp()) {
+        return Ok(session);
+    }
+
+    let refreshed = refresh_provider_auth_session(
+        app,
+        state,
+        RuntimeProvider::Xai,
+        session.account_id.as_str(),
+    )
+    .map_err(command_error_from_auth)?;
+    let auth_store_path = state.global_db_path(app)?;
+    load_xai_session(&auth_store_path, refreshed.account_id.as_str())
+        .map_err(command_error_from_auth)?
+        .ok_or_else(|| {
+            CommandError::retryable(
+                "xai_auth_refresh_missing",
+                "Xero refreshed xAI auth, but the refreshed session was not available in the app-local credential store.",
+            )
+        })
+}
+
+fn xai_session_needs_refresh(session: &StoredXaiSession, now: i64) -> bool {
+    session.expires_at <= now.saturating_add(OPENAI_CODEX_REFRESH_SKEW_SECONDS)
+}
+
 fn current_unix_timestamp() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -913,6 +993,19 @@ fn openai_codex_provider_config_from_session(
         access_token: session.access_token,
         account_id: session.account_id,
         session_id: Some(session.session_id),
+        timeout_ms: 0,
+    })
+}
+
+fn xai_provider_config_from_session(
+    model_id: &str,
+    session: StoredXaiSession,
+) -> AgentProviderConfig {
+    AgentProviderConfig::XaiResponses(XaiResponsesProviderConfig {
+        provider_id: XAI_PROVIDER_ID.into(),
+        model_id: model_id.into(),
+        base_url: XAI_API_BASE_URL.into(),
+        bearer_token: session.access_token,
         timeout_ms: 0,
     })
 }
@@ -1051,6 +1144,9 @@ pub(crate) fn agent_provider_config_identity(config: &AgentProviderConfig) -> (S
             (config.provider_id.clone(), config.model_id.clone())
         }
         AgentProviderConfig::OpenAiCodexResponses(config) => {
+            (config.provider_id.clone(), config.model_id.clone())
+        }
+        AgentProviderConfig::XaiResponses(config) => {
             (config.provider_id.clone(), config.model_id.clone())
         }
         AgentProviderConfig::OpenAiCompatible(config) => {
@@ -1501,6 +1597,7 @@ fn active_profile_selection_from_override(
         AgentProviderConfig::Fake => OPENAI_CODEX_PROVIDER_ID.to_string(),
         AgentProviderConfig::OpenAiResponses(config) => config.provider_id.clone(),
         AgentProviderConfig::OpenAiCodexResponses(config) => config.provider_id.clone(),
+        AgentProviderConfig::XaiResponses(config) => config.provider_id.clone(),
         AgentProviderConfig::OpenAiCompatible(config) => config.provider_id.clone(),
         AgentProviderConfig::DeepSeek(_) => DEEPSEEK_PROVIDER_ID.to_string(),
         AgentProviderConfig::Anthropic(config) => config.provider_id.clone(),
@@ -1514,6 +1611,7 @@ fn active_profile_selection_from_override(
             AgentProviderConfig::Fake => Some("test-model".to_string()),
             AgentProviderConfig::OpenAiResponses(config) => Some(config.model_id),
             AgentProviderConfig::OpenAiCodexResponses(config) => Some(config.model_id),
+            AgentProviderConfig::XaiResponses(config) => Some(config.model_id),
             AgentProviderConfig::OpenAiCompatible(config) => Some(config.model_id),
             AgentProviderConfig::DeepSeek(config) => Some(config.model_id),
             AgentProviderConfig::Anthropic(config) => Some(config.model_id),

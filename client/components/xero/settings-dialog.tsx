@@ -52,6 +52,7 @@ import type {
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
   UpsertProviderCredentialRequestDto,
+  XaiDeviceCodeLoginDto,
 } from "@/src/lib/xero-model"
 import type { StartTargetDto, StartTargetInputDto } from "@/src/lib/xero-desktop"
 import type { ToolCallGroupingPreference } from "@/src/features/xero/tool-call-grouping-preference"
@@ -352,6 +353,11 @@ export interface SettingsDialogProps {
     providerId: RuntimeProviderIdDto
     originator?: string | null
   }) => Promise<ProviderAuthSessionView | null>
+  onStartXaiDeviceCodeLogin?: (request: { providerId: "xai" }) => Promise<XaiDeviceCodeLoginDto>
+  onPollXaiDeviceCodeLogin?: (request: {
+    providerId: "xai"
+    flowId: string
+  }) => Promise<XaiDeviceCodeLoginDto>
   doctorReport?: XeroDoctorReportDto | null
   doctorReportStatus?: DoctorReportRunStatus
   doctorReportError?: OperatorActionErrorView | null
@@ -381,6 +387,7 @@ export interface SettingsDialogProps {
     providerProfileId: string | null
     runtimeAgentId: RuntimeAgentIdDto | null
     thinkingEffort:
+      | "none"
       | "minimal"
       | "low"
       | "medium"
@@ -393,6 +400,7 @@ export interface SettingsDialogProps {
     providerProfileId: string | null
     runtimeAgentId: RuntimeAgentIdDto | null
     thinkingEffort:
+      | "none"
       | "minimal"
       | "low"
       | "medium"
@@ -475,6 +483,8 @@ export function SettingsDialog({
   onUpsertProviderCredential,
   onDeleteProviderCredential,
   onStartOAuthLogin,
+  onStartXaiDeviceCodeLogin,
+  onPollXaiDeviceCodeLogin,
   doctorReport = null,
   doctorReportStatus = "idle",
   doctorReportError = null,
@@ -679,6 +689,8 @@ export function SettingsDialog({
           onUpsertProviderCredential={onUpsertProviderCredential}
           onDeleteProviderCredential={onDeleteProviderCredential}
           onStartOAuthLogin={onStartOAuthLogin}
+          onStartXaiDeviceCodeLogin={onStartXaiDeviceCodeLogin}
+          onPollXaiDeviceCodeLogin={onPollXaiDeviceCodeLogin}
         />
       )
     }

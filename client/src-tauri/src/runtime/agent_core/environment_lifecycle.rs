@@ -461,6 +461,7 @@ fn provider_config_has_credentials(config: &AgentProviderConfig) -> bool {
         AgentProviderConfig::OpenAiCodexResponses(config) => {
             !config.access_token.trim().is_empty() && !config.account_id.trim().is_empty()
         }
+        AgentProviderConfig::XaiResponses(config) => !config.bearer_token.trim().is_empty(),
         AgentProviderConfig::OpenAiCompatible(config) => {
             config
                 .api_key

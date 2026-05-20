@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildComposerAgentSelectionKey,
   getComposerControlInput,
+  getComposerModelGroups,
   parseComposerAgentSelectionKey,
   runtimeAgentIdForCustomBaseCapability,
 } from '@/components/xero/agent-runtime/composer-helpers'
@@ -95,6 +96,35 @@ describe('parseComposerAgentSelectionKey', () => {
   it('returns null when a custom selection references an unknown definition', () => {
     const parsed = parseComposerAgentSelectionKey('custom:missing', [customDefinition])
     expect(parsed).toBeNull()
+  })
+})
+
+describe('getComposerModelGroups', () => {
+  it('uses displayName for picker labels even when label still carries the raw model id', () => {
+    const model: AgentProviderModelView = {
+      ...baseModel,
+      selectionKey: 'xai:grok-4.3-latest',
+      providerId: 'xai',
+      providerLabel: 'xAI / Grok',
+      modelId: 'grok-4.3-latest',
+      label: 'grok-4.3-latest',
+      displayName: 'Grok 4.3 Latest',
+      groupId: 'xai',
+      groupLabel: 'xAI / Grok',
+    }
+
+    expect(getComposerModelGroups([model])).toEqual([
+      {
+        id: 'xai',
+        label: 'xAI / Grok',
+        items: [
+          {
+            value: 'xai:grok-4.3-latest',
+            label: 'Grok 4.3 Latest',
+          },
+        ],
+      },
+    ])
   })
 })
 

@@ -165,6 +165,7 @@ import type {
   SyncNotificationAdaptersResponseDto,
   UpsertMcpServerRequestDto,
   UpsertNotificationRouteRequestDto,
+  XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model'
 import {
   getCloudProviderPreset,
@@ -409,6 +410,27 @@ function makeProviderAuthSession(overrides: Partial<ProviderAuthSessionDto> = {}
     callbackBound: true,
     authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=test',
     redirectUri: 'http://127.0.0.1:1455/auth/callback',
+    lastErrorCode: null,
+    lastError: null,
+    updatedAt: '2026-04-15T20:00:00Z',
+    ...overrides,
+  }
+}
+
+function makeXaiDeviceCodeLogin(
+  overrides: Partial<XaiDeviceCodeLoginDto> = {},
+): XaiDeviceCodeLoginDto {
+  return {
+    providerId: 'xai',
+    flowId: 'xai-device-flow-1',
+    userCode: 'GROK-1234',
+    verificationUri: 'https://auth.x.ai/device',
+    verificationUriComplete: 'https://auth.x.ai/device?user_code=GROK-1234',
+    intervalSeconds: 5,
+    expiresAt: 1_779_984_000,
+    phase: 'awaiting_manual_input',
+    sessionId: null,
+    accountId: null,
     lastErrorCode: null,
     lastError: null,
     updatedAt: '2026-04-15T20:00:00Z',
@@ -2248,6 +2270,9 @@ function createAdapter(options?: {
     completeOAuthCallback: async () => {
       return makeProviderAuthSession()
     },
+    startXaiDeviceCodeLogin: async () => makeXaiDeviceCodeLogin(),
+    pollXaiDeviceCodeLogin: async (request) =>
+      makeXaiDeviceCodeLogin({ flowId: request.flowId }),
     startRuntimeSession: async () => {
       currentRuntimeSession = makeRuntimeSession('project-1')
       return currentRuntimeSession
@@ -3815,9 +3840,10 @@ describe('XeroApp current UI', () => {
 
     fireEvent.click(screen.getByLabelText('Settings'))
     expect(await screen.findByRole('heading', { name: 'Providers' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible()
+    const openAiCodexCard = getProviderCard('OpenAI Codex')
+    expect(within(openAiCodexCard).getByRole('button', { name: 'Sign in' })).toBeVisible()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    fireEvent.click(within(openAiCodexCard).getByRole('button', { name: 'Sign in' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }))
     expect(await screen.findByText('Telegram')).toBeVisible()

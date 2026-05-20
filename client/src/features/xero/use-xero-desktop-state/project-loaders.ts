@@ -406,9 +406,31 @@ async function loadProjectStateFromBundle({
   const snapshotProject = mapProjectSnapshot(bundle.projectSnapshot, {
     notificationDispatches: finalDispatches,
   })
+  const selectedAgentSessionId = snapshotProject.selectedAgentSession?.agentSessionId ?? null
+  const runtimeRunDiagnostic = bundleDiagnostic(bundle, 'runtimeRun')
   const status = bundle.repositoryStatus ? mapRepositoryStatus(bundle.repositoryStatus) : cachedRepositoryStatus
   const runtime = bundle.runtimeSession ? mapRuntimeSession(bundle.runtimeSession) : refs.runtimeSessionsRef.current[projectId] ?? null
-  const runtimeRun = bundle.runtimeRun ? mapRuntimeRun(bundle.runtimeRun) : refs.runtimeRunsRef.current[projectId] ?? null
+  const cachedRuntimeRun = refs.runtimeRunsRef.current[projectId] ?? null
+  let runtimeRun = bundle.runtimeRun
+    ? mapRuntimeRun(bundle.runtimeRun)
+    : runtimeRunDiagnostic
+      ? cachedRuntimeRun
+      : null
+  if (runtimeRun?.agentSessionId !== selectedAgentSessionId) {
+    runtimeRun = null
+  }
+  let runtimeRunLoadError = runtimeRunDiagnostic?.message ?? null
+  if (!bundle.runtimeRun && !runtimeRunDiagnostic && selectedAgentSessionId) {
+    try {
+      const response = await adapter.getRuntimeRun(projectId, selectedAgentSessionId)
+      const loadedRuntimeRun = response ? mapRuntimeRun(response) : null
+      runtimeRun = loadedRuntimeRun?.agentSessionId === selectedAgentSessionId ? loadedRuntimeRun : null
+      runtimeRunLoadError = null
+    } catch (error) {
+      runtimeRun = cachedRuntimeRun?.agentSessionId === selectedAgentSessionId ? cachedRuntimeRun : null
+      runtimeRunLoadError = getDesktopErrorMessage(error)
+    }
+  }
   const autonomousInspection = bundle.autonomousRun
     ? mapAutonomousRunInspection(bundle.autonomousRun)
     : {
@@ -475,12 +497,12 @@ async function loadProjectStateFromBundle({
         [projectId]: runtime,
       }))
     }
-    if (bundle.runtimeRun) {
+    if (runtimeRun) {
       setters.setRuntimeRuns((currentRuntimeRuns) => ({
         ...currentRuntimeRuns,
-        [projectId]: runtimeRun!,
+        [projectId]: runtimeRun,
       }))
-    } else if (bundleDiagnostic(bundle, 'runtimeRun') === null) {
+    } else if (runtimeRunLoadError === null) {
       setters.setRuntimeRuns((currentRuntimeRuns) => removeProjectRecord(currentRuntimeRuns, projectId))
     }
     applyAutonomousInspectionRecords(projectId, autonomousInspection, setters, {
@@ -492,7 +514,7 @@ async function loadProjectStateFromBundle({
     }))
     setters.setRuntimeRunLoadErrors((currentErrors) => ({
       ...currentErrors,
-      [projectId]: diagnosticMessage(bundle, 'runtimeRun'),
+      [projectId]: runtimeRunLoadError,
     }))
     setters.setAutonomousRunLoadErrors((currentErrors) => ({
       ...currentErrors,
@@ -510,7 +532,7 @@ async function loadProjectStateFromBundle({
       diagnosticMessage(bundle, 'notificationDispatches'),
       diagnosticMessage(bundle, 'notificationRoutes'),
       diagnosticMessage(bundle, 'runtimeSession'),
-      diagnosticMessage(bundle, 'runtimeRun'),
+      runtimeRunLoadError,
       diagnosticMessage(bundle, 'autonomousRun'),
     ),
   )

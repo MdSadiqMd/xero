@@ -13,6 +13,7 @@ Use the first-class provider presets when your provider is listed directly in Pr
 | Anthropic | API key | Add an app-local Anthropic key. Manual model entry remains available if catalog discovery is unavailable. |
 | DeepSeek | API key | Add an app-local DeepSeek key. Xero uses the hosted `https://api.deepseek.com` endpoint, live `/models` discovery, and DeepSeek V4 reasoning replay metadata. |
 | GitHub Models | API token | Add a GitHub token in Providers settings. Device-flow onboarding is intentionally out of scope for this phase. |
+| xAI / Grok | OAuth, device code, or API key | Sign in with an eligible Grok or X subscription account, use device-code login for SSH and remote contexts, or add an app-local xAI API key. Xero uses `https://api.x.ai/v1/responses` with `grok-4.3` seeded in the catalog. |
 | OpenAI-compatible | API key or custom endpoint | Use for OpenAI, LiteLLM, Mistral, hosted compatible gateways, and custom `/v1` routes that do not have a first-class provider preset. |
 | Ollama | Local | Start Ollama and use the default local endpoint or an edited local base URL. No placeholder API key is stored. |
 | Azure OpenAI | API key | Use for deployment URLs that need Azure `api-version` metadata. Model ID should match the deployment name. |
@@ -44,6 +45,18 @@ Hosted recipes require an app-local API key unless the recipe explicitly marks t
 Azure AI Foundry uses the OpenAI-compatible endpoint route. If the endpoint is an Azure OpenAI deployment URL that requires `api-version` metadata, use the dedicated Azure OpenAI preset instead.
 
 DeepSeek is now a first-class provider, not an OpenAI-compatible recipe. Hosted DeepSeek uses OpenAI-style chat completions and tool calls through `https://api.deepseek.com`; local/self-hosted DeepSeek DSML prompt encoding is a separate protocol path and is not mixed into the hosted adapter.
+
+## xAI / Grok Onboarding
+
+Xero supports xAI / Grok as a first-class provider through browser OAuth, device-code OAuth, or an app-local xAI API key. API keys come from the xAI console and can also be represented by `XAI_API_KEY` for scripts and imported setup, but the desktop app stores configured credentials through app-local provider credential state.
+
+Browser OAuth uses xAI's shared public OAuth client and stores only the provider credential link plus refreshable session tokens in the app-local credential store. End users do not configure an OAuth client id, and Xero does not use X Developer Portal OAuth clients for this flow. OAuth eligibility depends on xAI account and subscription policy. If a signed-in account is ineligible, re-run Check connection after switching accounts or use an API key from the xAI console.
+
+Use device-code login when the app is running through SSH, on a remote desktop, or in any context where a localhost browser callback is inconvenient. Xero shows the user code and verification URL, polls without printing tokens, and stores the completed session through the same xAI OAuth credential path.
+
+The browser callback matches the working xAI local-agent contract used by OpenClaw: `http://127.0.0.1:56121/callback`. xAI may label the consent application as Grok Build because this is a shared OAuth client for local Grok agents. For Xero-specific client experiments, set `XERO_XAI_OAUTH_CLIENT_ID` at build time or in the local process environment; Xero ignores ordinary X Developer Portal OAuth client ids because they are for X API endpoints such as `api.x.com` and are rejected by `auth.x.ai`. The xAI API console currently exposes API keys, not self-service OAuth client registration.
+
+xAI runs use the native Responses API at `https://api.x.ai/v1/responses`, not the generic OpenAI-compatible profile. The initial catalog seeds `grok-4.3` with documented 1,000,000-token context and reasoning support, then learns additional models from live catalog refresh when credentials are available. xAI-native X Search, web search, code execution, file attachments, image generation, and voice are not enabled in this provider path yet.
 
 ## GitHub Models Onboarding
 

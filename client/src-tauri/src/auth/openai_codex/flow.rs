@@ -305,7 +305,13 @@ pub fn complete_openai_codex_flow<R: Runtime>(
             format!("Xero could not find the active OpenAI auth flow `{flow_id}`."),
         )
     })?;
-    let super::super::ActiveAuthFlow::OpenAiCodex(selected_flow) = selected_flow;
+    let super::super::ActiveAuthFlow::OpenAiCodex(selected_flow) = selected_flow else {
+        return Err(AuthFlowError::terminal(
+            "auth_flow_provider_mismatch",
+            RuntimeAuthPhase::Failed,
+            format!("Xero rejected auth flow `{flow_id}` because it is not an OpenAI login."),
+        ));
+    };
 
     if selected_flow.is_cancelled() {
         return Err(AuthFlowError::terminal(
@@ -462,7 +468,15 @@ pub fn cancel_openai_codex_flow(
         .with_flow(
             flow_id,
             |flow| -> Result<RuntimeAuthStateSnapshot, AuthFlowError> {
-                let super::super::ActiveAuthFlow::OpenAiCodex(flow) = flow;
+                let super::super::ActiveAuthFlow::OpenAiCodex(flow) = flow else {
+                    return Err(AuthFlowError::terminal(
+                        "auth_flow_provider_mismatch",
+                        RuntimeAuthPhase::Failed,
+                        format!(
+                            "Xero rejected auth flow `{flow_id}` because it is not an OpenAI login."
+                        ),
+                    ));
+                };
                 flow.mark_cancelled();
                 Ok(flow.snapshot())
             },

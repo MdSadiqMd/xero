@@ -318,6 +318,7 @@ fn map_thinking_capability(
 
 fn map_thinking_effort(effort: ProviderModelThinkingEffort) -> ProviderModelThinkingEffortDto {
     match effort {
+        ProviderModelThinkingEffort::None => ProviderModelThinkingEffortDto::None,
         ProviderModelThinkingEffort::Minimal => ProviderModelThinkingEffortDto::Minimal,
         ProviderModelThinkingEffort::Low => ProviderModelThinkingEffortDto::Low,
         ProviderModelThinkingEffort::Medium => ProviderModelThinkingEffortDto::Medium,

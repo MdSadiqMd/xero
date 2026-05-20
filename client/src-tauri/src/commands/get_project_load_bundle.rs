@@ -7,8 +7,9 @@ use crate::{
         get_project_snapshot::project_snapshot_record_for_project,
         get_runtime_session::reconcile_runtime_session, map_notification_dispatch_record,
         map_notification_route_credential_readiness, map_notification_route_record,
-        validate_non_empty, CommandError, CommandResult, ProjectLoadBundleDiagnosticDto,
-        ProjectLoadBundleDto, ProjectLoadBundleRequestDto, RuntimeRunDto,
+        validate_non_empty, AgentSessionDto, AgentSessionStatusDto, CommandError, CommandResult,
+        ProjectLoadBundleDiagnosticDto, ProjectLoadBundleDto, ProjectLoadBundleRequestDto,
+        RuntimeRunDto,
     },
     db::project_store,
     git::status,
@@ -81,11 +82,8 @@ fn get_project_load_bundle_blocking<R: Runtime>(
         &mut diagnostics,
     );
 
-    let selected_agent_session_id = project_snapshot
-        .agent_sessions
-        .iter()
-        .find(|session| session.selected)
-        .map(|session| session.agent_session_id.clone());
+    let selected_agent_session_id =
+        resolve_selected_agent_session_id(&project_snapshot.agent_sessions);
 
     let (runtime_run, autonomous_run) = if let Some(agent_session_id) = selected_agent_session_id {
         let before = load_persisted_runtime_run(&repo_root, &project_id, &agent_session_id);
@@ -194,6 +192,18 @@ fn bundle_diagnostic(
     }
 }
 
+fn resolve_selected_agent_session_id(agent_sessions: &[AgentSessionDto]) -> Option<String> {
+    agent_sessions
+        .iter()
+        .find(|session| session.selected && session.status == AgentSessionStatusDto::Active)
+        .or_else(|| {
+            agent_sessions
+                .iter()
+                .find(|session| session.status == AgentSessionStatusDto::Active)
+        })
+        .map(|session| session.agent_session_id.clone())
+}
+
 fn load_notification_routes<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopState,
@@ -227,4 +237,72 @@ fn load_notification_routes<R: Runtime>(
             Ok(mapped_route)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(
+        agent_session_id: &str,
+        selected: bool,
+        status: AgentSessionStatusDto,
+    ) -> AgentSessionDto {
+        AgentSessionDto {
+            project_id: "project-1".into(),
+            agent_session_id: agent_session_id.into(),
+            title: agent_session_id.into(),
+            summary: String::new(),
+            status: status.clone(),
+            selected,
+            remote_visible: false,
+            created_at: "2026-05-19T00:00:00Z".into(),
+            updated_at: "2026-05-19T00:00:00Z".into(),
+            archived_at: (status == AgentSessionStatusDto::Archived)
+                .then(|| "2026-05-19T00:00:00Z".into()),
+            last_run_id: None,
+            last_runtime_kind: None,
+            last_provider_id: None,
+            lineage: None,
+        }
+    }
+
+    #[test]
+    fn selected_agent_session_id_prefers_selected_active_session() {
+        let sessions = vec![
+            session("session-a", false, AgentSessionStatusDto::Active),
+            session("session-b", true, AgentSessionStatusDto::Active),
+        ];
+
+        assert_eq!(
+            resolve_selected_agent_session_id(&sessions),
+            Some("session-b".into())
+        );
+    }
+
+    #[test]
+    fn selected_agent_session_id_falls_back_to_first_active_session() {
+        let sessions = vec![
+            session("session-a", false, AgentSessionStatusDto::Active),
+            session("session-b", false, AgentSessionStatusDto::Active),
+        ];
+
+        assert_eq!(
+            resolve_selected_agent_session_id(&sessions),
+            Some("session-a".into())
+        );
+    }
+
+    #[test]
+    fn selected_agent_session_id_ignores_archived_selected_session() {
+        let sessions = vec![
+            session("session-archived", true, AgentSessionStatusDto::Archived),
+            session("session-active", false, AgentSessionStatusDto::Active),
+        ];
+
+        assert_eq!(
+            resolve_selected_agent_session_id(&sessions),
+            Some("session-active".into())
+        );
+    }
 }

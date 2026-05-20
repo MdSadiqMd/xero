@@ -277,6 +277,39 @@ describe('buildComposerModelOptions', () => {
     expect(options).toHaveLength(1)
     expect(options[0].providerId).toBe('openrouter')
   })
+
+  it('only exposes supported xAI 4.3 text models to the composer', () => {
+    const credentials = makeSnapshot([
+      makeCredential({ providerId: 'xai', kind: 'oauth_session', readinessProof: 'oauth_session' }),
+    ])
+    const catalogs = {
+      'xai-default': makeCatalog('xai', [
+        {
+          modelId: 'grok-4.20-0309-non-reasoning',
+          displayName: 'grok-4.20-0309-non-reasoning',
+        },
+        {
+          modelId: 'grok-4.20-0309-reasoning',
+          displayName: 'grok-4.20-0309-reasoning',
+        },
+        {
+          modelId: 'grok-4.20-multi-agent-0309',
+          displayName: 'grok-4.20-multi-agent-0309',
+        },
+        { modelId: 'grok-imagine-image-quality', displayName: 'grok-imagine-image-quality' },
+        { modelId: 'grok-imagine-video', displayName: 'grok-imagine-video' },
+        { modelId: 'grok-latest', displayName: 'grok-latest', thinking: true },
+        { modelId: 'grok-4.3-latest', displayName: 'grok-4.3-latest', thinking: true },
+      ]),
+    }
+
+    const options = buildComposerModelOptions(credentials, catalogs)
+
+    expect(options.map((option) => option.displayName)).toEqual([
+      'Grok 4.3 Latest',
+    ])
+    expect(options[0]?.thinkingEffortOptions).toEqual(['medium', 'high'])
+  })
 })
 
 describe('isAgentRuntimeBlocked', () => {

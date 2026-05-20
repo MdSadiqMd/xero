@@ -17,9 +17,12 @@ const IDB_COMPANION_SHA256: &str =
 const IDB_COMPANION_DIR: &str = "idb-companion.universal";
 const BUILD_COOKIE_IMPORTER_ENV: &str = "XERO_BUILD_COOKIE_IMPORTER";
 const SKIP_COOKIE_IMPORTER_ENV: &str = "XERO_SKIP_COOKIE_IMPORTER";
+const XAI_OAUTH_CLIENT_ID_ENV: &str = "XERO_XAI_OAUTH_CLIENT_ID";
+const LEGACY_XAI_OAUTH_CLIENT_ID_ENV: &str = "XAI_OAUTH_CLIENT_ID";
 
 fn main() {
     configure_custom_cfgs();
+    configure_xai_oauth_build_env();
     tauri_build::build();
     compile_dictation_shim();
     build_cookie_importer();
@@ -31,6 +34,21 @@ fn main() {
 fn configure_custom_cfgs() {
     println!("cargo:rustc-check-cfg=cfg(xero_dictation_native_shim)");
     println!("cargo:rustc-check-cfg=cfg(xero_dictation_modern_sdk)");
+}
+
+fn configure_xai_oauth_build_env() {
+    println!("cargo:rerun-if-env-changed={XAI_OAUTH_CLIENT_ID_ENV}");
+    println!("cargo:rerun-if-env-changed={LEGACY_XAI_OAUTH_CLIENT_ID_ENV}");
+
+    let client_id = std::env::var(XAI_OAUTH_CLIENT_ID_ENV)
+        .ok()
+        .or_else(|| std::env::var(LEGACY_XAI_OAUTH_CLIENT_ID_ENV).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    if let Some(client_id) = client_id {
+        println!("cargo:rustc-env={XAI_OAUTH_CLIENT_ID_ENV}={client_id}");
+    }
 }
 
 fn compile_dictation_shim() {

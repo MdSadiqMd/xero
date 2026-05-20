@@ -142,6 +142,7 @@ describe('provider-models', () => {
     expect(getProviderModelCatalogConfiguredModel(catalog)?.modelId).toBe('openai/o4-mini')
     expect(getProviderModelById(catalog, 'anthropic/claude-3.7-sonnet')?.displayName).toBe('Claude 3.7 Sonnet')
     expect(hasProviderModelCatalogSnapshot(catalog)).toBe(true)
+    expect(getProviderModelThinkingEffortLabel('none')).toBe('None')
     expect(getProviderModelThinkingEffortLabel('x_high')).toBe('Very high')
     expect(getProviderModelCatalogFreshnessLabel(catalog)).toContain('2m / 24h TTL')
     expect(catalog.capabilities?.requestPreview.headers[0]).toContain('[redacted]')

@@ -8,6 +8,7 @@ import {
   OllamaIcon,
   OpenAIIcon,
   OpenRouterIcon,
+  XAIIcon,
 } from "@/components/landing/brand-icons"
 
 type Provider = {
@@ -49,6 +50,12 @@ const providers: Provider[] = [
     badgeClass: "bg-foreground text-background",
   },
   {
+    name: "xAI / Grok",
+    plan: "OAuth, device code, or API key",
+    icon: <XAIIcon className="h-4 w-4" />,
+    badgeClass: "bg-foreground text-background",
+  },
+  {
     name: "Ollama",
     plan: "Local models, no network",
     icon: <OllamaIcon className="h-5 w-5" />,
@@ -74,7 +81,7 @@ const providers: Provider[] = [
   },
   {
     name: "OpenAI-compatible",
-    plan: "Groq, xAI, Together, vLLM, LM Studio",
+    plan: "Groq, Together, vLLM, LM Studio",
     icon: <Webhook className="h-4 w-4" />,
     badgeClass: "border border-border bg-secondary text-foreground",
   },
@@ -92,39 +99,39 @@ export function Models() {
             Bring your own model
           </p>
           <h2 className="mt-3 font-sans text-3xl font-medium tracking-tight text-balance sm:text-4xl lg:text-5xl">
-            Ten providers. Keys stay on your machine.
+            Eleven providers. Keys stay on your machine.
           </h2>
         </div>
 
         <div>
           <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {providers.map((p) => (
-                <li
-                  key={p.name}
-                  className="relative flex items-center gap-3 overflow-hidden rounded-xl border border-border/70 bg-card p-4"
+            {providers.map((p) => (
+              <li
+                key={p.name}
+                className="relative flex items-center gap-3 overflow-hidden rounded-xl border border-border/70 bg-card p-4"
+              >
+                <span
+                  className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${p.badgeClass}`}
+                  aria-hidden
                 >
-                  <span
-                    className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${p.badgeClass}`}
-                    aria-hidden
-                  >
-                    {p.icon}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{p.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {p.plan}
-                    </p>
-                  </div>
-                  <span
-                    className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
-                    aria-label="Supported"
-                    title="Supported"
-                  >
-                    <Check className="h-3 w-3" strokeWidth={2.5} />
-                  </span>
-                </li>
-              ))}
-            </ul>
+                  {p.icon}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{p.name}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {p.plan}
+                  </p>
+                </div>
+                <span
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+                  aria-label="Supported"
+                  title="Supported"
+                >
+                  <Check className="h-3 w-3" strokeWidth={2.5} />
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </section>

@@ -40,10 +40,12 @@ import {
 } from './notification-health'
 import {
   buildComposerModelOptions,
+  displayNameForProviderModel,
   getAgentMessagesUnavailableCredentialReason,
   getAgentRuntimeRunUnavailableCredentialReason,
   getAgentSessionUnavailableCredentialReason,
   getProviderModelCatalogForProvider,
+  isSelectableXaiComposerModelId,
   isAgentRuntimeBlocked,
   resolveSelectedModel,
   type ComposerModelOptionView,
@@ -281,6 +283,10 @@ function buildOrphanedAgentProviderModel(
   if (trimmedModelId.length === 0) {
     return null
   }
+  const displayName = displayNameForProviderModel(providerId, {
+    modelId: trimmedModelId,
+    displayName: trimmedModelId,
+  })
 
   return {
     selectionKey: `${providerId}:${trimmedModelId}`,
@@ -289,8 +295,8 @@ function buildOrphanedAgentProviderModel(
     providerId,
     providerLabel,
     modelId: trimmedModelId,
-    label: trimmedModelId,
-    displayName: trimmedModelId,
+    label: displayName,
+    displayName,
     groupId: profileId ? `${profileId}:current_selection` : providerId === 'github_models' ? 'github_models_current_selection' : 'current_selection',
     groupLabel,
     availability: 'orphaned',
@@ -466,7 +472,7 @@ function buildAgentProviderModelCatalog(options: {
     providerId: option.providerId,
     providerLabel: option.providerLabel,
     modelId: option.modelId,
-    label: option.modelId,
+    label: option.displayName,
     displayName: option.displayName,
     groupId: option.providerId,
     groupLabel: option.providerLabel,
@@ -485,7 +491,15 @@ function buildAgentProviderModelCatalog(options: {
     options.selectedModel.modelId?.trim() ||
     catalog?.configuredModelId.trim() ||
     null
-  const selectedModelId = configuredModelId && configuredModelId.length > 0 ? configuredModelId : null
+  const fallbackModelId = providerId
+    ? models.find((model) => model.providerId === providerId)?.modelId ?? null
+    : null
+  const selectedModelId =
+    configuredModelId &&
+    configuredModelId.length > 0 &&
+    !(providerId === 'xai' && !isSelectableXaiComposerModelId(configuredModelId))
+      ? configuredModelId
+      : fallbackModelId
   const selectionKey =
     providerId && selectedModelId ? `${providerId}:${selectedModelId}` : null
   const discoveredSelected = selectionKey

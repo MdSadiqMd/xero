@@ -362,13 +362,19 @@ import {
 import {
   completeOAuthCallbackRequestSchema,
   deleteProviderCredentialRequestSchema,
+  pollXaiDeviceCodeLoginRequestSchema,
   providerCredentialsSnapshotSchema,
   startOAuthLoginRequestSchema,
+  startXaiDeviceCodeLoginRequestSchema,
   upsertProviderCredentialRequestSchema,
+  xaiDeviceCodeLoginSchema,
   type CompleteOAuthCallbackRequestDto,
+  type PollXaiDeviceCodeLoginRequestDto,
   type ProviderCredentialsSnapshotDto,
   type StartOAuthLoginRequestDto,
+  type StartXaiDeviceCodeLoginRequestDto,
   type UpsertProviderCredentialRequestDto,
+  type XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model/provider-credentials'
 import {
   createPreflightProviderProfileRequest,
@@ -690,6 +696,8 @@ const COMMANDS = {
   deleteProviderCredential: 'delete_provider_credential',
   startOAuthLogin: 'start_oauth_login',
   completeOAuthCallback: 'complete_oauth_callback',
+  startXaiDeviceCodeLogin: 'start_xai_device_code_login',
+  pollXaiDeviceCodeLogin: 'poll_xai_device_code_login',
   startOpenAiLogin: 'start_openai_login',
   submitOpenAiCallback: 'submit_openai_callback',
   startAutonomousRun: 'start_autonomous_run',
@@ -845,6 +853,7 @@ export interface SuggestProjectStartTargetsRequestDto {
   providerProfileId?: string | null
   runtimeAgentId?: RuntimeAgentIdDto | null
   thinkingEffort?:
+    | 'none'
     | 'minimal'
     | 'low'
     | 'medium'
@@ -1263,6 +1272,8 @@ export interface XeroDesktopAdapter {
   deleteProviderCredential(providerId: string): Promise<ProviderCredentialsSnapshotDto>
   startOAuthLogin(request: StartOAuthLoginRequestDto): Promise<ProviderAuthSessionDto>
   completeOAuthCallback(request: CompleteOAuthCallbackRequestDto): Promise<ProviderAuthSessionDto>
+  startXaiDeviceCodeLogin(request: StartXaiDeviceCodeLoginRequestDto): Promise<XaiDeviceCodeLoginDto>
+  pollXaiDeviceCodeLogin(request: PollXaiDeviceCodeLoginRequestDto): Promise<XaiDeviceCodeLoginDto>
   resolveOperatorAction(
     projectId: string,
     actionId: string,
@@ -3268,6 +3279,20 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
   completeOAuthCallback(request) {
     const parsed = completeOAuthCallbackRequestSchema.parse(request)
     return invokeTyped(COMMANDS.completeOAuthCallback, providerAuthSessionSchema, {
+      request: parsed,
+    })
+  },
+
+  startXaiDeviceCodeLogin(request) {
+    const parsed = startXaiDeviceCodeLoginRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.startXaiDeviceCodeLogin, xaiDeviceCodeLoginSchema, {
+      request: parsed,
+    })
+  },
+
+  pollXaiDeviceCodeLogin(request) {
+    const parsed = pollXaiDeviceCodeLoginRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.pollXaiDeviceCodeLogin, xaiDeviceCodeLoginSchema, {
       request: parsed,
     })
   },

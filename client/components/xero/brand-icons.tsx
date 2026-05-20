@@ -114,6 +114,21 @@ export function DeepSeekIcon({ className }: BrandIconProps) {
   )
 }
 
+export function XAIIcon({ className }: BrandIconProps) {
+  return (
+    <svg
+      role="img"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      className={cn("h-4 w-4", className)}
+      aria-label="xAI"
+    >
+      <path d="M2.25 3h4.57l5.17 6.58L17.7 3h4.05l-7.81 8.93L22.25 21h-4.58l-5.7-7.15L5.76 21H1.75l8.13-9.36Z" />
+    </svg>
+  )
+}
+
 export function OpenRouterIcon({ className }: BrandIconProps) {
   return (
     <svg

@@ -34,6 +34,7 @@ export const runtimeProviderIdSchema = z.enum([
   'github_models',
   'openai_api',
   'deepseek',
+  'xai',
   'ollama',
   'azure_openai',
   'gemini_ai_studio',
@@ -42,7 +43,7 @@ export const runtimeProviderIdSchema = z.enum([
 ])
 export const writableRuntimeSettingsProviderIdSchema = z.enum(['openrouter', 'openai_codex', 'anthropic'])
 
-export const runtimeRunThinkingEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'x_high'])
+export const runtimeRunThinkingEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'x_high'])
 export const runtimeRunApprovalModeSchema = z.enum(['suggest', 'auto_edit', 'yolo'])
 export const agentToolApplicationStyleSchema = z.enum(['conservative', 'balanced', 'declarative_first'])
 export const agentToolApplicationStyleResolutionSourceSchema = z.enum(['global_default', 'model_override'])
@@ -1202,6 +1203,8 @@ export function getRuntimeRunApprovalModeLabel(mode: RuntimeRunApprovalModeDto):
 
 export function getRuntimeRunThinkingEffortLabel(effort: RuntimeRunThinkingEffortDto | null | undefined): string {
   switch (effort) {
+    case 'none':
+      return 'None'
     case 'minimal':
       return 'Minimal'
     case 'low':

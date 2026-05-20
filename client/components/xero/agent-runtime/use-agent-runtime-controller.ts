@@ -112,7 +112,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
 const AUTO_COMPACT_STORAGE_KEY = 'xero.agent.autoCompact.enabled'
 const COMPOSER_SETTINGS_STORAGE_KEY = 'xero.agent.composer.settings.v1'
 const COMPOSER_SETTINGS_VERSION = 1
-const COMPOSER_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'x_high'] as const
+const COMPOSER_THINKING_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'x_high'] as const
 const COMPOSER_APPROVAL_MODES = ['suggest', 'auto_edit', 'yolo'] as const
 
 interface StoredComposerSettings {

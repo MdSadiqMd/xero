@@ -363,6 +363,7 @@ fn select_openai_profile_id(
 fn profile_link_updated_at(link: &ProviderCredentialLink) -> String {
     match link {
         ProviderCredentialLink::OpenAiCodex { updated_at, .. }
+        | ProviderCredentialLink::Xai { updated_at, .. }
         | ProviderCredentialLink::ApiKey { updated_at }
         | ProviderCredentialLink::Local { updated_at }
         | ProviderCredentialLink::Ambient { updated_at } => normalize_updated_at(updated_at),

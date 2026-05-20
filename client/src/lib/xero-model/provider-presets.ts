@@ -15,6 +15,7 @@ export type ProviderRuntimeKind =
   | 'anthropic'
   | 'openai_compatible'
   | 'deepseek'
+  | 'xai'
   | 'gemini'
 export type ProviderPresetId =
   | 'openrouter'
@@ -22,6 +23,7 @@ export type ProviderPresetId =
   | 'github_models'
   | 'openai_api'
   | 'deepseek'
+  | 'xai'
   | 'ollama'
   | 'azure_openai'
   | 'gemini_ai_studio'
@@ -45,6 +47,8 @@ export interface CloudProviderPreset {
   manualModelAllowed: boolean
   supportsCatalogRefresh: boolean
   connectionHint: string
+  browserOAuthSupported?: boolean
+  deviceCodeSupported?: boolean
 }
 
 const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
@@ -119,6 +123,26 @@ const CLOUD_PROVIDER_PRESETS: CloudProviderPreset[] = [
     manualModelAllowed: true,
     supportsCatalogRefresh: true,
     connectionHint: 'Uses the built-in DeepSeek endpoint preset.',
+  },
+  {
+    providerId: 'xai',
+    runtimeKind: 'xai',
+    label: 'xAI / Grok',
+    description: "Use xAI-hosted Grok models through Xero's native Responses API adapter.",
+    defaultProfileId: 'xai-default',
+    defaultProfileLabel: 'xAI / Grok',
+    defaultModelId: 'grok-4.3',
+    presetId: 'xai',
+    authMode: 'api_key',
+    baseUrlMode: 'none',
+    apiVersionMode: 'none',
+    regionMode: 'none',
+    projectIdMode: 'none',
+    manualModelAllowed: true,
+    supportsCatalogRefresh: true,
+    connectionHint: 'Use browser sign-in, device code, or an app-local xAI API key.',
+    browserOAuthSupported: true,
+    deviceCodeSupported: true,
   },
   {
     providerId: 'github_models',

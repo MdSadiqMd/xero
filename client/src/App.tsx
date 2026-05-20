@@ -1156,6 +1156,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
     upsertProviderCredential,
     deleteProviderCredential,
     startOAuthLogin,
+    startXaiDeviceCodeLogin,
+    pollXaiDeviceCodeLogin,
     refreshMcpRegistry,
     upsertMcpServer,
     removeMcpServer,
@@ -1627,6 +1629,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
       providerProfileId: string | null
       runtimeAgentId: RuntimeAgentIdDto | null
       thinkingEffort:
+        | 'none'
         | 'minimal'
         | 'low'
         | 'medium'
@@ -1681,6 +1684,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
       | RuntimeAgentIdDto
       | null = null
     let storedThinkingEffort:
+      | 'none'
       | 'minimal'
       | 'low'
       | 'medium'
@@ -1715,6 +1719,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           if (typeof parsed.thinkingEffort === 'string') {
             const eff = parsed.thinkingEffort
             if (
+              eff === 'none' ||
               eff === 'minimal' ||
               eff === 'low' ||
               eff === 'medium' ||
@@ -3335,6 +3340,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
           onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
           onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
           onStartOAuthLogin={(request) => startOAuthLogin(request)}
+          onStartXaiDeviceCodeLogin={(request) => startXaiDeviceCodeLogin(request)}
+          onPollXaiDeviceCodeLogin={(request) => pollXaiDeviceCodeLogin(request)}
           onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
           onComplete={() => {
             setOnboardingDismissed(true)
@@ -3636,6 +3643,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onUpsertProviderCredential={(request) => upsertProviderCredential(request)}
                 onDeleteProviderCredential={(providerId) => deleteProviderCredential(providerId)}
                 onStartOAuthLogin={(request) => startOAuthLogin(request)}
+                onStartXaiDeviceCodeLogin={(request) => startXaiDeviceCodeLogin(request)}
+                onPollXaiDeviceCodeLogin={(request) => pollXaiDeviceCodeLogin(request)}
                 doctorReport={doctorReport}
                 doctorReportStatus={doctorReportStatus}
                 doctorReportError={doctorReportError}

@@ -27,6 +27,7 @@ export interface StartTargetsSuggestRequest {
   providerProfileId: string | null
   runtimeAgentId: RuntimeAgentIdDto | null
   thinkingEffort:
+    | "none"
     | "minimal"
     | "low"
     | "medium"

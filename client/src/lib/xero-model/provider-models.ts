@@ -8,7 +8,7 @@ import {
 } from './session-context'
 
 export const providerModelCatalogSourceSchema = z.enum(['live', 'cache', 'manual', 'unavailable'])
-export const providerModelThinkingEffortSchema = z.enum(['minimal', 'low', 'medium', 'high', 'x_high'])
+export const providerModelThinkingEffortSchema = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'x_high'])
 export const providerCapabilityStatusSchema = z.enum([
   'supported',
   'probed',
@@ -462,6 +462,8 @@ export function getProviderModelThinkingEffortLabel(
   effort: ProviderModelThinkingEffortDto | null | undefined,
 ): string {
   switch (effort) {
+    case 'none':
+      return 'None'
     case 'minimal':
       return 'Minimal'
     case 'low':

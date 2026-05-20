@@ -3641,6 +3641,7 @@ fn route_provider_config_model(
         AgentProviderConfig::Fake => {}
         AgentProviderConfig::OpenAiResponses(config) => config.model_id = model_id.into(),
         AgentProviderConfig::OpenAiCodexResponses(config) => config.model_id = model_id.into(),
+        AgentProviderConfig::XaiResponses(config) => config.model_id = model_id.into(),
         AgentProviderConfig::OpenAiCompatible(config) => config.model_id = model_id.into(),
         AgentProviderConfig::DeepSeek(config) => config.model_id = model_id.into(),
         AgentProviderConfig::Anthropic(config) => config.model_id = model_id.into(),

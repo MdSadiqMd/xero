@@ -217,6 +217,7 @@ fn merge_missing_default_agents(mut agents: Vec<AgentEntry>) -> Vec<AgentEntry> 
 /// the snake-case `x_high` spelling the rest of the codebase uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThinkingEffort {
+    None,
     Minimal,
     Low,
     Medium,
@@ -227,6 +228,7 @@ pub enum ThinkingEffort {
 impl ThinkingEffort {
     pub fn label(self) -> &'static str {
         match self {
+            Self::None => "none",
             Self::Minimal => "minimal",
             Self::Low => "low",
             Self::Medium => "medium",
@@ -237,16 +239,18 @@ impl ThinkingEffort {
 
     pub fn next(self) -> Self {
         match self {
+            Self::None => Self::Minimal,
             Self::Minimal => Self::Low,
             Self::Low => Self::Medium,
             Self::Medium => Self::High,
             Self::High => Self::XHigh,
-            Self::XHigh => Self::Minimal,
+            Self::XHigh => Self::None,
         }
     }
 
     pub fn from_str(value: &str) -> Option<Self> {
         Some(match value {
+            "none" => Self::None,
             "minimal" => Self::Minimal,
             "low" => Self::Low,
             "medium" => Self::Medium,
@@ -681,19 +685,15 @@ fn disable_bracketed_paste(enabled: bool) -> Result<(), CliError> {
     execute!(io::stdout(), DisableBracketedPaste).map_err(tui_io_error)
 }
 
-/// Inline viewport heights. We use a few sizes:
-///   - `INLINE_HEIGHT_RUNNING` (11 rows): hosts the streaming spinner
-///     and in-flight tool row above the composer block, with one blank
-///     row above the `Thinking…` footer.
-///   - `INLINE_HEIGHT_SLASH` (12 rows): lets composer-owned slash command
-///     suggestions behave like an inline select list.
-///   - `INLINE_HEIGHT_IDLE` (9 rows): composer + one row of breathing
-///     room above it + composer-to-footer gap + footer. Drops the
-///     reserved spinner rows but keeps a visual buffer so the
-///     composer doesn't clamp directly against the last response.
-pub const INLINE_HEIGHT_RUNNING: u16 = 11;
-pub const INLINE_HEIGHT_SLASH: u16 = 12;
-pub const INLINE_HEIGHT_IDLE: u16 = 9;
+/// Steady inline viewport height for normal composer states. Rebuilding an
+/// inline ratatui terminal requires clearing/replaying scrollback, which reads
+/// as a flash while typing. Reserving the slash-list/running rows up front
+/// keeps ordinary input, `/` suggestions, and run start/finish on the cheap
+/// diff-only render path.
+const INLINE_HEIGHT_STEADY: u16 = 14;
+pub const INLINE_HEIGHT_RUNNING: u16 = INLINE_HEIGHT_STEADY;
+pub const INLINE_HEIGHT_SLASH: u16 = INLINE_HEIGHT_STEADY;
+pub const INLINE_HEIGHT_IDLE: u16 = INLINE_HEIGHT_STEADY;
 const CONVERSATION_COMPOSER_GAP_ROWS: u16 = 1;
 // Blank row above + the `Thinking…` row. The existing conversation-to-composer
 // gap below this area gives the footer its bottom breathing room.
@@ -725,12 +725,9 @@ fn desired_bottom_panel_height(app: &App, _terminal_height: u16) -> u16 {
     } else {
         composer_required_height
     };
-    let fixed_height = match (running, slash::is_visible(app)) {
-        (true, true) => INLINE_HEIGHT_RUNNING.max(INLINE_HEIGHT_SLASH),
-        (true, false) => INLINE_HEIGHT_RUNNING,
-        (false, true) => INLINE_HEIGHT_SLASH,
-        (false, false) => INLINE_HEIGHT_IDLE,
-    };
+    let fixed_height = INLINE_HEIGHT_IDLE
+        .max(INLINE_HEIGHT_RUNNING)
+        .max(INLINE_HEIGHT_SLASH);
     fixed_height.max(required_height)
 }
 
@@ -4065,6 +4062,20 @@ mod tests {
     }
 
     #[test]
+    fn slash_root_suggestions_keep_steady_inline_viewport_height() {
+        let mut app = empty_app();
+        let idle_height = desired_inline_height(&app, 40);
+        app.replace_composer("/");
+
+        assert!(slash::is_visible(&app));
+        assert_eq!(
+            desired_inline_height(&app, 40),
+            idle_height,
+            "opening slash suggestions should not request an inline viewport rebuild"
+        );
+    }
+
+    #[test]
     fn slash_partial_enter_uses_selected_inline_suggestion() {
         let mut app = empty_app();
         app.replace_composer("/prov");
@@ -4093,6 +4104,35 @@ mod tests {
     }
 
     #[test]
+    fn running_state_keeps_steady_inline_viewport_height() {
+        let mut app = empty_app();
+        let idle_height = desired_inline_height(&app, 40);
+        app.run_detail = Some(RunDetail {
+            run_id: "steady-running".into(),
+            status: "running".into(),
+            messages: vec![RuntimeMessageRow {
+                role: "user".into(),
+                content: "prompt".into(),
+                attachments: Vec::new(),
+                thinking: None,
+                tool_calls: Vec::new(),
+            }],
+            events: Vec::new(),
+            in_progress_text: None,
+            in_progress_reasoning: None,
+            tokens_used: None,
+            context_window: None,
+            started_at: Some(Instant::now()),
+        });
+
+        assert_eq!(
+            desired_inline_height(&app, 40),
+            idle_height,
+            "run start should stay on the existing inline viewport"
+        );
+    }
+
+    #[test]
     fn idle_inline_viewport_keeps_gap_above_composer() {
         let app = empty_app();
         let rows = render_rows(&app, 100, desired_inline_height(&app, 40));
@@ -4112,12 +4152,12 @@ mod tests {
     }
 
     #[test]
-    fn multiline_composer_grows_inline_viewport_past_idle_height() {
+    fn multiline_composer_fits_steady_inline_viewport_height() {
         let mut app = empty_app();
         app.replace_composer("\n\n\n");
 
         assert_eq!(composer::height(&app), 8);
-        assert_eq!(desired_inline_height(&app, 40), 11);
+        assert_eq!(desired_inline_height(&app, 40), INLINE_HEIGHT_IDLE);
     }
 
     #[test]
@@ -5057,13 +5097,14 @@ mod tests {
 
     #[test]
     fn thinking_effort_cycle_wraps_after_x_high() {
-        let mut effort = ThinkingEffort::Minimal;
+        let mut effort = ThinkingEffort::None;
         for expected in [
+            ThinkingEffort::Minimal,
             ThinkingEffort::Low,
             ThinkingEffort::Medium,
             ThinkingEffort::High,
             ThinkingEffort::XHigh,
-            ThinkingEffort::Minimal,
+            ThinkingEffort::None,
         ] {
             effort = effort.next();
             assert_eq!(effort, expected);

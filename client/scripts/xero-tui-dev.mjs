@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { loadRootDotenv } from '../../scripts/lib/env.mjs'
+
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const clientDir = resolve(scriptDir, '..')
 const repoRoot = resolve(clientDir, '..')
@@ -15,12 +17,13 @@ if (xeroTuiArgs[0] === '--') {
   xeroTuiArgs.shift()
 }
 
+const rootEnv = loadRootDotenv(repoRoot)
 const relayUrl = resolveRelayUrl()
 const cloudUrl = resolveCloudUrl()
 const env = {
-  ...process.env,
-  CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? '4',
-  XERO_REMOTE_RELAY_URL: process.env.XERO_REMOTE_RELAY_URL ?? relayUrl,
+  ...rootEnv,
+  CARGO_BUILD_JOBS: rootEnv.CARGO_BUILD_JOBS ?? '4',
+  XERO_REMOTE_RELAY_URL: rootEnv.XERO_REMOTE_RELAY_URL ?? relayUrl,
 }
 
 main().catch((error) => {
@@ -75,14 +78,14 @@ async function main() {
 
 function resolveRelayUrl() {
   const raw =
-    process.env.XERO_REMOTE_RELAY_URL ||
-    process.env.VITE_XERO_SERVER_URL ||
+    rootEnv.XERO_REMOTE_RELAY_URL ||
+    rootEnv.VITE_XERO_SERVER_URL ||
     'http://127.0.0.1:4000'
   return raw.replace(/\/+$/, '')
 }
 
 function resolveCloudUrl() {
-  const raw = process.env.XERO_CLOUD_DEV_URL || 'http://127.0.0.1:3002'
+  const raw = rootEnv.XERO_CLOUD_DEV_URL || 'http://127.0.0.1:3002'
   return raw.replace(/\/+$/, '')
 }
 
@@ -91,12 +94,12 @@ async function ensureLocalRelay() {
   if (!isLocalRelay(relayUrl)) return null
 
   console.log(`[dev:tui] Local Xero relay is not running at ${relayUrl}; starting Phoenix...`)
-  await runOnce(process.execPath, [preflightScript], { cwd: repoRoot, env: process.env })
+  await runOnce(process.execPath, [preflightScript], { cwd: repoRoot, env })
 
   const logPath = resolve(tmpdir(), `xero-tui-phoenix-${process.pid}.log`)
   const log = createWriteStream(logPath, { flags: 'a' })
   const serverEnv = {
-    ...process.env,
+    ...env,
     ...serverPortEnv(relayUrl),
   }
   const server = spawn(process.platform === 'win32' ? 'mix.bat' : 'mix', ['phx.server'], {
@@ -122,7 +125,7 @@ async function ensureCloudApp() {
   const log = createWriteStream(logPath, { flags: 'a' })
   const cloud = spawn(pnpmCommand(), ['run', 'dev:cloud'], {
     cwd: repoRoot,
-    env: process.env,
+    env,
     shell: process.platform === 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   })

@@ -293,6 +293,18 @@ fn provider_static_capability(provider_id: &str) -> ProviderStaticCapability {
             catalog_kind: "model_provider",
             external_agent_adapter: false,
         },
+        "xai" => ProviderStaticCapability {
+            provider_id: "xai",
+            provider_label: "xAI / Grok",
+            default_model_id: "grok-4.3",
+            runtime_family: "xai",
+            runtime_kind: "xai",
+            auth_method: "oauth_or_api_key",
+            transport_mode: "hosted_api",
+            endpoint_shape: "xai_responses",
+            catalog_kind: "model_provider",
+            external_agent_adapter: false,
+        },
         "ollama" => ProviderStaticCapability {
             provider_id: "ollama",
             provider_label: "Ollama",
@@ -485,6 +497,17 @@ fn tool_call_capability(provider: ProviderStaticCapability) -> ProviderToolCallC
                 "Hosted DeepSeek uses OpenAI-style tool calls; local DSML tool-call encoding is a separate dialect and is not used by this provider path.".into(),
             ],
         },
+        "xai" => ProviderToolCallCapability {
+            status: "supported".into(),
+            source: "static".into(),
+            strictness_behavior: "xai_responses_json_schema_sanitized".into(),
+            schema_dialect: "xai_responses_json_schema".into(),
+            parallel_call_behavior: "provider_decides".into(),
+            known_incompatibilities: vec![
+                "Length and cardinality JSON Schema keywords are stripped before xAI requests."
+                    .into(),
+            ],
+        },
         _ => ProviderToolCallCapability {
             status: "supported".into(),
             source: "static".into(),
@@ -527,10 +550,16 @@ fn reasoning_capability(
             default_effort: input.thinking_default_effort.clone(),
             summary_support: match provider.provider_id {
                 "openai_codex" | "openai_api" => "auto_summary_supported".into(),
+                "xai" if is_xai_grok_4_3_text_model(model_id) => {
+                    "reasoning_summary_delta_supported".into()
+                }
                 "deepseek" => "reasoning_content_replay_required".into(),
                 _ => "provider_default".into(),
             },
-            clamping: "unsupported_effort_dropped_before_request".into(),
+            clamping: match provider.provider_id {
+                "xai" => "none_low_medium_high_exact".into(),
+                _ => "unsupported_effort_dropped_before_request".into(),
+            },
             unsupported_model_fallback: "disable_reasoning_control".into(),
         };
     }
@@ -633,6 +662,7 @@ fn provider_request_preview(
 ) -> ProviderRedactedRequestPreview {
     let route = match provider.provider_id {
         "openai_codex" => "POST /codex/responses",
+        "xai" => "POST /responses",
         "anthropic" => "POST /v1/messages",
         "bedrock" => "aws bedrock-runtime invoke-model",
         "vertex" => "POST /v1/projects/{project}/locations/{region}/publishers/anthropic/models/{model}:rawPredict",
@@ -661,6 +691,7 @@ fn provider_request_preview(
             "chatgpt-account-id: [redacted]".into(),
         ],
         "api_key" => vec!["Authorization/x-api-key: [redacted]".into()],
+        "oauth_or_api_key" => vec!["Authorization: Bearer [redacted]".into()],
         "ambient" => vec!["ambient-cloud-auth: [redacted]".into()],
         _ => Vec::new(),
     };
@@ -703,6 +734,20 @@ fn provider_known_limitations(
             "DeepSeek thinking-mode tool loops require replaying assistant reasoning_content from provider history.".into(),
         );
     }
+    if provider.provider_id == "xai" {
+        limitations.push(
+            "xAI-native X search, web, code, image, and voice tools are not exposed by this Xero-owned adapter."
+                .into(),
+        );
+        limitations.push(
+            "Grok Imagine image and video models require a separate media-generation path and are not exposed as agent chat models."
+                .into(),
+        );
+        limitations.push(
+            "Length and cardinality JSON Schema keywords are stripped before xAI tool schemas are sent."
+                .into(),
+        );
+    }
     limitations
 }
 
@@ -730,6 +775,16 @@ fn provider_remediations(
         remediations.push("Start the local model server before running connection checks.".into());
     }
     remediations
+}
+
+fn is_xai_grok_4_3_text_model(model_id: &str) -> bool {
+    let model_id = model_id
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(model_id)
+        .to_ascii_lowercase();
+    matches!(model_id.as_str(), "grok-4.3" | "grok-4.3-latest")
 }
 
 fn feature(status: &str, source: &str, detail: &str) -> ProviderFeatureCapability {
@@ -831,5 +886,41 @@ mod tests {
             .known_limitations
             .iter()
             .any(|limitation| limitation.contains("DSML")));
+    }
+
+    #[test]
+    fn xai_capabilities_describe_native_responses_adapter() {
+        let mut input = input("xai");
+        input.model_id = "grok-4.3".into();
+        input.context_window_tokens = Some(1_000_000);
+        input.thinking_efforts = vec!["none".into(), "low".into(), "medium".into(), "high".into()];
+        input.thinking_default_effort = Some("low".into());
+
+        let catalog = provider_capability_catalog(input);
+
+        assert_eq!(catalog.provider_label, "xAI / Grok");
+        assert_eq!(catalog.runtime_kind, "xai");
+        assert_eq!(catalog.endpoint_shape, "xai_responses");
+        assert_eq!(catalog.request_preview.route, "POST /responses");
+        assert_eq!(
+            catalog.capabilities.tool_calls.strictness_behavior,
+            "xai_responses_json_schema_sanitized"
+        );
+        assert_eq!(
+            catalog.capabilities.reasoning.clamping,
+            "none_low_medium_high_exact"
+        );
+        assert_eq!(
+            catalog.capabilities.reasoning.summary_support,
+            "reasoning_summary_delta_supported"
+        );
+        assert!(catalog
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("X search")));
+        assert!(catalog
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("Imagine")));
     }
 }

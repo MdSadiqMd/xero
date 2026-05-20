@@ -64,7 +64,7 @@ pub use harness_contract::{
 pub use provider_adapters::{
     create_provider_adapter, AgentProviderConfig, AnthropicProviderConfig, BedrockProviderConfig,
     DeepSeekProviderConfig, OpenAiCodexResponsesProviderConfig, OpenAiCompatibleProviderConfig,
-    OpenAiResponsesProviderConfig, VertexProviderConfig,
+    OpenAiResponsesProviderConfig, VertexProviderConfig, XaiResponsesProviderConfig,
 };
 pub use run::*;
 pub use supervisor::{

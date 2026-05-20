@@ -1972,6 +1972,9 @@ fn context_pressure_from_percent(percent: Option<u64>) -> SessionContextBudgetPr
 }
 
 fn built_in_context_limits(provider: &str, model: &str) -> Option<(u64, u64)> {
+    if provider == "xai" && is_supported_xai_context_model(model) {
+        return Some((1_000_000, DEFAULT_CONTEXT_LIMIT_MAX_OUTPUT_TOKENS));
+    }
     if provider == "deepseek" && model.starts_with("deepseek-v4-") {
         return Some((
             DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS,
@@ -2016,6 +2019,16 @@ fn built_in_context_limits(provider: &str, model: &str) -> Option<(u64, u64)> {
     }
 
     None
+}
+
+fn is_supported_xai_context_model(model: &str) -> bool {
+    let model = model
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    matches!(model.as_str(), "grok-4.3" | "grok-4.3-latest")
 }
 
 fn heuristic_context_window_tokens(provider: &str, model: &str) -> Option<u64> {

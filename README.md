@@ -271,6 +271,7 @@ Xero supports provider profiles for:
 - `anthropic`
 - `deepseek`
 - `github_models`
+- `xai` (xAI / Grok; OAuth, device code, or API key)
 - `openai_api` (OpenAI-compatible)
 - `ollama` (local OpenAI-compatible)
 - `azure_openai`
@@ -279,7 +280,8 @@ Xero supports provider profiles for:
 - `vertex` (ambient GCP creds)
 
 Credentials/config are managed via app state and provider profile stores (not via checked-in env files).
-OpenAI-compatible setup recipes cover LiteLLM, LM Studio, Mistral, Groq, Together AI, NVIDIA NIM, MiniMax, Azure AI Foundry, Atomic Chat local, and custom `/v1` gateways. See `docs/provider-setup-and-diagnostics.md` for the setup and diagnostics workflow, including the current GitHub Models token-based onboarding decision.
+For xAI / Grok OAuth, Xero uses xAI's shared public OAuth client for local Grok agents; ordinary X Developer Portal OAuth client ids are for X API auth and are not accepted by `auth.x.ai`. End users should only need to sign in, use device code, or paste an API key.
+OpenAI-compatible setup recipes cover LiteLLM, LM Studio, Mistral, Groq, Together AI, NVIDIA NIM, MiniMax, Azure AI Foundry, Atomic Chat local, and custom `/v1` gateways. See `docs/provider-setup-and-diagnostics.md` for the setup and diagnostics workflow, including the current GitHub Models token-based onboarding decision and native xAI/Grok setup.
 
 ---
 

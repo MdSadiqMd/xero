@@ -94,6 +94,21 @@ export function XBrandIcon({ className }: BrandIconProps) {
   )
 }
 
+export function XAIIcon({ className }: BrandIconProps) {
+  return (
+    <svg
+      role="img"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="currentColor"
+      className={cn("h-4 w-4", className)}
+      aria-label="xAI"
+    >
+      <path d="M18.901 1.153h3.68l-8.04 9.19 9.46 12.504h-7.406l-5.8-7.584-6.64 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932Zm-1.296 19.488h2.039L6.486 3.24H4.298Z" />
+    </svg>
+  )
+}
+
 export function OllamaIcon({ className }: BrandIconProps) {
   return (
     <svg

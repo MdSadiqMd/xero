@@ -7,11 +7,13 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { loadRootDotenv } from './lib/env.mjs'
 import { createLogger, host, streamRun } from './lib/preflight-utils.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDir, '..')
 const clientDir = resolve(repoRoot, 'client')
+const rootEnv = loadRootDotenv(repoRoot)
 
 const logger = createLogger('start:build')
 
@@ -124,9 +126,9 @@ async function main() {
   // Ad-hoc signing parity with the existing dev runner; users can override
   // by setting TAURI_SIGNING_IDENTITY before invoking `pnpm start`.
   const env = {
-    ...process.env,
-    TAURI_SIGNING_IDENTITY: process.env.TAURI_SIGNING_IDENTITY ?? '-',
-    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? '4',
+    ...rootEnv,
+    TAURI_SIGNING_IDENTITY: rootEnv.TAURI_SIGNING_IDENTITY ?? '-',
+    CARGO_BUILD_JOBS: rootEnv.CARGO_BUILD_JOBS ?? '4',
   }
   await streamRun('pnpm', ['exec', 'tauri', 'build'], { cwd: clientDir, env })
 

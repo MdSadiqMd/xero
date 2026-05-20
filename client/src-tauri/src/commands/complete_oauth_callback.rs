@@ -8,8 +8,8 @@ use crate::{
         validate_non_empty, CommandError, CommandResult, CompleteOAuthCallbackRequestDto,
         ProviderAuthSessionDto,
     },
-    provider_credentials::OPENAI_CODEX_DEFAULT_PROFILE_ID,
-    runtime::{openai_codex_provider, OPENAI_CODEX_PROVIDER_ID},
+    provider_credentials::{OPENAI_CODEX_DEFAULT_PROFILE_ID, XAI_DEFAULT_PROFILE_ID},
+    runtime::{openai_codex_provider, xai_provider, OPENAI_CODEX_PROVIDER_ID, XAI_PROVIDER_ID},
     state::DesktopState,
 };
 
@@ -26,24 +26,26 @@ pub fn complete_oauth_callback<R: Runtime>(
     validate_non_empty(&request.provider_id, "providerId")?;
     validate_non_empty(&request.flow_id, "flowId")?;
 
-    if request.provider_id != OPENAI_CODEX_PROVIDER_ID {
-        return Err(CommandError::user_fixable(
-            "oauth_login_provider_unsupported",
-            format!(
-                "Xero does not support browser-based OAuth for provider `{}`. Only `{}` is wired today.",
-                request.provider_id, OPENAI_CODEX_PROVIDER_ID
-            ),
-        ));
-    }
-
-    let provider = openai_codex_provider();
+    let (provider, profile_id) = match request.provider_id.as_str() {
+        OPENAI_CODEX_PROVIDER_ID => (openai_codex_provider(), OPENAI_CODEX_DEFAULT_PROFILE_ID),
+        XAI_PROVIDER_ID => (xai_provider(), XAI_DEFAULT_PROFILE_ID),
+        _ => {
+            return Err(CommandError::user_fixable(
+                "oauth_login_provider_unsupported",
+                format!(
+                    "Xero does not support browser-based OAuth for provider `{}`. Only `{}` and `{}` are wired today.",
+                    request.provider_id, OPENAI_CODEX_PROVIDER_ID, XAI_PROVIDER_ID
+                ),
+            ));
+        }
+    };
     let session = complete_provider_auth_flow(
         &app,
         state.inner(),
         provider.provider,
         PROVIDER_CREDENTIAL_OAUTH_SCOPE_ID,
         &request.flow_id,
-        OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        profile_id,
         request.manual_input.as_deref(),
     )
     .map_err(command_error_from_auth)?;

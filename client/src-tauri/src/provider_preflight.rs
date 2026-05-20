@@ -4,10 +4,11 @@ use rusqlite::{params, OptionalExtension};
 use tauri::{AppHandle, Runtime};
 use xero_agent_core::{
     provider_capability_catalog, provider_preflight_snapshot,
-    run_openai_compatible_provider_preflight_probe, OpenAiCompatibleProviderPreflightProbeRequest,
-    ProviderCapabilityCatalogInput, ProviderPreflightError, ProviderPreflightErrorClass,
-    ProviderPreflightInput, ProviderPreflightRequiredFeatures, ProviderPreflightSnapshot,
-    ProviderPreflightSource, DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
+    run_openai_compatible_provider_preflight_probe, run_xai_provider_preflight_probe,
+    OpenAiCompatibleProviderPreflightProbeRequest, ProviderCapabilityCatalogInput,
+    ProviderPreflightError, ProviderPreflightErrorClass, ProviderPreflightInput,
+    ProviderPreflightRequiredFeatures, ProviderPreflightSnapshot, ProviderPreflightSource,
+    XaiProviderPreflightProbeRequest, DEFAULT_PROVIDER_CATALOG_TTL_SECONDS,
 };
 
 use crate::{
@@ -31,12 +32,13 @@ use crate::{
         ANTHROPIC_PROVIDER_ID, AZURE_OPENAI_PROVIDER_ID, BEDROCK_PROVIDER_ID, DEEPSEEK_PROVIDER_ID,
         GEMINI_AI_STUDIO_PROVIDER_ID, GITHUB_MODELS_PROVIDER_ID, OLLAMA_PROVIDER_ID,
         OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID, OPENROUTER_PROVIDER_ID,
-        VERTEX_PROVIDER_ID,
+        VERTEX_PROVIDER_ID, XAI_PROVIDER_ID,
     },
     state::DesktopState,
 };
 
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+const XAI_BASE_URL: &str = "https://api.x.ai/v1";
 const PROVIDER_PREFLIGHT_LIVE_PROBE_TIMEOUT_MS: u64 = 5_000;
 
 pub(crate) fn run_selected_provider_preflight<R: Runtime>(
@@ -85,14 +87,24 @@ pub(crate) fn run_selected_provider_preflight<R: Runtime>(
         &catalog,
     )? {
         Some(snapshot) => Some(snapshot),
-        None => live_openai_compatible_preflight_for_profile(
+        None => match live_xai_preflight_for_profile(
             state,
             &provider_profiles,
             profile,
             selected_model_id,
-            required_features,
+            required_features.clone(),
             &catalog,
-        )?,
+        )? {
+            Some(snapshot) => Some(snapshot),
+            None => live_openai_compatible_preflight_for_profile(
+                state,
+                &provider_profiles,
+                profile,
+                selected_model_id,
+                required_features,
+                &catalog,
+            )?,
+        },
     };
     let snapshot = bind_provider_preflight_cache_for_profile(
         state,
@@ -186,6 +198,7 @@ fn provider_preflight_cache_binding_parts(
 ) -> CommandResult<(String, String)> {
     let endpoint_fingerprint = match profile.provider_id.as_str() {
         OPENAI_CODEX_PROVIDER_ID => "https://chatgpt.com/backend-api/codex/responses".into(),
+        XAI_PROVIDER_ID => format!("{XAI_BASE_URL}/responses"),
         OPENAI_API_PROVIDER_ID
         | DEEPSEEK_PROVIDER_ID
         | GITHUB_MODELS_PROVIDER_ID
@@ -253,6 +266,14 @@ fn provider_preflight_cache_binding_parts(
             "openai_codex:{}:{updated_at}",
             xero_agent_core::runtime_trace_id("provider-account", &[account_id])
         ),
+        Some(ProviderCredentialLink::Xai {
+            account_id,
+            updated_at,
+            ..
+        }) => format!(
+            "xai:{}:{updated_at}",
+            xero_agent_core::runtime_trace_id("provider-account", &[account_id])
+        ),
         Some(ProviderCredentialLink::ApiKey { updated_at }) => format!("api_key:{updated_at}"),
         Some(ProviderCredentialLink::Local { updated_at }) => format!("local:{updated_at}"),
         Some(ProviderCredentialLink::Ambient { updated_at }) => format!("ambient:{updated_at}"),
@@ -312,6 +333,68 @@ pub(crate) fn static_provider_preflight_snapshot(
         context_limit_known: None,
         provider_error: None,
     })
+}
+
+fn live_xai_preflight_for_profile(
+    _state: &DesktopState,
+    provider_profiles: &ProviderCredentialsView,
+    profile: &ProviderCredentialProfile,
+    selected_model_id: &str,
+    required_features: ProviderPreflightRequiredFeatures,
+    catalog: &ProviderModelCatalog,
+) -> CommandResult<Option<ProviderPreflightSnapshot>> {
+    if profile.provider_id != XAI_PROVIDER_ID {
+        return Ok(None);
+    }
+
+    let selected_model = catalog
+        .models
+        .iter()
+        .find(|model| model.model_id == selected_model_id);
+    if selected_model.is_none() {
+        return Ok(None);
+    }
+    let context_window_tokens = selected_model.and_then(|model| model.context_window_tokens);
+    let max_output_tokens = selected_model.and_then(|model| model.max_output_tokens);
+
+    Ok(Some(run_xai_provider_preflight_probe(
+        XaiProviderPreflightProbeRequest {
+            profile_id: profile.profile_id.clone(),
+            provider_id: profile.provider_id.clone(),
+            model_id: selected_model_id.into(),
+            base_url: XAI_BASE_URL.into(),
+            bearer_token: xai_preflight_bearer_token(provider_profiles, profile),
+            timeout_ms: PROVIDER_PREFLIGHT_LIVE_PROBE_TIMEOUT_MS,
+            required_features,
+            credential_proof: Some("app_data_profile".into()),
+            context_window_tokens,
+            max_output_tokens,
+            context_limit_source: selected_model
+                .and_then(|model| model.context_limit_source.as_ref())
+                .map(context_limit_source_label)
+                .or_else(|| context_window_tokens.map(|_| "provider_catalog".into())),
+            context_limit_confidence: selected_model
+                .and_then(|model| model.context_limit_confidence.as_ref())
+                .map(context_limit_confidence_label)
+                .or_else(|| context_window_tokens.map(|_| "medium".into())),
+            thinking_supported: selected_model
+                .map(|model| model.thinking.supported)
+                .unwrap_or(false),
+            thinking_efforts: selected_model
+                .map(|model| {
+                    model
+                        .thinking
+                        .effort_options
+                        .iter()
+                        .map(thinking_effort_label)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            thinking_default_effort: selected_model
+                .and_then(|model| model.thinking.default_effort.as_ref())
+                .map(thinking_effort_label),
+        },
+    )))
 }
 
 fn live_openai_compatible_preflight_for_profile(
@@ -653,13 +736,30 @@ fn context_limit_source_label(source: &SessionContextLimitSourceDto) -> String {
 
 fn thinking_effort_label(effort: &ProviderModelThinkingEffort) -> String {
     match effort {
+        ProviderModelThinkingEffort::None => "none",
         ProviderModelThinkingEffort::Minimal => "minimal",
         ProviderModelThinkingEffort::Low => "low",
         ProviderModelThinkingEffort::Medium => "medium",
         ProviderModelThinkingEffort::High => "high",
-        ProviderModelThinkingEffort::XHigh => "xhigh",
+        ProviderModelThinkingEffort::XHigh => "x_high",
     }
     .into()
+}
+
+fn xai_preflight_bearer_token(
+    provider_profiles: &ProviderCredentialsView,
+    profile: &ProviderCredentialProfile,
+) -> Option<String> {
+    provider_profiles
+        .matched_api_key_credential_for_profile(&profile.profile_id)
+        .map(|entry| entry.api_key.clone())
+        .or_else(|| {
+            provider_profiles
+                .record_for_provider(XAI_PROVIDER_ID)
+                .and_then(|record| record.oauth_access_token.clone())
+        })
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
 }
 
 fn provider_credentials_ready_for_preflight<R: Runtime>(

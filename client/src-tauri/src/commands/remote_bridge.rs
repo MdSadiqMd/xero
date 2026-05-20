@@ -1355,6 +1355,7 @@ fn remote_available_models<R: Runtime>(
 
 fn thinking_effort_wire_value(effort: &ProviderModelThinkingEffort) -> &'static str {
     match effort {
+        ProviderModelThinkingEffort::None => "none",
         ProviderModelThinkingEffort::Minimal => "minimal",
         ProviderModelThinkingEffort::Low => "low",
         ProviderModelThinkingEffort::Medium => "medium",
@@ -1589,6 +1590,7 @@ fn selected_runtime_run_controls(
 
 fn parse_thinking_effort(value: &str) -> CommandResult<ProviderModelThinkingEffortDto> {
     match value.trim() {
+        "none" => Ok(ProviderModelThinkingEffortDto::None),
         "minimal" => Ok(ProviderModelThinkingEffortDto::Minimal),
         "low" => Ok(ProviderModelThinkingEffortDto::Low),
         "medium" => Ok(ProviderModelThinkingEffortDto::Medium),

@@ -34,6 +34,7 @@ import {
   type RuntimeUpdatedPayloadDto,
   type SkillRegistryDto,
   type WriteProjectFileResponseDto,
+  type XaiDeviceCodeLoginDto,
 } from '@/src/lib/xero-model'
 import { type ProviderProfilesDto } from '@/src/test/legacy-provider-profiles'
 import { XeroDesktopError, type XeroDesktopAdapter } from '@/src/lib/xero-desktop'
@@ -224,6 +225,27 @@ function makeProviderAuthSession(overrides: Partial<ProviderAuthSessionDto> = {}
     callbackBound: true,
     authorizationUrl: 'https://auth.openai.com/oauth/authorize',
     redirectUri: 'http://127.0.0.1:1455/auth/callback',
+    lastErrorCode: null,
+    lastError: null,
+    updatedAt: '2026-04-13T19:33:32Z',
+    ...overrides,
+  }
+}
+
+function makeXaiDeviceCodeLogin(
+  overrides: Partial<XaiDeviceCodeLoginDto> = {},
+): XaiDeviceCodeLoginDto {
+  return {
+    providerId: 'xai',
+    flowId: 'xai-device-flow-1',
+    userCode: 'GROK-1234',
+    verificationUri: 'https://auth.x.ai/device',
+    verificationUriComplete: 'https://auth.x.ai/device?user_code=GROK-1234',
+    intervalSeconds: 5,
+    expiresAt: 1_779_984_000,
+    phase: 'awaiting_manual_input',
+    sessionId: null,
+    accountId: null,
     lastErrorCode: null,
     lastError: null,
     updatedAt: '2026-04-13T19:33:32Z',
@@ -2224,6 +2246,10 @@ function createMockAdapter(options?: {
     deleteProviderCredential: vi.fn(async () => ({ credentials: [] })),
     startOAuthLogin: vi.fn(async () => makeProviderAuthSession()),
     completeOAuthCallback: vi.fn(async () => makeProviderAuthSession()),
+    startXaiDeviceCodeLogin: vi.fn(async () => makeXaiDeviceCodeLogin()),
+    pollXaiDeviceCodeLogin: vi.fn(async (request) =>
+      makeXaiDeviceCodeLogin({ flowId: request.flowId }),
+    ),
     resolveOperatorAction,
     resumeOperatorRun,
     listNotificationRoutes,
@@ -3721,6 +3747,76 @@ describe('useXeroDesktopState', () => {
     expect(screen.getByTestId('active-project')).toHaveTextContent('orchestra')
     await waitFor(() => expect(screen.getByTestId('project-loading')).toHaveTextContent('false'))
     expect(getProjectLoadBundle).not.toHaveBeenCalled()
+  })
+
+  it('hydrates the selected session runtime run when a startup bundle omits it', async () => {
+    const fallbackSession = {
+      ...makeAgentSession('project-1'),
+      selected: false,
+      lastRunId: 'run-project-1',
+      lastRuntimeKind: 'openai_codex',
+      lastProviderId: 'openai_codex',
+    }
+    const snapshot = {
+      ...makeSnapshot('project-1', 'Xero'),
+      agentSessions: [fallbackSession],
+    }
+    const setup = createMockAdapter({
+      snapshots: {
+        'project-1': snapshot,
+      },
+      runtimeRuns: {
+        'project-1': makeRuntimeRun('project-1'),
+      },
+    })
+    const getProjectLoadBundle = vi.fn(async (): Promise<ProjectLoadBundleDto> => ({
+      projectId: 'project-1',
+      projectSnapshot: snapshot,
+      repositoryStatus: makeStatus('project-1', 'main'),
+      runtimeSession: makeRuntimeSession('project-1'),
+      runtimeRun: null,
+      autonomousRun: null,
+      notificationDispatches: [],
+      notificationRoutes: [],
+      diagnostics: [],
+    }))
+    setup.adapter.getProjectLoadBundle = getProjectLoadBundle
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
+      cancelIdleCallback?: (handle: number) => void
+    }
+    const originalRequestIdleCallback = idleWindow.requestIdleCallback
+    const originalCancelIdleCallback = idleWindow.cancelIdleCallback
+    Object.defineProperty(idleWindow, 'requestIdleCallback', {
+      configurable: true,
+      value: vi.fn(() => 1),
+    })
+    Object.defineProperty(idleWindow, 'cancelIdleCallback', {
+      configurable: true,
+      value: vi.fn(),
+    })
+
+    try {
+      render(<Harness adapter={setup.adapter} />)
+
+      await waitFor(() => expect(screen.getByTestId('active-project-id')).toHaveTextContent('project-1'))
+      expect(getProjectLoadBundle).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        includeNotificationRoutes: true,
+      })
+      expect(setup.getRuntimeRun).toHaveBeenCalledWith('project-1', 'agent-session-main')
+      await waitFor(() => expect(screen.getByTestId('runtime-run-id')).toHaveTextContent('run-project-1'))
+      await waitFor(() => expect(setup.subscribeRuntimeStream).toHaveBeenCalledTimes(1))
+    } finally {
+      Object.defineProperty(idleWindow, 'requestIdleCallback', {
+        configurable: true,
+        value: originalRequestIdleCallback,
+      })
+      Object.defineProperty(idleWindow, 'cancelIdleCallback', {
+        configurable: true,
+        value: originalCancelIdleCallback,
+      })
+    }
   })
 
   it('shows a lightweight project preview before hydrating a cached project selection', async () => {

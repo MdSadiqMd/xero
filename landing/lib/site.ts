@@ -25,6 +25,8 @@ export const siteConfig = {
     "OpenRouter",
     "Claude",
     "OpenAI",
+    "xAI",
+    "Grok",
   ],
 } as const
 
