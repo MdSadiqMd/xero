@@ -21,6 +21,7 @@ const ports = [
   { port: 3000, label: 'client Vite/Tauri dev server' },
   { port: 3001, label: 'landing Next dev server' },
   { port: 3002, label: 'cloud Vite dev server' },
+  { port: 3003, label: 'video Remotion Studio' },
   { port: 4000, label: 'Phoenix relay server' },
 ]
 
@@ -68,6 +69,10 @@ const stopPatterns = [
   {
     label: 'Next dev server',
     test: (command) => /\bnext(?:\.js)?\b.*\bdev\b/.test(command),
+  },
+  {
+    label: 'Remotion Studio',
+    test: (command) => /\bremotion(?:\.cmd)?\b.*\bstudio\b/.test(command),
   },
   {
     label: 'Docker Postgres log tail',
