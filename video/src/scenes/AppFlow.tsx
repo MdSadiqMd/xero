@@ -30,6 +30,7 @@ const HEAD_TURN_END = 613;
 // through two sidebar clicks. It starts brisk, clicks Personas (2nd tab), holds
 // that pace briefly, then accelerates down to the Wallet button near the bottom.
 const SOL_OPEN_CLICK = 650; // click Solana Workbench toolbar icon
+const SOL_CURSOR_START = 628; // combined frame 832 (after LogoReveal)
 const SOL_WORKBENCH_SHOW = SOL_OPEN_CLICK + 4;
 const SOL_CAPTION_START = SOL_WORKBENCH_SHOW + 4;
 const SOL_CLICK = 688; // click Personas (2nd tab) -> swap to bench_2
@@ -1891,11 +1892,11 @@ export const AppFlow: React.FC = () => {
   // Cursor: one continuous pointer opens the Workbench, continues through the
   // sidebar tab sequence, then glitches away only after the final click. All
   // targets track the live camera pan.
-  const solCurIn = interpolate(frame, [618, 624], [0, 1], {
+  const solCurIn = interpolate(frame, [SOL_CURSOR_START, SOL_CURSOR_START + 4], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-  const approachOpen = interpolate(frame, [632, SOL_OPEN_CLICK], [0, 1], {
+  const approachOpen = interpolate(frame, [SOL_CURSOR_START, SOL_OPEN_CLICK], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.inOut(Easing.cubic),
@@ -1930,7 +1931,8 @@ export const AppFlow: React.FC = () => {
       );
   const solCursorExit = cursorExitAt(frame, [SOL_CLICK2]);
   const solCursorVisible =
-    frame >= 618 && frame <= SOL_CLICK2 + CURSOR_GLITCH_DELAY + CURSOR_GLITCH_FRAMES;
+    frame >= SOL_CURSOR_START &&
+    frame <= SOL_CLICK2 + CURSOR_GLITCH_DELAY + CURSOR_GLITCH_FRAMES;
 
   // Camera: zoom into "Create agent", pan to the modal, then zoom out to reveal
   // the whole canvas.
