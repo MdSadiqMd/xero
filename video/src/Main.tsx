@@ -1,0 +1,27 @@
+import { AbsoluteFill, Audio, Series, staticFile } from "remotion";
+import { LogoReveal } from "./scenes/LogoReveal";
+import { AppFlow } from "./scenes/AppFlow";
+
+// Per-scene lengths (frames @ 30fps). Shared so the parent and the standalone
+// scene compositions can't drift out of sync.
+export const LOGO_FRAMES = 218;
+export const APPFLOW_FRAMES = 645;
+export const MAIN_FRAMES = LOGO_FRAMES + APPFLOW_FRAMES;
+
+// The full video: each scene plays in sequence (hard cut between them), with
+// background music whose first 4s (120 frames @ 30fps) are trimmed off.
+export const Main: React.FC = () => {
+  return (
+    <AbsoluteFill>
+      <Audio src={staticFile("bgm.mp3")} trimBefore={150} volume={0.1} />
+      <Series>
+        <Series.Sequence durationInFrames={LOGO_FRAMES}>
+          <LogoReveal />
+        </Series.Sequence>
+        <Series.Sequence durationInFrames={APPFLOW_FRAMES}>
+          <AppFlow />
+        </Series.Sequence>
+      </Series>
+    </AbsoluteFill>
+  );
+};

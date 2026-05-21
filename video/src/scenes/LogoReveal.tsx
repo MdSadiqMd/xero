@@ -1,14 +1,18 @@
 import {
   AbsoluteFill,
+  Audio,
   Easing,
   interpolate,
   random,
+  Sequence,
   spring,
+  staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
 import { loadFont } from "@remotion/google-fonts/Inter";
 import { measureText } from "@remotion/layout-utils";
+import { SceneBackground } from "../SceneBackground";
 
 const { fontFamily } = loadFont("normal", { weights: ["600"] });
 // Italic thin face for the emphasised "your" in the final phrase.
@@ -51,19 +55,20 @@ const FILL_OVERLAP = 4;
 const LOCKUP_START = 30;
 // The logo recoils a few frames after the wordmark starts pushing in.
 const LOGO_SHOVE_DELAY = 4;
-// The gleam sweeps once the shove has settled (~frame 47).
-const SHINE_START = 48;
+// The gleam sweeps once the shove has settled (~frame 47), after a short beat.
+const SHINE_START = 55;
 const SHINE_DURATION = 22;
 const SHINE_HALF_WIDTH = 0.28; // half-width of the bright band (gradient units)
 const SHINE_PEAK = 0.6; // peak white opacity of the gleam
 
 // Second beat: the wordmark shoves the logo off-screen and centers itself,
 // then rapidly cycles through the taglines.
-const SECOND_SHOVE_START = 74;
-const SWITCH_START = 92;
+const SECOND_SHOVE_START = 88;
+const SWITCH_START = 114;
 const PHRASE_STRIDE = 26; // frames each tagline holds before a hard cut
 const GLITCH_IN = 7; // glitch frames as a tagline appears
 const GLITCH_OUT = 4; // glitch frames just before a tagline cuts away
+const LAST_GLITCH_OUT = 208; // the final tagline glitches out to bare bg here
 const PHRASES = [
   "Create Agents",
   "Build workflows",
@@ -225,10 +230,31 @@ const PhraseSwitcher: React.FC<{ size: number; maxWidth: number }> = ({
         extrapolateLeft: "clamp",
         extrapolateRight: "clamp",
       });
-  const intensity = Math.max(inGlitch, outGlitch);
+
+  // The final tagline glitches hard, then dissolves to nothing but the bg.
+  const finalGlitch = isLast
+    ? interpolate(frame, [LAST_GLITCH_OUT, LAST_GLITCH_OUT + 6], [0, 1], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      })
+    : 0;
+  const fadeOut = isLast
+    ? interpolate(frame, [LAST_GLITCH_OUT + 2, LAST_GLITCH_OUT + 9], [0, 1], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.in(Easing.cubic),
+      })
+    : 0;
+  const intensity = Math.max(inGlitch, outGlitch, finalGlitch);
 
   return (
-    <AbsoluteFill style={{ justifyContent: "center", alignItems: "center" }}>
+    <AbsoluteFill
+      style={{
+        justifyContent: "center",
+        alignItems: "center",
+        opacity: 1 - fadeOut,
+      }}
+    >
       <GlitchText fontSize={fontSize} intensity={intensity} seed={frame}>
         {renderPhrase(phrase)}
       </GlitchText>
@@ -409,7 +435,8 @@ export const LogoReveal: React.FC = () => {
   const nudgePx = -0.06 * fontSize;
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#030303" }}>
+    <AbsoluteFill style={{ backgroundColor: "#070707" }}>
+      <SceneBackground />
       <AbsoluteFill
         style={{ justifyContent: "center", alignItems: "center" }}
       >
@@ -470,6 +497,27 @@ export const LogoReveal: React.FC = () => {
         </div>
       </AbsoluteFill>
       <PhraseSwitcher size={size} maxWidth={width * 0.84} />
+      {/* pencil scribble while the logo outline is drawn (from the clip's 8s mark) */}
+      <Sequence from={START_DELAY} durationInFrames={20} layout="none">
+        <Audio src={staticFile("scribble.mp3")} trimBefore={240} volume={0.15} />
+      </Sequence>
+      {/* glitch sound on each text glitch (first 40% of the clip trimmed off) */}
+      {[
+        SWITCH_START,
+        SWITCH_START + PHRASE_STRIDE,
+        SWITCH_START + 2 * PHRASE_STRIDE,
+        SWITCH_START + 3 * PHRASE_STRIDE
+      ].map((at) => (
+        <Sequence key={at} from={at} durationInFrames={13} layout="none">
+          <Audio src={staticFile("glitch2.mp3")} trimBefore={22} volume={0.05} />
+        </Sequence>
+      ))}
+      {/* pop each time the logo is shoved left (first recoil + the eject) */}
+      {[LOCKUP_START + LOGO_SHOVE_DELAY - 4, SECOND_SHOVE_START].map((at) => (
+        <Sequence key={at} from={at} durationInFrames={27} layout="none">
+          <Audio src={staticFile("pop.mp3")} trimBefore={4} volume={0.1} />
+        </Sequence>
+      ))}
     </AbsoluteFill>
   );
 };

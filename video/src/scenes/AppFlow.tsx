@@ -1,0 +1,1813 @@
+import {
+  AbsoluteFill,
+  Audio,
+  Easing,
+  Img,
+  interpolate,
+  random,
+  Sequence,
+  spring,
+  staticFile,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
+import { loadFont } from "@remotion/google-fonts/Inter";
+import { loadFont as loadMono } from "@remotion/google-fonts/JetBrainsMono";
+import { SceneBackground } from "../SceneBackground";
+
+const { fontFamily } = loadFont("normal", { weights: ["400", "600"] });
+const { fontFamily: monoFamily } = loadMono("normal", { weights: ["400", "700"] });
+
+// The app screenshots are 2000x1199; keep that aspect when fitting to frame.
+const SCREEN_RATIO = 2000 / 1199;
+
+// Beat timing (frames @ 30fps).
+const CLICK1 = 38; // click "Create agent"
+const CLICK2 = 68; // click "New agent"
+const CANVAS_IN = 72;
+
+// Scene-3 hand-off (no cut): the list slides out while the app flattens and
+// zooms into the top-left tabs, clicks "Agent", and the screen swaps.
+const T3_START = 150;
+const CLICK3 = 202; // click the "Agent" tab
+const AGENT_TAB = { x: 15.7, y: 4.4 };
+const AGENT_FROM = { x: 24, y: 12 };
+
+// Typed prompt in the composer (placeholder is covered with its own bg color).
+const TYPE_START = 240;
+const TYPE_TEXT = "Tell me about this project";
+const TYPING_FRAMES = 32; // total typing duration (kept fixed; jitter is relative)
+
+// Per-character reveal times with subtle human jitter (slightly uneven
+// keystrokes, a small beat after each space), normalised to TYPING_FRAMES.
+const KEY_TIMES = (() => {
+  const raw: number[] = [];
+  let acc = 0;
+  for (let i = 0; i < TYPE_TEXT.length; i++) {
+    let d = 1.8 + random(`key-${i}`) * 0.6; // 1.8–2.4 frames between keys
+    if (i > 0 && TYPE_TEXT[i - 1] === " ") d += 0.9; // small pause for a new word
+    acc += d;
+    raw.push(acc);
+  }
+  return raw.map((v) => (v / acc) * TYPING_FRAMES);
+})();
+const COMPOSER = {
+  coverLeft: 28.8,
+  coverTop: 83.1,
+  coverWidth: 42,
+  coverHeight: 3.7,
+  textLeft: 29.2,
+  textTop: 85.0,
+};
+
+// Cursor waypoints + click targets, as % of the app area.
+const START = { x: 62, y: 72 };
+const CREATE_AGENT = { x: 51.5, y: 55.7 };
+const NEW_AGENT = { x: 50.4, y: 47.9 };
+
+// "Create agent" modal panel bounds, as % of the app image.
+const MODAL = { left: 34.85, top: 31.6, right: 65.95, bottom: 67.5 };
+
+// Per-segment eased keyframe interpolation (each leg eases in/out, so the
+// camera settles between deliberate moves).
+const kf = (frame: number, times: number[], values: number[]) => {
+  if (frame <= times[0]) return values[0];
+  for (let i = 0; i < times.length - 1; i++) {
+    if (frame <= times[i + 1]) {
+      return interpolate(frame, [times[i], times[i + 1]], [values[i], values[i + 1]], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.inOut(Easing.cubic),
+      });
+    }
+  }
+  return values[values.length - 1];
+};
+
+const Cursor: React.FC<{ x: number; y: number; press: number; cam: number }> = ({
+  x,
+  y,
+  press,
+  cam,
+}) => (
+  <div
+    style={{
+      position: "absolute",
+      left: `${x}%`,
+      top: `${y}%`,
+      transform: `scale(${press / cam})`,
+      transformOrigin: "top left",
+      filter: "drop-shadow(0 2px 3px rgba(0,0,0,0.55))",
+    }}
+  >
+    <svg width={76} height={76} viewBox="0 0 24 24">
+      <path
+        d="M3 2 L3 20.5 L8.2 15.4 L11.5 22 L14.1 20.8 L10.8 14.4 L17.4 14.4 Z"
+        fill="#ffffff"
+        stroke="#111111"
+        strokeWidth={1.3}
+        strokeLinejoin="round"
+      />
+    </svg>
+  </div>
+);
+
+const ClickRipple: React.FC<{ x: number; y: number; at: number; cam: number }> = ({
+  x,
+  y,
+  at,
+  cam,
+}) => {
+  const frame = useCurrentFrame();
+  if (frame < at || frame > at + 13) {
+    return null;
+  }
+  const p = interpolate(frame, [at, at + 13], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: `${x}%`,
+        top: `${y}%`,
+        width: 48,
+        height: 48,
+        marginLeft: -24,
+        marginTop: -24,
+        borderRadius: "50%",
+        border: "2px solid rgba(212,165,116,0.9)",
+        transform: `scale(${interpolate(p, [0, 1], [0.2, 2.5]) / cam})`,
+        opacity: interpolate(p, [0, 1], [0.55, 0]),
+      }}
+    />
+  );
+};
+
+const Caption: React.FC = () => {
+  const frame = useCurrentFrame();
+  const capIn = interpolate(frame, [10, 22], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+  const capOut = interpolate(frame, [66, 80], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.cubic),
+  });
+  const opacity = capIn * (1 - capOut);
+  const y = (1 - capIn) * 28 + capOut * -22;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 88,
+        bottom: 84,
+        display: "flex",
+        alignItems: "center",
+        gap: 20,
+        opacity,
+        transform: `translateY(${y}px)`,
+      }}
+    >
+      <div
+        style={{
+          width: 5,
+          height: 56,
+          borderRadius: 3,
+          backgroundColor: "#D4A574",
+        }}
+      />
+      <span
+        style={{
+          fontFamily,
+          fontWeight: 600,
+          fontSize: 54,
+          lineHeight: 1,
+          color: "#ffffff",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Create Agents
+      </span>
+    </div>
+  );
+};
+
+// Top-left caption shown as the view transitions to the Agent tab.
+const ChatCaption: React.FC = () => {
+  const frame = useCurrentFrame();
+  const capIn = interpolate(frame, [166, 176], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+  const capOut = interpolate(frame, [191, 201], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.cubic),
+  });
+  const opacity = capIn * (1 - capOut);
+  const y = (1 - capIn) * -24 - capOut * 18;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 88,
+        top: 84,
+        display: "flex",
+        alignItems: "center",
+        gap: 20,
+        opacity,
+        transform: `translateY(${y}px)`,
+      }}
+    >
+      <div
+        style={{ width: 5, height: 56, borderRadius: 3, backgroundColor: "#D4A574" }}
+      />
+      <span
+        style={{
+          fontFamily,
+          fontWeight: 600,
+          fontSize: 54,
+          lineHeight: 1,
+          color: "#ffffff",
+          whiteSpace: "nowrap",
+        }}
+      >
+        Chat with agents in the app
+      </span>
+    </div>
+  );
+};
+
+// Feature list revealed on the left once the canvas slides right.
+const PANEL_HEAD = 92;
+const PANEL_ITEMS = 100;
+const PANEL_STAGGER = 6;
+const PANEL_OUT = 150; // list slides out as the scene-3 hand-off begins
+const FEATURES = [
+  "Attach tools",
+  "Custom gates",
+  "Configure memory",
+  "Attach skills",
+  "Define output",
+];
+
+const riseIn = (frame: number, start: number) => {
+  const t = interpolate(frame, [start, start + 11], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+  return { opacity: t, dx: (1 - t) * -26 };
+};
+
+const Chevron: React.FC = () => (
+  <svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M9 6l6 6-6 6"
+      stroke="#D4A574"
+      strokeWidth={2.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const FeaturePanel: React.FC = () => {
+  const frame = useCurrentFrame();
+  if (frame < PANEL_HEAD) {
+    return null;
+  }
+  const head = riseIn(frame, PANEL_HEAD);
+  const out = interpolate(frame, [PANEL_OUT, PANEL_OUT + 14], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.cubic),
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 96,
+        top: 0,
+        bottom: 0,
+        width: 760,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        fontFamily,
+        opacity: 1 - out,
+        transform: `translateX(${-out * 60}px)`,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 20,
+          marginBottom: 46,
+          opacity: head.opacity,
+          transform: `translateX(${head.dx}px)`,
+        }}
+      >
+        <div
+          style={{
+            width: 5,
+            height: 58,
+            borderRadius: 3,
+            backgroundColor: "#D4A574",
+          }}
+        />
+        <span style={{ fontWeight: 600, fontSize: 56, color: "#ffffff" }}>
+          Create Agents
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
+        {FEATURES.map((label, i) => {
+          const { opacity, dx } = riseIn(frame, PANEL_ITEMS + i * PANEL_STAGGER);
+          return (
+            <div
+              key={label}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 18,
+                opacity,
+                transform: `translateX(${dx}px)`,
+              }}
+            >
+              <Chevron />
+              <span style={{ fontWeight: 600, fontSize: 34, color: "#dcdcdc" }}>
+                {label}
+              </span>
+            </div>
+          );
+        })}
+        {(() => {
+          const { opacity, dx } = riseIn(
+            frame,
+            PANEL_ITEMS + FEATURES.length * PANEL_STAGGER,
+          );
+          return (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 18,
+                opacity,
+                transform: `translateX(${dx}px)`,
+              }}
+            >
+              <Chevron />
+              <span
+                style={{
+                  fontWeight: 600,
+                  fontSize: 34,
+                  color: "#b6a892",
+                  fontStyle: "italic",
+                }}
+              >
+                and more
+              </span>
+            </div>
+          );
+        })()}
+      </div>
+    </div>
+  );
+};
+
+// Types the prompt into the composer. The static placeholder is hidden under a
+// rect filled with the input's own background colour.
+const ComposerType: React.FC = () => {
+  const frame = useCurrentFrame();
+  if (frame < TYPE_START) {
+    return null;
+  }
+  const elapsed = frame - TYPE_START;
+  let chars = 0;
+  for (let i = 0; i < KEY_TIMES.length; i++) {
+    if (elapsed >= KEY_TIMES[i]) chars = i + 1;
+    else break;
+  }
+  const shown = TYPE_TEXT.slice(0, chars);
+  const typing = chars < TYPE_TEXT.length;
+  const caretOn = typing || Math.floor(frame / 8) % 2 === 0;
+
+  return (
+    <>
+      <div
+        style={{
+          position: "absolute",
+          left: `${COMPOSER.coverLeft}%`,
+          top: `${COMPOSER.coverTop}%`,
+          width: `${COMPOSER.coverWidth}%`,
+          height: `${COMPOSER.coverHeight}%`,
+          backgroundColor: "#191919",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: `${COMPOSER.textLeft}%`,
+          top: `${COMPOSER.textTop}%`,
+          transform: "translateY(-50%)",
+          display: "flex",
+          alignItems: "center",
+          fontFamily,
+          fontWeight: 400,
+          fontSize: 17,
+          color: "#ededed",
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span>{shown}</span>
+        <span
+          style={{
+            width: 1.5,
+            height: 20,
+            marginLeft: 2,
+            backgroundColor: "#D4A574",
+            opacity: caretOn ? 1 : 0,
+          }}
+        />
+      </div>
+    </>
+  );
+};
+
+// After the prompt is "sent": pan up to the chat area, mask the static empty
+// state, and stream an agent conversation into it.
+const REVEAL_START = 274;
+const CONV_START = 298;
+
+const appear = (frame: number, start: number, dur = 7): React.CSSProperties => {
+  const t = interpolate(frame, [start, start + dur], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+  return { opacity: t, transform: `translateY(${(1 - t) * 14}px)` };
+};
+
+// Sizes mirror the real app (@xero/ui transcript), converted from CSS px to
+// this scene's content space (the screenshots are 2x retina): content ≈ css * 1.27.
+const MUTED = "#8b8b8b";
+
+const Check: React.FC<{ size?: number }> = ({ size = 20 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <circle cx="12" cy="12" r="9.5" stroke="#4ade80" strokeWidth="1.7" />
+    <path
+      d="M8.5 12.4l2.4 2.4 4.6-5.2"
+      stroke="#4ade80"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const BrainIcon: React.FC<{ size?: number }> = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <path
+      d="M10 4.5a3 3 0 0 0-3 3 3 3 0 0 0-1.2 5.4A3 3 0 0 0 9 18.5h1z"
+      stroke="rgba(212,165,116,0.7)"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M14 4.5a3 3 0 0 1 3 3 3 3 0 0 1 1.2 5.4A3 3 0 0 1 15 18.5h-1z"
+      stroke="rgba(212,165,116,0.7)"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const ToolChevron: React.FC<{ size?: number; up?: boolean }> = ({
+  size = 18,
+  up,
+}) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    style={{ transform: up ? "rotate(180deg)" : undefined, flexShrink: 0 }}
+  >
+    <path
+      d="M6 9l6 6 6-6"
+      stroke="rgba(140,140,140,0.5)"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const TOOLS: [string, string][] = [
+  ["list tree", "Listed tree for `.` — 64 files, 18 dirs."],
+  ["read README.md", "Read 96 lines from `README.md`."],
+  ["read package.json", "Read 41 lines from `package.json`."],
+  ["grep", "Found 9 matches for `agent`."],
+];
+
+const Conversation: React.FC = () => {
+  const frame = useCurrentFrame();
+  const f = frame - CONV_START;
+  if (f < 0) {
+    return null;
+  }
+  const scrollY = interpolate(f, [30, 108], [0, -210], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.inOut(Easing.cubic),
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "52%",
+        top: "16%",
+        width: "52.4%",
+        fontFamily,
+        color: "#e6e6e6",
+        transform: `translate(-50%, ${scrollY}px)`,
+      }}
+    >
+      {/* user message */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          alignItems: "flex-start",
+          gap: 13,
+          ...appear(frame, CONV_START),
+        }}
+      >
+        <div
+          style={{
+            borderRadius: 20,
+            padding: "10px 18px",
+            background: "rgba(212,165,116,0.10)",
+            boxShadow: "inset 0 0 0 1px rgba(212,165,116,0.4)",
+            fontSize: 18,
+            lineHeight: 1.5,
+            color: "#f2f2f2",
+            maxWidth: "80%",
+          }}
+        >
+          Tell me about this project
+        </div>
+        <Img
+          src={staticFile("avatar.jpg")}
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: "50%",
+            objectFit: "cover",
+            boxShadow: "0 0 0 1px rgba(212,165,116,0.45)",
+            marginTop: 3,
+            flexShrink: 0,
+          }}
+        />
+      </div>
+
+      {/* thoughts */}
+      <div
+        style={{
+          marginTop: 30,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          ...appear(frame, CONV_START + 8),
+        }}
+      >
+        <BrainIcon />
+        <span
+          style={{
+            fontSize: 14.5,
+            letterSpacing: "0.07em",
+            color: "rgba(150,150,150,0.9)",
+            fontWeight: 600,
+            textTransform: "uppercase",
+          }}
+        >
+          Thoughts
+        </span>
+      </div>
+      <div
+        style={{
+          marginTop: 10,
+          fontSize: 18,
+          fontStyle: "italic",
+          fontWeight: 700,
+          color: "#e6e6e6",
+          ...appear(frame, CONV_START + 12),
+        }}
+      >
+        Getting my bearings
+      </div>
+      <div
+        style={{
+          marginTop: 7,
+          fontSize: 17.5,
+          lineHeight: 1.6,
+          fontStyle: "italic",
+          color: MUTED,
+        }}
+      >
+        <div style={appear(frame, CONV_START + 16)}>
+          Let me ground this in the actual workspace before answering.
+        </div>
+        <div style={appear(frame, CONV_START + 20)}>
+          I&apos;ll skim the README and manifest, then list the tree to see
+        </div>
+        <div style={appear(frame, CONV_START + 24)}>what actually ships here.</div>
+      </div>
+
+      {/* tool calls */}
+      <div
+        style={{
+          marginTop: 28,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          ...appear(frame, CONV_START + 30),
+        }}
+      >
+        <Check size={20} />
+        <span
+          style={{
+            fontSize: 16.5,
+            fontWeight: 500,
+            color: "#ededed",
+            letterSpacing: "-0.005em",
+          }}
+        >
+          4 tool calls
+        </span>
+        <span style={{ flex: 1, fontSize: 15, color: "rgba(150,150,150,0.75)" }}>
+          4 succeeded · latest read package.json
+        </span>
+        <ToolChevron up />
+      </div>
+      <div
+        style={{
+          marginTop: 12,
+          marginLeft: 9,
+          borderLeft: "1px solid rgba(140,140,140,0.3)",
+          paddingLeft: 22,
+          display: "flex",
+          flexDirection: "column",
+          gap: 15,
+          ...appear(frame, CONV_START + 34),
+        }}
+      >
+        {TOOLS.map(([name, desc], i) => (
+          <div
+            key={name}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              ...appear(frame, CONV_START + 36 + i * 4),
+            }}
+          >
+            <Check size={18} />
+            <span
+              style={{
+                fontSize: 16,
+                fontWeight: 500,
+                color: "#dcdcdc",
+                letterSpacing: "-0.005em",
+              }}
+            >
+              {name}
+            </span>
+            <span
+              style={{ flex: 1, fontSize: 15, color: "rgba(150,150,150,0.75)" }}
+            >
+              {desc}
+            </span>
+            <ToolChevron />
+          </div>
+        ))}
+      </div>
+
+      {/* response */}
+      <div style={{ marginTop: 30, fontSize: 18, lineHeight: 1.6 }}>
+        <div style={appear(frame, CONV_START + 56)}>
+          <b style={{ color: "#fff" }}>Xero</b> is a desktop harness for
+          building, running, and observing AI agents.
+        </div>
+        <div style={{ marginTop: 14, ...appear(frame, CONV_START + 64) }}>
+          You compose agents on a canvas — prompts, tools, skills, and gates —
+          then drive them from one place.
+        </div>
+        <div style={{ marginTop: 14, ...appear(frame, CONV_START + 72) }}>
+          Every run is fully observable: live tool calls, reasoning, token
+          usage, and cost — all in one view.
+        </div>
+
+        <div
+          style={{
+            marginTop: 16,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {[
+            ["Reusable agents", "chain them into larger workflows"],
+            ["Bring your own models", "run them locally or in the cloud"],
+            ["Built-in guardrails", "approvals, gates, and persistent memory"],
+          ].map(([lead, rest], i) => (
+            <div
+              key={lead}
+              style={{
+                display: "flex",
+                gap: 12,
+                ...appear(frame, CONV_START + 80 + i * 5),
+              }}
+            >
+              <span style={{ color: "rgba(212,165,116,0.85)" }}>•</span>
+              <span>
+                <b style={{ color: "#fff" }}>{lead}</b> — {rest}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 16, ...appear(frame, CONV_START + 98) }}>
+          Go from a single prompt to a production-ready agent in minutes — no
+          glue code, no guesswork.
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const pressDip = (frame: number, at: number) =>
+  interpolate(frame, [at - 1, at + 1, at + 4], [0, 1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+// Left-side panel for the cloud/mobile beat (mirrors the FeaturePanel style).
+const CLOUD_HEAD = 444;
+const CLOUD_ITEMS = 452;
+const CLOUD_OUT = 512; // panel slides out as the combo moves left
+const CLOUD_FEATURES = [
+  "Open sessions from your phone",
+  "Watch runs live, anywhere",
+  "Approve & steer on the go",
+  "Stays in sync with your Mac",
+];
+
+const CloudPanel: React.FC = () => {
+  const frame = useCurrentFrame();
+  if (frame < CLOUD_HEAD) {
+    return null;
+  }
+  const head = riseIn(frame, CLOUD_HEAD);
+  const andMore = riseIn(frame, CLOUD_ITEMS + CLOUD_FEATURES.length * 6);
+  const out = interpolate(frame, [CLOUD_OUT, CLOUD_OUT + 18], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.cubic),
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 96,
+        top: 0,
+        bottom: 0,
+        width: 560,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        fontFamily,
+        opacity: 1 - out,
+        transform: `translateX(${-out * 90}px)`,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 20,
+          marginBottom: 46,
+          opacity: head.opacity,
+          transform: `translateX(${head.dx}px)`,
+        }}
+      >
+        <div
+          style={{ width: 5, height: 58, borderRadius: 3, backgroundColor: "#D4A574" }}
+        />
+        <span style={{ fontWeight: 600, fontSize: 56, color: "#ffffff" }}>
+          Take it on the go
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
+        {CLOUD_FEATURES.map((label, i) => {
+          const { opacity, dx } = riseIn(frame, CLOUD_ITEMS + i * 6);
+          return (
+            <div
+              key={label}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 18,
+                opacity,
+                transform: `translateX(${dx}px)`,
+              }}
+            >
+              <Chevron />
+              <span style={{ fontWeight: 600, fontSize: 31, color: "#dcdcdc" }}>
+                {label}
+              </span>
+            </div>
+          );
+        })}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 18,
+            opacity: andMore.opacity,
+            transform: `translateX(${andMore.dx}px)`,
+          }}
+        >
+          <Chevron />
+          <span
+            style={{
+              fontWeight: 600,
+              fontSize: 31,
+              color: "#b6a892",
+              fontStyle: "italic",
+            }}
+          >
+            and more
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---- Cloud app, framed as an iPhone, attached to the app's tilted plane ----
+const PHONE_SHOW = 400; // rendered (off-screen) before the zoom-out reveals it
+const PH_SCREEN_W = 800; // cloud.png fills the screen exactly
+const PH_SCREEN_H = 1576;
+const PH_BEZEL = 18;
+const PH_W = PH_SCREEN_W + PH_BEZEL * 2;
+const PH_H = PH_SCREEN_H + PH_BEZEL * 2;
+// Placed in the app's content space (to the left, overlapping it) so it shares
+// the camera zoom + tilt — revealed by the zoom-out as if it was always there.
+const PH_CONTENT_SCALE = 0.6;
+const PHONE_CX = -190;
+const PHONE_CY = 205;
+
+const MOBILE_TOOLS: [string, string][] = [
+  ["list tree", "64 files, 18 dirs"],
+  ["read README.md", "96 lines"],
+  ["read package.json", "41 lines"],
+  ["grep", "9 matches"],
+];
+
+// The Xero conversation re-rendered at mobile sizes, drawn over cloud.png's
+// (covered) chat body. Static — the phone arrives with it already complete.
+const MobileConversation: React.FC = () => (
+  <div
+    style={{
+      position: "absolute",
+      top: 188,
+      left: 58,
+      width: 684,
+      fontFamily,
+      color: "#e6e6e6",
+    }}
+  >
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "flex-end",
+        alignItems: "flex-start",
+        gap: 18,
+      }}
+    >
+      <div
+        style={{
+          borderRadius: 36,
+          padding: "16px 30px",
+          background: "rgba(212,165,116,0.10)",
+          boxShadow: "inset 0 0 0 2px rgba(212,165,116,0.4)",
+          fontSize: 31,
+          lineHeight: 1.45,
+          color: "#f2f2f2",
+          maxWidth: "76%",
+        }}
+      >
+        Tell me about this project
+      </div>
+      <Img
+        src={staticFile("avatar.jpg")}
+        style={{
+          width: 56,
+          height: 56,
+          borderRadius: "50%",
+          objectFit: "cover",
+          boxShadow: "0 0 0 2px rgba(212,165,116,0.45)",
+          marginTop: 4,
+          flexShrink: 0,
+        }}
+      />
+    </div>
+
+    <div style={{ marginTop: 52, display: "flex", alignItems: "center", gap: 12 }}>
+      <BrainIcon size={32} />
+      <span
+        style={{
+          fontSize: 25,
+          letterSpacing: "0.07em",
+          color: "rgba(150,150,150,0.9)",
+          fontWeight: 600,
+          textTransform: "uppercase",
+        }}
+      >
+        Thoughts
+      </span>
+    </div>
+    <div
+      style={{
+        marginTop: 14,
+        fontSize: 31,
+        fontStyle: "italic",
+        fontWeight: 700,
+        color: "#e6e6e6",
+      }}
+    >
+      Getting my bearings
+    </div>
+    <div
+      style={{
+        marginTop: 12,
+        fontSize: 29,
+        lineHeight: 1.55,
+        fontStyle: "italic",
+        color: MUTED,
+      }}
+    >
+      Let me ground this in the workspace, then summarize what actually ships
+      here.
+    </div>
+
+    <div style={{ marginTop: 44, display: "flex", alignItems: "center", gap: 16 }}>
+      <Check size={34} />
+      <span style={{ fontSize: 30, fontWeight: 500, color: "#ededed" }}>
+        4 tool calls
+      </span>
+      <span style={{ flex: 1 }} />
+      <ToolChevron up size={30} />
+    </div>
+    <div
+      style={{
+        marginTop: 20,
+        marginLeft: 14,
+        borderLeft: "2px solid rgba(140,140,140,0.3)",
+        paddingLeft: 30,
+        display: "flex",
+        flexDirection: "column",
+        gap: 24,
+      }}
+    >
+      {MOBILE_TOOLS.map(([name, desc]) => (
+        <div
+          key={name}
+          style={{ display: "flex", alignItems: "center", gap: 14 }}
+        >
+          <Check size={28} />
+          <span style={{ fontSize: 28, fontWeight: 500, color: "#dcdcdc" }}>
+            {name}
+          </span>
+          <span
+            style={{
+              flex: 1,
+              fontSize: 26,
+              color: "rgba(150,150,150,0.75)",
+              textAlign: "right",
+            }}
+          >
+            {desc}
+          </span>
+        </div>
+      ))}
+    </div>
+
+    <div style={{ marginTop: 44, fontSize: 30, lineHeight: 1.55 }}>
+      <div>
+        <b style={{ color: "#fff" }}>Xero</b> is a desktop harness for building,
+        running, and observing AI agents.
+      </div>
+      <div style={{ marginTop: 18 }}>
+        Compose agents on a canvas, then drive them from one place.
+      </div>
+    </div>
+  </div>
+);
+
+const StatusBar: React.FC = () => (
+  <div
+    style={{
+      position: "absolute",
+      top: 42,
+      left: 0,
+      width: PH_SCREEN_W,
+      height: 40,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "0 60px",
+    }}
+  >
+    <span style={{ fontFamily, fontWeight: 600, fontSize: 28, color: "#fff" }}>
+      9:41
+    </span>
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <svg width="34" height="24" viewBox="0 0 34 24">
+        <g fill="#fff">
+          <rect x="0" y="15" width="6" height="9" rx="1.5" />
+          <rect x="9" y="11" width="6" height="13" rx="1.5" />
+          <rect x="18" y="6" width="6" height="18" rx="1.5" />
+          <rect x="27" y="0" width="6" height="24" rx="1.5" />
+        </g>
+      </svg>
+      <svg width="46" height="24" viewBox="0 0 46 24">
+        <rect
+          x="1"
+          y="3"
+          width="38"
+          height="18"
+          rx="5"
+          fill="none"
+          stroke="#fff"
+          strokeWidth="2"
+          opacity="0.45"
+        />
+        <rect x="4" y="6" width="30" height="12" rx="2.5" fill="#fff" />
+        <rect x="42" y="9" width="3" height="6" rx="1.5" fill="#fff" opacity="0.45" />
+      </svg>
+    </div>
+  </div>
+);
+
+const MobileHeader: React.FC = () => (
+  <div
+    style={{
+      position: "absolute",
+      top: 110,
+      left: 0,
+      width: PH_SCREEN_W,
+      height: 44,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: "0 54px",
+    }}
+  >
+    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      <div
+        style={{
+          width: 26,
+          height: 26,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gridTemplateRows: "1fr 1fr",
+          gap: 3,
+        }}
+      >
+        <div style={{ background: "#D4A574", borderRadius: 2 }} />
+        <div style={{ background: "#4E4337", borderRadius: 2 }} />
+        <div style={{ background: "#4E4337", borderRadius: 2 }} />
+        <div style={{ background: "#D4A574", borderRadius: 2 }} />
+      </div>
+      <span style={{ fontFamily, fontSize: 30, color: "#cfcfcf" }}>New chat</span>
+    </div>
+    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#cfcfcf" strokeWidth="2" strokeLinecap="round">
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  </div>
+);
+
+const MobileComposer: React.FC = () => (
+  <div
+    style={{
+      position: "absolute",
+      left: 50,
+      right: 50,
+      bottom: 74,
+      borderRadius: 40,
+      background: "#1a1a1c",
+      boxShadow: "inset 0 0 0 1px #2c2c2f",
+      padding: "26px 30px 20px",
+      boxSizing: "border-box",
+    }}
+  >
+    <div style={{ fontFamily, fontSize: 30, color: "#737373" }}>
+      Ask anything...
+    </div>
+    <div style={{ marginTop: 26, display: "flex", alignItems: "center", gap: 22 }}>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#9a9a9a" strokeWidth="2" strokeLinecap="round">
+        <path d="M12 5v14M5 12h14" />
+      </svg>
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#9a9a9a" strokeWidth="1.8">
+        <circle cx="12" cy="12" r="3.2" />
+        <path
+          d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6l1.4 1.4M18 6l-1.4 1.4M7.4 16.6L6 18"
+          strokeLinecap="round"
+        />
+      </svg>
+      <div style={{ flex: 1 }} />
+      <div
+        style={{
+          width: 58,
+          height: 58,
+          borderRadius: 16,
+          background: "rgba(212,165,116,0.16)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="#D4A574">
+          <path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8z" />
+        </svg>
+      </div>
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#9a9a9a" strokeWidth="1.8" strokeLinecap="round">
+        <rect x="9" y="3" width="6" height="11" rx="3" />
+        <path d="M6 11a6 6 0 0 0 12 0M12 17v3" />
+      </svg>
+      <div
+        style={{
+          width: 58,
+          height: 58,
+          borderRadius: 16,
+          background: "#2a2a2d",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#cfcfcf" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 19V5M5 12l7-7 7 7" />
+        </svg>
+      </div>
+    </div>
+  </div>
+);
+
+const CloudPhone: React.FC = () => (
+  <div
+    style={{
+      width: PH_W,
+      height: PH_H,
+      borderRadius: 134,
+      background: "linear-gradient(150deg, #34353b 0%, #18191d 46%, #26272c 100%)",
+      boxShadow: "0 50px 120px rgba(0,0,0,0.55)",
+      padding: PH_BEZEL,
+      boxSizing: "border-box",
+    }}
+  >
+    <div
+      style={{
+        position: "relative",
+        width: PH_SCREEN_W,
+        height: PH_SCREEN_H,
+        borderRadius: 114,
+        overflow: "hidden",
+        background: "#121212",
+        outline: "3px solid #141417",
+      }}
+    >
+      <Img
+        src={staticFile("cloud.png")}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+      />
+      {/* re-skin the whole screen over cloud.png so it fits the frame cleanly */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundColor: "#121212",
+        }}
+      />
+      <StatusBar />
+      <MobileHeader />
+      <MobileConversation />
+      <MobileComposer />
+      {/* dynamic island */}
+      <div
+        style={{
+          position: "absolute",
+          top: 16,
+          left: PH_SCREEN_W / 2 - 125,
+          width: 250,
+          height: 70,
+          borderRadius: 38,
+          background: "#000000",
+        }}
+      />
+      {/* home indicator */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 22,
+          left: PH_SCREEN_W / 2 - 130,
+          width: 260,
+          height: 10,
+          borderRadius: 6,
+          background: "rgba(255,255,255,0.55)",
+        }}
+      />
+    </div>
+  </div>
+);
+
+// Right-side panel for the terminal/TUI beat (mirrors the cloud panel).
+const TUI_HEAD = 566;
+const TUI_ITEMS = 574;
+const TUI_FEATURES = [
+  "The full agent in your shell",
+  "Slash commands & agent swaps",
+  "Same sessions, every surface",
+  "Built for keyboard flow",
+];
+
+const TuiPanel: React.FC = () => {
+  const frame = useCurrentFrame();
+  if (frame < TUI_HEAD) {
+    return null;
+  }
+  const head = riseIn(frame, TUI_HEAD);
+  const andMore = riseIn(frame, TUI_ITEMS + TUI_FEATURES.length * 6);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 1245,
+        top: 0,
+        bottom: 0,
+        width: 640,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        fontFamily,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 18,
+          marginBottom: 36,
+          opacity: head.opacity,
+          transform: `translateX(${-head.dx}px)`,
+        }}
+      >
+        <div
+          style={{ width: 5, height: 52, borderRadius: 3, backgroundColor: "#D4A574" }}
+        />
+        <span style={{ fontWeight: 600, fontSize: 50, color: "#ffffff" }}>
+          Live in the terminal
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+        {TUI_FEATURES.map((label, i) => {
+          const { opacity, dx } = riseIn(frame, TUI_ITEMS + i * 6);
+          return (
+            <div
+              key={label}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 18,
+                opacity,
+                transform: `translateX(${-dx}px)`,
+              }}
+            >
+              <Chevron />
+              <span style={{ fontWeight: 600, fontSize: 29, color: "#dcdcdc" }}>
+                {label}
+              </span>
+            </div>
+          );
+        })}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 18,
+            opacity: andMore.opacity,
+            transform: `translateX(${-andMore.dx}px)`,
+          }}
+        >
+          <Chevron />
+          <span
+            style={{
+              fontWeight: 600,
+              fontSize: 29,
+              color: "#b6a892",
+              fontStyle: "italic",
+            }}
+          >
+            and more
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---- macOS terminal running the Xero TUI, revealed on the right at the close ----
+const TERM_SHOW = 500; // rendered (off-screen right) before the left-pan reveals it
+const TERM_W = 1500;
+const TERM_H = 1000;
+const TERM_CONTENT_SCALE = 0.64;
+const TERM_CX = 1560;
+const TERM_CY = 545;
+
+// Xero TUI palette + box-drawing logo (verbatim from xero-cli).
+const T_FG = "#f8f9fa";
+const T_MUTED = "#a8aeb5";
+const T_DIM = "#6b6f74";
+const T_ACCENT = "#d4a574";
+const TUI_LOGO = [
+  "██╗  ██╗ ███████╗ ██████╗   ██████╗ ",
+  "╚██╗██╔╝ ██╔════╝ ██╔══██╗ ██╔═══██╗",
+  " ╚███╔╝  █████╗   ██████╔╝ ██║   ██║",
+  " ██╔██╗  ██╔══╝   ██╔══██╗ ██║   ██║",
+  "██╔╝ ██╗ ███████╗ ██║  ██║ ╚██████╔╝",
+  "╚═╝  ╚═╝ ╚══════╝ ╚═╝  ╚═╝  ╚═════╝ ",
+].join("\n");
+
+const TerminalWindow: React.FC = () => (
+  <div
+    style={{
+      width: TERM_W,
+      height: TERM_H,
+      borderRadius: 18,
+      overflow: "hidden",
+      background: "#121212",
+      boxShadow: "0 50px 120px rgba(0,0,0,0.55)",
+      border: "1px solid #2b2b2e",
+      display: "flex",
+      flexDirection: "column",
+      fontFamily: monoFamily,
+    }}
+  >
+    <div
+      style={{
+        height: 52,
+        background: "linear-gradient(#262629, #1d1d20)",
+        borderBottom: "1px solid #2b2b2e",
+        display: "flex",
+        alignItems: "center",
+        padding: "0 22px",
+        gap: 12,
+        position: "relative",
+        flexShrink: 0,
+      }}
+    >
+      {["#ff5f57", "#febc2e", "#28c840"].map((c) => (
+        <div
+          key={c}
+          style={{ width: 18, height: 18, borderRadius: "50%", background: c }}
+        />
+      ))}
+      <span
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          textAlign: "center",
+          color: "#8b8b8b",
+          fontSize: 22,
+        }}
+      >
+        xero — ~/Documents/dev/xero
+      </span>
+    </div>
+
+    <div
+      style={{
+        flex: 1,
+        background: "#121212",
+        padding: "40px 48px 28px",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <pre
+          style={{
+            margin: 0,
+            color: T_ACCENT,
+            fontSize: 44,
+            lineHeight: 1,
+            letterSpacing: 0,
+            fontWeight: 700,
+          }}
+        >
+          {TUI_LOGO}
+        </pre>
+        <div style={{ marginTop: 28, color: T_FG, fontSize: 26 }}>@xeroshell</div>
+        <div style={{ marginTop: 6, color: T_DIM, fontSize: 26 }}>v0.1.0</div>
+      </div>
+
+      <div
+        style={{
+          borderLeft: `4px solid ${T_ACCENT}`,
+          background: "#1a1a1c",
+          padding: "26px 30px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 32,
+          fontSize: 26,
+        }}
+      >
+        <span style={{ color: T_DIM }}>Ask anything... "Fix broken tests"</span>
+        <span>
+          <span style={{ color: T_ACCENT }}>Agent</span>
+          <span style={{ color: T_DIM }}> · </span>
+          <span style={{ color: T_MUTED }}>gpt-5.5</span>
+          <span style={{ color: T_DIM }}> · </span>
+          <span style={{ color: T_ACCENT }}>openai_codex</span>
+          <span style={{ color: T_DIM }}> · </span>
+          <span style={{ color: T_MUTED }}>think:medium</span>
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          marginTop: 22,
+          fontSize: 24,
+        }}
+      >
+        <span>
+          <span style={{ color: T_FG }}>~/Documents/dev/xero</span>
+          <span style={{ color: T_ACCENT }}>:main</span>
+          <span style={{ color: T_DIM }}>
+            {"   New session: session-1779350462326-87904"}
+          </span>
+        </span>
+        <span style={{ color: T_DIM }}>tab agents   ctrl+p /commands   0.1.0</span>
+      </div>
+    </div>
+  </div>
+);
+
+export const AppFlow: React.FC = () => {
+  const frame = useCurrentFrame();
+  const { fps, width, height } = useVideoConfig();
+
+  // Fill the full frame width (the app is narrower than 16:9, so this crops a
+  // few px off the top/bottom rather than leaving black side bars).
+  const baseW = width;
+  const baseH = width / SCREEN_RATIO;
+
+  const enter = interpolate(frame, [0, 10], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // Camera: zoom into "Create agent", pan to the modal, then zoom out to reveal
+  // the whole canvas.
+  // Ends by zooming out past 1.0 and panning right (small focal x) so the agent
+  // chat panel slides off the right edge, clearing the left for the feature list.
+  // Opens further out (whole app visible) with a brief hold, then zooms in.
+  const camS = kf(
+    frame,
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 452, 512, 560],
+    [
+      0.78, 0.78, 1.55, 1.55, 1.45, 1.45, 0.85, 0.85, 2.6, 2.6, 1.9, 1.9, 1.62,
+      1.62, 0.85, 0.85, 0.85,
+    ],
+  );
+  const camFx = kf(
+    frame,
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 452, 512, 560],
+    [
+      0.5, 0.5, 0.515, 0.515, 0.5, 0.5, 0.034, 0.034, 0.157, 0.157, 0.518, 0.518,
+      0.5, 0.5, 0.034, 0.034, 1.17,
+    ],
+  );
+  const camFy = kf(
+    frame,
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 452, 512, 560],
+    [
+      0.5, 0.5, 0.557, 0.557, 0.5, 0.5, 0.5, 0.5, 0.09, 0.09, 0.715, 0.715, 0.44,
+      0.44, 0.5, 0.5, 0.525,
+    ],
+  );
+  const camTx = width / 2 - camFx * baseW * camS;
+  const camTy = height / 2 - camFy * baseH * camS;
+
+  // Cursor path: start → Create agent (hold) → New agent.
+  const ease = { easing: Easing.inOut(Easing.cubic) } as const;
+  const seg = (a: number, b: number, from: number, to: number) =>
+    interpolate(frame, [a, b], [from, to], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      ...ease,
+    });
+  const cx =
+    frame < 46
+      ? seg(12, 30, START.x, CREATE_AGENT.x)
+      : frame < T3_START
+        ? seg(48, 62, CREATE_AGENT.x, NEW_AGENT.x)
+        : seg(T3_START + 12, 176, AGENT_FROM.x, AGENT_TAB.x);
+  const cy =
+    frame < 46
+      ? seg(12, 30, START.y, CREATE_AGENT.y)
+      : frame < T3_START
+        ? seg(48, 62, CREATE_AGENT.y, NEW_AGENT.y)
+        : seg(T3_START + 12, 176, AGENT_FROM.y, AGENT_TAB.y);
+  const press =
+    1 -
+    0.16 *
+      Math.max(
+        pressDip(frame, CLICK1),
+        pressDip(frame, CLICK2),
+        pressDip(frame, CLICK3),
+      );
+  const cursorVisible =
+    frame < CANVAS_IN + 6 || (frame >= 158 && frame < CLICK3 + 6);
+
+  // Modal: springs in on click 1, scales out on click 2.
+  const modalIn = spring({
+    frame: frame - CLICK1 - 1,
+    fps,
+    config: { mass: 0.5, damping: 13, stiffness: 220 },
+  });
+  const modalExit = interpolate(frame, [CLICK2, CLICK2 + 10], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.cubic),
+  });
+  const modalOpacity =
+    interpolate(frame, [CLICK1, CLICK1 + 8], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }) *
+    (1 - modalExit);
+  const modalScale =
+    interpolate(modalIn, [0, 1], [0.9, 1]) *
+    interpolate(modalExit, [0, 1], [1, 1.05]);
+  const dim =
+    interpolate(frame, [CLICK1, CLICK1 + 8], [0, 0.5], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }) *
+    (1 - modalExit);
+
+  // Canvas dissolves in after click 2.
+  const canvasIn = interpolate(frame, [CANVAS_IN, CANVAS_IN + 12], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+
+  // The agent chat screen swaps in at the Agent-tab click (match cut on tabs).
+  const agentChatIn = interpolate(frame, [CLICK3, CLICK3 + 3], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // The app eases into a hovering 3D perspective once it settles, then flattens
+  // back out for the scene-3 hand-off.
+  const tiltP = kf(
+    frame,
+    [CANVAS_IN, 112, T3_START, T3_START + 20, 422, 452],
+    [0, 1, 1, 0, 0, 1],
+  );
+  // As the combo slides to the left at the close, flip the yaw so the cards
+  // face the now-empty right side (with a slightly shallower angle there).
+  const tiltYaw = interpolate(frame, [512, 560], [-9, 7], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const tiltRy = tiltP * (tiltYaw + 0.8 * Math.sin(frame * 0.045));
+  const tiltRx = tiltP * (3 + 0.5 * Math.sin(frame * 0.038 + 1.2));
+  const tiltFloat = tiltP * 7 * Math.sin(frame * 0.04 + 0.7);
+  const tiltTransform = `perspective(1700px) translateY(${tiltFloat}px) rotateX(${tiltRx}deg) rotateY(${tiltRy}deg)`;
+  const tiltShadow = tiltP * 0.5;
+
+
+  const mw = MODAL.right - MODAL.left;
+  const mh = MODAL.bottom - MODAL.top;
+  const fill: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    objectFit: "cover",
+  };
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: "#070707" }}>
+      <SceneBackground />
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          overflow: "hidden",
+          opacity: enter,
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            width: baseW,
+            height: baseH,
+            transformOrigin: "0 0",
+            transform: `translate(${camTx}px, ${camTy}px) scale(${camS})`,
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              width: baseW,
+              height: baseH,
+              transformOrigin: "center center",
+              transform: tiltTransform,
+              filter: `drop-shadow(0 44px 80px rgba(0,0,0,${tiltShadow}))`,
+            }}
+          >
+            <Img src={staticFile("app/main.png")} style={fill} />
+
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              backgroundColor: "#000000",
+              opacity: dim,
+            }}
+          />
+
+          {modalOpacity > 0.001 && (
+            <div
+              style={{
+                position: "absolute",
+                left: `${MODAL.left}%`,
+                top: `${MODAL.top}%`,
+                width: `${mw}%`,
+                height: `${mh}%`,
+                overflow: "hidden",
+                borderRadius: 14,
+                opacity: modalOpacity,
+                transform: `scale(${modalScale})`,
+                transformOrigin: "center",
+                boxShadow: "0 30px 80px rgba(0,0,0,0.6)",
+              }}
+            >
+              <Img
+                src={staticFile("app/modal.png")}
+                style={{
+                  position: "absolute",
+                  width: `${10000 / mw}%`,
+                  height: `${10000 / mh}%`,
+                  left: `${(-MODAL.left / mw) * 100}%`,
+                  top: `${(-MODAL.top / mh) * 100}%`,
+                  maxWidth: "none",
+                }}
+              />
+            </div>
+          )}
+
+          {canvasIn > 0.001 && (
+            <Img
+              src={staticFile("app/canvas.png")}
+              style={{ ...fill, opacity: canvasIn }}
+            />
+          )}
+
+          {agentChatIn > 0.001 && (
+            <Img
+              src={staticFile("agent_chat.png")}
+              style={{ ...fill, opacity: agentChatIn }}
+            />
+          )}
+
+          <ComposerType />
+
+          {frame >= REVEAL_START && (
+            <div
+              style={{
+                position: "absolute",
+                left: "5%",
+                top: "10.5%",
+                width: "90%",
+                height: "69%",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{ position: "absolute", inset: 0, backgroundColor: "#121212" }}
+              />
+              <Conversation />
+            </div>
+          )}
+
+          <ClickRipple x={CREATE_AGENT.x} y={CREATE_AGENT.y} at={CLICK1} cam={camS} />
+          <ClickRipple x={NEW_AGENT.x} y={NEW_AGENT.y} at={CLICK2} cam={camS} />
+          <ClickRipple x={AGENT_TAB.x} y={AGENT_TAB.y} at={CLICK3} cam={camS} />
+
+            {cursorVisible && (
+              <Cursor x={cx} y={cy} press={press} cam={camS} />
+            )}
+
+            {/* Cloud iPhone, on the app's own tilted plane — revealed (not slid
+                in) by the zoom-out, so it moves attached to the app. */}
+            {frame >= PHONE_SHOW && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: PHONE_CX,
+                  top: PHONE_CY,
+                  transform: `scale(${PH_CONTENT_SCALE})`,
+                  transformOrigin: "top left",
+                }}
+              >
+                <CloudPhone />
+              </div>
+            )}
+
+            {/* macOS terminal (Xero TUI), to the right of the app on the same
+                plane — revealed as the combo pans left at the close. */}
+            {frame >= TERM_SHOW && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: TERM_CX,
+                  top: TERM_CY,
+                  transform: `scale(${TERM_CONTENT_SCALE})`,
+                  transformOrigin: "top left",
+                }}
+              >
+                <TerminalWindow />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <Caption />
+      <FeaturePanel />
+      <ChatCaption />
+      <CloudPanel />
+      <TuiPanel />
+
+      {[CLICK1, CLICK2, CLICK3].map((at) => (
+        <Sequence key={at} from={at} durationInFrames={12} layout="none">
+          <Audio src={staticFile("click.mp3")} trimBefore={1} volume={0.4} />
+        </Sequence>
+      ))}
+
+      {/* keyboard sound while the prompt is typed in the composer */}
+      <Sequence from={TYPE_START} durationInFrames={TYPING_FRAMES} layout="none">
+        <Audio src={staticFile("keyboard.mp3")} volume={1} />
+      </Sequence>
+
+      {/* single Enter/Return press as the prompt sends and the empty state is covered */}
+      <Sequence from={REVEAL_START - 1} durationInFrames={3} layout="none">
+        <Audio src={staticFile("keyboard.mp3")} volume={1} />
+      </Sequence>
+    </AbsoluteFill>
+  );
+};
