@@ -21,6 +21,10 @@ const { fontFamily: monoFamily } = loadMono("normal", { weights: ["400", "700"] 
 // The app screenshots are 2000x1199; keep that aspect when fitting to frame.
 const SCREEN_RATIO = 2000 / 1199;
 
+// Head-turn exit at the very end.
+const HEAD_TURN_START = 616;
+const HEAD_TURN_END = 640;
+
 // Beat timing (frames @ 30fps).
 const CLICK1 = 38; // click "Create agent"
 const CLICK2 = 68; // click "New agent"
@@ -68,8 +72,10 @@ const NEW_AGENT = { x: 50.4, y: 47.9 };
 // "Create agent" modal panel bounds, as % of the app image.
 const MODAL = { left: 34.85, top: 31.6, right: 65.95, bottom: 67.5 };
 
-// Per-segment eased keyframe interpolation (each leg eases in/out, so the
-// camera settles between deliberate moves).
+// Per-segment eased keyframe interpolation. A steep S-curve (slow anticipation,
+// strong acceleration through the middle, quick settle) gives the camera moves
+// punch and depth rather than a flat glide.
+const CAM_EASE = Easing.bezier(0.78, 0, 0.2, 1);
 const kf = (frame: number, times: number[], values: number[]) => {
   if (frame <= times[0]) return values[0];
   for (let i = 0; i < times.length - 1; i++) {
@@ -77,7 +83,7 @@ const kf = (frame: number, times: number[], values: number[]) => {
       return interpolate(frame, [times[i], times[i + 1]], [values[i], values[i + 1]], {
         extrapolateLeft: "clamp",
         extrapolateRight: "clamp",
-        easing: Easing.inOut(Easing.cubic),
+        easing: CAM_EASE,
       });
     }
   }
@@ -774,18 +780,13 @@ const CLOUD_FEATURES = [
   "Stays in sync with your Mac",
 ];
 
-const CloudPanel: React.FC = () => {
+const CloudPanel: React.FC<{ exitX: number }> = ({ exitX }) => {
   const frame = useCurrentFrame();
   if (frame < CLOUD_HEAD) {
     return null;
   }
   const head = riseIn(frame, CLOUD_HEAD);
   const andMore = riseIn(frame, CLOUD_ITEMS + CLOUD_FEATURES.length * 6);
-  const out = interpolate(frame, [CLOUD_OUT, CLOUD_OUT + 18], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.in(Easing.cubic),
-  });
 
   return (
     <div
@@ -799,8 +800,9 @@ const CloudPanel: React.FC = () => {
         flexDirection: "column",
         justifyContent: "center",
         fontFamily,
-        opacity: 1 - out,
-        transform: `translateX(${-out * 90}px)`,
+        // Slide off-screen left, locked to the camera pan, so the panel stays
+        // "attached" to the combo as it sweeps left (no fade, no collision).
+        transform: `translateX(${exitX}px)`,
       }}
     >
       <div
@@ -1247,8 +1249,8 @@ const CloudPhone: React.FC = () => (
 );
 
 // Right-side panel for the terminal/TUI beat (mirrors the cloud panel).
-const TUI_HEAD = 566;
-const TUI_ITEMS = 574;
+const TUI_HEAD = 536;
+const TUI_ITEMS = 544;
 const TUI_FEATURES = [
   "The full agent in your shell",
   "Slash commands & agent swaps",
@@ -1482,9 +1484,6 @@ const TerminalWindow: React.FC = () => (
         <span>
           <span style={{ color: T_FG }}>~/Documents/dev/xero</span>
           <span style={{ color: T_ACCENT }}>:main</span>
-          <span style={{ color: T_DIM }}>
-            {"   New session: session-1779350462326-87904"}
-          </span>
         </span>
         <span style={{ color: T_DIM }}>tab agents   ctrl+p /commands   0.1.0</span>
       </div>
@@ -1506,6 +1505,16 @@ export const AppFlow: React.FC = () => {
     extrapolateRight: "clamp",
   });
 
+  // "Head turn" exit: the whole scene (combo + text) swings left off-screen
+  // while pivoting on Y, as if turning your head to the right.
+  const turn = interpolate(frame, [HEAD_TURN_START, HEAD_TURN_END], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: CAM_EASE,
+  });
+  const turnTx = turn * -2300;
+  const turnRy = turn * 58;
+
   // Camera: zoom into "Create agent", pan to the modal, then zoom out to reveal
   // the whole canvas.
   // Ends by zooming out past 1.0 and panning right (small focal x) so the agent
@@ -1513,7 +1522,7 @@ export const AppFlow: React.FC = () => {
   // Opens further out (whole app visible) with a brief hold, then zooms in.
   const camS = kf(
     frame,
-    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 452, 512, 560],
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 446, 512, 534],
     [
       0.78, 0.78, 1.55, 1.55, 1.45, 1.45, 0.85, 0.85, 2.6, 2.6, 1.9, 1.9, 1.62,
       1.62, 0.85, 0.85, 0.85,
@@ -1521,7 +1530,7 @@ export const AppFlow: React.FC = () => {
   );
   const camFx = kf(
     frame,
-    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 452, 512, 560],
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 446, 512, 534],
     [
       0.5, 0.5, 0.515, 0.515, 0.5, 0.5, 0.034, 0.034, 0.157, 0.157, 0.518, 0.518,
       0.5, 0.5, 0.034, 0.034, 1.17,
@@ -1529,7 +1538,7 @@ export const AppFlow: React.FC = () => {
   );
   const camFy = kf(
     frame,
-    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 452, 512, 560],
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 446, 512, 534],
     [
       0.5, 0.5, 0.557, 0.557, 0.5, 0.5, 0.5, 0.5, 0.09, 0.09, 0.715, 0.715, 0.44,
       0.44, 0.5, 0.5, 0.525,
@@ -1537,6 +1546,11 @@ export const AppFlow: React.FC = () => {
   );
   const camTx = width / 2 - camFx * baseW * camS;
   const camTy = height / 2 - camFy * baseH * camS;
+
+  // The cloud panel rides the camera's left pan (so it exits "attached" to the
+  // combo). camTx at the pre-pan floating hold is the rest position.
+  const restCamTx = width / 2 - 0.034 * baseW * 0.85;
+  const cloudExitX = frame >= CLOUD_OUT ? camTx - restCamTx : 0;
 
   // Cursor path: start → Create agent (hold) → New agent.
   const ease = { easing: Easing.inOut(Easing.cubic) } as const;
@@ -1613,12 +1627,12 @@ export const AppFlow: React.FC = () => {
   // back out for the scene-3 hand-off.
   const tiltP = kf(
     frame,
-    [CANVAS_IN, 112, T3_START, T3_START + 20, 422, 452],
+    [CANVAS_IN, 112, T3_START, T3_START + 20, 422, 446],
     [0, 1, 1, 0, 0, 1],
   );
   // As the combo slides to the left at the close, flip the yaw so the cards
   // face the now-empty right side (with a slightly shallower angle there).
-  const tiltYaw = interpolate(frame, [512, 560], [-9, 7], {
+  const tiltYaw = interpolate(frame, [512, 534], [-9, 7], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
@@ -1642,6 +1656,13 @@ export const AppFlow: React.FC = () => {
   return (
     <AbsoluteFill style={{ backgroundColor: "#070707" }}>
       <SceneBackground />
+      <AbsoluteFill style={{ perspective: 1700 }}>
+        <AbsoluteFill
+          style={{
+            transform: `translateX(${turnTx}px) rotateY(${turnRy}deg)`,
+            transformOrigin: "center center",
+          }}
+        >
       <div
         style={{
           position: "absolute",
@@ -1790,8 +1811,10 @@ export const AppFlow: React.FC = () => {
       <Caption />
       <FeaturePanel />
       <ChatCaption />
-      <CloudPanel />
+      <CloudPanel exitX={cloudExitX} />
       <TuiPanel />
+        </AbsoluteFill>
+      </AbsoluteFill>
 
       {[CLICK1, CLICK2, CLICK3].map((at) => (
         <Sequence key={at} from={at} durationInFrames={12} layout="none">

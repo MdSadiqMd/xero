@@ -65,10 +65,10 @@ const SHINE_PEAK = 0.6; // peak white opacity of the gleam
 // then rapidly cycles through the taglines.
 const SECOND_SHOVE_START = 88;
 const SWITCH_START = 114;
-const PHRASE_STRIDE = 26; // frames each tagline holds before a hard cut
-const GLITCH_IN = 7; // glitch frames as a tagline appears
-const GLITCH_OUT = 4; // glitch frames just before a tagline cuts away
-const LAST_GLITCH_OUT = 208; // the final tagline glitches out to bare bg here
+const PHRASE_STRIDE = 22; // frames each tagline holds before a hard cut
+const GLITCH_IN = 5; // glitch frames as a tagline appears
+const GLITCH_OUT = 3; // glitch frames just before a tagline cuts away
+const LAST_GLITCH_OUT = 194; // the final tagline glitches out to bare bg here
 const PHRASES = [
   "Create Agents",
   "Build workflows",
@@ -501,21 +501,24 @@ export const LogoReveal: React.FC = () => {
       <Sequence from={START_DELAY} durationInFrames={20} layout="none">
         <Audio src={staticFile("scribble.mp3")} trimBefore={240} volume={0.15} />
       </Sequence>
+      <Sequence from={SHINE_START} durationInFrames={45} layout="none">
+        <Audio src={staticFile("gleam.mp3")} />
+      </Sequence>
       {/* glitch sound on each text glitch (first 40% of the clip trimmed off) */}
-      {[
+      {/* {[
         SWITCH_START,
         SWITCH_START + PHRASE_STRIDE,
         SWITCH_START + 2 * PHRASE_STRIDE,
         SWITCH_START + 3 * PHRASE_STRIDE
       ].map((at) => (
         <Sequence key={at} from={at} durationInFrames={13} layout="none">
-          <Audio src={staticFile("glitch2.mp3")} trimBefore={22} volume={0.05} />
+          <Audio src={staticFile("glitch2.mp3")} trimBefore={22} volume={0.2} />
         </Sequence>
-      ))}
+      ))} */}
       {/* pop each time the logo is shoved left (first recoil + the eject) */}
       {[LOCKUP_START + LOGO_SHOVE_DELAY - 4, SECOND_SHOVE_START].map((at) => (
         <Sequence key={at} from={at} durationInFrames={27} layout="none">
-          <Audio src={staticFile("pop.mp3")} trimBefore={4} volume={0.1} />
+          <Audio src={staticFile("pop.mp3")} trimBefore={4} volume={0.2} />
         </Sequence>
       ))}
     </AbsoluteFill>
