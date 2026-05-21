@@ -22,18 +22,18 @@ const { fontFamily: monoFamily } = loadMono("normal", { weights: ["400", "700"] 
 const SCREEN_RATIO = 2000 / 1199;
 
 // Head-turn exit at the very end.
-const HEAD_TURN_START = 601;
-const HEAD_TURN_END = 625;
+const HEAD_TURN_START = 589;
+const HEAD_TURN_END = 613;
 
 // Solana workbench: as the zoom finishes it flows straight into a downward pan
 // that first opens the Solana Workbench from agent chat, then keeps moving
 // through two sidebar clicks. It starts brisk, clicks Personas (2nd tab), holds
 // that pace briefly, then accelerates down to the Wallet button near the bottom.
-const SOL_OPEN_CLICK = 662; // click Solana Workbench toolbar icon
+const SOL_OPEN_CLICK = 650; // click Solana Workbench toolbar icon
 const SOL_WORKBENCH_SHOW = SOL_OPEN_CLICK + 4;
 const SOL_CAPTION_START = SOL_WORKBENCH_SHOW + 4;
-const SOL_CLICK = 700; // click Personas (2nd tab) -> swap to bench_2
-const SOL_CLICK2 = 746; // click Wallet button (lower) -> swap to bench_3
+const SOL_CLICK = 688; // click Personas (2nd tab) -> swap to bench_2
+const SOL_CLICK2 = 734; // click Wallet button (lower) -> swap to bench_3
 const SOL_FINAL_PULLBACK_START = SOL_CLICK2 + 21;
 const SOL_FINAL_PULLBACK_END = SOL_FINAL_PULLBACK_START + 30;
 const SOL_OPEN_ICON = { fx: 0.946, fy: 0.044 }; // Solana Workbench toolbar icon
@@ -67,8 +67,11 @@ const CANVAS_IN = 72;
 // zooms into the top-left tabs, clicks "Agent", and the screen swaps.
 const T3_START = 150;
 const CLICK3 = 198; // click the "Agent" tab
+const AGENT_CURSOR_START = CLICK3 - 20;
+const AGENT_CURSOR_VISIBLE_START = AGENT_CURSOR_START;
+const AGENT_CURSOR_GLITCH_DELAY = 11;
 const AGENT_TAB = { x: 15.7, y: 4.4 };
-const AGENT_FROM = { x: 24, y: 12 };
+const AGENT_FROM = { x: 36.5, y: 15.2 };
 
 // Typed prompt in the composer (placeholder is covered with its own bg color).
 const TYPE_START = 240;
@@ -133,11 +136,16 @@ const kf = (frame: number, times: number[], values: number[]) => {
   return values[values.length - 1];
 };
 
-const cursorExitAt = (frame: number, clicks: number[]) => {
+type CursorExitClick = number | { at: number; delay?: number };
+
+const cursorExitAt = (frame: number, clicks: CursorExitClick[]) => {
   const progress = Math.max(
     0,
-    ...clicks.map((at) => {
-      const start = at + CURSOR_GLITCH_DELAY;
+    ...clicks.map((click) => {
+      const at = typeof click === "number" ? click : click.at;
+      const delay =
+        typeof click === "number" ? CURSOR_GLITCH_DELAY : (click.delay ?? CURSOR_GLITCH_DELAY);
+      const start = at + delay;
       const end = start + CURSOR_GLITCH_FRAMES;
       if (frame < start || frame > end) {
         return 0;
@@ -376,12 +384,12 @@ const Caption: React.FC = () => {
 // Top-left caption shown as the view transitions to the Agent tab.
 const ChatCaption: React.FC = () => {
   const frame = useCurrentFrame();
-  const capIn = interpolate(frame, [166, 176], [0, 1], {
+  const capIn = interpolate(frame, [163, 173], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.cubic),
   });
-  const capOut = interpolate(frame, [191, 201], [0, 1], {
+  const capOut = interpolate(frame, [188, 198], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.in(Easing.cubic),
@@ -1078,9 +1086,9 @@ const pressDip = (frame: number, at: number) =>
   });
 
 // Left-side panel for the cloud/mobile beat (mirrors the FeaturePanel style).
-const CLOUD_HEAD = 444;
-const CLOUD_ITEMS = 452;
-const CLOUD_OUT = 512; // panel slides out as the combo moves left
+const CLOUD_HEAD = 434;
+const CLOUD_ITEMS = 442;
+const CLOUD_OUT = 504; // panel slides out as the combo moves left
 const CLOUD_FEATURES = [
   "Open sessions from your phone",
   "Watch runs live, anywhere",
@@ -1557,8 +1565,8 @@ const CloudPhone: React.FC = () => (
 );
 
 // Right-side panel for the terminal/TUI beat (mirrors the cloud panel).
-const TUI_HEAD = 536;
-const TUI_ITEMS = 544;
+const TUI_HEAD = 532;
+const TUI_ITEMS = 540;
 const TUI_FEATURES = [
   "The full agent in your shell",
   "Slash commands & agent swaps",
@@ -1826,12 +1834,12 @@ export const AppFlow: React.FC = () => {
   // The solana view is locked to the head turn (mirror of the exiting scene)
   // so they move as one, then ~halfway through it starts a camera push into
   // the Solana Workbench sidebar (top-right). It begins zoomed out.
-  const solZoom = interpolate(frame, [619, 653], [0, 1], {
+  const solZoom = interpolate(frame, [607, 641], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: CAM_EASE,
   });
-  const solPullback = interpolate(frame, [714, SOL_CLICK2], [0, 1], {
+  const solPullback = interpolate(frame, [702, SOL_CLICK2], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.inOut(Easing.cubic),
@@ -1853,15 +1861,14 @@ export const AppFlow: React.FC = () => {
   // only ever increases (no stall) until it settles at the end.
   const solPanDown = interpolate(
     frame,
-    [668, 698, 714, 746, 758],
+    [656, 686, 702, 734, 746],
     [0, 0.072, 0.103, 0.345, 0.37],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
   const activeSolFy = 0.5 - solZoom * 0.32 + solPanDown; // center -> top, then pan down
-  const solS = interpolate(solFinalPullback, [0, 1], [activeSolS, 0.74]);
+  const solS = interpolate(solFinalPullback, [0, 1], [activeSolS, 0.88]);
   const solFx = interpolate(solFinalPullback, [0, 1], [activeSolFx, 0.5]);
-  const solFy = interpolate(solFinalPullback, [0, 1], [activeSolFy, 0.5]);
-  const solFinalAgentView = frame >= SOL_FINAL_PULLBACK_START;
+  const solFy = interpolate(solFinalPullback, [0, 1], [activeSolFy, 0.04]);
   const solTx = width / 2 - solFx * width * solS;
   const solTy = height / 2 - solFy * height * solS;
 
@@ -1884,16 +1891,16 @@ export const AppFlow: React.FC = () => {
   // Cursor: one continuous pointer opens the Workbench, continues through the
   // sidebar tab sequence, then glitches away only after the final click. All
   // targets track the live camera pan.
-  const solCurIn = interpolate(frame, [624, 632], [0, 1], {
+  const solCurIn = interpolate(frame, [618, 624], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-  const approachOpen = interpolate(frame, [628, SOL_OPEN_CLICK], [0, 1], {
+  const approachOpen = interpolate(frame, [632, SOL_OPEN_CLICK], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.inOut(Easing.cubic),
   });
-  const toTab2 = interpolate(frame, [SOL_OPEN_CLICK + 6, SOL_CLICK], [0, 1], {
+  const toTab2 = interpolate(frame, [SOL_OPEN_CLICK + 14, SOL_CLICK], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.inOut(Easing.cubic),
@@ -1923,7 +1930,7 @@ export const AppFlow: React.FC = () => {
       );
   const solCursorExit = cursorExitAt(frame, [SOL_CLICK2]);
   const solCursorVisible =
-    frame >= 624 && frame <= SOL_CLICK2 + CURSOR_GLITCH_DELAY + CURSOR_GLITCH_FRAMES;
+    frame >= 618 && frame <= SOL_CLICK2 + CURSOR_GLITCH_DELAY + CURSOR_GLITCH_FRAMES;
 
   // Camera: zoom into "Create agent", pan to the modal, then zoom out to reveal
   // the whole canvas.
@@ -1932,7 +1939,7 @@ export const AppFlow: React.FC = () => {
   // Opens further out (whole app visible) with a brief hold, then zooms in.
   const camS = kf(
     frame,
-    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 414, 438, 512, 534],
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 400, 438, 504, 526],
     [
       0.78, 0.78, 1.55, 1.55, 1.45, 1.45, 0.85, 0.85, 2.6, 2.6, 1.9, 1.9, 1.62,
       1.62, 0.85, 0.85, 0.85,
@@ -1940,7 +1947,7 @@ export const AppFlow: React.FC = () => {
   );
   const camFx = kf(
     frame,
-    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 414, 438, 512, 534],
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 400, 438, 504, 526],
     [
       0.5, 0.5, 0.515, 0.515, 0.5, 0.5, 0.034, 0.034, 0.157, 0.157, 0.518, 0.518,
       0.55, 0.55, 0.034, 0.034, 1.17,
@@ -1948,7 +1955,7 @@ export const AppFlow: React.FC = () => {
   );
   const camFy = kf(
     frame,
-    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 414, 438, 512, 534],
+    [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 400, 438, 504, 526],
     [
       0.5, 0.5, 0.557, 0.557, 0.5, 0.5, 0.5, 0.5, 0.09, 0.09, 0.715, 0.715, 0.4,
       0.4, 0.5, 0.5, 0.525,
@@ -1975,13 +1982,13 @@ export const AppFlow: React.FC = () => {
       ? seg(12, 30, START.x, CREATE_AGENT.x)
       : frame < T3_START
         ? seg(48, 62, CREATE_AGENT.x, NEW_AGENT.x)
-        : seg(T3_START + 12, 176, AGENT_FROM.x, AGENT_TAB.x);
+        : seg(AGENT_CURSOR_START, CLICK3, AGENT_FROM.x, AGENT_TAB.x);
   const cy =
     frame < 46
       ? seg(12, 30, START.y, CREATE_AGENT.y)
       : frame < T3_START
         ? seg(48, 62, CREATE_AGENT.y, NEW_AGENT.y)
-        : seg(T3_START + 12, 176, AGENT_FROM.y, AGENT_TAB.y);
+        : seg(AGENT_CURSOR_START, CLICK3, AGENT_FROM.y, AGENT_TAB.y);
   const press =
     1 -
     0.16 *
@@ -1990,10 +1997,14 @@ export const AppFlow: React.FC = () => {
         pressDip(frame, CLICK2),
         pressDip(frame, CLICK3),
       );
-  const cursorExit = cursorExitAt(frame, [CLICK2, CLICK3]);
+  const cursorExit = cursorExitAt(frame, [
+    CLICK2,
+    { at: CLICK3, delay: AGENT_CURSOR_GLITCH_DELAY },
+  ]);
   const cursorVisible =
     frame < CLICK2 + CURSOR_GLITCH_DELAY + CURSOR_GLITCH_FRAMES ||
-    (frame >= 158 && frame < CLICK3 + CURSOR_GLITCH_DELAY + CURSOR_GLITCH_FRAMES);
+    (frame >= AGENT_CURSOR_VISIBLE_START &&
+      frame < CLICK3 + AGENT_CURSOR_GLITCH_DELAY + CURSOR_GLITCH_FRAMES);
 
   // Modal: springs in on click 1, scales out on click 2.
   const modalIn = spring({
@@ -2047,7 +2058,7 @@ export const AppFlow: React.FC = () => {
   );
   // As the combo slides to the left at the close, flip the yaw so the cards
   // face the now-empty right side (with a slightly shallower angle there).
-  const tiltYaw = interpolate(frame, [512, 534], [-9, 7], {
+  const tiltYaw = interpolate(frame, [504, 526], [-9, 7], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
@@ -2275,8 +2286,7 @@ export const AppFlow: React.FC = () => {
                   width: "100%",
                   height: "100%",
                   objectFit: "contain",
-                  opacity:
-                    frame < SOL_WORKBENCH_SHOW || solFinalAgentView ? 1 : 0,
+                  opacity: frame < SOL_WORKBENCH_SHOW ? 1 : 0,
                 }}
               />
               <Img
@@ -2310,8 +2320,7 @@ export const AppFlow: React.FC = () => {
                   width: "100%",
                   height: "100%",
                   objectFit: "contain",
-                  opacity:
-                    frame >= SOL_CLICK2 && !solFinalAgentView ? 1 : 0,
+                  opacity: frame >= SOL_CLICK2 ? 1 : 0,
                 }}
               />
             </div>

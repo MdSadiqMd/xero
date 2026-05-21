@@ -57,8 +57,8 @@ const LOCKUP_START = 30;
 const LOGO_SHOVE_DELAY = 4;
 // The gleam sweeps once the shove has settled (~frame 47), after a short beat.
 const SHINE_START = 55;
-const SHINE_DURATION = 22;
-const SHINE_HALF_WIDTH = 0.28; // half-width of the bright band (gradient units)
+const SHINE_DURATION = 14;
+const SHINE_HALF_WIDTH = 0.38; // half-width of the bright band (gradient units)
 const SHINE_PEAK = 0.6; // peak white opacity of the gleam
 
 // Second beat: the wordmark shoves the logo off-screen and centers itself,
@@ -430,8 +430,17 @@ export const LogoReveal: React.FC = () => {
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
-  // Hand-off to the taglines is a hard cut: the centered "xero" simply vanishes
-  // at SWITCH_START as the first tagline appears.
+  // Match the later phrase-to-phrase cuts: the centered "xero" glitches away
+  // for the last few frames before the first tagline glitches in.
+  const wordmarkGlitch = interpolate(
+    SWITCH_START - frame,
+    [0, GLITCH_OUT],
+    [1, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    },
+  );
   const nudgePx = -0.06 * fontSize;
 
   return (
@@ -492,7 +501,17 @@ export const LogoReveal: React.FC = () => {
               clipPath: `inset(0 0 0 ${textClipLeft}px)`,
             }}
           >
-            xero
+            {wordmarkGlitch > 0.001 ? (
+              <GlitchText
+                fontSize={fontSize}
+                intensity={wordmarkGlitch}
+                seed={frame}
+              >
+                xero
+              </GlitchText>
+            ) : (
+              "xero"
+            )}
           </span>
         </div>
       </AbsoluteFill>
@@ -505,16 +524,16 @@ export const LogoReveal: React.FC = () => {
         <Audio src={staticFile("gleam.mp3")} />
       </Sequence>
       {/* glitch sound on each text glitch (first 40% of the clip trimmed off) */}
-      {/* {[
+      {[
         SWITCH_START,
         SWITCH_START + PHRASE_STRIDE,
         SWITCH_START + 2 * PHRASE_STRIDE,
         SWITCH_START + 3 * PHRASE_STRIDE
       ].map((at) => (
         <Sequence key={at} from={at} durationInFrames={13} layout="none">
-          <Audio src={staticFile("glitch2.mp3")} trimBefore={22} volume={0.2} />
+          <Audio src={staticFile("glitch2.mp3")} trimBefore={22} volume={0.1} />
         </Sequence>
-      ))} */}
+      ))}
       {/* pop each time the logo is shoved left (first recoil + the eject) */}
       {[LOCKUP_START + LOGO_SHOVE_DELAY - 4, SECOND_SHOVE_START].map((at) => (
         <Sequence key={at} from={at} durationInFrames={27} layout="none">
