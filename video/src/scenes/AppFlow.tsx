@@ -461,7 +461,13 @@ const appear = (frame: number, start: number, dur = 7): React.CSSProperties => {
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.cubic),
   });
-  return { opacity: t, transform: `translateY(${(1 - t) * 14}px)` };
+  // Each element lifts off the surface as it streams: rises, scales up, and
+  // unfolds (rotateX) into place — clear 3D elevation rather than a flat fade.
+  return {
+    opacity: t,
+    transform: `perspective(1000px) translateY(${(1 - t) * 30}px) scale(${0.9 + 0.1 * t}) rotateX(${(1 - t) * -24}deg)`,
+    transformOrigin: "center top",
+  };
 };
 
 // Sizes mirror the real app (@xero/ui transcript), converted from CSS px to
@@ -547,6 +553,9 @@ const Conversation: React.FC = () => {
         width: "52.4%",
         fontFamily,
         color: "#e6e6e6",
+        // Soft drop-shadow on every line so the whole conversation reads as
+        // lifted off the surface, not just the user bubble.
+        textShadow: "0 9px 22px rgba(0,0,0,0.7)",
         transform: `translate(-50%, ${scrollY}px)`,
       }}
     >
@@ -565,7 +574,8 @@ const Conversation: React.FC = () => {
             borderRadius: 20,
             padding: "10px 18px",
             background: "rgba(212,165,116,0.10)",
-            boxShadow: "inset 0 0 0 1px rgba(212,165,116,0.4)",
+            boxShadow:
+              "inset 0 0 0 1px rgba(212,165,116,0.4), 0 16px 34px rgba(0,0,0,0.5)",
             fontSize: 18,
             lineHeight: 1.5,
             color: "#f2f2f2",
@@ -581,7 +591,8 @@ const Conversation: React.FC = () => {
             height: 30,
             borderRadius: "50%",
             objectFit: "cover",
-            boxShadow: "0 0 0 1px rgba(212,165,116,0.45)",
+            boxShadow:
+              "0 0 0 1px rgba(212,165,116,0.45), 0 14px 30px rgba(0,0,0,0.5)",
             marginTop: 3,
             flexShrink: 0,
           }}
@@ -1533,15 +1544,15 @@ export const AppFlow: React.FC = () => {
     [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 446, 512, 534],
     [
       0.5, 0.5, 0.515, 0.515, 0.5, 0.5, 0.034, 0.034, 0.157, 0.157, 0.518, 0.518,
-      0.5, 0.5, 0.034, 0.034, 1.17,
+      0.55, 0.55, 0.034, 0.034, 1.17,
     ],
   );
   const camFy = kf(
     frame,
     [0, 12, 30, 44, 58, 74, 108, 150, 176, 208, 236, 274, 298, 422, 446, 512, 534],
     [
-      0.5, 0.5, 0.557, 0.557, 0.5, 0.5, 0.5, 0.5, 0.09, 0.09, 0.715, 0.715, 0.44,
-      0.44, 0.5, 0.5, 0.525,
+      0.5, 0.5, 0.557, 0.557, 0.5, 0.5, 0.5, 0.5, 0.09, 0.09, 0.715, 0.715, 0.4,
+      0.4, 0.5, 0.5, 0.525,
     ],
   );
   const camTx = width / 2 - camFx * baseW * camS;
@@ -1625,10 +1636,13 @@ export const AppFlow: React.FC = () => {
 
   // The app eases into a hovering 3D perspective once it settles, then flattens
   // back out for the scene-3 hand-off.
+  // Flat through the composer/typing, then a gentle 3D angle while the
+  // conversation streams (298-422), growing into the full card tilt at the
+  // zoom-out.
   const tiltP = kf(
     frame,
-    [CANVAS_IN, 112, T3_START, T3_START + 20, 422, 446],
-    [0, 1, 1, 0, 0, 1],
+    [CANVAS_IN, 112, T3_START, T3_START + 20, 298, 320, 422, 446],
+    [0, 1, 1, 0, 0, 0.78, 0.78, 1],
   );
   // As the combo slides to the left at the close, flip the yaw so the cards
   // face the now-empty right side (with a slightly shallower angle there).
@@ -1636,8 +1650,18 @@ export const AppFlow: React.FC = () => {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-  const tiltRy = tiltP * (tiltYaw + 0.8 * Math.sin(frame * 0.045));
-  const tiltRx = tiltP * (3 + 0.5 * Math.sin(frame * 0.038 + 1.2));
+  // While the conversation is up, the plane gently rocks so its 3D angle is in
+  // motion — depth reads far better moving than static at this zoom.
+  const convPhase = interpolate(frame, [298, 318, 408, 422], [0, 1, 1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const tiltRy =
+    tiltP * (tiltYaw + 0.8 * Math.sin(frame * 0.045)) +
+    convPhase * 4 * Math.sin(frame * 0.028);
+  const tiltRx =
+    tiltP * (3 + 0.5 * Math.sin(frame * 0.038 + 1.2)) +
+    convPhase * 1.8 * Math.sin(frame * 0.02 + 1.3);
   const tiltFloat = tiltP * 7 * Math.sin(frame * 0.04 + 0.7);
   const tiltTransform = `perspective(1700px) translateY(${tiltFloat}px) rotateX(${tiltRx}deg) rotateY(${tiltRy}deg)`;
   const tiltShadow = tiltP * 0.5;
