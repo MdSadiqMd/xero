@@ -23,11 +23,11 @@ const LEGACY_XAI_OAUTH_CLIENT_ID_ENV: &str = "XAI_OAUTH_CLIENT_ID";
 fn main() {
     configure_custom_cfgs();
     configure_xai_oauth_build_env();
+    fetch_scrcpy_server();
+    fetch_idb_companion();
     tauri_build::build();
     compile_dictation_shim();
     build_cookie_importer();
-    fetch_scrcpy_server();
-    fetch_idb_companion();
     compile_idb_proto();
 }
 
