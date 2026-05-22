@@ -64,7 +64,7 @@
   "plugins": {
     "updater": {
       "active": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMyRTJDMDYzNUZCQjg3MgpSV1J5dVBzMUJpd3VETlZoUHZJTmRuRXR6TWN4UWZpaVB2dnE3ajROdnBRSE93NTEraWprc1h1eQo=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDREQzMxREU5RjI5QTNFQzcKUldUSFBwcnk2UjNEVGFTWWNnUjUxcGEybUk0dGdSTEVKKzZ2MmkxYit4d0Q0ODJ3QW5nWm4zaVMK",
       "endpoints": [
         "https://github.com/hyperpush-org/xero/releases/latest/download/latest.json"
       ],

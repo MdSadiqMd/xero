@@ -1,12 +1,13 @@
 # syntax=docker/dockerfile:1
 #
-# Build context must be the repo root (see cloud/fly.toml). The container
+# Build context must be the repo root (see fly.cloud.toml). The container
 # bundles the cloud web app along with the shared `@xero/ui` workspace.
 
 FROM node:24-slim AS base
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
+ENV CI=true
 RUN corepack enable && corepack prepare pnpm@10.28.1 --activate
 
 WORKDIR /app
@@ -28,6 +29,8 @@ RUN pnpm install --frozen-lockfile --filter cloud... --filter @xero/ui
 FROM base AS builder
 
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/cloud/node_modules ./cloud/node_modules
+COPY --from=deps /app/packages/ui/node_modules ./packages/ui/node_modules
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY cloud ./cloud
 COPY packages ./packages

@@ -10,7 +10,7 @@ https://cloud.xeroshell.com
 
 ## Repo Configuration
 
-- Cloud Fly config: `cloud/fly.toml`
+- Cloud Fly config: `fly.cloud.toml`
 - Cloud Dockerfile: `cloud/Dockerfile`
 - Landing Cloud link: `NEXT_PUBLIC_CLOUD_URL`, defaulting to `https://cloud.xeroshell.com`
 - CI deploy secrets: `FLY_CLOUD_TOKEN` or fallback `FLY_API_TOKEN`
@@ -21,7 +21,7 @@ Run these from the repo root after confirming the Fly organization/scope:
 
 ```bash
 fly apps create xero-cloud
-fly deploy --remote-only --config cloud/fly.toml
+fly deploy --remote-only --config fly.cloud.toml
 fly certs add cloud.xeroshell.com -a xero-cloud
 fly certs setup cloud.xeroshell.com -a xero-cloud
 ```
@@ -41,9 +41,26 @@ fly certs check cloud.xeroshell.com -a xero-cloud
 curl -I https://cloud.xeroshell.com
 ```
 
+## Current DNS Records
+
+Fly assigned these records for `xero-cloud` on May 22, 2026:
+
+```text
+A     cloud.xeroshell.com -> 66.241.125.151
+AAAA  cloud.xeroshell.com -> 2a09:8280:1::119:7674:0
+```
+
+Fly also offers this CNAME option:
+
+```text
+CNAME cloud.xeroshell.com -> pq8d9kr.xero-cloud.fly.dev
+```
+
+Prefer the `A` plus `AAAA` records in Vercel DNS. Remove the existing Vercel `A` records for `cloud.xeroshell.com` first.
+
 ## API Dependency
 
-The Cloud app uses `XERO_SERVER_URL` for GitHub OAuth, session refresh, device APIs, and relay websockets. In production, set it to the Phoenix relay/auth API origin. The current `cloud/fly.toml` value is:
+The Cloud app uses `XERO_SERVER_URL` for GitHub OAuth, session refresh, device APIs, and relay websockets. In production, set it to the Phoenix relay/auth API origin. The current `fly.cloud.toml` value is:
 
 ```text
 https://xeroshell.com

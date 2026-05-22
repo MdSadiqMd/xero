@@ -38,6 +38,61 @@ Add these repository variables for Windows Trusted Signing:
 - `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`
 - `AZURE_TRUSTED_SIGNING_CERT_PROFILE_NAME`
 
+Current repository check: the updater signing secret and macOS signing secrets are configured at the repo level. Windows signing and platform-specific deploy secrets still need to be added before the full release workflow can complete.
+
+## macOS Signing Setup
+
+Xero follows the normal Tauri v2 signing path for macOS: Tauri imports a base64-encoded Developer ID Application `.p12` certificate in CI, signs the bundle, notarizes with Apple credentials, and emits updater artifacts signed with the Tauri updater private key.
+
+Use a paid Apple Developer Program account for public distribution. A free Apple Developer account can sign for development, but cannot notarize Developer ID builds for other users.
+
+On the Mac that owns the signing identity:
+
+1. Create or download a `Developer ID Application` certificate from Apple Developer > Certificates, IDs & Profiles.
+2. Open the `.cer` so it lands in Keychain Access under `login` > `My Certificates`.
+3. Confirm the identity is visible:
+
+```bash
+security find-identity -v -p codesigning
+```
+
+4. Export the private-key-backed certificate from Keychain Access as a password-protected `.p12`.
+5. Add the Apple secrets with GitHub CLI:
+
+```bash
+openssl base64 -A -in /path/to/xero-developer-id.p12 | gh secret set APPLE_CERTIFICATE --repo hyperpush-org/xero
+gh secret set APPLE_CERTIFICATE_PASSWORD --repo hyperpush-org/xero
+gh secret set APPLE_ID --repo hyperpush-org/xero
+gh secret set APPLE_PASSWORD --repo hyperpush-org/xero
+gh secret set APPLE_TEAM_ID --repo hyperpush-org/xero
+```
+
+`APPLE_PASSWORD` must be an Apple app-specific password, not the account login password.
+
+## Updater Signing Setup
+
+The public updater key is already in `client/src-tauri/tauri.conf.json`. The matching private key must be stored as `TAURI_SIGNING_PRIVATE_KEY`; otherwise the release workflow cannot create `.sig` files for update artifacts.
+
+If the matching private key is available:
+
+```bash
+gh secret set TAURI_SIGNING_PRIVATE_KEY --repo hyperpush-org/xero < /path/to/xero-updater.key
+```
+
+The current `~/.tauri/xero.key` was generated without a password, so leave `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` unset.
+
+If the private key is lost and no public release has shipped yet, generate a new updater key and replace the public key in `client/src-tauri/tauri.conf.json` before the first release. If a public release has shipped, do not rotate the key without a bridge release signed by the old key.
+
+## macOS CI Smoke Test
+
+After the Apple secrets are configured, run the focused signed macOS workflow before running the full release workflow:
+
+```bash
+gh workflow run "macOS Signed Build" --repo hyperpush-org/xero
+```
+
+This workflow builds both `aarch64-apple-darwin` and `x86_64-apple-darwin`, notarizes the app, verifies `codesign`, verifies Gatekeeper assessment with `spctl`, checks that the bundled `idb_companion` resource is present, and uploads the signed `.dmg`, updater `.app.tar.gz`, and `.sig` artifacts.
+
 ## Required Production Secrets
 
 Set the server's production runtime secrets in Fly before the first deploy:
