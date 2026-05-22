@@ -74,12 +74,16 @@ fn set_platform_icon<R: Runtime>(app: AppHandle<R>, png_bytes: Vec<u8>) -> Comma
 fn set_platform_icon<R: Runtime>(app: AppHandle<R>, png_bytes: Vec<u8>) -> CommandResult<()> {
     use tauri::Manager;
 
-    let icon = tauri::image::Image::from_bytes(&png_bytes).map_err(|error| {
-        CommandError::user_fixable(
-            "app_icon_decode_failed",
-            format!("The generated application icon image could not be decoded: {error}"),
-        )
-    })?;
+    let decoded = image::load_from_memory_with_format(&png_bytes, image::ImageFormat::Png)
+        .map_err(|error| {
+            CommandError::user_fixable(
+                "app_icon_decode_failed",
+                format!("The generated application icon image could not be decoded: {error}"),
+            )
+        })?;
+    let rgba = decoded.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
 
     if let Some(window) = app.get_webview_window("main") {
         window.set_icon(icon).map_err(|error| {
