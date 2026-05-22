@@ -1,11 +1,12 @@
-import { AbsoluteFill, Audio, Series, staticFile } from "remotion";
+import { Audio } from "@remotion/media";
+import { AbsoluteFill, Series, staticFile } from "remotion";
 import { LogoReveal } from "./scenes/LogoReveal";
 import { AppFlow } from "./scenes/AppFlow";
 
 // Per-scene lengths (frames @ 30fps). Shared so the parent and the standalone
 // scene compositions can't drift out of sync.
 export const LOGO_FRAMES = 204;
-export const APPFLOW_FRAMES = 970;
+export const APPFLOW_FRAMES = 1060;
 export const MAIN_FRAMES = LOGO_FRAMES + APPFLOW_FRAMES;
 
 // The full video: each scene plays in sequence (hard cut between them), with

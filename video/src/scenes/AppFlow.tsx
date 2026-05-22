@@ -1,6 +1,5 @@
 import {
   AbsoluteFill,
-  Audio,
   Easing,
   Img,
   interpolate,
@@ -11,6 +10,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { Audio } from "@remotion/media";
 import { loadFont } from "@remotion/google-fonts/Inter";
 import { loadFont as loadMono } from "@remotion/google-fonts/JetBrainsMono";
 import { SceneBackground } from "../SceneBackground";
@@ -60,6 +60,8 @@ const SOL_TAB_NAME_STRIDE = 18;
 const SOL_TAB_NAME_TRANSITION = 7;
 const CLOSEOUT_START = SOL_FINAL_PULLBACK_START - 8;
 const CLOSEOUT_LAYER_TOP = -400;
+const FINAL_ZOOM_START = 1000;
+const FINAL_ZOOM_END = 1059;
 const XERO_MARK_QUADRANTS = [
   {
     d: "M182.98 182.984L0.000640869 182.984L0.000629244 50.0041C0.00062683 22.3898 22.3864 0.00413391 50.0006 0.0041315L182.98 0.00411987L182.98 182.984Z",
@@ -718,6 +720,26 @@ const Closeout: React.FC = () => {
       extrapolateRight: "clamp",
     },
   );
+  const finalSloganFade = interpolate(
+    frame,
+    [FINAL_ZOOM_START, FINAL_ZOOM_START + 20],
+    [1, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    },
+  );
+  const finalSloganGlitch = interpolate(
+    frame,
+    [FINAL_ZOOM_START, FINAL_ZOOM_START + 9, FINAL_ZOOM_START + 20],
+    [taglineGlitch, 1.15, 0.55],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    },
+  );
 
   return (
     <div
@@ -757,11 +779,12 @@ const Closeout: React.FC = () => {
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
+          opacity: finalSloganFade,
         }}
       >
-          <CloseoutGlitchText
-            fontSize={62}
-            intensity={taglineGlitch}
+        <CloseoutGlitchText
+          fontSize={62}
+          intensity={finalSloganGlitch}
           seed={frame}
           color="rgba(245,245,245,0.92)"
         >
@@ -1309,7 +1332,7 @@ const CLOUD_FEATURES = [
   "Open sessions from your phone",
   "Watch runs live, anywhere",
   "Approve & steer on the go",
-  "Stays in sync with your Mac",
+  "Stays in sync with your Desktop",
 ];
 
 const CloudPanel: React.FC<{ exitX: number }> = ({ exitX }) => {
@@ -1785,9 +1808,9 @@ const TUI_HEAD = 532;
 const TUI_ITEMS = 540;
 const TUI_FEATURES = [
   "The full agent in your shell",
-  "Slash commands & agent swaps",
   "Same sessions, every surface",
-  "Built for keyboard flow",
+  "Project Snapshots",
+  "Headless mode",
 ];
 
 const TuiPanel: React.FC = () => {
@@ -2082,9 +2105,17 @@ export const AppFlow: React.FC = () => {
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
   const activeSolFy = 0.5 - solZoom * 0.32 + solPanDown; // center -> top, then pan down
-  const solS = interpolate(solFinalPullback, [0, 1], [activeSolS, 0.88]);
-  const solFx = interpolate(solFinalPullback, [0, 1], [activeSolFx, 0.5]);
-  const solFy = interpolate(solFinalPullback, [0, 1], [activeSolFy, 0.04]);
+  const finalZoom = interpolate(frame, [FINAL_ZOOM_START, FINAL_ZOOM_END], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: CAM_EASE,
+  });
+  const settledSolS = interpolate(solFinalPullback, [0, 1], [activeSolS, 0.88]);
+  const settledSolFx = interpolate(solFinalPullback, [0, 1], [activeSolFx, 0.5]);
+  const settledSolFy = interpolate(solFinalPullback, [0, 1], [activeSolFy, 0.04]);
+  const solS = interpolate(finalZoom, [0, 1], [settledSolS, 1.72]);
+  const solFx = interpolate(finalZoom, [0, 1], [settledSolFx, 0.5]);
+  const solFy = interpolate(finalZoom, [0, 1], [settledSolFy, -0.32]);
   const solTx = width / 2 - solFx * width * solS;
   const solTy = height / 2 - solFy * height * solS;
 
@@ -2597,7 +2628,7 @@ export const AppFlow: React.FC = () => {
       </Sequence>
 
       {/* single Enter/Return press as the prompt sends and the empty state is covered */}
-      <Sequence from={REVEAL_START - 1} durationInFrames={3} layout="none">
+      <Sequence from={REVEAL_START - 2} durationInFrames={5} layout="none">
         <Audio src={staticFile("keyboard.mp3")} volume={1} />
       </Sequence>
     </AbsoluteFill>

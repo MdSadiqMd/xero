@@ -1,6 +1,5 @@
 import {
   AbsoluteFill,
-  Audio,
   Easing,
   interpolate,
   random,
@@ -10,6 +9,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
+import { Audio } from "@remotion/media";
 import { loadFont } from "@remotion/google-fonts/Inter";
 import { measureText } from "@remotion/layout-utils";
 import { SceneBackground } from "../SceneBackground";
@@ -535,9 +535,9 @@ export const LogoReveal: React.FC = () => {
         </Sequence>
       ))}
       {/* pop each time the logo is shoved left (first recoil + the eject) */}
-      {[LOCKUP_START + LOGO_SHOVE_DELAY - 4, SECOND_SHOVE_START].map((at) => (
+      {[LOCKUP_START + LOGO_SHOVE_DELAY, SECOND_SHOVE_START].map((at) => (
         <Sequence key={at} from={at} durationInFrames={27} layout="none">
-          <Audio src={staticFile("pop.mp3")} trimBefore={4} volume={0.2} />
+          <Audio src={staticFile("pop.mp3")} trimBefore={3} volume={0.2} />
         </Sequence>
       ))}
     </AbsoluteFill>

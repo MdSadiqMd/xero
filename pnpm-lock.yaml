@@ -933,6 +933,9 @@ importers:
       '@remotion/layout-utils':
         specifier: 4.0.464
         version: 4.0.464
+      '@remotion/media':
+        specifier: 4.0.464
+        version: 4.0.464(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@remotion/tailwind-v4':
         specifier: 4.0.464
         version: 4.0.464(@remotion/bundler@4.0.464(@swc/helpers@0.5.15)(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(webpack@5.105.0)
@@ -2663,6 +2666,12 @@ packages:
 
   '@remotion/media-utils@4.0.464':
     resolution: {integrity: sha512-/kJ4+kb5zWUebYv744LuHZ3JRI5Y/1cd9DmIHy4CxIq/BuYpfrduRHV7tMBTaNBMr6aeegUxGb4v6KqD1QyF2w==}
+    peerDependencies:
+      react: '>=16.8.0'
+      react-dom: '>=16.8.0'
+
+  '@remotion/media@4.0.464':
+    resolution: {integrity: sha512-vhW0pdhCf6sQojIAbkuSd1YgnQhKGDtRdwMOH5djKztFz6tfuhK+H7uA/LsOsWjOM7fzDzkio04gRIsVRmSahg==}
     peerDependencies:
       react: '>=16.8.0'
       react-dom: '>=16.8.0'
@@ -8488,6 +8497,14 @@ snapshots:
       react: 19.2.3
       react-dom: 19.2.3(react@19.2.3)
       remotion: 4.0.464(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+
+  '@remotion/media@4.0.464(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
+    dependencies:
+      mediabunny: 1.45.0
+      react: 19.2.3
+      react-dom: 19.2.3(react@19.2.3)
+      remotion: 4.0.464(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      zod: 4.3.6
 
   '@remotion/player@4.0.464(react-dom@19.2.3(react@19.2.3))(react@19.2.3)':
     dependencies:
