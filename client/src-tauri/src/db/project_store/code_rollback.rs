@@ -9455,7 +9455,7 @@ fn infer_file_operation(
     match (before_entry, after_entry) {
         (None, Some(_)) => CodeFileOperation::Create,
         (Some(_), None) => CodeFileOperation::Delete,
-        (Some(before), Some(after))
+        (Some(_), Some(_))
             if target.path_before != target.path_after
                 && target.path_before.is_some()
                 && target.path_after.is_some() =>

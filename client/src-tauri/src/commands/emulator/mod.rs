@@ -1157,7 +1157,7 @@ pub fn emulator_set_location(
 #[tauri::command]
 pub fn emulator_push_notification(
     state: State<'_, EmulatorState>,
-    request: PushNotificationRequest,
+    _request: PushNotificationRequest,
 ) -> CommandResult<()> {
     let active = state.active.lock().expect("emulator active mutex poisoned");
     match active.as_ref() {
@@ -1166,15 +1166,14 @@ pub fn emulator_push_notification(
             "Android AVDs have no APNS equivalent; push notifications are iOS-only.",
         )),
         #[cfg(target_os = "macos")]
-        Some(ActiveDevice::Ios { session, .. }) => {
-            ios::xcrun::push_notification(session.device_id(), &request.bundle_id, &request.payload)
-                .map_err(|e| {
-                    CommandError::system_fault(
-                        "ios_push_failed",
-                        format!("simctl push failed: {e}"),
-                    )
-                })
-        }
+        Some(ActiveDevice::Ios { session, .. }) => ios::xcrun::push_notification(
+            session.device_id(),
+            &_request.bundle_id,
+            &_request.payload,
+        )
+        .map_err(|e| {
+            CommandError::system_fault("ios_push_failed", format!("simctl push failed: {e}"))
+        }),
         #[cfg(feature = "emulator-synthetic")]
         Some(ActiveDevice::Synthetic { .. }) => Ok(()),
         None => Err(no_active_device()),

@@ -71,7 +71,7 @@ impl BrowserSource {
     }
 
     fn all() -> Vec<BrowserSource> {
-        let mut sources = vec![
+        vec![
             BrowserSource::Chrome,
             BrowserSource::Chromium,
             BrowserSource::Brave,
@@ -83,10 +83,9 @@ impl BrowserSource {
             BrowserSource::Firefox,
             BrowserSource::LibreWolf,
             BrowserSource::Zen,
-        ];
-        #[cfg(target_os = "macos")]
-        sources.push(BrowserSource::Safari);
-        sources
+            #[cfg(target_os = "macos")]
+            BrowserSource::Safari,
+        ]
     }
 
     /// Detects installed browsers via file presence instead of rookie. Rookie's

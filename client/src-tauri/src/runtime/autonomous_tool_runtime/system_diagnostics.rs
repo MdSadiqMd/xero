@@ -3,27 +3,36 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
+};
+#[cfg(target_os = "macos")]
+use std::{
+    process::Stdio,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use regex::Regex;
+#[cfg(target_os = "macos")]
 use serde_json::Value as JsonValue;
 
+#[cfg(target_os = "macos")]
+use super::AutonomousSystemDiagnosticsLogLevel;
 use super::{
     policy::system_diagnostics_policy_trace, AutonomousSystemDiagnosticsAction,
     AutonomousSystemDiagnosticsArtifact, AutonomousSystemDiagnosticsArtifactMode,
     AutonomousSystemDiagnosticsDiagnostic, AutonomousSystemDiagnosticsFdKind,
-    AutonomousSystemDiagnosticsLogLevel, AutonomousSystemDiagnosticsOutput,
-    AutonomousSystemDiagnosticsPolicyTrace, AutonomousSystemDiagnosticsPreset,
-    AutonomousSystemDiagnosticsRequest, AutonomousSystemDiagnosticsRow,
-    AutonomousSystemDiagnosticsTarget, AutonomousToolOutput, AutonomousToolResult,
-    AutonomousToolRuntime, AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS,
+    AutonomousSystemDiagnosticsOutput, AutonomousSystemDiagnosticsPolicyTrace,
+    AutonomousSystemDiagnosticsPreset, AutonomousSystemDiagnosticsRequest,
+    AutonomousSystemDiagnosticsRow, AutonomousSystemDiagnosticsTarget, AutonomousToolOutput,
+    AutonomousToolResult, AutonomousToolRuntime, AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS,
 };
+#[cfg(target_os = "macos")]
+use crate::runtime::cancelled_error;
 use crate::{
     commands::{validate_non_empty, CommandError, CommandResult},
-    runtime::{cancelled_error, redaction::find_prohibited_persistence_content},
+    runtime::redaction::find_prohibited_persistence_content,
 };
 
 const DEFAULT_SYSTEM_DIAGNOSTICS_LIMIT: usize = 100;
@@ -34,9 +43,11 @@ const MAX_SYSTEM_DIAGNOSTICS_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SYSTEM_DIAGNOSTICS_DEPTH: usize = 8;
 const DEFAULT_PROCESS_SAMPLE_DURATION_MS: u64 = 2_000;
 const DEFAULT_PROCESS_SAMPLE_INTERVAL_MS: u64 = 10;
+#[cfg(target_os = "macos")]
 const PROCESS_SAMPLE_TIMEOUT_GRACE_MS: u64 = 3_000;
 const DEFAULT_SYSTEM_LOG_LAST_MS: u64 = 60_000;
 const MAX_SYSTEM_LOG_LAST_MS: u64 = 15 * 60_000;
+#[cfg(target_os = "macos")]
 const MAX_SYSTEM_LOG_MESSAGE_CHARS: usize = 320;
 const SYSTEM_DIAGNOSTICS_ARTIFACT_DIR: &str = "diagnostics-artifacts";
 
@@ -2495,6 +2506,7 @@ fn platform_macos_accessibility_snapshot(
     ))
 }
 
+#[cfg(target_os = "macos")]
 fn json_string_field(value: &JsonValue, field: &str) -> Option<String> {
     match value.get(field)? {
         JsonValue::String(value) => Some(value.clone()),
@@ -2505,6 +2517,7 @@ fn json_string_field(value: &JsonValue, field: &str) -> Option<String> {
     .filter(|value| !value.is_empty())
 }
 
+#[cfg(target_os = "macos")]
 fn json_u64_field(value: &JsonValue, field: &str) -> Option<u64> {
     match value.get(field)? {
         JsonValue::Number(value) => value.as_u64(),
@@ -2513,6 +2526,7 @@ fn json_u64_field(value: &JsonValue, field: &str) -> Option<u64> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn redact_json_strings_for_diagnostics(value: &mut JsonValue, redacted: &mut bool) {
     match value {
         JsonValue::String(text) => {
@@ -3448,6 +3462,7 @@ fn diagnostics_artifact_path(root: &Path, prefix: &str, extension: &str) -> Comm
     Ok(root.join(format!("{prefix}-{millis}.{extension}")))
 }
 
+#[cfg(target_os = "macos")]
 fn camel_to_snake(value: &str) -> String {
     let mut out = String::new();
     for (index, ch) in value.chars().enumerate() {

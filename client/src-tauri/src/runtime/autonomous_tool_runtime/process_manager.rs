@@ -3022,7 +3022,10 @@ fn macos_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
     ps_system_processes()
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    target_os = "macos",
+    all(unix, not(any(target_os = "linux", target_os = "macos")))
+))]
 fn ps_system_processes() -> CommandResult<Vec<SystemProcessInfo>> {
     let output = Command::new("ps")
         .args(["-axo", "pid=,ppid=,comm="])
@@ -3115,7 +3118,7 @@ fn process_executable_path(pid: u32) -> Option<String> {
     Some(String::from_utf8_lossy(&buffer[..len]).into_owned())
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn process_executable_path(_pid: u32) -> Option<String> {
     None
 }
@@ -3649,7 +3652,10 @@ fn linux_ipv6_addr(value: &str) -> String {
         .join(":")
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    target_os = "macos",
+    all(unix, not(any(target_os = "linux", target_os = "macos")))
+))]
 fn lsof_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
     let output = Command::new("lsof")
         .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcPn"])
@@ -3702,6 +3708,10 @@ fn lsof_system_ports() -> CommandResult<Vec<SystemPortInfo>> {
     Ok(ports)
 }
 
+#[cfg(any(
+    target_os = "macos",
+    all(unix, not(any(target_os = "linux", target_os = "macos")))
+))]
 fn parse_lsof_address(value: &str) -> Option<(String, u16)> {
     let without_state = value.split(" (").next().unwrap_or(value);
     let (addr, port) = if let Some(end) = without_state.rfind("]:") {

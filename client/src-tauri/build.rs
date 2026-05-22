@@ -11,9 +11,12 @@ const SCRCPY_SHA256: &str = "a23c5659f36c260f105c022d27bcb3eafffa26070e7baa9eda6
 /// sibling `idb-companion.universal/` directory which holds both the binary
 /// at `bin/idb_companion` and its `@executable_path/../Frameworks` dylibs —
 /// the whole tree has to ship together or the binary fails to load.
+#[cfg(target_os = "macos")]
 const IDB_COMPANION_VERSION: &str = "1.1.8";
+#[cfg(target_os = "macos")]
 const IDB_COMPANION_SHA256: &str =
     "3b72cc6a9a5b1a22a188205a84090d3a294347a846180efd755cf1a3c848e3e7";
+#[cfg(target_os = "macos")]
 const IDB_COMPANION_DIR: &str = "idb-companion.universal";
 const BUILD_COOKIE_IMPORTER_ENV: &str = "XERO_BUILD_COOKIE_IMPORTER";
 const SKIP_COOKIE_IMPORTER_ENV: &str = "XERO_SKIP_COOKIE_IMPORTER";
