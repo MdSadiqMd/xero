@@ -138,10 +138,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: macos-15
             target: aarch64-apple-darwin
             artifact_suffix: macos-aarch64
-          - platform: macos-latest
+          - platform: macos-15-intel
             target: x86_64-apple-darwin
             artifact_suffix: macos-x86_64
           - platform: ubuntu-24.04
@@ -306,11 +306,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
+          - platform: macos-15
             args: --target aarch64-apple-darwin --config src-tauri/tauri.macos.conf.json
             artifact_suffix: macos-aarch64
             platform_key: darwin-aarch64
-          - platform: macos-latest
+          - platform: macos-15-intel
             args: --target x86_64-apple-darwin --config src-tauri/tauri.macos.conf.json
             artifact_suffix: macos-x86_64
             platform_key: darwin-x86_64

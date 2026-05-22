@@ -16,16 +16,18 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.artifact_suffix }}
-    runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: aarch64-apple-darwin
+          - platform: macos-15
+            target: aarch64-apple-darwin
             artifact_suffix: macos-aarch64
-          - target: x86_64-apple-darwin
+          - platform: macos-15-intel
+            target: x86_64-apple-darwin
             artifact_suffix: macos-x86_64
 
+    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
