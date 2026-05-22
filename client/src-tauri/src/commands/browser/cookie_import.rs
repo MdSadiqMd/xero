@@ -133,8 +133,12 @@ impl BrowserSource {
         }
         #[cfg(target_os = "windows")]
         {
-            let local = home.join("AppData/Local");
-            let roaming = home.join("AppData/Roaming");
+            let local = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join("AppData").join("Local"));
+            let roaming = std::env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join("AppData").join("Roaming"));
             match self {
                 BrowserSource::Chrome => vec![local
                     .join("Google/Chrome/User Data/Default/Network/Cookies")],

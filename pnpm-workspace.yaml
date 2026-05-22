@@ -3,4 +3,4 @@ packages:
   - "client"
   - "cloud"
   - "landing"
-  - "video"
+  - "video/*"

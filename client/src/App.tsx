@@ -24,7 +24,12 @@ import { PhaseView } from '@/components/xero/phase-view'
 import { ProjectAddDialog } from '@/components/xero/project-add-dialog'
 import { ProjectRail } from '@/components/xero/project-rail'
 import { UpdateScreen } from '@/components/xero/update-screen'
-import { XeroShell, type PlatformVariant, type SurfacePreloadTarget } from '@/components/xero/shell'
+import {
+  XeroShell,
+  detectPlatform,
+  type PlatformVariant,
+  type SurfacePreloadTarget,
+} from '@/components/xero/shell'
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { StatusFooterProps } from '@/components/xero/status-footer'
 import type { SettingsSection } from '@/components/xero/settings-dialog'
@@ -174,7 +179,7 @@ async function persistActiveView(adapter: XeroDesktopAdapter, view: View): Promi
 
 const warmedSurfaceChunks = new Set<SurfacePreloadTarget>()
 
-const IDLE_SURFACE_PRELOAD_SEQUENCE: SurfacePreloadTarget[] = [
+const BASE_IDLE_SURFACE_PRELOAD_SEQUENCE: SurfacePreloadTarget[] = [
   'agent-dock',
   'terminal',
   'solana',
@@ -183,7 +188,6 @@ const IDLE_SURFACE_PRELOAD_SEQUENCE: SurfacePreloadTarget[] = [
   'browser',
   'settings',
   'usage',
-  'ios',
 ]
 
 const SOLANA_WORKBENCH_WIDTH_STORAGE_KEY = 'xero.solana.workbench.width'
@@ -196,10 +200,9 @@ const AGENT_DOCK_DEFAULT_WIDTH = 560
 const AGENT_DOCK_MAX_WIDTH = 720
 const STARTUP_SURFACE_PREWARM_SETTLE_MS = 320
 const HEAVY_SURFACE_MOUNT_AFTER_REVEAL_MS = 180
-const STARTUP_SURFACE_PRELOAD_TARGETS: SurfacePreloadTarget[] = [
+const BASE_STARTUP_SURFACE_PRELOAD_TARGETS: SurfacePreloadTarget[] = [
   'agent-dock',
   'browser',
-  'ios',
   'solana',
   'settings',
   'terminal',
@@ -207,6 +210,16 @@ const STARTUP_SURFACE_PRELOAD_TARGETS: SurfacePreloadTarget[] = [
   'vcs',
   'workflows',
 ]
+
+function shouldIncludeIosSurface(): boolean {
+  return detectPlatform() === 'macos'
+}
+
+function withPlatformSurfacePreloads(
+  targets: readonly SurfacePreloadTarget[],
+): SurfacePreloadTarget[] {
+  return shouldIncludeIosSurface() ? [...targets, 'ios'] : [...targets]
+}
 
 function readPersistedSolanaWorkbenchWidth(): number {
   if (typeof window === 'undefined') {
@@ -253,6 +266,10 @@ function readPersistedAgentDockWidth(): number {
 
 function preloadSurfaceChunk(target: SurfacePreloadTarget): void {
   if (import.meta.env.MODE === 'test') {
+    return
+  }
+
+  if (target === 'ios' && !shouldIncludeIosSurface()) {
     return
   }
 
@@ -379,11 +396,10 @@ async function waitForStartupPreloadSettle(): Promise<void> {
 }
 
 async function preloadStartupSurfaceChunks(): Promise<void> {
-  await Promise.all([
+  const preloads: Array<Promise<unknown>> = [
     loadAgentRuntime(),
     loadExecutionView(),
     loadBrowserSidebar(),
-    loadIosEmulatorSidebar(),
     loadSolanaWorkbenchSidebar(),
     loadSettingsDialog().then((module) => {
       void module.preloadSettingsSectionChunks().catch(() => undefined)
@@ -393,8 +409,16 @@ async function preloadStartupSurfaceChunks(): Promise<void> {
     loadVcsSidebar(),
     loadWorkflowsSidebar(),
     loadAgentDockSidebar(),
-  ])
-  STARTUP_SURFACE_PRELOAD_TARGETS.forEach((target) => warmedSurfaceChunks.add(target))
+  ]
+
+  if (shouldIncludeIosSurface()) {
+    preloads.push(loadIosEmulatorSidebar())
+  }
+
+  await Promise.all(preloads)
+  withPlatformSurfacePreloads(BASE_STARTUP_SURFACE_PRELOAD_TARGETS).forEach((target) =>
+    warmedSurfaceChunks.add(target),
+  )
 }
 
 function useStartupSurfacePrewarm(enabled: boolean): {
@@ -459,7 +483,7 @@ function useIdleSurfacePreloads(enabled: boolean): void {
 
     let cancelled = false
     let cancelScheduled: (() => void) | null = null
-    const queue = [...IDLE_SURFACE_PRELOAD_SEQUENCE]
+    const queue = withPlatformSurfacePreloads(BASE_IDLE_SURFACE_PRELOAD_SEQUENCE)
 
     const warmNext = () => {
       if (cancelled) {
@@ -3461,7 +3485,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
           </LazyPrerenderedSurface>
           <IosEmulatorSurface
             open={iosOpen}
-            prewarm={startupSurfacePrewarm.shouldMount}
+            prewarm={startupSurfacePrewarm.shouldMount && shouldIncludeIosSurface()}
           />
           <SolanaWorkbenchSurface
             open={solanaOpen}

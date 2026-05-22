@@ -381,7 +381,7 @@ export function TerminalSidebar({
         }
         const initialLabel =
           sanitizeTerminalTabLabel(options?.label ?? "") ??
-          sanitizeTerminalTabLabel(response.shell.split("/").pop() ?? response.shell) ??
+          sanitizeTerminalTabLabel(response.shell.split(/[\\/]/).pop() ?? response.shell) ??
           "terminal"
         const tab: TerminalTab = {
           id: response.terminalId,

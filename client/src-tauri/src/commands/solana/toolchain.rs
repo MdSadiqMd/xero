@@ -25,6 +25,7 @@ const PROBE_TIMEOUT_SECS: u64 = 5;
 const INSTALL_TIMEOUT_SECS: u64 = 1_800;
 const TOOLCHAIN_ROOT_ENV: &str = "XERO_SOLANA_TOOLCHAIN_ROOT";
 const TOOLCHAIN_RESOURCE_ROOT_ENV: &str = "XERO_SOLANA_RESOURCE_ROOT";
+const APP_DATA_DIRECTORY_NAME: &str = "dev.sn0w.xero";
 const AGAVE_VERSION: &str = "v3.1.13";
 const ANCHOR_VERSION: &str = "v1.0.0";
 const ANCHOR_VERSION_FILENAME: &str = "1.0.0";
@@ -620,9 +621,10 @@ fn managed_root() -> PathBuf {
     if let Some(path) = env::var_os(TOOLCHAIN_ROOT_ENV) {
         return PathBuf::from(path);
     }
-    dirs::data_dir()
-        .map(|dir| dir.join("xero").join("solana").join("toolchain"))
-        .unwrap_or_else(|| env::temp_dir().join("xero-solana-toolchain"))
+    env::temp_dir()
+        .join(APP_DATA_DIRECTORY_NAME)
+        .join("solana")
+        .join("toolchain")
 }
 
 fn tool_dirs_from_root(root: &Path) -> Vec<PathBuf> {

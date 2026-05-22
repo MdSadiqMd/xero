@@ -36,8 +36,19 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 
 import { XeroShell } from './shell'
 
+const MAC_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15'
+const WINDOWS_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+
+function setUserAgent(value: string) {
+  Object.defineProperty(window.navigator, 'userAgent', {
+    value,
+    configurable: true,
+  })
+}
+
 describe('XeroShell', () => {
   beforeEach(() => {
+    setUserAgent(MAC_USER_AGENT)
     isTauriMock.mockReturnValue(false)
     tauriWindowMock.close.mockReset()
     tauriWindowMock.minimize.mockReset()
@@ -187,6 +198,23 @@ describe('XeroShell', () => {
       )
       expect(screen.queryByRole('button', { name: /iOS simulator/ })).toBeNull()
     }
+  })
+
+  it('does not render the iOS titlebar button when macOS preview runs on a non-macOS host', () => {
+    setUserAgent(WINDOWS_USER_AGENT)
+
+    render(
+      <XeroShell
+        activeView="phases"
+        onToggleIos={() => undefined}
+        onViewChange={() => undefined}
+        platformOverride="macos"
+      >
+        <div>Body</div>
+      </XeroShell>,
+    )
+
+    expect(screen.queryByRole('button', { name: /iOS simulator/ })).toBeNull()
   })
 
   it('preloads the terminal surface from the titlebar button before opening', async () => {

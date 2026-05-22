@@ -525,8 +525,9 @@ export function XeroShell({
   // present — optimistically render the iOS toggle. Once the probe
   // resolves we flip to the CTA if Xcode is missing. The "supported"
   // flag stays true on all macOS hosts per the backend contract.
+  const iosSupportedOnHost = detectedPlatform === "macos"
   const xcodeKnownMissing =
-    platform === "macos" && desktopRuntime && emulatorSdk.ios.supported && !emulatorSdk.ios.xcodePresent
+    iosSupportedOnHost && desktopRuntime && emulatorSdk.ios.supported && !emulatorSdk.ios.xcodePresent
 
   const titlebarToolButtonClassName = (open: boolean, tone?: "warning") =>
     cn(
@@ -535,7 +536,7 @@ export function XeroShell({
       tone === "warning" && "text-warning/90 hover:bg-warning/15 hover:text-warning",
     )
 
-  const IosToolBtn = platform === "macos" ? (
+  const IosToolBtn = iosSupportedOnHost ? (
     xcodeKnownMissing ? (
       <Tooltip>
         <TooltipTrigger asChild>

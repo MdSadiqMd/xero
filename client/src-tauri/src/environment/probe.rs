@@ -504,8 +504,6 @@ pub fn built_in_environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry>
             &["--version"],
         ),
         // Mobile tooling
-        entry("xcodebuild", MobileTooling, "xcodebuild", &["-version"]),
-        entry("xcrun", MobileTooling, "xcrun", &["--version"]),
         entry("adb", MobileTooling, "adb", &["version"]),
         entry("emulator", MobileTooling, "emulator", &["-version"]),
         entry("flutter", MobileTooling, "flutter", &["--version"]),
@@ -576,6 +574,13 @@ pub fn built_in_environment_probe_catalog() -> Vec<EnvironmentProbeCatalogEntry>
         entry("llm", AgentAiCli, "llm", &["--version"]),
         entry("continue", AgentAiCli, "continue", &["--version"]),
     ];
+
+    if cfg!(target_os = "macos") {
+        entries.extend([
+            entry("xcodebuild", MobileTooling, "xcodebuild", &["-version"]),
+            entry("xcrun", MobileTooling, "xcrun", &["--version"]),
+        ]);
+    }
 
     entries.extend(platform_package_manager_entries());
     entries
@@ -786,7 +791,7 @@ fn derive_capabilities(tools: &[EnvironmentToolRecord]) -> Vec<EnvironmentCapabi
         .collect::<std::collections::HashSet<_>>();
 
     let package_managers = ["pnpm", "npm", "yarn", "bun"];
-    vec![
+    let mut capabilities = vec![
         capability_any(
             "node_project_ready",
             &present,
@@ -807,12 +812,18 @@ fn derive_capabilities(tools: &[EnvironmentToolRecord]) -> Vec<EnvironmentCapabi
             &["docker"],
             "Docker CLI was not found.",
         ),
-        capability_all(
+    ];
+
+    if cfg!(target_os = "macos") {
+        capabilities.push(capability_all(
             "ios_simulator_available",
             &present,
             &["xcodebuild", "xcrun"],
             "iOS simulator tooling requires xcodebuild and xcrun.",
-        ),
+        ));
+    }
+
+    capabilities.extend([
         capability_all(
             "android_emulator_available",
             &present,
@@ -831,7 +842,9 @@ fn derive_capabilities(tools: &[EnvironmentToolRecord]) -> Vec<EnvironmentCapabi
             &["protoc"],
             "Protocol Buffer builds require protoc.",
         ),
-    ]
+    ]);
+
+    capabilities
 }
 
 fn capability_all(
@@ -1016,10 +1029,6 @@ fn managed_tool_dirs() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(root) = env::var_os("XERO_SOLANA_TOOLCHAIN_ROOT") {
         roots.push(PathBuf::from(root));
-    }
-    if let Some(data_dir) = dirs::data_dir() {
-        roots.push(data_dir.join("xero").join("solana").join("toolchain"));
-        roots.push(data_dir.join("xero").join("toolchains"));
     }
 
     roots
