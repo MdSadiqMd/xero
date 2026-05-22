@@ -61,9 +61,9 @@ const SOL_TAB_NAME_STRIDE = 18;
 const SOL_TAB_NAME_TRANSITION = 7;
 const CLOSEOUT_START = SOL_FINAL_PULLBACK_START - 8;
 const CLOSEOUT_LAYER_TOP = -400;
-const FINAL_ZOOM_START = 940;
-const FINAL_ZOOM_END = 982;
-const FINAL_SHOVE_START = 1000;
+const FINAL_ZOOM_START = SOL_FINAL_PULLBACK_END + 10;
+const FINAL_ZOOM_END = FINAL_ZOOM_START + 36;
+const FINAL_SHOVE_START = FINAL_ZOOM_END + 10;
 const FINAL_DOMAIN_REVEAL_START = FINAL_SHOVE_START + 28;
 const XERO_MARK_QUADRANTS = [
   {
@@ -2753,7 +2753,7 @@ export const AppFlow: React.FC = () => {
       </Sequence>
 
       {/* single Enter/Return press as the prompt sends and the empty state is covered */}
-      <Sequence from={REVEAL_START - 2} durationInFrames={5} layout="none">
+      <Sequence from={REVEAL_START - 4} durationInFrames={5} layout="none">
         <Audio src={staticFile("keyboard.mp3")} volume={1} />
       </Sequence>
 
