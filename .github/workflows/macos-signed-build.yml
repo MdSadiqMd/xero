@@ -118,6 +118,7 @@ jobs:
 
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
           spctl --assess --type execute --verbose "$APP_BUNDLE"
+          bash client/src-tauri/scripts/verify-macos-portable-linkage.sh "$APP_BUNDLE"
 
       - name: Upload signed artifacts
         uses: actions/upload-artifact@v4

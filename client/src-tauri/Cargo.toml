@@ -5,7 +5,7 @@ resolver = "2"
 
 [package]
 name = "xero-desktop"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 default-run = "xero-desktop"
 description = "Xero desktop host"
@@ -73,7 +73,7 @@ csv = "1"
 dirs = "5"
 ed25519-dalek = { version = "2", default-features = false, features = ["fast", "std", "rand_core"] }
 flate2 = "1"
-git2 = "0.20"
+git2 = { version = "0.20", features = ["vendored-openssl"] }
 globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 xcap = "0.6"
