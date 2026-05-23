@@ -524,7 +524,7 @@
   stroke-width: 2.25;
 }
 .agent-visualization.is-focusing
-  .react-flow__node:not(.is-focused):not(.react-flow__node-lane-label):not(.react-flow__node-tool-group-frame):not(.react-flow__node-stage-group-frame) {
+  .react-flow__node:not(.is-focused):not(.react-flow__node-lane-label):not(.react-flow__node-tool-group-frame):not(.react-flow__node-db-group-frame):not(.react-flow__node-stage-group-frame) {
   opacity: 0.3;
   /* Snap-dim (no opacity transition) so hovering a node doesn't fire 100+
      simultaneous opacity tweens. The focused cluster still pops because
@@ -544,6 +544,12 @@
   opacity: 0.3;
 }
 
+.agent-visualization.is-focusing
+  .react-flow__node-db-group-frame:not(.is-focused)
+  .agent-db-group-frame {
+  opacity: 0.3;
+}
+
 .agent-visualization .react-flow__node-tool-group-frame.is-focused .agent-tool-group-frame {
   border-color: color-mix(
     in oklab,
@@ -557,6 +563,21 @@
   );
   box-shadow: inset 0 0 0 1px
     color-mix(in oklab, var(--color-sky-500, #0ea5e9) 18%, transparent);
+}
+
+.agent-visualization .react-flow__node-db-group-frame.is-focused .agent-db-group-frame {
+  border-color: color-mix(
+    in oklab,
+    var(--color-emerald-500, #10b981) 78%,
+    var(--background)
+  );
+  background: color-mix(
+    in oklab,
+    var(--color-emerald-500, #10b981) 11%,
+    transparent
+  );
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--color-emerald-500, #10b981) 18%, transparent);
 }
 
 /* Output → output-section parent links: subtle but legible. The spatial
@@ -903,6 +924,7 @@
    does not add a full-size hit surface, because tool cards inside the frame
    must keep first claim on hover and expand clicks. */
 .agent-visualization .react-flow__node.react-flow__node-tool-group-frame,
+.agent-visualization .react-flow__node.react-flow__node-db-group-frame,
 .agent-visualization .react-flow__node.react-flow__node-stage-group-frame {
   z-index: 0 !important;
   cursor: default;
@@ -910,11 +932,13 @@
 }
 
 .agent-visualization .react-flow__node.react-flow__node-tool-group-frame.dragging,
+.agent-visualization .react-flow__node.react-flow__node-db-group-frame.dragging,
 .agent-visualization .react-flow__node.react-flow__node-stage-group-frame.dragging {
   cursor: grabbing;
 }
 
 .agent-visualization .react-flow__node.react-flow__node-tool,
+.agent-visualization .react-flow__node.react-flow__node-db-table,
 .agent-visualization .react-flow__node.react-flow__node-stage {
   z-index: 1 !important;
   pointer-events: auto;
@@ -932,6 +956,27 @@
   background: color-mix(
     in oklab,
     var(--color-amber-500, #f59e0b) 3%,
+    transparent
+  );
+  box-sizing: border-box;
+  pointer-events: none;
+  transition:
+    width var(--agent-layout-duration) var(--agent-layout-ease),
+    height var(--agent-layout-duration) var(--agent-layout-ease),
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.agent-visualization .agent-db-group-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border: 1px dashed
+    color-mix(in oklab, var(--color-emerald-500, #10b981) 32%, var(--background));
+  border-radius: 10px;
+  background: color-mix(
+    in oklab,
+    var(--color-emerald-500, #10b981) 3%,
     transparent
   );
   box-sizing: border-box;

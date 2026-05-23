@@ -52,7 +52,7 @@ const BEZIER_CURVATURE = 0.25
 // header strips and tool-group frames are mostly empty space around their
 // child tool cards. Treat them as transparent for collision detection so a
 // label centred over a frame's border isn't pushed away unnecessarily.
-const EXCLUDED_TYPES = new Set(['lane-label', 'tool-group-frame'])
+const EXCLUDED_TYPES = new Set(['lane-label', 'tool-group-frame', 'db-group-frame'])
 
 function selectNodeLookup(state: ReactFlowState) {
   return state.nodeLookup

@@ -4,6 +4,7 @@ import type { Edge, Node, XYPosition } from '@xyflow/react'
 import {
   AGENT_GRAPH_HEADER_NODE_ID,
   AGENT_GRAPH_OUTPUT_NODE_ID,
+  DB_GROUP_FRAME_NODE_ID,
   type AgentGraphNode,
 } from './build-agent-graph'
 
@@ -96,6 +97,7 @@ export function layoutAgentGraphByCategory(
     | 'skills'
     | 'tool'
     | 'db-table'
+    | 'db-group-frame'
     | 'agent-output'
     | 'output-section'
     | 'consumed-artifact'
@@ -107,6 +109,7 @@ export function layoutAgentGraphByCategory(
     skills: 'Skills',
     tool: 'Tools',
     'db-table': 'Database',
+    'db-group-frame': 'Database',
     'agent-output': 'Response Format',
     'output-section': 'Response Sections',
     'consumed-artifact': 'Consumes',
@@ -120,6 +123,7 @@ export function layoutAgentGraphByCategory(
     skills: [],
     tool: [],
     'db-table': [],
+    'db-group-frame': [],
     'agent-output': [],
     'output-section': [],
     'consumed-artifact': [],
@@ -131,6 +135,7 @@ export function layoutAgentGraphByCategory(
   // their frame so React Flow draws them inside it.
   const toolFrames: AgentGraphNode[] = []
   const toolsByFrameId = new Map<string, AgentGraphNode[]>()
+  const dbFrames: AgentGraphNode[] = []
 
   for (const node of nodes) {
     if (node.id === AGENT_GRAPH_HEADER_NODE_ID) {
@@ -139,6 +144,11 @@ export function layoutAgentGraphByCategory(
     }
     if (node.type === 'tool-group-frame') {
       toolFrames.push(node)
+      continue
+    }
+    if (node.type === 'db-group-frame') {
+      dbFrames.push(node)
+      grouped['db-group-frame'].push(node)
       continue
     }
     if (node.type === 'agent-output' || node.id === AGENT_GRAPH_OUTPUT_NODE_ID) {
@@ -443,6 +453,9 @@ export function layoutAgentGraphByCategory(
   // header centre, so the block extends downward.
   const dbs = grouped['db-table']
   if (dbs.length > 0) {
+    const DB_FRAME_PAD_X = 12
+    const DB_FRAME_PAD_TOP = 12
+    const DB_FRAME_PAD_BOTTOM = 12
     const colCount = Math.max(1, Math.ceil(dbs.length / MAX_DBS_PER_COLUMN))
     const rowsPerCol = Math.ceil(dbs.length / colCount)
 
@@ -452,16 +465,45 @@ export function layoutAgentGraphByCategory(
       colWidth = Math.max(colWidth, s.width)
     }
 
-    const blockTopY = headerCenterY + HEADER_BAND_GAP
-    let blockRightX = rightStartX
+    let frameContentHeight = 0
+    for (let c = 0; c < colCount; c++) {
+      const subStart = c * rowsPerCol
+      const subEnd = Math.min(subStart + rowsPerCol, dbs.length)
+      const colDbs = dbs.slice(subStart, subEnd)
+      let colHeight = 0
+      for (const d of colDbs) {
+        const s = sizes.get(d.id) ?? { width: colWidth, height: 104 }
+        colHeight += s.height
+      }
+      colHeight += Math.max(0, colDbs.length - 1) * ROW_GAP
+      frameContentHeight = Math.max(frameContentHeight, colHeight)
+    }
+
+    const frameWidth =
+      colCount * colWidth +
+      Math.max(0, colCount - 1) * COLUMN_GAP +
+      DB_FRAME_PAD_X * 2
+    const frameHeight = frameContentHeight + DB_FRAME_PAD_TOP + DB_FRAME_PAD_BOTTOM
+    const frameTopY = headerCenterY + HEADER_BAND_GAP
+    const dbFrame =
+      dbFrames.find((frame) => frame.id === DB_GROUP_FRAME_NODE_ID) ?? dbFrames[0]
+
+    if (dbFrame) {
+      placedById.set(dbFrame.id, {
+        ...dbFrame,
+        position: { x: rightStartX, y: frameTopY } as XYPosition,
+        width: frameWidth,
+        height: frameHeight,
+      } as AgentGraphNode)
+    }
 
     for (let c = 0; c < colCount; c++) {
       const subStart = c * rowsPerCol
       const subEnd = Math.min(subStart + rowsPerCol, dbs.length)
       const colDbs = dbs.slice(subStart, subEnd)
 
-      let y = blockTopY
-      const x = rightStartX + c * (colWidth + COLUMN_GAP)
+      let y = DB_FRAME_PAD_TOP
+      const x = DB_FRAME_PAD_X + c * (colWidth + COLUMN_GAP)
 
       for (const d of colDbs) {
         const s = sizes.get(d.id) ?? { width: colWidth, height: 104 }
@@ -471,8 +513,6 @@ export function layoutAgentGraphByCategory(
         })
         y += s.height + ROW_GAP
       }
-
-      blockRightX = Math.max(blockRightX, x + colWidth)
     }
 
     laneLabelNodes.push({
@@ -480,13 +520,13 @@ export function layoutAgentGraphByCategory(
       type: 'lane-label',
       position: {
         x: rightStartX,
-        y: blockTopY - LANE_LABEL_HEIGHT - LANE_LABEL_GAP,
+        y: frameTopY - LANE_LABEL_HEIGHT - LANE_LABEL_GAP,
       } as XYPosition,
       selectable: false,
       draggable: true,
       dragHandle: '.agent-graph-lane-label',
       data: { label: CATEGORY_LABELS['db-table'], count: dbs.length },
-      width: blockRightX - rightStartX,
+      width: frameWidth,
     } as AgentGraphNode)
   }
 

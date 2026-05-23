@@ -51,7 +51,11 @@ interface NodeDetailsPanelProps {
 // have no user-facing data, so they fall through to nothing.
 export function NodeDetailsPanel({ selectedNode, onClose }: NodeDetailsPanelProps) {
   if (!selectedNode) return null
-  if (selectedNode.type === 'lane-label' || selectedNode.type === 'tool-group-frame') return null
+  if (
+    selectedNode.type === 'lane-label' ||
+    selectedNode.type === 'tool-group-frame' ||
+    selectedNode.type === 'db-group-frame'
+  ) return null
 
   const meta = panelMetaForNode(selectedNode)
 

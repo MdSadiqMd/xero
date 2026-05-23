@@ -126,6 +126,7 @@ import { NodeDetailsPanel } from './node-details-panel'
 import { NodePropertiesPanel } from './node-properties-panel'
 import { AgentHeaderNode } from './nodes/agent-header-node'
 import { ConsumedArtifactNode } from './nodes/consumed-artifact-node'
+import { DbGroupFrameNode } from './nodes/db-group-frame-node'
 import { DbTableNode } from './nodes/db-table-node'
 import { LaneLabelNode } from './nodes/lane-label-node'
 import { OutputNode } from './nodes/output-node'
@@ -145,6 +146,7 @@ const NODE_TYPES = {
   skills: SkillNode,
   tool: ToolNode,
   'db-table': DbTableNode,
+  'db-group-frame': DbGroupFrameNode,
   'agent-output': OutputNode,
   'output-section': OutputSectionNode,
   'consumed-artifact': ConsumedArtifactNode,
@@ -875,7 +877,9 @@ function nodeMovesWithLane(node: Node, category: LaneDragCategory): boolean {
       // the cards visually while preserving each card's relative coordinates.
       return node.type === 'tool-group-frame'
     case 'db-table':
-      return node.type === 'db-table'
+      // DB cards are children of the database frame; moving the frame moves
+      // the whole database family while preserving card-relative layout.
+      return node.type === 'db-group-frame'
     case 'agent-output':
       return node.type === 'agent-output'
     case 'output-section':
@@ -1195,7 +1199,10 @@ export function applyKnownNodeDimensions(
     const handles = options.domMeasuredHandleNodeTypes?.has(node.type ?? '')
       ? undefined
       : knownHandlesForNode(node, width, height)
-    const pinsWrapperSize = node.type === 'tool-group-frame' || node.type === 'stage-group-frame'
+    const pinsWrapperSize =
+      node.type === 'tool-group-frame' ||
+      node.type === 'stage-group-frame' ||
+      node.type === 'db-group-frame'
     const nextWidth = pinsWrapperSize ? width : undefined
     const nextHeight = pinsWrapperSize ? height : undefined
     if (
@@ -1327,7 +1334,10 @@ function buildFocusTarget(nodeId: string, index: FocusIndex): FocusTarget | null
     }
   }
 
-  visit(nodeId, { includeChildConnections: nodeType === 'tool-group-frame' })
+  visit(nodeId, {
+    includeChildConnections:
+      nodeType === 'tool-group-frame' || nodeType === 'db-group-frame',
+  })
 
   let cursor: string | undefined = index.parentIdByNodeId.get(nodeId)
   const seenAncestors = new Set<string>()
@@ -4823,6 +4833,8 @@ function defaultLanePosition(
       return { x: 380, y: -80 + index * 70 }
     case 'db-table':
       return { x: -380, y: 220 + index * 150 }
+    case 'db-group-frame':
+      return { x: 360, y: 200 }
     case 'output-section':
       return { x: 380, y: 480 + index * 80 }
     case 'consumed-artifact':
@@ -4838,27 +4850,33 @@ function defaultLanePosition(
 }
 
 /**
- * Collapse the viewing graph's tool-group-frame chrome so the editing canvas
+ * Collapse the viewing graph's group-frame chrome so the editing canvas
  * works with a flat node list. Frames are a viewing-time visual grouping;
- * authoring tools as standalone nodes (with header → tool edges) keeps the
- * data model tractable for the snapshot serializer.
+ * authoring tools and DB touchpoints as standalone nodes keeps the data model
+ * tractable for the snapshot serializer.
  */
 function flattenForEditing(graph: AgentGraph): AgentGraph {
   const frameIds = new Set(
-    graph.nodes.filter((node) => node.type === 'tool-group-frame').map((node) => node.id),
+    graph.nodes
+      .filter((node) => node.type === 'tool-group-frame' || node.type === 'db-group-frame')
+      .map((node) => node.id),
   )
   const toolIds = new Set(
     graph.nodes.filter((node) => node.type === 'tool').map((node) => node.id),
+  )
+  const dbIds = new Set(
+    graph.nodes.filter((node) => node.type === 'db-table').map((node) => node.id),
   )
 
   const counters: EditingPositionCounters = { ...EDITING_BLANK_COUNTERS }
   const nodes: AgentGraphNode[] = []
   for (const node of graph.nodes) {
     if (node.type === 'tool-group-frame') continue
+    if (node.type === 'db-group-frame') continue
     if (node.type === 'stage-group-frame') continue
     if (node.type === 'lane-label') continue
     let next: AgentGraphNode = node
-    if (node.type === 'tool') {
+    if (node.type === 'tool' || node.type === 'db-table') {
       const stripped = { ...node }
       delete (stripped as { parentId?: string }).parentId
       delete (stripped as { extent?: 'parent' | unknown }).extent
@@ -4904,6 +4922,22 @@ function flattenForEditing(graph: AgentGraph): AgentGraph {
       type: 'smoothstep',
       data: { category: 'tool' },
       className: 'agent-edge agent-edge-tool',
+    })
+  }
+  const seenHeaderDbEdges = new Set(
+    edges
+      .filter((edge) => edge.source === AGENT_GRAPH_HEADER_NODE_ID && dbIds.has(edge.target))
+      .map((edge) => edge.target),
+  )
+  for (const dbId of dbIds) {
+    if (seenHeaderDbEdges.has(dbId)) continue
+    edges.push({
+      id: `e:header->${dbId}`,
+      source: AGENT_GRAPH_HEADER_NODE_ID,
+      target: dbId,
+      type: 'smoothstep',
+      data: { category: 'db-table' },
+      className: 'agent-edge agent-edge-db',
     })
   }
 

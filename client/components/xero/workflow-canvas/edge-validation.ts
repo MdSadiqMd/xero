@@ -29,6 +29,7 @@ const ALLOWED_PAIRS: ReadonlyArray<readonly [AgentGraphNodeKind, AgentGraphNodeK
   ['agent-header', 'skills'],
   ['agent-header', 'tool'],
   ['agent-header', 'db-table'],
+  ['agent-header', 'db-group-frame'],
   ['agent-header', 'agent-output'],
   // Tools produce content for output sections; sections live under the output
   ['tool', 'output-section'],
@@ -55,6 +56,7 @@ const ALLOWED_PAIRS: ReadonlyArray<readonly [AgentGraphNodeKind, AgentGraphNodeK
 const LAYOUT_CHROME_KINDS = new Set<string>([
   'lane-label',
   'tool-group-frame',
+  'db-group-frame',
   'stage-group-frame',
 ])
 
@@ -139,6 +141,7 @@ const KIND_LABELS: Record<AgentGraphNodeKind, string> = {
   skills: 'skill',
   tool: 'tool',
   'db-table': 'DB table',
+  'db-group-frame': 'database group',
   'agent-output': 'response format',
   'output-section': 'response section',
   'consumed-artifact': 'consumed artifact',

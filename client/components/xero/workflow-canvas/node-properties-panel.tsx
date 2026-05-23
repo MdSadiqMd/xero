@@ -175,7 +175,11 @@ interface NodePropertiesPanelProps {
 
 export function NodePropertiesPanel({ selectedNode, onClose }: NodePropertiesPanelProps) {
   if (!selectedNode) return null
-  if (selectedNode.type === 'lane-label' || selectedNode.type === 'tool-group-frame') return null
+  if (
+    selectedNode.type === 'lane-label' ||
+    selectedNode.type === 'tool-group-frame' ||
+    selectedNode.type === 'db-group-frame'
+  ) return null
 
   const meta = panelMetaForNode(selectedNode)
 

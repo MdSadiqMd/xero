@@ -11,6 +11,7 @@ import {
   AGENT_GRAPH_HEADER_NODE_ID,
   AGENT_GRAPH_OUTPUT_NODE_ID,
   AGENT_GRAPH_TRIGGER_HANDLES,
+  DB_GROUP_FRAME_NODE_ID,
   STAGE_GROUP_FRAME_NODE_ID,
   agentGraphFromProjection,
   buildAgentGraph,
@@ -455,10 +456,40 @@ describe('buildAgentGraph', () => {
       if (node.type === 'consumed-artifact') continue // flows into header
       if (node.type === 'lane-label') continue
       if (node.type === 'tool') continue // tools are parented under their tool-group-frame
+      if (node.type === 'db-table') continue // DB cards are parented under the database frame
       const hasEdge = edges.some(
         (edge) => edge.source === AGENT_GRAPH_HEADER_NODE_ID && edge.target === node.id,
       )
       expect(hasEdge, `${node.id} should be reachable from header`).toBe(true)
+    }
+  })
+
+  it('parents database cards under one database frame and connects only the frame to the header', () => {
+    const detail = fixtureDetail()
+    const { nodes, edges } = buildAgentGraph(detail)
+    const dbFrame = nodes.find((node) => node.id === DB_GROUP_FRAME_NODE_ID)
+    const dbNodes = nodes.filter((node) => node.type === 'db-table')
+    const headerDbEdges = edges.filter(
+      (edge) =>
+        edge.source === AGENT_GRAPH_HEADER_NODE_ID &&
+        (edge.data as { category?: string } | undefined)?.category === 'db-table',
+    )
+
+    expect(dbFrame?.type).toBe('db-group-frame')
+    expect(dbFrame?.style?.pointerEvents).toBe('none')
+    expect((dbFrame?.data as { count?: number } | undefined)?.count).toBe(dbNodes.length)
+    expect(headerDbEdges).toHaveLength(1)
+    expect(headerDbEdges[0]?.target).toBe(DB_GROUP_FRAME_NODE_ID)
+
+    for (const dbNode of dbNodes) {
+      expect((dbNode as { parentId?: string }).parentId).toBe(DB_GROUP_FRAME_NODE_ID)
+      expect((dbNode as { draggable?: boolean }).draggable).toBe(false)
+      expect(dbNode.style?.pointerEvents).toBe('all')
+      expect(
+        edges.some(
+          (edge) => edge.source === AGENT_GRAPH_HEADER_NODE_ID && edge.target === dbNode.id,
+        ),
+      ).toBe(false)
     }
   })
 

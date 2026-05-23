@@ -29,6 +29,7 @@ export type AgentGraphNodeKind =
   | 'skills'
   | 'tool'
   | 'db-table'
+  | 'db-group-frame'
   | 'agent-output'
   | 'output-section'
   | 'consumed-artifact'
@@ -150,11 +151,16 @@ export interface StageGroupFrameNodeData extends Record<string, unknown> {
   count: number
 }
 
+export interface DbGroupFrameNodeData extends Record<string, unknown> {
+  count: number
+}
+
 export type AgentHeaderFlowNode = Node<AgentHeaderNodeData, 'agent-header'>
 export type PromptFlowNode = Node<PromptNodeData, 'prompt'>
 export type SkillFlowNode = Node<SkillNodeData, 'skills'>
 export type ToolFlowNode = Node<ToolNodeData, 'tool'>
 export type DbTableFlowNode = Node<DbTableNodeData, 'db-table'>
+export type DbGroupFrameFlowNode = Node<DbGroupFrameNodeData, 'db-group-frame'>
 export type OutputFlowNode = Node<OutputNodeData, 'agent-output'>
 export type OutputSectionFlowNode = Node<OutputSectionNodeData, 'output-section'>
 export type ConsumedArtifactFlowNode = Node<ConsumedArtifactNodeData, 'consumed-artifact'>
@@ -183,6 +189,7 @@ export type AgentGraphNode =
   | SkillFlowNode
   | ToolFlowNode
   | DbTableFlowNode
+  | DbGroupFrameFlowNode
   | OutputFlowNode
   | OutputSectionFlowNode
   | ConsumedArtifactFlowNode
@@ -305,6 +312,7 @@ export function stageNodeId(phaseId: string): string {
 // column), so a constant id is enough; no per-bucket variant needed like
 // tool-group-frame:CORE / tool-group-frame:SOLANA.
 export const STAGE_GROUP_FRAME_NODE_ID = 'stage-group-frame:stages'
+export const DB_GROUP_FRAME_NODE_ID = 'db-group-frame:database'
 
 export function stageBranchEdgeId(
   sourcePhaseId: string,
@@ -904,6 +912,25 @@ export function buildAgentGraph(detail: WorkflowAgentDetailDto): AgentGraph {
   // expected — a table that's both read and written produces two entries —
   // so we key by id rather than table name.
   const dbEntryById = new Map<string, OrderedTouchpoint>()
+  if (dbEntries.length > 0) {
+    nodes.push({
+      id: DB_GROUP_FRAME_NODE_ID,
+      type: 'db-group-frame',
+      position: { x: 0, y: 0 },
+      data: { count: dbEntries.length },
+      style: { pointerEvents: 'none' },
+    })
+    edges.push({
+      id: `e:header->${DB_GROUP_FRAME_NODE_ID}`,
+      source: HEADER_NODE_ID,
+      sourceHandle: HEADER_SOURCE_HANDLE.db,
+      target: DB_GROUP_FRAME_NODE_ID,
+      type: 'smoothstep',
+      data: { category: 'db-table' },
+      className: 'agent-edge agent-edge-db',
+      markerEnd: ARROW_MARKER,
+    })
+  }
   for (const entry of dbEntries) {
     const id = dbNodeId(entry.detail.table, entry.kind)
     dbEntryById.set(id, entry)
@@ -911,6 +938,10 @@ export function buildAgentGraph(detail: WorkflowAgentDetailDto): AgentGraph {
       id,
       type: 'db-table',
       position: { x: 0, y: 0 },
+      parentId: DB_GROUP_FRAME_NODE_ID,
+      extent: 'parent',
+      draggable: false,
+      style: { pointerEvents: 'all' },
       data: {
         table: entry.detail.table,
         touchpoint: entry.kind,
@@ -918,16 +949,6 @@ export function buildAgentGraph(detail: WorkflowAgentDetailDto): AgentGraph {
         triggers: entry.detail.triggers,
         columns: entry.detail.columns,
       },
-    })
-    edges.push({
-      id: `e:header->${id}`,
-      source: HEADER_NODE_ID,
-      sourceHandle: HEADER_SOURCE_HANDLE.db,
-      target: id,
-      type: 'smoothstep',
-      data: { category: 'db-table' },
-      className: 'agent-edge agent-edge-db',
-      markerEnd: ARROW_MARKER,
     })
   }
 
@@ -1579,6 +1600,7 @@ export function decodeAgentGraphNodeId(
   | { kind: 'consumed-artifact'; artifactId: string }
   | { kind: 'stage'; phaseId: string }
   | { kind: 'tool-group-frame'; groupKey: string }
+  | { kind: 'db-group-frame' }
   | { kind: 'lane-label' }
   | { kind: 'unknown' } {
   if (id === HEADER_NODE_ID) return { kind: 'header' }
@@ -1604,6 +1626,9 @@ export function decodeAgentGraphNodeId(
       touchpoint: touchpoint as 'read' | 'write' | 'encouraged',
       table: tableParts.join(':'),
     }
+  }
+  if (id === DB_GROUP_FRAME_NODE_ID) {
+    return { kind: 'db-group-frame' }
   }
   if (id.startsWith('output-section:')) {
     return { kind: 'output-section', sectionId: id.slice('output-section:'.length) }
