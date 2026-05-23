@@ -10822,7 +10822,7 @@ dependencies = [
 
 [[package]]
 name = "xero-desktop"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "arc-swap",
  "arrow-array",
