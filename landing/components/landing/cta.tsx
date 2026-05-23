@@ -1,7 +1,8 @@
 import Link from "next/link"
-import { Github, ShieldCheck } from "lucide-react"
+import { Github, ShieldCheck, Terminal } from "lucide-react"
+import { DesktopDownloads } from "@/components/landing/desktop-downloads"
 import { TuiInstall } from "@/components/landing/tui-install"
-import { siteConfig, tuiInstallCommand, tuiPowerShellInstallCommand } from "@/lib/site"
+import { desktopRelease, siteConfig, tuiInstallCommand, tuiPowerShellInstallCommand } from "@/lib/site"
 
 const installTargets = [
   { id: "unix", label: "macOS / Linux", command: tuiInstallCommand },
@@ -19,43 +20,61 @@ export function CTA() {
         aria-hidden
         className="pointer-events-none absolute inset-0 -z-10 bg-radial-fade"
       />
-      <div className="mx-auto w-full max-w-5xl px-4 py-24 text-center sm:px-6 lg:px-8 lg:py-32">
+      <div className="mx-auto w-full max-w-6xl px-4 py-24 text-center sm:px-6 lg:px-8 lg:py-32">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-primary">
-          Xero TUI · The terminal edition
+          Download Xero · {desktopRelease.tag}
         </p>
         <h2 className="mx-auto mt-3 max-w-3xl font-sans text-3xl font-medium tracking-tight text-balance sm:text-5xl lg:text-6xl">
-          Or run Xero in your terminal. <br className="hidden sm:block" />
-          <span className="text-muted-foreground">Bring your own keys.</span>
+          Desktop builds are live. <br className="hidden sm:block" />
+          <span className="text-muted-foreground">Pick your platform.</span>
         </h2>
         <p className="mx-auto mt-5 max-w-lg text-pretty text-muted-foreground">
-          A full terminal interface for the same agents, workflows, and keys as
-          the desktop app, without leaving your shell. Use it on its own or
-          alongside the app.
+          Install the local-first desktop app for macOS, Windows, or Linux.
+          The terminal edition is still available below for shell-native work.
         </p>
 
-        <div className="mx-auto mt-10 max-w-2xl">
-          <TuiInstall targets={installTargets} />
+        <div className="mx-auto mt-10 max-w-5xl">
+          <DesktopDownloads />
 
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-muted-foreground/80">
-            <span className="inline-flex items-center gap-1.5">
-              <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-              SHA-256 checksummed builds
-            </span>
-            <Link
-              href="/install.sh"
-              className="underline-offset-4 transition-colors hover:text-foreground hover:underline"
-            >
-              View install script
-            </Link>
-            <Link
-              href={siteConfig.githubUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 underline-offset-4 transition-colors hover:text-foreground hover:underline"
-            >
-              <Github className="h-3.5 w-3.5" />
-              Source on GitHub
-            </Link>
+          <div className="mt-8 rounded-lg border border-border/70 bg-secondary/20 p-4 text-left backdrop-blur sm:p-5">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-[0.18em] text-primary">
+                  <Terminal className="h-3.5 w-3.5" />
+                  Terminal edition
+                </p>
+                <h3 className="mt-2 text-xl font-medium tracking-tight text-foreground">
+                  Install Xero TUI
+                </h3>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                Same agents and keys, without leaving your shell.
+              </span>
+            </div>
+
+            <TuiInstall targets={installTargets} />
+
+            <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-muted-foreground/80">
+              <span className="inline-flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+                SHA-256 checksummed builds
+              </span>
+              <Link
+                href="/install.sh"
+                className="underline-offset-4 transition-colors hover:text-foreground hover:underline"
+              >
+                View install script
+              </Link>
+              <Link
+                href={siteConfig.githubUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 underline-offset-4 transition-colors hover:text-foreground hover:underline"
+              >
+                <Github className="h-3.5 w-3.5" />
+                Source on GitHub
+              </Link>
+            </div>
           </div>
         </div>
       </div>

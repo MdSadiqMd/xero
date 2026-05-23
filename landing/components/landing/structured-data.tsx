@@ -1,4 +1,4 @@
-import { absoluteUrl, siteConfig } from "@/lib/site"
+import { absoluteUrl, desktopDownloads, desktopRelease, siteConfig } from "@/lib/site"
 
 const jsonLd = {
   "@context": "https://schema.org",
@@ -27,9 +27,10 @@ const jsonLd = {
       name: siteConfig.name,
       applicationCategory: "DeveloperApplication",
       operatingSystem: "macOS, Windows, Linux",
-      softwareVersion: "Beta",
+      softwareVersion: desktopRelease.version,
       description: siteConfig.description,
       url: siteConfig.url,
+      downloadUrl: desktopDownloads.map((download) => absoluteUrl(download.href)),
       codeRepository: siteConfig.githubUrl,
       publisher: {
         "@id": absoluteUrl("/#organization"),
@@ -38,7 +39,7 @@ const jsonLd = {
         "@type": "Offer",
         price: "0",
         priceCurrency: "USD",
-        availability: "https://schema.org/PreOrder",
+        availability: "https://schema.org/InStock",
       },
     },
   ],

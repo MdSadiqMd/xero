@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ArrowRight, Download, Github } from "lucide-react"
+import { ArrowRight, Cloud, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AppWindowMock } from "@/components/landing/app-window-mock"
 import { siteConfig } from "@/lib/site"
@@ -45,9 +45,9 @@ export function Hero() {
               size="lg"
               className="h-11 gap-2 bg-primary px-5 text-primary-foreground shadow-[0_8px_24px_-12px_color-mix(in_oklab,var(--primary)_70%,transparent)] hover:bg-primary/90"
             >
-              <Link href={siteConfig.githubUrl} target="_blank" rel="noopener noreferrer">
-                <Github className="h-4 w-4" />
-                Run it locally
+              <Link href="#download">
+                <Download className="h-4 w-4" />
+                Download Xero
               </Link>
             </Button>
             <Button
@@ -56,9 +56,9 @@ export function Hero() {
               variant="secondary"
               className="h-11 gap-2 border border-border/70 bg-secondary/70 px-5 text-secondary-foreground hover:bg-secondary"
             >
-              <Link href="#download">
-                <Download className="h-4 w-4" />
-                Install TUI
+              <Link href={siteConfig.cloudUrl}>
+                <Cloud className="h-4 w-4" />
+                Open Cloud
               </Link>
             </Button>
           </div>

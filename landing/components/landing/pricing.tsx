@@ -1,6 +1,6 @@
 import Link from "next/link"
 import type { ElementType } from "react"
-import { Check, Download, Rocket, Smartphone } from "lucide-react"
+import { Check, Github, Rocket, Smartphone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -80,21 +80,15 @@ export function Pricing() {
               size="lg"
               className="bg-primary text-primary-foreground shadow-[0_8px_24px_-12px_color-mix(in_oklab,var(--primary)_70%,transparent)] hover:bg-primary/90"
             >
-              <Link href={siteConfig.githubUrl} target="_blank" rel="noopener noreferrer">
-                Run it locally
+              <Link href="/#download">
+                Download app
               </Link>
             </Button>
-            <Button
-              size="lg"
-              disabled
-              aria-disabled
-              className="relative bg-secondary text-muted-foreground disabled:opacity-100 disabled:pointer-events-auto disabled:cursor-not-allowed"
-            >
-              <Download className="h-4 w-4" />
-              Download
-              <span className="absolute -top-2 -right-2 inline-flex items-center rounded-full border border-primary/40 bg-background px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-primary">
-                Soon
-              </span>
+            <Button asChild size="lg" variant="secondary" className="gap-2 border border-border/70">
+              <Link href={siteConfig.githubUrl} target="_blank" rel="noopener noreferrer">
+                <Github className="h-4 w-4" />
+                Source
+              </Link>
             </Button>
           </div>
         </div>

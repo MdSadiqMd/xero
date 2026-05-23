@@ -74,7 +74,7 @@ export function SiteHeader() {
           <Button asChild size="sm" className="gap-1.5 bg-primary text-primary-foreground">
             <Link href="/#download">
               <Download className="h-3.5 w-3.5" />
-              Install TUI
+              Download
             </Link>
           </Button>
           <Button
