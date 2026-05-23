@@ -72,10 +72,10 @@ export function SiteHeader() {
             <Github className="h-4 w-4" />
           </Link>
           <Button asChild size="sm" className="gap-1.5 bg-primary text-primary-foreground">
-            <Link href="/#download">
+            <a href="/download">
               <Download className="h-3.5 w-3.5" />
               Download
-            </Link>
+            </a>
           </Button>
           <Button
             asChild

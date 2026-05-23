@@ -80,9 +80,9 @@ export function Pricing() {
               size="lg"
               className="bg-primary text-primary-foreground shadow-[0_8px_24px_-12px_color-mix(in_oklab,var(--primary)_70%,transparent)] hover:bg-primary/90"
             >
-              <Link href="/#download">
+              <a href="/download">
                 Download app
-              </Link>
+              </a>
             </Button>
             <Button asChild size="lg" variant="secondary" className="gap-2 border border-border/70">
               <Link href={siteConfig.githubUrl} target="_blank" rel="noopener noreferrer">

@@ -1,4 +1,4 @@
-import { absoluteUrl, desktopDownloads, desktopRelease, siteConfig } from "@/lib/site"
+import { absoluteUrl, desktopDownloadUrl, desktopRelease, siteConfig } from "@/lib/site"
 
 const jsonLd = {
   "@context": "https://schema.org",
@@ -30,7 +30,7 @@ const jsonLd = {
       softwareVersion: desktopRelease.version,
       description: siteConfig.description,
       url: siteConfig.url,
-      downloadUrl: desktopDownloads.map((download) => absoluteUrl(download.href)),
+      downloadUrl: absoluteUrl(desktopDownloadUrl),
       codeRepository: siteConfig.githubUrl,
       publisher: {
         "@id": absoluteUrl("/#organization"),

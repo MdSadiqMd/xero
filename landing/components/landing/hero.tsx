@@ -45,10 +45,10 @@ export function Hero() {
               size="lg"
               className="h-11 gap-2 bg-primary px-5 text-primary-foreground shadow-[0_8px_24px_-12px_color-mix(in_oklab,var(--primary)_70%,transparent)] hover:bg-primary/90"
             >
-              <Link href="#download">
+              <a href="/download">
                 <Download className="h-4 w-4" />
                 Download Xero
-              </Link>
+              </a>
             </Button>
             <Button
               asChild

@@ -53,48 +53,7 @@ export const desktopRelease = {
   releaseUrl: `${siteConfig.githubUrl}/releases/latest`,
 } as const
 
-export const desktopDownloads = [
-  {
-    id: "macos-apple-silicon",
-    platform: "macOS",
-    label: "Apple Silicon",
-    detail: "M-series Macs",
-    format: "DMG",
-    size: "215 MB",
-    href: "/download/macos-apple-silicon",
-    recommended: true,
-  },
-  {
-    id: "macos-intel",
-    platform: "macOS",
-    label: "Intel",
-    detail: "x86_64 Macs",
-    format: "DMG",
-    size: "233 MB",
-    href: "/download/macos-intel",
-    recommended: false,
-  },
-  {
-    id: "windows",
-    platform: "Windows",
-    label: "x64 installer",
-    detail: "Windows 10 or newer",
-    format: "EXE",
-    size: "127 MB",
-    href: "/download/windows",
-    recommended: false,
-  },
-  {
-    id: "linux",
-    platform: "Linux",
-    label: "x86_64 AppImage",
-    detail: "Portable desktop build",
-    format: "AppImage",
-    size: "294 MB",
-    href: "/download/linux",
-    recommended: false,
-  },
-] as const
+export const desktopDownloadUrl = "/download"
 
 export const tuiInstallCommand = `curl -fsSL ${absoluteUrl("/install.sh")} | sh`
 export const tuiPowerShellInstallCommand = `irm ${absoluteUrl("/install.ps1")} | iex`
