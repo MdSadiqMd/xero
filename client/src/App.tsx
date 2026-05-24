@@ -76,7 +76,11 @@ import type {
   WorkflowDefinitionDto,
   WorkflowDefinitionSummaryDto,
 } from '@/src/lib/xero-model/workflow-definition'
-import type { WorkflowRunDto } from '@/src/lib/xero-model/workflow-run'
+import type {
+  WorkflowRunBlockerResponseDto,
+  WorkflowRunBundleResponseDto,
+  WorkflowRunDto,
+} from '@/src/lib/xero-model/workflow-run'
 import {
   instantiateBlankWorkflow,
   instantiateWorkflowTemplate,
@@ -3024,6 +3028,59 @@ export function XeroApp({ adapter }: XeroAppProps) {
     [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
   )
 
+  const handleExplainWorkflowRunBlocker = useCallback(
+    async (runId: string): Promise<WorkflowRunBlockerResponseDto | void> => {
+      if (!activeProjectId || !resolvedAdapter.explainWorkflowRunBlocker) return
+      setWorkflowActionRunning(true)
+      try {
+        return await resolvedAdapter.explainWorkflowRunBlocker({
+          projectId: activeProjectId,
+          runId,
+        })
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleExportWorkflowRunBundle = useCallback(
+    async (runId: string): Promise<WorkflowRunBundleResponseDto | void> => {
+      if (!activeProjectId || !resolvedAdapter.exportWorkflowRunBundle) return
+      setWorkflowActionRunning(true)
+      try {
+        return await resolvedAdapter.exportWorkflowRunBundle({
+          projectId: activeProjectId,
+          runId,
+        })
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, resolvedAdapter],
+  )
+
+  const handleResumeWorkflowNextIncompletePhase = useCallback(
+    async (runId: string): Promise<WorkflowRunDto | void> => {
+      if (!activeProjectId || !resolvedAdapter.resumeWorkflowNextIncompletePhase) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.resumeWorkflowNextIncompletePhase({
+          projectId: activeProjectId,
+          runId,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
   const handleInspectWorkflowAgent = useCallback(
     (ref: AgentRefDto) => {
       workflowAgentInspector.selectAgent(ref)
@@ -3619,6 +3676,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onRetryWorkflowNodeRun={handleRetryWorkflowNodeRun}
                 onSkipWorkflowBranch={handleSkipWorkflowBranch}
                 onResumeWorkflowCheckpoint={handleResumeWorkflowCheckpoint}
+                onExplainWorkflowRunBlocker={handleExplainWorkflowRunBlocker}
+                onExportWorkflowRunBundle={handleExportWorkflowRunBundle}
+                onResumeWorkflowNextIncompletePhase={handleResumeWorkflowNextIncompletePhase}
                 templates={workflowAgentInspector.agents}
                 templatesLoading={workflowAgentInspector.agentsStatus === 'loading'}
                 templatesError={workflowAgentInspector.agentsError}

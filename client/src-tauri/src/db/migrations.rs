@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use rusqlite_migration::{Migrations, M};
 
-pub const PROJECT_DATABASE_SCHEMA_VERSION: i64 = 33;
+pub const PROJECT_DATABASE_SCHEMA_VERSION: i64 = 34;
 
 pub fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
@@ -40,6 +40,7 @@ pub fn migrations() -> &'static Migrations<'static> {
             M::up(NOOP_SCHEMA_VERSION_MARKER_SQL),
             M::up(MIGRATION_025_MULTI_AGENT_WORKFLOWS_SQL),
             M::up(MIGRATION_026_AGENT_CREATE_WORKFLOW_DEFINITIONS_SQL),
+            M::up(MIGRATION_027_DELIVERY_STATE_SQL),
         ])
     });
 
@@ -47,6 +48,205 @@ pub fn migrations() -> &'static Migrations<'static> {
 }
 
 const NOOP_SCHEMA_VERSION_MARKER_SQL: &str = "";
+
+const MIGRATION_027_DELIVERY_STATE_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS delivery_projects (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (id <> ''),
+        CHECK (title <> ''),
+        CHECK (status IN ('active', 'paused', 'completed', 'archived')),
+        CHECK (created_at <> ''),
+        CHECK (updated_at <> '')
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_milestones (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        delivery_project_id TEXT,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        goal TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        archived_at TEXT,
+        PRIMARY KEY (project_id, id),
+        CHECK (id <> ''),
+        CHECK (title <> ''),
+        CHECK (status IN ('active', 'paused', 'completed', 'archived')),
+        FOREIGN KEY (project_id, delivery_project_id)
+            REFERENCES delivery_projects(project_id, id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_requirements (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        milestone_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'open',
+        priority INTEGER NOT NULL DEFAULT 0,
+        metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (id <> ''),
+        CHECK (title <> ''),
+        CHECK (status IN ('open', 'satisfied', 'deferred', 'archived')),
+        FOREIGN KEY (project_id, milestone_id)
+            REFERENCES delivery_milestones(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_phases (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        milestone_id TEXT NOT NULL,
+        phase_key TEXT NOT NULL,
+        title TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'incomplete',
+        sort_order REAL NOT NULL DEFAULT 0,
+        inserted_after_phase_id TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        PRIMARY KEY (project_id, id),
+        UNIQUE (project_id, milestone_id, phase_key),
+        CHECK (id <> ''),
+        CHECK (phase_key <> ''),
+        CHECK (title <> ''),
+        CHECK (status IN ('incomplete', 'in_progress', 'blocked', 'complete', 'deferred', 'archived')),
+        FOREIGN KEY (project_id, milestone_id)
+            REFERENCES delivery_milestones(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, inserted_after_phase_id)
+            REFERENCES delivery_phases(project_id, id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_phase_context (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        phase_id TEXT NOT NULL,
+        context_json TEXT NOT NULL CHECK (json_valid(context_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        FOREIGN KEY (project_id, phase_id)
+            REFERENCES delivery_phases(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_phase_plans (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        phase_id TEXT NOT NULL,
+        plan_json TEXT NOT NULL CHECK (json_valid(plan_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        FOREIGN KEY (project_id, phase_id)
+            REFERENCES delivery_phases(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_phase_summaries (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        phase_id TEXT NOT NULL,
+        summary_json TEXT NOT NULL CHECK (json_valid(summary_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        FOREIGN KEY (project_id, phase_id)
+            REFERENCES delivery_phases(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_verification_evidence (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        phase_id TEXT,
+        requirement_id TEXT,
+        status TEXT NOT NULL DEFAULT 'recorded',
+        evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (status IN ('recorded', 'passed', 'failed', 'superseded')),
+        FOREIGN KEY (project_id, phase_id)
+            REFERENCES delivery_phases(project_id, id) ON DELETE SET NULL,
+        FOREIGN KEY (project_id, requirement_id)
+            REFERENCES delivery_requirements(project_id, id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_deferred_items (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        milestone_id TEXT,
+        phase_id TEXT,
+        title TEXT NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'open',
+        metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (title <> ''),
+        CHECK (status IN ('open', 'accepted', 'closed', 'archived')),
+        FOREIGN KEY (project_id, milestone_id)
+            REFERENCES delivery_milestones(project_id, id) ON DELETE SET NULL,
+        FOREIGN KEY (project_id, phase_id)
+            REFERENCES delivery_phases(project_id, id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_milestone_archives (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        milestone_id TEXT NOT NULL,
+        archive_json TEXT NOT NULL CHECK (json_valid(archive_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        FOREIGN KEY (project_id, milestone_id)
+            REFERENCES delivery_milestones(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS delivery_state_events (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        workflow_run_id TEXT,
+        node_run_id TEXT,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        before_json TEXT CHECK (before_json IS NULL OR json_valid(before_json)),
+        after_json TEXT CHECK (after_json IS NULL OR json_valid(after_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (entity_type <> ''),
+        CHECK (entity_id <> ''),
+        CHECK (event_type <> ''),
+        FOREIGN KEY (project_id, workflow_run_id)
+            REFERENCES workflow_runs(project_id, id) ON DELETE SET NULL,
+        FOREIGN KEY (project_id, node_run_id)
+            REFERENCES workflow_run_nodes(project_id, id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_delivery_milestones_project_status
+        ON delivery_milestones(project_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_delivery_phases_milestone_status
+        ON delivery_phases(project_id, milestone_id, status, sort_order ASC);
+    CREATE INDEX IF NOT EXISTS idx_delivery_requirements_milestone_status
+        ON delivery_requirements(project_id, milestone_id, status);
+    CREATE INDEX IF NOT EXISTS idx_delivery_state_events_project_created
+        ON delivery_state_events(project_id, created_at ASC);
+"#;
 
 const MIGRATION_026_AGENT_CREATE_WORKFLOW_DEFINITIONS_SQL: &str = r#"
     INSERT OR IGNORE INTO agent_definition_versions (
@@ -158,7 +358,7 @@ const MIGRATION_025_MULTI_AGENT_WORKFLOWS_SQL: &str = r#"
         CHECK (id <> ''),
         CHECK (workflow_run_id <> ''),
         CHECK (node_id <> ''),
-        CHECK (node_type IN ('agent', 'router', 'gate', 'human_checkpoint', 'merge', 'terminal')),
+        CHECK (node_type IN ('agent', 'router', 'gate', 'human_checkpoint', 'merge', 'terminal', 'state_read', 'state_write', 'state_patch', 'state_query', 'state_checkpoint', 'collection_loop', 'subgraph', 'command')),
         CHECK (status IN ('pending', 'eligible', 'starting', 'running', 'waiting_on_gate', 'succeeded', 'failed', 'stalled', 'skipped', 'cancelled')),
         CHECK (runtime_run_id IS NULL OR runtime_run_id <> ''),
         CHECK (agent_session_id IS NULL OR agent_session_id <> ''),
@@ -3085,6 +3285,17 @@ mod tests {
             "workflow_gate_decisions",
             "workflow_loop_attempts",
             "workflow_events",
+            "delivery_projects",
+            "delivery_milestones",
+            "delivery_requirements",
+            "delivery_phases",
+            "delivery_phase_context",
+            "delivery_phase_plans",
+            "delivery_phase_summaries",
+            "delivery_verification_evidence",
+            "delivery_deferred_items",
+            "delivery_milestone_archives",
+            "delivery_state_events",
             "runtime_run_attached_skill_snapshots",
             "workspace_index_metadata",
             "agent_embedding_backfill_jobs",

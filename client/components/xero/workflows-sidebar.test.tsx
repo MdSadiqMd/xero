@@ -327,13 +327,13 @@ describe('WorkflowsSidebar', () => {
     )
 
     fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for Agent handoff' }), {
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for Continuous delivery' }), {
       button: 0,
       ctrlKey: false,
     })
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Use template' }))
 
-    expect(onCreateWorkflowFromTemplate).toHaveBeenCalledWith('linear_handoff')
+    expect(onCreateWorkflowFromTemplate).toHaveBeenCalledWith('continuous_delivery')
   })
 
   it('uses the same library row shell for agents, workflows, and workflow templates', () => {
@@ -361,7 +361,7 @@ describe('WorkflowsSidebar', () => {
     fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
 
     const workflowShell = screen.getByLabelText('Open workflow Release pipeline').parentElement
-    const templateShell = screen.getByLabelText('Create workflow from Agent handoff').parentElement
+    const templateShell = screen.getByLabelText('Create workflow from Continuous delivery').parentElement
     expect(workflowShell).toHaveClass(
       'group',
       'relative',

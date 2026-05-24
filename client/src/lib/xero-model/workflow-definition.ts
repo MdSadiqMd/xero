@@ -26,6 +26,14 @@ export const workflowNodeTypeSchema = z.enum([
   'human_checkpoint',
   'merge',
   'terminal',
+  'state_read',
+  'state_write',
+  'state_patch',
+  'state_query',
+  'state_checkpoint',
+  'collection_loop',
+  'subgraph',
+  'command',
 ])
 export type WorkflowNodeTypeDto = z.infer<typeof workflowNodeTypeSchema>
 
@@ -45,6 +53,7 @@ export type WorkflowArtifactTypeDto = z.infer<typeof workflowArtifactTypeSchema>
 export const workflowArtifactPresetSchema = z.enum([
   'text_output',
   'task_brief',
+  'delivery_plan',
   'plan',
   'implementation_summary',
   'verification_result',
@@ -52,6 +61,9 @@ export const workflowArtifactPresetSchema = z.enum([
   'gap_list',
   'review_findings',
   'human_decision',
+  'milestone_audit',
+  'command_result',
+  'subgraph_result',
 ])
 export type WorkflowArtifactPresetDto = z.infer<typeof workflowArtifactPresetSchema>
 
@@ -174,6 +186,13 @@ export type WorkflowConditionDto =
   | { kind: 'loop_attempt_lt'; loopKey: string; value: number }
   | { kind: 'loop_attempt_gte'; loopKey: string; value: number }
   | { kind: 'human_decision_is'; checkpointNodeId: string; decision: string }
+  | { kind: 'state_field_equals'; stateRef: string; path: string; value: unknown }
+  | {
+      kind: 'state_collection_count_compare'
+      stateRef: string
+      operator: WorkflowNumberCompareOperatorDto
+      value: number
+    }
 
 export const workflowConditionSchema: z.ZodType<WorkflowConditionDto> = z.lazy(() =>
   z.discriminatedUnion('kind', [
@@ -262,6 +281,22 @@ export const workflowConditionSchema: z.ZodType<WorkflowConditionDto> = z.lazy((
         decision: nonEmptyTextSchema,
       })
       .strict(),
+    z
+      .object({
+        kind: z.literal('state_field_equals'),
+        stateRef: nonEmptyTextSchema,
+        path: nonEmptyTextSchema,
+        value: jsonValueSchema,
+      })
+      .strict(),
+    z
+      .object({
+        kind: z.literal('state_collection_count_compare'),
+        stateRef: nonEmptyTextSchema,
+        operator: workflowNumberCompareOperatorSchema,
+        value: z.number(),
+      })
+      .strict(),
   ]),
 )
 
@@ -306,6 +341,16 @@ export const workflowInputBindingSchema = z.discriminatedUnion('source', [
       promptLabel: z.string().trim().min(1).nullable().optional(),
     })
     .strict(),
+  z
+    .object({
+      source: z.literal('state'),
+      name: nonEmptyTextSchema,
+      required: z.boolean().default(true),
+      stateRef: nonEmptyTextSchema,
+      path: z.string().trim().min(1).nullable().optional(),
+      promptLabel: z.string().trim().min(1).nullable().optional(),
+    })
+    .strict(),
 ])
 export type WorkflowInputBindingDto = z.infer<typeof workflowInputBindingSchema>
 
@@ -326,6 +371,86 @@ export const workflowOutputContractSchema = z
   })
   .strict()
 export type WorkflowOutputContractDto = z.infer<typeof workflowOutputContractSchema>
+
+export const workflowDeliveryStateEntityTypeSchema = z.enum([
+  'delivery_project',
+  'milestone',
+  'requirement',
+  'delivery_phase',
+  'phase_context',
+  'phase_plan',
+  'phase_summary',
+  'verification_evidence',
+  'deferred_item',
+  'milestone_archive',
+])
+export type WorkflowDeliveryStateEntityTypeDto = z.infer<
+  typeof workflowDeliveryStateEntityTypeSchema
+>
+
+export const workflowStateQueryFilterSchema = z
+  .object({
+    path: nonEmptyTextSchema,
+    operator: z.enum(['eq', 'neq', 'in', 'not_in', 'exists', 'missing']).default('eq'),
+    value: jsonValueSchema.optional(),
+    values: z.array(jsonValueSchema).optional().default([]),
+  })
+  .strict()
+export type WorkflowStateQueryFilterDto = z.infer<typeof workflowStateQueryFilterSchema>
+
+export const workflowStateQuerySchema = z
+  .object({
+    entityType: workflowDeliveryStateEntityTypeSchema,
+    filters: z.array(workflowStateQueryFilterSchema).default([]),
+    orderBy: nonEmptyTextSchema.nullable().optional(),
+    limit: z.number().int().positive().nullable().optional(),
+    includeArchived: z.boolean().default(false),
+  })
+  .strict()
+export type WorkflowStateQueryDto = z.infer<typeof workflowStateQuerySchema>
+
+export const workflowStateWriteActionSchema = z.enum([
+  'create',
+  'upsert',
+  'update',
+  'patch',
+  'mark_complete',
+  'archive',
+])
+export type WorkflowStateWriteActionDto = z.infer<typeof workflowStateWriteActionSchema>
+
+export const workflowStateWriteOperationSchema = z
+  .object({
+    entityType: workflowDeliveryStateEntityTypeSchema,
+    action: workflowStateWriteActionSchema,
+    idempotencyKey: nonEmptyTextSchema.nullable().optional(),
+    targetId: nonEmptyTextSchema.nullable().optional(),
+    payload: z.record(z.unknown()).default({}),
+    outputArtifactType: workflowArtifactTypeSchema.default('state_write_result'),
+  })
+  .strict()
+export type WorkflowStateWriteOperationDto = z.infer<
+  typeof workflowStateWriteOperationSchema
+>
+
+export const workflowCollectionLoopControlsSchema = z
+  .object({
+    fromInputPath: z.string().trim().min(1).nullable().optional(),
+    toInputPath: z.string().trim().min(1).nullable().optional(),
+    onlyInputPath: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+export type WorkflowCollectionLoopControlsDto = z.infer<
+  typeof workflowCollectionLoopControlsSchema
+>
+
+export const workflowCommandParserSchema = z
+  .object({
+    extraction: workflowOutputExtractionSchema.default('generic_text'),
+    renderTextPath: z.string().trim().min(1).nullable().optional(),
+  })
+  .strict()
+export type WorkflowCommandParserDto = z.infer<typeof workflowCommandParserSchema>
 
 export const workflowFailureClassificationPolicySchema = z
   .object({
@@ -387,6 +512,8 @@ export const workflowHumanCheckpointNodeSchema = workflowNodeBaseSchema
     checkpointType: workflowHumanCheckpointTypeSchema,
     prompt: nonEmptyTextSchema,
     decisionOptions: z.array(nonEmptyTextSchema).default([]),
+    resumePayloadSchema: z.record(z.unknown()).nullable().optional(),
+    stateUpdates: z.array(workflowStateWriteOperationSchema).default([]),
   })
   .strict()
 
@@ -406,6 +533,95 @@ export const workflowTerminalNodeSchema = workflowNodeBaseSchema
   })
   .strict()
 
+export const workflowStateReadNodeSchema = workflowNodeBaseSchema
+  .extend({
+    type: z.literal('state_read'),
+    query: workflowStateQuerySchema,
+    outputArtifactType: workflowArtifactTypeSchema.default('state_read_result'),
+  })
+  .strict()
+
+export const workflowStateQueryNodeSchema = workflowNodeBaseSchema
+  .extend({
+    type: z.literal('state_query'),
+    query: workflowStateQuerySchema,
+    outputArtifactType: workflowArtifactTypeSchema.default('state_query_result'),
+  })
+  .strict()
+
+export const workflowStateWriteNodeSchema = workflowNodeBaseSchema
+  .extend({
+    type: z.literal('state_write'),
+    inputBindings: z.array(workflowInputBindingSchema).default([]),
+    operation: workflowStateWriteOperationSchema,
+  })
+  .strict()
+
+export const workflowStatePatchNodeSchema = workflowNodeBaseSchema
+  .extend({
+    type: z.literal('state_patch'),
+    inputBindings: z.array(workflowInputBindingSchema).default([]),
+    operation: workflowStateWriteOperationSchema,
+  })
+  .strict()
+
+export const workflowStateCheckpointNodeSchema = workflowNodeBaseSchema
+  .extend({
+    type: z.literal('state_checkpoint'),
+    requiredChecks: z.array(workflowConditionSchema).default([]),
+    onBlocked: z.enum(['pause', 'fail']).default('pause'),
+  })
+  .strict()
+
+export const workflowCollectionLoopNodeSchema = workflowNodeBaseSchema
+  .extend({
+    type: z.literal('collection_loop'),
+    collection: workflowStateQuerySchema,
+    itemArtifactType: workflowArtifactTypeSchema.default('collection_item'),
+    itemVariableName: nonEmptyTextSchema.default('item'),
+    sortKey: nonEmptyTextSchema.nullable().optional(),
+    afterItemRequery: z.boolean().default(true),
+    maxItemCount: z.number().int().positive().default(100),
+    maxRuntimeSeconds: z.number().int().positive().nullable().optional(),
+    controls: workflowCollectionLoopControlsSchema.default({}),
+  })
+  .strict()
+
+export const workflowSubgraphNodeSchema = workflowNodeBaseSchema
+  .extend({
+    type: z.literal('subgraph'),
+    subgraphId: workflowNodeIdSchema,
+    inputBindings: z.array(workflowInputBindingSchema).default([]),
+    outputContract: workflowOutputContractSchema.default({
+      artifactType: 'subgraph_result',
+      schemaVersion: 1,
+      extraction: 'json_object',
+      required: true,
+    }),
+  })
+  .strict()
+
+export const workflowCommandNodeSchema = workflowNodeBaseSchema
+  .extend({
+    type: z.literal('command'),
+    command: nonEmptyTextSchema,
+    args: z.array(z.string()).default([]),
+    allowedCommands: z.array(nonEmptyTextSchema).default([]),
+    workingDirectory: z.string().trim().min(1).nullable().optional(),
+    timeoutSeconds: z.number().int().positive().default(120),
+    successExitCodes: z.array(z.number().int()).default([0]),
+    outputContract: workflowOutputContractSchema.default({
+      artifactType: 'command_result',
+      schemaVersion: 1,
+      extraction: 'json_object',
+      required: true,
+    }),
+    parser: workflowCommandParserSchema.default({
+      extraction: 'generic_text',
+    }),
+  })
+  .strict()
+
 export const workflowNodeSchema = z.discriminatedUnion('type', [
   workflowAgentNodeSchema,
   workflowRouterNodeSchema,
@@ -413,6 +629,14 @@ export const workflowNodeSchema = z.discriminatedUnion('type', [
   workflowHumanCheckpointNodeSchema,
   workflowMergeNodeSchema,
   workflowTerminalNodeSchema,
+  workflowStateReadNodeSchema,
+  workflowStateWriteNodeSchema,
+  workflowStatePatchNodeSchema,
+  workflowStateQueryNodeSchema,
+  workflowStateCheckpointNodeSchema,
+  workflowCollectionLoopNodeSchema,
+  workflowSubgraphNodeSchema,
+  workflowCommandNodeSchema,
 ])
 export type WorkflowNodeDto = z.infer<typeof workflowNodeSchema>
 
@@ -488,6 +712,25 @@ export const workflowRunPolicySchema = z
   .strict()
 export type WorkflowRunPolicyDto = z.infer<typeof workflowRunPolicySchema>
 
+export const workflowSubgraphSchema = z
+  .object({
+    id: workflowNodeIdSchema,
+    title: nonEmptyTextSchema,
+    description: optionalTextSchema,
+    startNodeId: workflowNodeIdSchema,
+    nodes: z.array(workflowNodeSchema).min(1),
+    edges: z.array(workflowEdgeSchema).default([]),
+    inputBindings: z.array(workflowInputBindingSchema).default([]),
+    outputContract: workflowOutputContractSchema.default({
+      artifactType: 'subgraph_result',
+      schemaVersion: 1,
+      extraction: 'json_object',
+      required: true,
+    }),
+  })
+  .strict()
+export type WorkflowSubgraphDto = z.infer<typeof workflowSubgraphSchema>
+
 export const workflowDefinitionSchema = z
   .object({
     schema: z.literal('xero.workflow_definition.v1').default('xero.workflow_definition.v1'),
@@ -499,6 +742,7 @@ export const workflowDefinitionSchema = z
     startNodeId: workflowNodeIdSchema,
     nodes: z.array(workflowNodeSchema).min(1),
     edges: z.array(workflowEdgeSchema).default([]),
+    subgraphs: z.array(workflowSubgraphSchema).default([]),
     artifactContracts: z.array(workflowArtifactContractSchema).default([]),
     runPolicy: workflowRunPolicySchema.default({
       concurrencyLimit: 1,
@@ -589,15 +833,67 @@ function validateWorkflowDefinitionGraph(
   const nodeIds = new Set<string>()
   const edgeIds = new Set<string>()
   const producedArtifactRefs = new Set<string>()
+  const artifactContractByRef = new Map<string, WorkflowArtifactContractDto>()
 
   definition.nodes.forEach((node, index) => {
     if (nodeIds.has(node.id)) {
       diagnostics.push(error('duplicate_node_id', `nodes.${index}.id`, `Node id \`${node.id}\` is duplicated.`))
     }
     nodeIds.add(node.id)
-    if (node.type === 'agent') {
-      producedArtifactRefs.add(`${node.id}.${node.outputContract.artifactType}`)
+    const producedArtifactType = producedArtifactTypeForNode(node)
+    const artifactRef = producedArtifactType ? `${node.id}.${producedArtifactType}` : null
+    if (artifactRef) {
+      producedArtifactRefs.add(artifactRef)
     }
+    if (node.type === 'agent' || node.type === 'command' || node.type === 'subgraph') {
+      const contract = definition.artifactContracts.find(
+        (candidate) =>
+          candidate.artifactType === node.outputContract.artifactType &&
+          candidate.schemaVersion === node.outputContract.schemaVersion,
+      )
+      if (!contract && node.outputContract.extraction !== 'generic_text') {
+        diagnostics.push(error(
+          'artifact_contract_missing',
+          `nodes.${index}.outputContract`,
+          `JSON artifact \`${node.outputContract.artifactType}\` v${node.outputContract.schemaVersion} must declare an artifact contract.`,
+        ))
+      }
+      if (contract && artifactRef) artifactContractByRef.set(artifactRef, contract)
+      if (
+        node.outputContract.renderTextPath &&
+        contract?.jsonSchema &&
+        !jsonSchemaAllowsPath(contract.jsonSchema, node.outputContract.renderTextPath)
+      ) {
+        diagnostics.push(error(
+          'render_text_path_not_in_schema',
+          `nodes.${index}.outputContract.renderTextPath`,
+          `Render path \`${node.outputContract.renderTextPath}\` is not allowed by the \`${node.outputContract.artifactType}\` artifact schema.`,
+        ))
+      }
+    }
+  })
+
+  const subgraphIds = new Set<string>()
+  definition.subgraphs.forEach((subgraph, index) => {
+    if (subgraphIds.has(subgraph.id)) {
+      diagnostics.push(error('duplicate_subgraph_id', `subgraphs.${index}.id`, `Subgraph id \`${subgraph.id}\` is duplicated.`))
+    }
+    subgraphIds.add(subgraph.id)
+    const subgraphNodeIds = new Set(subgraph.nodes.map((node) => node.id))
+    if (subgraph.nodes.length === 0) {
+      diagnostics.push(error('subgraph_nodes_empty', `subgraphs.${index}.nodes`, `Subgraph \`${subgraph.id}\` must contain at least one node.`))
+    } else if (!subgraphNodeIds.has(subgraph.startNodeId)) {
+      diagnostics.push(error('subgraph_start_node_missing', `subgraphs.${index}.startNodeId`, `Subgraph \`${subgraph.id}\` references a missing start node.`))
+    }
+    subgraph.edges.forEach((edge, edgeIndex) => {
+      if (!subgraphNodeIds.has(edge.fromNodeId)) {
+        diagnostics.push(error('subgraph_edge_source_missing', `subgraphs.${index}.edges.${edgeIndex}.fromNodeId`, `Subgraph edge \`${edge.id}\` references a missing source node.`))
+      }
+      if (!subgraphNodeIds.has(edge.toNodeId)) {
+        diagnostics.push(error('subgraph_edge_target_missing', `subgraphs.${index}.edges.${edgeIndex}.toNodeId`, `Subgraph edge \`${edge.id}\` references a missing target node.`))
+      }
+      validateConditionShape(edge.condition, `subgraphs.${index}.edges.${edgeIndex}.condition`, diagnostics)
+    })
   })
 
   if (!nodeIds.has(definition.startNodeId)) {
@@ -619,31 +915,100 @@ function validateWorkflowDefinitionGraph(
       diagnostics.push(error('edge_target_missing', `edges.${index}.toNodeId`, `Edge \`${edge.id}\` references a missing target node.`))
     }
     if (edge.condition.kind === 'always') {
-      const previous = outgoingDefaults.get(edge.fromNodeId)
-      if (previous) {
+      const buckets = defaultEdgeBuckets(edge.type)
+      const conflicts = buckets.some((bucket) => {
+        if (bucket === 'all') {
+          return [...outgoingDefaults.keys()].some((key) => key.startsWith(`${edge.fromNodeId}:`))
+        }
+        return outgoingDefaults.has(`${edge.fromNodeId}:all`) || outgoingDefaults.has(`${edge.fromNodeId}:${bucket}`)
+      })
+      if (conflicts) {
         diagnostics.push(error('duplicate_default_edge', `edges.${index}.condition`, `Node \`${edge.fromNodeId}\` has more than one default else edge.`))
       } else {
-        outgoingDefaults.set(edge.fromNodeId, edge.id)
+        buckets.forEach((bucket) => outgoingDefaults.set(`${edge.fromNodeId}:${bucket}`, edge.id))
       }
     }
     if (edge.type === 'loop' || edge.loopPolicy) {
       if (!edge.loopPolicy) {
         diagnostics.push(error('loop_policy_missing', `edges.${index}.loopPolicy`, `Loop edge \`${edge.id}\` must declare a loop policy.`))
-      } else if (!nodeIds.has(edge.loopPolicy.onExhausted)) {
-        diagnostics.push(error('loop_exhaustion_target_missing', `edges.${index}.loopPolicy.onExhausted`, `Loop edge \`${edge.id}\` must route exhaustion to an existing node.`))
+      } else {
+        if (edge.loopPolicy.maxAttempts <= 0) {
+          diagnostics.push(error('loop_max_attempts_invalid', `edges.${index}.loopPolicy.maxAttempts`, `Loop edge \`${edge.id}\` must allow at least one attempt.`))
+        }
+        if (!nodeIds.has(edge.loopPolicy.onExhausted)) {
+          diagnostics.push(error('loop_exhaustion_target_missing', `edges.${index}.loopPolicy.onExhausted`, `Loop edge \`${edge.id}\` must route exhaustion to an existing node.`))
+        }
       }
     }
+    validateConditionShape(edge.condition, `edges.${index}.condition`, diagnostics)
     const entries = outgoingEdges.get(edge.fromNodeId) ?? []
     entries.push(edge)
     outgoingEdges.set(edge.fromNodeId, entries)
   })
 
   definition.nodes.forEach((node, index) => {
-    if (node.type === 'agent') {
+    if (
+      node.type === 'agent' ||
+      node.type === 'state_write' ||
+      node.type === 'state_patch' ||
+      node.type === 'subgraph'
+    ) {
       node.inputBindings.forEach((binding, bindingIndex) => {
         if (binding.source === 'artifact' && !producedArtifactRefs.has(binding.artifactRef)) {
           diagnostics.push(error('artifact_ref_missing', `nodes.${index}.inputBindings.${bindingIndex}.artifactRef`, `Artifact reference \`${binding.artifactRef}\` is not produced by any agent node.`))
         }
+        if (binding.source === 'state' && !producedArtifactRefs.has(binding.stateRef)) {
+          diagnostics.push(error('state_ref_missing', `nodes.${index}.inputBindings.${bindingIndex}.stateRef`, `State reference \`${binding.stateRef}\` is not produced by any state-capable node.`))
+        }
+      })
+    }
+    if (node.type === 'state_read' || node.type === 'state_query') {
+      validateStateQuery(node.query, `nodes.${index}.query`, diagnostics)
+    }
+    if (node.type === 'state_write' || node.type === 'state_patch') {
+      validateStateWriteOperation(node.operation, `nodes.${index}.operation`, diagnostics, true)
+    }
+    if (node.type === 'collection_loop') {
+      validateStateQuery(node.collection, `nodes.${index}.collection`, diagnostics)
+      if (node.maxItemCount <= 0) {
+        diagnostics.push(error('collection_loop_max_item_count_invalid', `nodes.${index}.maxItemCount`, 'Collection loops must allow at least one item.'))
+      }
+      if (node.sortKey && !node.sortKey.trim().startsWith('$')) {
+        diagnostics.push(error('collection_loop_sort_path_invalid', `nodes.${index}.sortKey`, 'Collection loop sort keys must use a JSON path that starts with `$`.'))
+      }
+    }
+    if (node.type === 'subgraph' && !subgraphIds.has(node.subgraphId)) {
+      diagnostics.push(error('subgraph_ref_missing', `nodes.${index}.subgraphId`, `Subgraph node references missing subgraph \`${node.subgraphId}\`.`))
+    }
+    if (node.type === 'command') {
+      if (!node.command.trim()) {
+        diagnostics.push(error('command_empty', `nodes.${index}.command`, 'Command nodes must declare a command.'))
+      }
+      if (node.timeoutSeconds <= 0) {
+        diagnostics.push(error('command_timeout_invalid', `nodes.${index}.timeoutSeconds`, 'Command node timeout must be at least one second.'))
+      }
+      if (node.allowedCommands.length === 0) {
+        diagnostics.push(error('command_allowlist_empty', `nodes.${index}.allowedCommands`, 'Command nodes must declare an allowlist.'))
+      } else if (!node.allowedCommands.includes(node.command)) {
+        diagnostics.push(error('command_not_in_allowlist', `nodes.${index}.allowedCommands`, `Command \`${node.command}\` must appear in the command node allowlist.`))
+      }
+    }
+    if (node.type === 'human_checkpoint') {
+      const seen = new Set<string>()
+      node.decisionOptions.forEach((option, optionIndex) => {
+        const trimmed = option.trim()
+        if (!trimmed) {
+          diagnostics.push(error('checkpoint_decision_empty', `nodes.${index}.decisionOptions.${optionIndex}`, 'Human checkpoint decision options cannot be blank.'))
+        } else if (seen.has(trimmed)) {
+          diagnostics.push(error('checkpoint_decision_duplicate', `nodes.${index}.decisionOptions.${optionIndex}`, `Human checkpoint decision \`${trimmed}\` is duplicated.`))
+        }
+        seen.add(trimmed)
+      })
+      if (node.resumePayloadSchema !== null && node.resumePayloadSchema !== undefined && !isRecord(node.resumePayloadSchema)) {
+        diagnostics.push(error('checkpoint_payload_schema_invalid', `nodes.${index}.resumePayloadSchema`, 'Human checkpoint resume payload schemas must be JSON Schema objects.'))
+      }
+      node.stateUpdates.forEach((operation, operationIndex) => {
+        validateStateWriteOperation(operation, `nodes.${index}.stateUpdates.${operationIndex}`, diagnostics, false)
       })
     }
     if (node.type === 'merge' && node.waitPolicy === 'quorum' && !node.quorum) {
@@ -657,15 +1022,173 @@ function validateWorkflowDefinitionGraph(
         diagnostics.push(error('condition_artifact_ref_missing', `edges.${index}.condition`, `Condition references missing artifact \`${artifactRef}\`.`))
       }
     })
+    collectConditionArtifactFieldRefs(edge.condition).forEach(({ artifactRef, path }) => {
+      const contract = artifactContractByRef.get(artifactRef)
+      if (contract?.jsonSchema && !jsonSchemaAllowsPath(contract.jsonSchema, path)) {
+        diagnostics.push(error(
+          'condition_artifact_path_not_in_schema',
+          `edges.${index}.condition`,
+          `Condition references \`${artifactRef}${path}\`, but that field is not allowed by the artifact schema.`,
+        ))
+      }
+    })
     collectConditionNodeRefs(edge.condition).forEach((nodeId) => {
       if (!nodeIds.has(nodeId)) {
         diagnostics.push(error('condition_node_ref_missing', `edges.${index}.condition`, `Condition references missing node \`${nodeId}\`.`))
+      }
+    })
+    collectConditionStateRefs(edge.condition).forEach((stateRef) => {
+      if (!producedArtifactRefs.has(stateRef)) {
+        diagnostics.push(error('condition_state_ref_missing', `edges.${index}.condition`, `Condition references missing state value \`${stateRef}\`.`))
       }
     })
   })
 
   diagnostics.push(...detectUnboundedCycles(definition, outgoingEdges))
   return diagnostics
+}
+
+function producedArtifactTypeForNode(node: WorkflowNodeDto): string | null {
+  switch (node.type) {
+    case 'agent':
+    case 'command':
+    case 'subgraph':
+      return node.outputContract.artifactType
+    case 'state_read':
+    case 'state_query':
+      return node.outputArtifactType
+    case 'state_write':
+    case 'state_patch':
+      return node.operation.outputArtifactType
+    case 'collection_loop':
+      return node.itemArtifactType
+    default:
+      return null
+  }
+}
+
+function validateStateQuery(
+  query: WorkflowStateQueryDto,
+  path: string,
+  diagnostics: WorkflowValidationDiagnosticDto[],
+): void {
+  query.filters.forEach((filter, index) => {
+    if (!filter.path.trim().startsWith('$')) {
+      diagnostics.push(error('state_query_filter_path_invalid', `${path}.filters.${index}.path`, 'State query filter paths must use a JSON path that starts with `$`.'))
+    }
+  })
+  if (query.orderBy && !query.orderBy.trim().startsWith('$')) {
+    diagnostics.push(error('state_query_order_path_invalid', `${path}.orderBy`, 'State query order paths must use a JSON path that starts with `$`.'))
+  }
+}
+
+function validateStateWriteOperation(
+  operation: WorkflowStateWriteOperationDto,
+  path: string,
+  diagnostics: WorkflowValidationDiagnosticDto[],
+  requireOutputArtifact: boolean,
+): void {
+  if (requireOutputArtifact && !operation.outputArtifactType.trim()) {
+    diagnostics.push(error('state_write_output_artifact_empty', `${path}.outputArtifactType`, 'State write nodes must name their output artifact.'))
+  }
+  if (operation.idempotencyKey !== null && operation.idempotencyKey !== undefined && !operation.idempotencyKey.trim()) {
+    diagnostics.push(error('state_write_idempotency_key_empty', `${path}.idempotencyKey`, 'State write idempotency keys cannot be blank.'))
+  }
+  if (operation.targetId !== null && operation.targetId !== undefined && !operation.targetId.trim()) {
+    diagnostics.push(error('state_write_target_id_empty', `${path}.targetId`, 'State write target ids cannot be blank.'))
+  }
+}
+
+function defaultEdgeBuckets(type: WorkflowEdgeTypeDto): string[] {
+  switch (type) {
+    case 'success':
+      return ['success']
+    case 'failure':
+    case 'recovery':
+      return ['failure']
+    case 'conditional':
+    case 'loop':
+    case 'manual_override':
+      return ['all']
+  }
+}
+
+function validateConditionShape(
+  condition: WorkflowConditionDto,
+  path: string,
+  diagnostics: WorkflowValidationDiagnosticDto[],
+): void {
+  if (condition.kind === 'all' || condition.kind === 'any') {
+    if (condition.conditions.length === 0) {
+      diagnostics.push(error('condition_children_empty', path, 'Composite Workflow conditions must contain at least one child condition.'))
+    }
+    condition.conditions.forEach((child, index) => validateConditionShape(child, `${path}.conditions.${index}`, diagnostics))
+    return
+  }
+  if (condition.kind === 'not') {
+    validateConditionShape(condition.condition, `${path}.condition`, diagnostics)
+    return
+  }
+  if (
+    condition.kind === 'artifact_field_equals' ||
+    condition.kind === 'artifact_field_in' ||
+    condition.kind === 'artifact_field_number_compare' ||
+    condition.kind === 'state_field_equals'
+  ) {
+    if (!condition.path.trim().startsWith('$')) {
+      diagnostics.push(error('condition_json_path_invalid', path, 'Workflow field conditions must use a JSON path that starts with `$`.'))
+    }
+  }
+}
+
+function collectConditionArtifactFieldRefs(
+  condition: WorkflowConditionDto,
+): Array<{ artifactRef: string; path: string }> {
+  switch (condition.kind) {
+    case 'artifact_field_equals':
+    case 'artifact_field_in':
+    case 'artifact_field_number_compare':
+      return [{ artifactRef: condition.artifactRef, path: condition.path }]
+    case 'all':
+    case 'any':
+      return condition.conditions.flatMap(collectConditionArtifactFieldRefs)
+    case 'not':
+      return collectConditionArtifactFieldRefs(condition.condition)
+    default:
+      return []
+  }
+}
+
+function jsonSchemaAllowsPath(schema: unknown, path: string): boolean {
+  if (path === '$') return true
+  if (!path.startsWith('$.')) return false
+  let cursor: unknown = schema
+  for (const rawSegment of path.slice(2).split('.')) {
+    const field = rawSegment.replace(/\[\d+\]/g, '')
+    if (!isRecord(cursor)) return false
+    const schemaType = cursor.type
+    if (schemaType && !schemaTypeAllowsObject(schemaType)) return false
+    const properties = isRecord(cursor.properties) ? cursor.properties : null
+    if (!properties || !(field in properties)) return false
+    cursor = properties[field]
+    const arrayIndexes = rawSegment.match(/\[\d+\]/g) ?? []
+    for (const _index of arrayIndexes) {
+      if (!isRecord(cursor)) return false
+      const itemSchema = cursor.items
+      if (!itemSchema) return false
+      cursor = itemSchema
+    }
+  }
+  return true
+}
+
+function schemaTypeAllowsObject(type: unknown): boolean {
+  if (typeof type === 'string') return type === 'object'
+  return Array.isArray(type) ? type.includes('object') : true
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function detectUnboundedCycles(
@@ -716,6 +1239,21 @@ function collectConditionArtifactRefs(condition: WorkflowConditionDto): string[]
       return condition.conditions.flatMap(collectConditionArtifactRefs)
     case 'not':
       return collectConditionArtifactRefs(condition.condition)
+    default:
+      return []
+  }
+}
+
+function collectConditionStateRefs(condition: WorkflowConditionDto): string[] {
+  switch (condition.kind) {
+    case 'state_field_equals':
+    case 'state_collection_count_compare':
+      return [condition.stateRef]
+    case 'all':
+    case 'any':
+      return condition.conditions.flatMap(collectConditionStateRefs)
+    case 'not':
+      return collectConditionStateRefs(condition.condition)
     default:
       return []
   }

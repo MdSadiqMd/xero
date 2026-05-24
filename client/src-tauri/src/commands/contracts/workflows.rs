@@ -20,6 +20,8 @@ pub struct WorkflowDefinitionDto {
     #[serde(default)]
     pub edges: Vec<WorkflowEdgeDto>,
     #[serde(default)]
+    pub subgraphs: Vec<WorkflowSubgraphDto>,
+    #[serde(default)]
     pub artifact_contracts: Vec<WorkflowArtifactContractDto>,
     #[serde(default)]
     pub run_policy: WorkflowRunPolicyDto,
@@ -59,6 +61,14 @@ pub enum WorkflowNodeTypeDto {
     HumanCheckpoint,
     Merge,
     Terminal,
+    StateRead,
+    StateWrite,
+    StatePatch,
+    StateQuery,
+    StateCheckpoint,
+    CollectionLoop,
+    Subgraph,
+    Command,
 }
 
 impl WorkflowNodeTypeDto {
@@ -70,6 +80,14 @@ impl WorkflowNodeTypeDto {
             Self::HumanCheckpoint => "human_checkpoint",
             Self::Merge => "merge",
             Self::Terminal => "terminal",
+            Self::StateRead => "state_read",
+            Self::StateWrite => "state_write",
+            Self::StatePatch => "state_patch",
+            Self::StateQuery => "state_query",
+            Self::StateCheckpoint => "state_checkpoint",
+            Self::CollectionLoop => "collection_loop",
+            Self::Subgraph => "subgraph",
+            Self::Command => "command",
         }
     }
 }
@@ -364,6 +382,16 @@ pub enum WorkflowConditionDto {
         checkpoint_node_id: String,
         decision: String,
     },
+    StateFieldEquals {
+        state_ref: String,
+        path: String,
+        value: JsonValue,
+    },
+    StateCollectionCountCompare {
+        state_ref: String,
+        operator: WorkflowNumberCompareOperatorDto,
+        value: f64,
+    },
 }
 
 impl Default for WorkflowConditionDto {
@@ -417,6 +445,16 @@ pub enum WorkflowInputBindingDto {
         #[serde(default = "default_true")]
         required: bool,
         artifact_ref: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_label: Option<String>,
+    },
+    State {
+        name: String,
+        #[serde(default = "default_true")]
+        required: bool,
+        state_ref: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -479,6 +517,153 @@ pub struct WorkflowFailureClassificationPolicyDto {
     pub transient_failure_classes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowDeliveryStateEntityTypeDto {
+    DeliveryProject,
+    Milestone,
+    Requirement,
+    DeliveryPhase,
+    PhaseContext,
+    PhasePlan,
+    PhaseSummary,
+    VerificationEvidence,
+    DeferredItem,
+    MilestoneArchive,
+}
+
+impl WorkflowDeliveryStateEntityTypeDto {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DeliveryProject => "delivery_project",
+            Self::Milestone => "milestone",
+            Self::Requirement => "requirement",
+            Self::DeliveryPhase => "delivery_phase",
+            Self::PhaseContext => "phase_context",
+            Self::PhasePlan => "phase_plan",
+            Self::PhaseSummary => "phase_summary",
+            Self::VerificationEvidence => "verification_evidence",
+            Self::DeferredItem => "deferred_item",
+            Self::MilestoneArchive => "milestone_archive",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStateQueryFilterOperatorDto {
+    Eq,
+    Neq,
+    In,
+    NotIn,
+    Exists,
+    Missing,
+}
+
+impl Default for WorkflowStateQueryFilterOperatorDto {
+    fn default() -> Self {
+        Self::Eq
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowStateQueryFilterDto {
+    pub path: String,
+    #[serde(default)]
+    pub operator: WorkflowStateQueryFilterOperatorDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<JsonValue>,
+    #[serde(default)]
+    pub values: Vec<JsonValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowStateQueryDto {
+    pub entity_type: WorkflowDeliveryStateEntityTypeDto,
+    #[serde(default)]
+    pub filters: Vec<WorkflowStateQueryFilterDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStateWriteActionDto {
+    Create,
+    Upsert,
+    Update,
+    Patch,
+    MarkComplete,
+    Archive,
+}
+
+impl WorkflowStateWriteActionDto {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Upsert => "upsert",
+            Self::Update => "update",
+            Self::Patch => "patch",
+            Self::MarkComplete => "mark_complete",
+            Self::Archive => "archive",
+        }
+    }
+}
+
+fn default_state_write_result_artifact_type() -> String {
+    "state_write_result".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowStateWriteOperationDto {
+    pub entity_type: WorkflowDeliveryStateEntityTypeDto,
+    pub action: WorkflowStateWriteActionDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
+    #[serde(default)]
+    pub payload: serde_json::Map<String, JsonValue>,
+    #[serde(default = "default_state_write_result_artifact_type")]
+    pub output_artifact_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowCollectionLoopControlsDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_input_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_input_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_input_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowCommandParserDto {
+    #[serde(default)]
+    pub extraction: WorkflowOutputExtractionDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_text_path: Option<String>,
+}
+
+impl Default for WorkflowCommandParserDto {
+    fn default() -> Self {
+        Self {
+            extraction: WorkflowOutputExtractionDto::GenericText,
+            render_text_path: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "type",
@@ -539,6 +724,10 @@ pub enum WorkflowNodeDto {
         prompt: String,
         #[serde(default)]
         decision_options: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume_payload_schema: Option<JsonValue>,
+        #[serde(default)]
+        state_updates: Vec<WorkflowStateWriteOperationDto>,
     },
     Merge {
         id: String,
@@ -563,10 +752,153 @@ pub enum WorkflowNodeDto {
         position: WorkflowPositionDto,
         terminal_status: WorkflowTerminalStatusDto,
     },
+    StateRead {
+        id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        position: WorkflowPositionDto,
+        query: WorkflowStateQueryDto,
+        #[serde(default = "default_state_read_artifact_type")]
+        output_artifact_type: String,
+    },
+    StateWrite {
+        id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        position: WorkflowPositionDto,
+        #[serde(default)]
+        input_bindings: Vec<WorkflowInputBindingDto>,
+        operation: WorkflowStateWriteOperationDto,
+    },
+    StatePatch {
+        id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        position: WorkflowPositionDto,
+        #[serde(default)]
+        input_bindings: Vec<WorkflowInputBindingDto>,
+        operation: WorkflowStateWriteOperationDto,
+    },
+    StateQuery {
+        id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        position: WorkflowPositionDto,
+        query: WorkflowStateQueryDto,
+        #[serde(default = "default_state_query_artifact_type")]
+        output_artifact_type: String,
+    },
+    StateCheckpoint {
+        id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        position: WorkflowPositionDto,
+        #[serde(default)]
+        required_checks: Vec<WorkflowConditionDto>,
+        #[serde(default = "default_gate_on_blocked")]
+        on_blocked: String,
+    },
+    CollectionLoop {
+        id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        position: WorkflowPositionDto,
+        collection: WorkflowStateQueryDto,
+        #[serde(default = "default_collection_item_artifact_type")]
+        item_artifact_type: String,
+        #[serde(default = "default_collection_item_variable_name")]
+        item_variable_name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sort_key: Option<String>,
+        #[serde(default = "default_true")]
+        after_item_requery: bool,
+        #[serde(default = "default_collection_loop_max_item_count")]
+        max_item_count: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_runtime_seconds: Option<u32>,
+        #[serde(default)]
+        controls: WorkflowCollectionLoopControlsDto,
+    },
+    Subgraph {
+        id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        position: WorkflowPositionDto,
+        subgraph_id: String,
+        #[serde(default)]
+        input_bindings: Vec<WorkflowInputBindingDto>,
+        #[serde(default)]
+        output_contract: WorkflowOutputContractDto,
+    },
+    Command {
+        id: String,
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        position: WorkflowPositionDto,
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        allowed_commands: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        working_directory: Option<String>,
+        #[serde(default = "default_command_timeout_seconds")]
+        timeout_seconds: u32,
+        #[serde(default = "default_success_exit_codes")]
+        success_exit_codes: Vec<i32>,
+        #[serde(default)]
+        output_contract: WorkflowOutputContractDto,
+        #[serde(default)]
+        parser: WorkflowCommandParserDto,
+    },
 }
 
 fn default_gate_on_blocked() -> String {
     "pause".into()
+}
+
+fn default_state_read_artifact_type() -> String {
+    "state_read_result".into()
+}
+
+fn default_state_query_artifact_type() -> String {
+    "state_query_result".into()
+}
+
+fn default_collection_item_artifact_type() -> String {
+    "collection_item".into()
+}
+
+fn default_collection_item_variable_name() -> String {
+    "item".into()
+}
+
+fn default_collection_loop_max_item_count() -> u32 {
+    100
+}
+
+fn default_command_timeout_seconds() -> u32 {
+    120
+}
+
+fn default_success_exit_codes() -> Vec<i32> {
+    vec![0]
 }
 
 impl WorkflowNodeDto {
@@ -577,7 +909,15 @@ impl WorkflowNodeDto {
             | Self::Gate { id, .. }
             | Self::HumanCheckpoint { id, .. }
             | Self::Merge { id, .. }
-            | Self::Terminal { id, .. } => id,
+            | Self::Terminal { id, .. }
+            | Self::StateRead { id, .. }
+            | Self::StateWrite { id, .. }
+            | Self::StatePatch { id, .. }
+            | Self::StateQuery { id, .. }
+            | Self::StateCheckpoint { id, .. }
+            | Self::CollectionLoop { id, .. }
+            | Self::Subgraph { id, .. }
+            | Self::Command { id, .. } => id,
         }
     }
 
@@ -588,7 +928,15 @@ impl WorkflowNodeDto {
             | Self::Gate { title, .. }
             | Self::HumanCheckpoint { title, .. }
             | Self::Merge { title, .. }
-            | Self::Terminal { title, .. } => title,
+            | Self::Terminal { title, .. }
+            | Self::StateRead { title, .. }
+            | Self::StateWrite { title, .. }
+            | Self::StatePatch { title, .. }
+            | Self::StateQuery { title, .. }
+            | Self::StateCheckpoint { title, .. }
+            | Self::CollectionLoop { title, .. }
+            | Self::Subgraph { title, .. }
+            | Self::Command { title, .. } => title,
         }
     }
 
@@ -600,6 +948,14 @@ impl WorkflowNodeDto {
             Self::HumanCheckpoint { .. } => WorkflowNodeTypeDto::HumanCheckpoint,
             Self::Merge { .. } => WorkflowNodeTypeDto::Merge,
             Self::Terminal { .. } => WorkflowNodeTypeDto::Terminal,
+            Self::StateRead { .. } => WorkflowNodeTypeDto::StateRead,
+            Self::StateWrite { .. } => WorkflowNodeTypeDto::StateWrite,
+            Self::StatePatch { .. } => WorkflowNodeTypeDto::StatePatch,
+            Self::StateQuery { .. } => WorkflowNodeTypeDto::StateQuery,
+            Self::StateCheckpoint { .. } => WorkflowNodeTypeDto::StateCheckpoint,
+            Self::CollectionLoop { .. } => WorkflowNodeTypeDto::CollectionLoop,
+            Self::Subgraph { .. } => WorkflowNodeTypeDto::Subgraph,
+            Self::Command { .. } => WorkflowNodeTypeDto::Command,
         }
     }
 
@@ -608,9 +964,61 @@ impl WorkflowNodeDto {
             Self::Agent {
                 output_contract, ..
             } => Some(output_contract),
+            Self::Subgraph {
+                output_contract, ..
+            } => Some(output_contract),
+            Self::Command {
+                output_contract, ..
+            } => Some(output_contract),
             _ => None,
         }
     }
+
+    pub fn produced_artifact_type(&self) -> Option<&str> {
+        match self {
+            Self::Agent {
+                output_contract, ..
+            }
+            | Self::Subgraph {
+                output_contract, ..
+            }
+            | Self::Command {
+                output_contract, ..
+            } => Some(output_contract.artifact_type.as_str()),
+            Self::StateRead {
+                output_artifact_type,
+                ..
+            }
+            | Self::StateQuery {
+                output_artifact_type,
+                ..
+            } => Some(output_artifact_type.as_str()),
+            Self::StateWrite { operation, .. } | Self::StatePatch { operation, .. } => {
+                Some(operation.output_artifact_type.as_str())
+            }
+            Self::CollectionLoop {
+                item_artifact_type, ..
+            } => Some(item_artifact_type.as_str()),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowSubgraphDto {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    pub start_node_id: String,
+    pub nodes: Vec<WorkflowNodeDto>,
+    #[serde(default)]
+    pub edges: Vec<WorkflowEdgeDto>,
+    #[serde(default)]
+    pub input_bindings: Vec<WorkflowInputBindingDto>,
+    #[serde(default)]
+    pub output_contract: WorkflowOutputContractDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -960,6 +1368,27 @@ pub struct GetWorkflowRunRequestDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExplainWorkflowRunBlockerRequestDto {
+    pub project_id: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExportWorkflowRunBundleRequestDto {
+    pub project_id: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResumeWorkflowNextIncompletePhaseRequestDto {
+    pub project_id: String,
+    pub run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListWorkflowRunsRequestDto {
     pub project_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -976,6 +1405,27 @@ pub struct ListWorkflowRunsResponseDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkflowRunResponseDto {
     pub run: WorkflowRunDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowRunBlockerResponseDto {
+    pub status: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowRunBundleResponseDto {
+    pub bundle: JsonValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1014,4 +1464,36 @@ pub struct ResumeWorkflowCheckpointRequestDto {
     pub decision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<JsonValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadWorkflowDeliveryStateRequestDto {
+    pub project_id: String,
+    pub query: WorkflowStateQueryDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WriteWorkflowDeliveryStateRequestDto {
+    pub project_id: String,
+    pub operation: WorkflowStateWriteOperationDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExportWorkflowDeliveryStateRequestDto {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WipeWorkflowDeliveryStateRequestDto {
+    pub project_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkflowDeliveryStateResponseDto {
+    pub state: JsonValue,
 }

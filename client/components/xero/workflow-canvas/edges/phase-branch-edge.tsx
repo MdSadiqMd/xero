@@ -1,6 +1,6 @@
 'use client'
 
-import { memo } from 'react'
+import { memo, type CSSProperties } from 'react'
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -17,6 +17,11 @@ import { arrowTargetEndpoint } from './edge-endpoint-offset'
 interface PhaseBranchEdgeData extends Record<string, unknown> {
   condition?: CustomAgentWorkflowBranchConditionDto
   label?: string
+  targetClearance?: number
+  edgeColor?: string
+  labelBackground?: string
+  labelBorderColor?: string
+  labelTextColor?: string
 }
 
 function describeCondition(condition: CustomAgentWorkflowBranchConditionDto | undefined): string {
@@ -84,12 +89,15 @@ export const PhaseBranchEdge = memo(function PhaseBranchEdge(props: EdgeProps) {
   const branchData = (data ?? undefined) as PhaseBranchEdgeData | undefined
   const label = branchData?.label?.trim() || describeCondition(branchData?.condition)
   const { editing } = useCanvasMode()
+  const hasTargetClearance = typeof branchData?.targetClearance === 'number'
+  const edgeStyle = branchData?.edgeColor ? { ...style, stroke: branchData.edgeColor } : style
   const target = arrowTargetEndpoint({
-    editing,
+    editing: editing || hasTargetClearance,
     markerEnd,
     targetX,
     targetY,
     targetPosition,
+    clearance: branchData?.targetClearance,
   })
 
   const sameSide =
@@ -106,6 +114,12 @@ export const PhaseBranchEdge = memo(function PhaseBranchEdge(props: EdgeProps) {
         targetY: target.y,
         targetPosition,
       })
+  const labelStyle = {
+    transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+    ...(branchData?.labelBackground ? { background: branchData.labelBackground } : null),
+    ...(branchData?.labelBorderColor ? { borderColor: branchData.labelBorderColor } : null),
+    ...(branchData?.labelTextColor ? { color: branchData.labelTextColor } : null),
+  } satisfies CSSProperties
 
   return (
     <>
@@ -113,16 +127,14 @@ export const PhaseBranchEdge = memo(function PhaseBranchEdge(props: EdgeProps) {
         id={id}
         path={edgePath}
         markerEnd={markerEnd}
-        style={style}
+        style={edgeStyle}
         interactionWidth={interactionWidth}
       />
       <EdgeLabelRenderer>
         <div
           data-edge-id={id}
           className="agent-edge-phase-branch-label"
-          style={{
-            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-          }}
+          style={labelStyle}
         >
           {label}
         </div>

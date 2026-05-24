@@ -93,34 +93,54 @@ import {
 import {
   cancelWorkflowRunRequestSchema,
   createWorkflowDefinitionRequestSchema,
+  explainWorkflowRunBlockerRequestSchema,
+  exportWorkflowDeliveryStateRequestSchema,
+  exportWorkflowRunBundleRequestSchema,
   getWorkflowDefinitionRequestSchema,
   getWorkflowRunRequestSchema,
   listWorkflowDefinitionsRequestSchema,
   listWorkflowDefinitionsResponseSchema,
   listWorkflowRunsRequestSchema,
   listWorkflowRunsResponseSchema,
+  readWorkflowDeliveryStateRequestSchema,
   resumeWorkflowCheckpointRequestSchema,
+  resumeWorkflowNextIncompletePhaseRequestSchema,
   retryWorkflowNodeRunRequestSchema,
   skipWorkflowBranchRequestSchema,
   startWorkflowRunRequestSchema,
   updateWorkflowDefinitionRequestSchema,
+  wipeWorkflowDeliveryStateRequestSchema,
+  workflowDeliveryStateResponseSchema,
   workflowDefinitionResponseSchema,
+  workflowRunBlockerResponseSchema,
+  workflowRunBundleResponseSchema,
   workflowRunResponseSchema,
+  writeWorkflowDeliveryStateRequestSchema,
   type CancelWorkflowRunRequestDto,
   type CreateWorkflowDefinitionRequestDto,
+  type ExplainWorkflowRunBlockerRequestDto,
+  type ExportWorkflowDeliveryStateRequestDto,
+  type ExportWorkflowRunBundleRequestDto,
   type GetWorkflowDefinitionRequestDto,
   type GetWorkflowRunRequestDto,
   type ListWorkflowDefinitionsRequestDto,
   type ListWorkflowDefinitionsResponseDto,
   type ListWorkflowRunsRequestDto,
   type ListWorkflowRunsResponseDto,
+  type ReadWorkflowDeliveryStateRequestDto,
   type ResumeWorkflowCheckpointRequestDto,
+  type ResumeWorkflowNextIncompletePhaseRequestDto,
   type RetryWorkflowNodeRunRequestDto,
   type SkipWorkflowBranchRequestDto,
   type StartWorkflowRunRequestDto,
   type UpdateWorkflowDefinitionRequestDto,
+  type WipeWorkflowDeliveryStateRequestDto,
+  type WorkflowDeliveryStateResponseDto,
   type WorkflowDefinitionResponseDto,
+  type WorkflowRunBlockerResponseDto,
+  type WorkflowRunBundleResponseDto,
   type WorkflowRunResponseDto,
+  type WriteWorkflowDeliveryStateRequestDto,
 } from '@/src/lib/xero-model/workflow-run'
 import {
   agentRunEventSchema,
@@ -678,11 +698,18 @@ const COMMANDS = {
   getWorkflowDefinition: 'get_workflow_definition',
   startWorkflowRun: 'start_workflow_run',
   getWorkflowRun: 'get_workflow_run',
+  explainWorkflowRunBlocker: 'explain_workflow_run_blocker',
+  exportWorkflowRunBundle: 'export_workflow_run_bundle',
+  resumeWorkflowNextIncompletePhase: 'resume_workflow_next_incomplete_phase',
   listWorkflowRuns: 'list_workflow_runs',
   cancelWorkflowRun: 'cancel_workflow_run',
   retryWorkflowNodeRun: 'retry_workflow_node_run',
   skipWorkflowBranch: 'skip_workflow_branch',
   resumeWorkflowCheckpoint: 'resume_workflow_checkpoint',
+  readWorkflowDeliveryState: 'read_workflow_delivery_state',
+  writeWorkflowDeliveryState: 'write_workflow_delivery_state',
+  exportWorkflowDeliveryState: 'export_workflow_delivery_state',
+  wipeWorkflowDeliveryState: 'wipe_workflow_delivery_state',
   getAgentAuthoringCatalog: 'get_agent_authoring_catalog',
   getAgentToolPackCatalog: 'get_agent_tool_pack_catalog',
   searchAgentAuthoringSkills: 'search_agent_authoring_skills',
@@ -1206,6 +1233,15 @@ export interface XeroDesktopAdapter {
   ): Promise<WorkflowDefinitionResponseDto>
   startWorkflowRun?(request: StartWorkflowRunRequestDto): Promise<WorkflowRunResponseDto>
   getWorkflowRun?(request: GetWorkflowRunRequestDto): Promise<WorkflowRunResponseDto>
+  explainWorkflowRunBlocker?(
+    request: ExplainWorkflowRunBlockerRequestDto,
+  ): Promise<WorkflowRunBlockerResponseDto>
+  exportWorkflowRunBundle?(
+    request: ExportWorkflowRunBundleRequestDto,
+  ): Promise<WorkflowRunBundleResponseDto>
+  resumeWorkflowNextIncompletePhase?(
+    request: ResumeWorkflowNextIncompletePhaseRequestDto,
+  ): Promise<WorkflowRunResponseDto>
   listWorkflowRuns?(
     request: ListWorkflowRunsRequestDto,
   ): Promise<ListWorkflowRunsResponseDto>
@@ -1217,6 +1253,18 @@ export interface XeroDesktopAdapter {
   resumeWorkflowCheckpoint?(
     request: ResumeWorkflowCheckpointRequestDto,
   ): Promise<WorkflowRunResponseDto>
+  readWorkflowDeliveryState?(
+    request: ReadWorkflowDeliveryStateRequestDto,
+  ): Promise<WorkflowDeliveryStateResponseDto>
+  writeWorkflowDeliveryState?(
+    request: WriteWorkflowDeliveryStateRequestDto,
+  ): Promise<WorkflowDeliveryStateResponseDto>
+  exportWorkflowDeliveryState?(
+    request: ExportWorkflowDeliveryStateRequestDto,
+  ): Promise<WorkflowDeliveryStateResponseDto>
+  wipeWorkflowDeliveryState?(
+    request: WipeWorkflowDeliveryStateRequestDto,
+  ): Promise<WorkflowDeliveryStateResponseDto>
   getAgentAuthoringCatalog(
     request: GetAgentAuthoringCatalogRequestDto,
   ): Promise<AgentAuthoringCatalogDto>
@@ -2818,6 +2866,27 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
     })
   },
 
+  explainWorkflowRunBlocker(request) {
+    const parsed = explainWorkflowRunBlockerRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.explainWorkflowRunBlocker, workflowRunBlockerResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  exportWorkflowRunBundle(request) {
+    const parsed = exportWorkflowRunBundleRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.exportWorkflowRunBundle, workflowRunBundleResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  resumeWorkflowNextIncompletePhase(request) {
+    const parsed = resumeWorkflowNextIncompletePhaseRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.resumeWorkflowNextIncompletePhase, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
   listWorkflowRuns(request) {
     const parsed = listWorkflowRunsRequestSchema.parse(request)
     return invokeTyped(COMMANDS.listWorkflowRuns, listWorkflowRunsResponseSchema, {
@@ -2849,6 +2918,34 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
   resumeWorkflowCheckpoint(request) {
     const parsed = resumeWorkflowCheckpointRequestSchema.parse(request)
     return invokeTyped(COMMANDS.resumeWorkflowCheckpoint, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  readWorkflowDeliveryState(request) {
+    const parsed = readWorkflowDeliveryStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.readWorkflowDeliveryState, workflowDeliveryStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  writeWorkflowDeliveryState(request) {
+    const parsed = writeWorkflowDeliveryStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.writeWorkflowDeliveryState, workflowDeliveryStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  exportWorkflowDeliveryState(request) {
+    const parsed = exportWorkflowDeliveryStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.exportWorkflowDeliveryState, workflowDeliveryStateResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  wipeWorkflowDeliveryState(request) {
+    const parsed = wipeWorkflowDeliveryStateRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.wipeWorkflowDeliveryState, workflowDeliveryStateResponseSchema, {
       request: parsed,
     })
   },

@@ -1742,6 +1742,7 @@ mod tests {
                 condition: Default::default(),
                 loop_policy: None,
             }],
+            subgraphs: Vec::new(),
             artifact_contracts: Vec::new(),
             run_policy: WorkflowRunPolicyDto::default(),
             created_at: None,

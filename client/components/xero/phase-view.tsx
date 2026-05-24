@@ -37,7 +37,11 @@ import type {
   AgentDefinitionWriteResponseDto,
 } from '@/src/lib/xero-model/agent-definition'
 import type { WorkflowDefinitionDto } from '@/src/lib/xero-model/workflow-definition'
-import type { WorkflowRunDto } from '@/src/lib/xero-model/workflow-run'
+import type {
+  WorkflowRunBlockerResponseDto,
+  WorkflowRunBundleResponseDto,
+  WorkflowRunDto,
+} from '@/src/lib/xero-model/workflow-run'
 import type { WorkflowTemplateIdDto } from '@/src/lib/xero-model/workflow-templates'
 import type {
   AgentAuthoringCatalogDto,
@@ -86,6 +90,9 @@ interface PhaseViewProps {
     decision: string,
     payload: unknown,
   ) => Promise<WorkflowRunDto | void>
+  onExplainWorkflowRunBlocker?: (runId: string) => Promise<WorkflowRunBlockerResponseDto | void>
+  onExportWorkflowRunBundle?: (runId: string) => Promise<WorkflowRunBundleResponseDto | void>
+  onResumeWorkflowNextIncompletePhase?: (runId: string) => Promise<WorkflowRunDto | void>
   templates?: WorkflowAgentSummaryDto[]
   templatesLoading?: boolean
   templatesError?: Error | null
@@ -158,6 +165,9 @@ export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
     onRetryWorkflowNodeRun,
     onSkipWorkflowBranch,
     onResumeWorkflowCheckpoint,
+    onExplainWorkflowRunBlocker,
+    onExportWorkflowRunBundle,
+    onResumeWorkflowNextIncompletePhase,
     templates = [],
     templatesLoading = false,
     templatesError = null,
@@ -352,6 +362,9 @@ export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
           onRetryNodeRun={onRetryWorkflowNodeRun}
           onSkipBranch={onSkipWorkflowBranch}
           onResumeCheckpoint={onResumeWorkflowCheckpoint}
+          onExplainRunBlocker={onExplainWorkflowRunBlocker}
+          onExportRunBundle={onExportWorkflowRunBundle}
+          onResumeNextIncompletePhase={onResumeWorkflowNextIncompletePhase}
           onCreateAgent={onCreateAgent}
           onEditAgent={onEditAgentFromWorkflow}
         />

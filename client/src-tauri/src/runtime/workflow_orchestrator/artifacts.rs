@@ -15,6 +15,13 @@ use crate::{
 
 use super::condition_eval::json_path_lookup;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowArtifactValidationDiagnostic {
+    pub code: String,
+    pub path: String,
+    pub message: String,
+}
+
 pub fn final_assistant_text(snapshot: &AgentRunSnapshotRecord) -> Option<String> {
     snapshot
         .messages
@@ -28,12 +35,22 @@ pub fn final_assistant_text(snapshot: &AgentRunSnapshotRecord) -> Option<String>
 
 pub fn extract_workflow_artifact_payload(
     contract: &WorkflowOutputContractDto,
+    json_schema: Option<&JsonValue>,
     final_text: &str,
-) -> Result<(JsonValue, Option<String>), CommandError> {
+) -> Result<
+    (
+        JsonValue,
+        Option<String>,
+        Vec<WorkflowArtifactValidationDiagnostic>,
+    ),
+    CommandError,
+> {
     match contract.extraction {
-        WorkflowOutputExtractionDto::GenericText => {
-            Ok((json!({ "text": final_text }), Some(final_text.to_string())))
-        }
+        WorkflowOutputExtractionDto::GenericText => Ok((
+            json!({ "text": final_text }),
+            Some(final_text.to_string()),
+            Vec::new(),
+        )),
         WorkflowOutputExtractionDto::JsonObject => {
             let value = parse_json_output(final_text)?;
             if !value.is_object() {
@@ -42,8 +59,10 @@ pub fn extract_workflow_artifact_payload(
                     "Xero expected the agent output to be a JSON object for this typed artifact.",
                 ));
             }
+            let diagnostics = validate_json_schema(&value, json_schema)?;
             let render_text = render_text_for_payload(&value, contract.render_text_path.as_deref());
-            Ok((value, render_text))
+            validate_render_text_path(&value, contract.render_text_path.as_deref())?;
+            Ok((value, render_text, diagnostics))
         }
         WorkflowOutputExtractionDto::JsonArray => {
             let value = parse_json_output(final_text)?;
@@ -53,16 +72,54 @@ pub fn extract_workflow_artifact_payload(
                     "Xero expected the agent output to be a JSON array for this typed artifact.",
                 ));
             }
+            let diagnostics = validate_json_schema(&value, json_schema)?;
             let render_text = render_text_for_payload(&value, contract.render_text_path.as_deref());
-            Ok((value, render_text))
+            validate_render_text_path(&value, contract.render_text_path.as_deref())?;
+            Ok((value, render_text, diagnostics))
         }
     }
+}
+
+pub fn validate_workflow_artifact_payload(
+    contract: &WorkflowOutputContractDto,
+    json_schema: Option<&JsonValue>,
+    payload: &JsonValue,
+) -> Result<(Option<String>, Vec<WorkflowArtifactValidationDiagnostic>), CommandError> {
+    match contract.extraction {
+        WorkflowOutputExtractionDto::GenericText => {}
+        WorkflowOutputExtractionDto::JsonObject if !payload.is_object() => {
+            return Err(CommandError::user_fixable(
+                "workflow_artifact_schema_invalid",
+                format!(
+                    "Xero expected `{}` to be a JSON object.",
+                    contract.artifact_type
+                ),
+            ));
+        }
+        WorkflowOutputExtractionDto::JsonArray if !payload.is_array() => {
+            return Err(CommandError::user_fixable(
+                "workflow_artifact_schema_invalid",
+                format!(
+                    "Xero expected `{}` to be a JSON array.",
+                    contract.artifact_type
+                ),
+            ));
+        }
+        WorkflowOutputExtractionDto::JsonObject | WorkflowOutputExtractionDto::JsonArray => {}
+    }
+
+    let diagnostics = validate_json_schema(payload, json_schema)?;
+    let render_text = render_text_for_payload(payload, contract.render_text_path.as_deref());
+    validate_render_text_path(payload, contract.render_text_path.as_deref())?;
+    Ok((render_text, diagnostics))
 }
 
 pub fn build_agent_node_prompt(
     workflow_name: &str,
     node_title: &str,
     prompt_preface: Option<&str>,
+    output_contract: &WorkflowOutputContractDto,
+    json_schema: Option<&JsonValue>,
     initial_input: Option<&JsonValue>,
     input_bindings: &[WorkflowInputBindingDto],
     artifacts: &[WorkflowArtifactRecordDto],
@@ -120,6 +177,25 @@ pub fn build_agent_node_prompt(
                     value,
                 )
             }
+            WorkflowInputBindingDto::State {
+                name,
+                required,
+                state_ref,
+                path,
+                prompt_label,
+            } => {
+                let value = artifact_index.get(state_ref).and_then(|artifact| {
+                    path.as_deref()
+                        .and_then(|path| json_path_lookup(&artifact.payload, path).cloned())
+                        .or_else(|| Some(artifact.payload.clone()))
+                });
+                (
+                    name,
+                    *required,
+                    prompt_label.as_deref().unwrap_or(name),
+                    value,
+                )
+            }
         };
         let Some(value) = value else {
             if required {
@@ -141,6 +217,33 @@ pub fn build_agent_node_prompt(
             lines.push("## Workflow input".into());
             lines.push(render_binding_value(input));
         }
+    }
+
+    lines.push(String::new());
+    lines.push("## Final response contract".into());
+    lines.push(format!(
+        "Return exactly one `{}` artifact, schema version {}.",
+        output_contract.artifact_type, output_contract.schema_version
+    ));
+    match output_contract.extraction {
+        WorkflowOutputExtractionDto::GenericText => {
+            lines.push("Respond with the final user-facing text only.".into());
+        }
+        WorkflowOutputExtractionDto::JsonObject => {
+            lines.push("Respond with a single JSON object and no prose outside the JSON.".into());
+        }
+        WorkflowOutputExtractionDto::JsonArray => {
+            lines.push("Respond with a single JSON array and no prose outside the JSON.".into());
+        }
+    }
+    if let Some(schema) = json_schema {
+        lines.push("The JSON must satisfy this JSON Schema:".into());
+        lines.push(render_binding_value(schema));
+    }
+    if let Some(render_text_path) = output_contract.render_text_path.as_deref() {
+        lines.push(format!(
+            "The render text path `{render_text_path}` must exist when the artifact is JSON."
+        ));
     }
 
     Ok(lines.join("\n"))
@@ -209,6 +312,214 @@ fn parse_json_output(text: &str) -> Result<JsonValue, CommandError> {
     ))
 }
 
+fn validate_render_text_path(
+    payload: &JsonValue,
+    render_text_path: Option<&str>,
+) -> Result<(), CommandError> {
+    let Some(path) = render_text_path else {
+        return Ok(());
+    };
+    if json_path_lookup(payload, path).is_some() {
+        return Ok(());
+    }
+    Err(CommandError::user_fixable(
+        "workflow_artifact_extraction_failed",
+        format!(
+            "Xero could not render the typed artifact because render path `{path}` was missing."
+        ),
+    ))
+}
+
+fn validate_json_schema(
+    value: &JsonValue,
+    schema: Option<&JsonValue>,
+) -> Result<Vec<WorkflowArtifactValidationDiagnostic>, CommandError> {
+    let Some(schema) = schema else {
+        return Ok(Vec::new());
+    };
+    let mut diagnostics = Vec::new();
+    validate_schema_value(value, schema, "$", &mut diagnostics);
+    if diagnostics.is_empty() {
+        Ok(diagnostics)
+    } else {
+        Err(CommandError::user_fixable(
+            "workflow_artifact_schema_invalid",
+            format!(
+                "Xero rejected the typed artifact because it failed JSON Schema validation: {}",
+                diagnostics
+                    .iter()
+                    .take(3)
+                    .map(|diagnostic| format!("{} {}", diagnostic.path, diagnostic.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        ))
+    }
+}
+
+fn validate_schema_value(
+    value: &JsonValue,
+    schema: &JsonValue,
+    path: &str,
+    diagnostics: &mut Vec<WorkflowArtifactValidationDiagnostic>,
+) {
+    let Some(schema_object) = schema.as_object() else {
+        return;
+    };
+
+    if let Some(enum_values) = schema_object.get("enum").and_then(JsonValue::as_array) {
+        if !enum_values.iter().any(|candidate| candidate == value) {
+            diagnostics.push(schema_error(
+                "schema_enum_mismatch",
+                path,
+                "must be one of the allowed values",
+            ));
+            return;
+        }
+    }
+
+    if let Some(schema_type) = schema_object.get("type") {
+        if !schema_type_matches(value, schema_type) {
+            diagnostics.push(schema_error(
+                "schema_type_mismatch",
+                path,
+                format!("must be {}", schema_type_label(schema_type)),
+            ));
+            return;
+        }
+    }
+
+    if let Some(min_length) = schema_object.get("minLength").and_then(JsonValue::as_u64) {
+        if value.as_str().map(|text| text.chars().count()).unwrap_or(0) < min_length as usize {
+            diagnostics.push(schema_error(
+                "schema_min_length",
+                path,
+                format!("must contain at least {min_length} characters"),
+            ));
+        }
+    }
+
+    if let Some(min_items) = schema_object.get("minItems").and_then(JsonValue::as_u64) {
+        if value.as_array().map(Vec::len).unwrap_or(0) < min_items as usize {
+            diagnostics.push(schema_error(
+                "schema_min_items",
+                path,
+                format!("must contain at least {min_items} items"),
+            ));
+        }
+    }
+
+    if let Some(required) = schema_object.get("required").and_then(JsonValue::as_array) {
+        if let Some(object) = value.as_object() {
+            for field in required.iter().filter_map(JsonValue::as_str) {
+                if !object.contains_key(field) {
+                    diagnostics.push(schema_error(
+                        "schema_required_missing",
+                        format!("{path}.{field}"),
+                        "is required",
+                    ));
+                }
+            }
+        }
+    }
+
+    if let (Some(properties), Some(object)) = (
+        schema_object
+            .get("properties")
+            .and_then(JsonValue::as_object),
+        value.as_object(),
+    ) {
+        for (field, field_schema) in properties {
+            if let Some(field_value) = object.get(field) {
+                validate_schema_value(
+                    field_value,
+                    field_schema,
+                    &format!("{path}.{field}"),
+                    diagnostics,
+                );
+            }
+        }
+        if schema_object
+            .get("additionalProperties")
+            .and_then(JsonValue::as_bool)
+            == Some(false)
+        {
+            for field in object.keys() {
+                if !properties.contains_key(field) {
+                    diagnostics.push(schema_error(
+                        "schema_additional_property",
+                        format!("{path}.{field}"),
+                        "is not allowed by this artifact contract",
+                    ));
+                }
+            }
+        }
+    }
+
+    if let (Some(items_schema), Some(items)) = (schema_object.get("items"), value.as_array()) {
+        for (index, item) in items.iter().enumerate() {
+            validate_schema_value(item, items_schema, &format!("{path}[{index}]"), diagnostics);
+        }
+    }
+}
+
+fn schema_type_matches(value: &JsonValue, schema_type: &JsonValue) -> bool {
+    if let Some(type_name) = schema_type.as_str() {
+        return single_schema_type_matches(value, type_name);
+    }
+    schema_type
+        .as_array()
+        .map(|types| {
+            types
+                .iter()
+                .filter_map(JsonValue::as_str)
+                .any(|type_name| single_schema_type_matches(value, type_name))
+        })
+        .unwrap_or(true)
+}
+
+fn single_schema_type_matches(value: &JsonValue, type_name: &str) -> bool {
+    match type_name {
+        "array" => value.is_array(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "null" => value.is_null(),
+        "number" => value.is_number(),
+        "object" => value.is_object(),
+        "string" => value.is_string(),
+        _ => true,
+    }
+}
+
+fn schema_type_label(schema_type: &JsonValue) -> String {
+    schema_type
+        .as_str()
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            schema_type.as_array().map(|types| {
+                types
+                    .iter()
+                    .filter_map(JsonValue::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            })
+        })
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| "the declared type".into())
+}
+
+fn schema_error(
+    code: impl Into<String>,
+    path: impl Into<String>,
+    message: impl Into<String>,
+) -> WorkflowArtifactValidationDiagnostic {
+    WorkflowArtifactValidationDiagnostic {
+        code: code.into(),
+        path: path.into(),
+        message: message.into(),
+    }
+}
+
 fn extract_fenced_json(text: &str) -> Option<&str> {
     let start = text.find("```")?;
     let after_open = &text[start + 3..];
@@ -227,12 +538,13 @@ mod tests {
 
     #[test]
     fn artifact_extraction_accepts_generic_text() {
-        let (payload, render_text) =
-            extract_workflow_artifact_payload(&WorkflowOutputContractDto::default(), "done")
+        let (payload, render_text, diagnostics) =
+            extract_workflow_artifact_payload(&WorkflowOutputContractDto::default(), None, "done")
                 .expect("extract generic text");
 
         assert_eq!(payload, json!({ "text": "done" }));
         assert_eq!(render_text.as_deref(), Some("done"));
+        assert!(diagnostics.is_empty());
     }
 
     #[test]
@@ -243,11 +555,53 @@ mod tests {
             ..WorkflowOutputContractDto::default()
         };
 
-        let (payload, render_text) =
-            extract_workflow_artifact_payload(&contract, "```json\n{\"summary\":\"ok\"}\n```")
-                .expect("extract JSON object");
+        let (payload, render_text, diagnostics) = extract_workflow_artifact_payload(
+            &contract,
+            None,
+            "```json\n{\"summary\":\"ok\"}\n```",
+        )
+        .expect("extract JSON object");
 
         assert_eq!(payload, json!({ "summary": "ok" }));
         assert_eq!(render_text.as_deref(), Some("ok"));
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn artifact_extraction_rejects_wrong_json_schema_shape() {
+        let contract = WorkflowOutputContractDto {
+            extraction: WorkflowOutputExtractionDto::JsonObject,
+            ..WorkflowOutputContractDto::default()
+        };
+        let schema = json!({
+            "type": "object",
+            "required": ["status"],
+            "properties": {
+                "status": { "type": "string", "enum": ["passed", "gaps_found", "human_needed"] }
+            },
+            "additionalProperties": false
+        });
+
+        let error =
+            extract_workflow_artifact_payload(&contract, Some(&schema), r#"{"status":"maybe"}"#)
+                .expect_err("invalid status should fail schema validation");
+
+        assert_eq!(error.code, "workflow_artifact_schema_invalid");
+        assert!(error.message.contains("$.status"));
+    }
+
+    #[test]
+    fn artifact_extraction_rejects_missing_render_path() {
+        let contract = WorkflowOutputContractDto {
+            extraction: WorkflowOutputExtractionDto::JsonObject,
+            render_text_path: Some("$.summary".into()),
+            ..WorkflowOutputContractDto::default()
+        };
+
+        let error = extract_workflow_artifact_payload(&contract, None, r#"{"status":"passed"}"#)
+            .expect_err("missing render path should fail");
+
+        assert_eq!(error.code, "workflow_artifact_extraction_failed");
+        assert!(error.message.contains("$.summary"));
     }
 }

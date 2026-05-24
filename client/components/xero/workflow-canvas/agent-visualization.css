@@ -305,6 +305,11 @@
   stroke: hsl(var(--destructive) / 0.72);
 }
 
+.agent-visualization .react-flow__edge.workflow-definition-edge--exhausted .react-flow__edge-path {
+  stroke-dasharray: 5 5;
+  opacity: 0.62;
+}
+
 /* During focus, the edge-wrapper opacity transition fires on 100+ edges
    simultaneously. The compositor handles each edge as its own layer; the
    sheer count saturates GPU work and hover feels sluggish. Snap dim/restore
@@ -459,10 +464,22 @@
   stroke-width: 1.25;
   opacity: 0.55;
 }
+.agent-visualization .react-flow__edge.workflow-definition-edge .react-flow__edge-path {
+  stroke-width: 1.55;
+  opacity: 0.72;
+}
 .agent-visualization .react-flow__edge.agent-edge-phase-branch .react-flow__arrowhead polyline,
 .agent-visualization .react-flow__edge.agent-edge-phase-branch .react-flow__arrowhead polygon {
   fill: color-mix(in oklab, var(--color-amber-500, #f59e0b) 70%, var(--foreground));
   stroke: color-mix(in oklab, var(--color-amber-500, #f59e0b) 70%, var(--foreground));
+}
+.agent-visualization .react-flow__edge.workflow-definition-edge .react-flow__arrowhead polyline,
+.agent-visualization .react-flow__edge.workflow-definition-edge .react-flow__arrowhead polygon {
+  fill: color-mix(in oklab, var(--color-amber-500, #f59e0b) 88%, var(--foreground));
+  stroke: color-mix(in oklab, var(--color-amber-500, #f59e0b) 88%, var(--foreground));
+  stroke-width: 1.8;
+  opacity: 1;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.65));
 }
 
 /* Stage → tool admittance lines are rendered by `<StageToolFanOverlay />`

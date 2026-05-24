@@ -690,6 +690,7 @@ mod tests {
                     loop_policy: None,
                 },
             ],
+            subgraphs: Vec::new(),
             artifact_contracts: Vec::new(),
             run_policy: Default::default(),
             created_at: None,

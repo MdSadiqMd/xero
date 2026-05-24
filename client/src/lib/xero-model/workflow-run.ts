@@ -10,6 +10,8 @@ import {
   workflowNodeIdSchema,
   workflowNodeRunStatusSchema,
   workflowRunStatusSchema,
+  workflowStateQuerySchema,
+  workflowStateWriteOperationSchema,
   workflowTerminalStatusSchema,
   type WorkflowDefinitionDto,
 } from './workflow-definition'
@@ -206,6 +208,36 @@ export const getWorkflowRunRequestSchema = z
   .strict()
 export type GetWorkflowRunRequestDto = z.infer<typeof getWorkflowRunRequestSchema>
 
+export const explainWorkflowRunBlockerRequestSchema = z
+  .object({
+    projectId: nonEmptyTextSchema,
+    runId: nonEmptyTextSchema,
+  })
+  .strict()
+export type ExplainWorkflowRunBlockerRequestDto = z.infer<
+  typeof explainWorkflowRunBlockerRequestSchema
+>
+
+export const exportWorkflowRunBundleRequestSchema = z
+  .object({
+    projectId: nonEmptyTextSchema,
+    runId: nonEmptyTextSchema,
+  })
+  .strict()
+export type ExportWorkflowRunBundleRequestDto = z.infer<
+  typeof exportWorkflowRunBundleRequestSchema
+>
+
+export const resumeWorkflowNextIncompletePhaseRequestSchema = z
+  .object({
+    projectId: nonEmptyTextSchema,
+    runId: nonEmptyTextSchema,
+  })
+  .strict()
+export type ResumeWorkflowNextIncompletePhaseRequestDto = z.infer<
+  typeof resumeWorkflowNextIncompletePhaseRequestSchema
+>
+
 export const listWorkflowRunsRequestSchema = z
   .object({
     projectId: nonEmptyTextSchema,
@@ -266,6 +298,53 @@ export type ResumeWorkflowCheckpointRequestDto = z.infer<
   typeof resumeWorkflowCheckpointRequestSchema
 >
 
+export const readWorkflowDeliveryStateRequestSchema = z
+  .object({
+    projectId: nonEmptyTextSchema,
+    query: workflowStateQuerySchema,
+  })
+  .strict()
+export type ReadWorkflowDeliveryStateRequestDto = z.infer<
+  typeof readWorkflowDeliveryStateRequestSchema
+>
+
+export const writeWorkflowDeliveryStateRequestSchema = z
+  .object({
+    projectId: nonEmptyTextSchema,
+    operation: workflowStateWriteOperationSchema,
+  })
+  .strict()
+export type WriteWorkflowDeliveryStateRequestDto = z.infer<
+  typeof writeWorkflowDeliveryStateRequestSchema
+>
+
+export const exportWorkflowDeliveryStateRequestSchema = z
+  .object({
+    projectId: nonEmptyTextSchema,
+  })
+  .strict()
+export type ExportWorkflowDeliveryStateRequestDto = z.infer<
+  typeof exportWorkflowDeliveryStateRequestSchema
+>
+
+export const wipeWorkflowDeliveryStateRequestSchema = z
+  .object({
+    projectId: nonEmptyTextSchema,
+  })
+  .strict()
+export type WipeWorkflowDeliveryStateRequestDto = z.infer<
+  typeof wipeWorkflowDeliveryStateRequestSchema
+>
+
+export const workflowDeliveryStateResponseSchema = z
+  .object({
+    state: z.unknown(),
+  })
+  .strict()
+export type WorkflowDeliveryStateResponseDto = z.infer<
+  typeof workflowDeliveryStateResponseSchema
+>
+
 export const workflowDefinitionResponseSchema = z
   .object({
     definition: workflowDefinitionSchema,
@@ -281,5 +360,28 @@ export const workflowRunResponseSchema = z
   })
   .strict()
 export type WorkflowRunResponseDto = z.infer<typeof workflowRunResponseSchema>
+
+export const workflowRunBlockerResponseSchema = z
+  .object({
+    status: nonEmptyTextSchema,
+    summary: nonEmptyTextSchema,
+    nodeId: z.string().trim().min(1).nullable().optional(),
+    nodeRunId: z.string().trim().min(1).nullable().optional(),
+    failureClass: z.string().trim().min(1).nullable().optional(),
+    event: z.unknown().nullable().optional(),
+  })
+  .strict()
+export type WorkflowRunBlockerResponseDto = z.infer<
+  typeof workflowRunBlockerResponseSchema
+>
+
+export const workflowRunBundleResponseSchema = z
+  .object({
+    bundle: z.unknown(),
+  })
+  .strict()
+export type WorkflowRunBundleResponseDto = z.infer<
+  typeof workflowRunBundleResponseSchema
+>
 
 export type WorkflowDefinitionSnapshotDto = WorkflowDefinitionDto

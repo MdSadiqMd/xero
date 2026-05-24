@@ -10,6 +10,7 @@ use crate::commands::contracts::workflows::{
 pub struct WorkflowConditionContext {
     pub node_statuses: BTreeMap<String, WorkflowNodeRunStatusDto>,
     pub artifacts: BTreeMap<String, JsonValue>,
+    pub state_values: BTreeMap<String, JsonValue>,
     pub failure_classes: BTreeMap<String, String>,
     pub latest_failure_class: Option<String>,
     pub loop_attempts: BTreeMap<String, u32>,
@@ -231,6 +232,55 @@ pub fn evaluate_workflow_condition(
                     "kind": "human_decision_is",
                     "checkpointNodeId": checkpoint_node_id,
                     "expected": decision,
+                    "actual": actual,
+                    "matched": matched
+                }),
+            }
+        }
+        WorkflowConditionDto::StateFieldEquals {
+            state_ref,
+            path,
+            value,
+        } => {
+            let actual = context
+                .state_values
+                .get(state_ref)
+                .and_then(|state| json_path_lookup(state, path));
+            let matched = actual == Some(value);
+            WorkflowConditionEvaluation {
+                matched,
+                evidence: json!({
+                    "kind": "state_field_equals",
+                    "stateRef": state_ref,
+                    "path": path,
+                    "expected": value,
+                    "actual": actual.cloned(),
+                    "matched": matched
+                }),
+            }
+        }
+        WorkflowConditionDto::StateCollectionCountCompare {
+            state_ref,
+            operator,
+            value,
+        } => {
+            let actual = context.state_values.get(state_ref).and_then(|state| {
+                state
+                    .get("records")
+                    .and_then(JsonValue::as_array)
+                    .map(|records| records.len() as f64)
+                    .or_else(|| state.as_array().map(|records| records.len() as f64))
+            });
+            let matched = actual
+                .map(|actual| compare_numbers(actual, *operator, *value))
+                .unwrap_or(false);
+            WorkflowConditionEvaluation {
+                matched,
+                evidence: json!({
+                    "kind": "state_collection_count_compare",
+                    "stateRef": state_ref,
+                    "operator": format!("{operator:?}"),
+                    "expected": value,
                     "actual": actual,
                     "matched": matched
                 }),
