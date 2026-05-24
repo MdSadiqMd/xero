@@ -262,7 +262,7 @@ const AGENT_DEFINITION_DRAFT_SECTIONS: &[OutputSectionEntry] = &[
     OutputSectionEntry {
         id: "definition_draft",
         label: "Definition Draft",
-        description: "Reviewable agent definition: id, prompts, tool policy, safety limits.",
+        description: "Reviewable agent or Workflow definition: identity, graph or prompt shape, tool policy, and safety limits.",
         emphasis: AgentOutputSectionEmphasisDto::Core,
         produced_by_tools: &[],
     },

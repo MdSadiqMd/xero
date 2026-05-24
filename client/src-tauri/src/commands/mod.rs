@@ -80,10 +80,11 @@ pub mod upsert_notification_route;
 pub mod upsert_notification_route_credentials;
 pub mod wipe_data;
 pub mod workflow_agents;
+pub mod workflows;
 pub mod workspace_index;
 pub mod xai_device_code_login;
 
-mod contracts;
+pub(crate) mod contracts;
 pub(crate) mod runtime_support;
 
 pub use adrenaline_mode::{
@@ -310,6 +311,12 @@ pub use workflow_agents::{
     get_workflow_agent_graph_projection, list_workflow_agents, resolve_agent_authoring_skill,
     search_agent_authoring_skills,
 };
+pub use workflows::{
+    cancel_workflow_run, create_workflow_definition, get_workflow_definition, get_workflow_run,
+    list_workflow_definitions, list_workflow_runs, resume_workflow_checkpoint,
+    retry_workflow_node_run, skip_workflow_branch, start_workflow_run, update_workflow_definition,
+    validate_workflow_definition,
+};
 pub use workspace_index::{
     workspace_explain, workspace_index, workspace_query, workspace_reset, workspace_status,
 };
@@ -319,7 +326,7 @@ pub use crate::environment::service::EnvironmentDiscoveryStatus;
 pub use contracts::{
     agent::*, autonomous::*, code_history::*, developer_tool_harness::*, dictation::*, error::*,
     mcp::*, notifications::*, runtime::*, session_context::*, skills::*, surface::*, usage::*,
-    workflow::*, workflow_agents::*,
+    workflow::*, workflow_agents::*, workflows::*,
 };
 
 pub(crate) use contracts::{

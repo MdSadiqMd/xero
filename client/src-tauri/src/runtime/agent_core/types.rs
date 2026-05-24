@@ -1027,7 +1027,8 @@ fn tool_application_metadata_for_tool(tool_name: &str) -> xero_agent_core::ToolA
         | AUTONOMOUS_TOOL_PROJECT_CONTEXT_REFRESH
         | AUTONOMOUS_TOOL_AGENT_COORDINATION
         | AUTONOMOUS_TOOL_TODO
-        | AUTONOMOUS_TOOL_AGENT_DEFINITION => {
+        | AUTONOMOUS_TOOL_AGENT_DEFINITION
+        | AUTONOMOUS_TOOL_WORKFLOW_DEFINITION => {
             xero_agent_core::ToolApplicationMetadata::granular("runtime_state")
         }
         AUTONOMOUS_TOOL_COMMAND_PROBE

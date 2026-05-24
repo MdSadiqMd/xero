@@ -1,10 +1,11 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Bot,
   Compass,
   Hammer,
+  History,
   MessageCircle,
   MoreHorizontal,
   Package,
@@ -15,9 +16,11 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Play,
   Wand2,
   Workflow as WorkflowIcon,
   Wrench,
+  type LucideIcon,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -76,6 +79,14 @@ import {
 } from "@/src/lib/xero-model/agent-definition"
 import type { ProviderModelThinkingEffortDto } from "@/src/lib/xero-model"
 import type { ComposerModelOptionView } from "@/src/features/xero/use-xero-desktop-state/runtime-provider"
+import type { WorkflowDefinitionSummaryDto } from "@/src/lib/xero-model/workflow-definition"
+import type { WorkflowRunDto } from "@/src/lib/xero-model/workflow-run"
+import {
+  WORKFLOW_TEMPLATE_LIBRARY,
+  type WorkflowTemplateIdDto,
+} from "@/src/lib/xero-model/workflow-templates"
+import { CreateWorkflowDialog } from "./create-workflow-dialog"
+import type { CreateEntityDialogView } from "./create-entity-dialog"
 
 const MIN_WIDTH = 280
 const MAX_WIDTH = 1200
@@ -90,7 +101,21 @@ interface WorkflowsSidebarProps {
   agents?: WorkflowAgentSummaryDto[]
   agentsLoading?: boolean
   agentsError?: Error | null
+  workflowDefinitions?: WorkflowDefinitionSummaryDto[]
+  workflowRuns?: WorkflowRunDto[]
+  workflowsLoading?: boolean
+  workflowsError?: Error | null
+  selectedWorkflowId?: string | null
+  selectedWorkflowRunId?: string | null
   selectedAgentRef?: AgentRefDto | null
+  onSelectWorkflow?: (workflowId: string) => void
+  onSelectWorkflowRun?: (runId: string) => void
+  onCreateWorkflow?: () => void
+  onCreateWorkflowWithAgentCreate?: () => void
+  onCreateWorkflowFromTemplate?: (templateId: WorkflowTemplateIdDto) => void
+  onStartWorkflowRun?: (workflowId: string) => void
+  onCancelWorkflowRun?: (runId: string) => void
+  onResumeWorkflowRun?: (runId: string, nodeRunId: string, decision: string) => void
   onSelectAgent?: (ref: AgentRefDto) => void
   onCreateAgent?: () => void
   onCreateAgentByHand?: () => void
@@ -124,7 +149,21 @@ export function WorkflowsSidebar({
   agents: agentsProp,
   agentsLoading = false,
   agentsError = null,
+  workflowDefinitions: workflowDefinitionsProp,
+  workflowRuns: workflowRunsProp,
+  workflowsLoading = false,
+  workflowsError = null,
+  selectedWorkflowId = null,
+  selectedWorkflowRunId = null,
   selectedAgentRef = null,
+  onSelectWorkflow,
+  onSelectWorkflowRun,
+  onCreateWorkflow,
+  onCreateWorkflowWithAgentCreate,
+  onCreateWorkflowFromTemplate,
+  onStartWorkflowRun,
+  onCancelWorkflowRun,
+  onResumeWorkflowRun,
   onSelectAgent,
   onCreateAgent,
   onCreateAgentByHand,
@@ -147,9 +186,57 @@ export function WorkflowsSidebar({
   const deferredQuery = useDeferredFilterQuery(query)
 
   const agents = useMemo(() => agentsProp ?? [], [agentsProp])
+  const workflowDefinitions = useMemo(
+    () => workflowDefinitionsProp ?? [],
+    [workflowDefinitionsProp],
+  )
+  const workflowRuns = useMemo(() => workflowRunsProp ?? [], [workflowRunsProp])
   const [defaultModelTarget, setDefaultModelTarget] =
     useState<WorkflowAgentSummaryDto | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<WorkflowAgentSummaryDto | null>(null)
+  const [createWorkflowDialogOpen, setCreateWorkflowDialogOpen] = useState(false)
+  const [createWorkflowDialogView, setCreateWorkflowDialogView] =
+    useState<CreateEntityDialogView>("choice")
+  const canCreateWorkflow = Boolean(
+    onCreateWorkflow || onCreateWorkflowWithAgentCreate || onCreateWorkflowFromTemplate,
+  )
+
+  const closeCreateWorkflowDialog = useCallback(() => {
+    setCreateWorkflowDialogOpen(false)
+    setCreateWorkflowDialogView("choice")
+  }, [])
+
+  const handleCreateWorkflowDialogOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (nextOpen) {
+        setCreateWorkflowDialogOpen(true)
+        return
+      }
+      closeCreateWorkflowDialog()
+    },
+    [closeCreateWorkflowDialog],
+  )
+
+  const handleCreateWorkflowBlank = useCallback(() => {
+    if (!onCreateWorkflow) return
+    closeCreateWorkflowDialog()
+    onCreateWorkflow()
+  }, [closeCreateWorkflowDialog, onCreateWorkflow])
+
+  const handleCreateWorkflowWithAgentCreate = useCallback(() => {
+    if (!onCreateWorkflowWithAgentCreate) return
+    closeCreateWorkflowDialog()
+    onCreateWorkflowWithAgentCreate()
+  }, [closeCreateWorkflowDialog, onCreateWorkflowWithAgentCreate])
+
+  const handleCreateWorkflowFromTemplate = useCallback(
+    (templateId: WorkflowTemplateIdDto) => {
+      if (!onCreateWorkflowFromTemplate) return
+      closeCreateWorkflowDialog()
+      onCreateWorkflowFromTemplate(templateId)
+    },
+    [closeCreateWorkflowDialog, onCreateWorkflowFromTemplate],
+  )
 
   const setTab = useCallback((next: LibraryTab) => {
     setTabState((current) => {
@@ -172,6 +259,16 @@ export function WorkflowsSidebar({
         agent.baseCapabilityProfile.toLowerCase().includes(q),
     )
   }, [agents, deferredQuery, tab])
+  const filteredWorkflowDefinitions = useMemo(() => {
+    if (tab !== "workflows") return workflowDefinitions
+    const q = deferredQuery
+    if (!q) return workflowDefinitions
+    return workflowDefinitions.filter(
+      (definition) =>
+        definition.name.toLowerCase().includes(q) ||
+        definition.description.toLowerCase().includes(q),
+    )
+  }, [deferredQuery, tab, workflowDefinitions])
 
   const handleResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -222,10 +319,10 @@ export function WorkflowsSidebar({
     })
   }, [])
 
-  const activeCount = filteredAgents.length
-  const totalCount = agents.length
+  const activeCount = tab === "workflows" ? filteredWorkflowDefinitions.length : filteredAgents.length
+  const totalCount = tab === "workflows" ? workflowDefinitions.length : agents.length
   const hasQuery = deferredQuery.length > 0
-  const searchPlaceholder = "Search agents"
+  const searchPlaceholder = tab === "workflows" ? "Search workflows" : "Search agents"
 
   return (
     <aside
@@ -272,8 +369,11 @@ export function WorkflowsSidebar({
             }}
             onCreateAgent={onCreateAgent}
             onCreateAgentByHand={onCreateAgentByHand}
+            onCreateWorkflow={
+              canCreateWorkflow ? () => handleCreateWorkflowDialogOpenChange(true) : undefined
+            }
           />
-          {searchOpen && tab === "agents" ? (
+          {searchOpen ? (
             <Toolbar
               query={query}
               placeholder={searchPlaceholder}
@@ -287,12 +387,24 @@ export function WorkflowsSidebar({
           <LibraryList
             tab={tab}
             agents={filteredAgents}
+            workflowDefinitions={filteredWorkflowDefinitions}
+            workflowRuns={workflowRuns}
             activeCount={activeCount}
             totalCount={totalCount}
             hasQuery={hasQuery}
             agentsLoading={agentsLoading}
             agentsError={agentsError}
+            workflowsLoading={workflowsLoading}
+            workflowsError={workflowsError}
+            selectedWorkflowId={selectedWorkflowId}
+            selectedWorkflowRunId={selectedWorkflowRunId}
             selectedAgentRef={selectedAgentRef}
+            onSelectWorkflow={onSelectWorkflow}
+            onSelectWorkflowRun={onSelectWorkflowRun}
+            onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
+            onStartWorkflowRun={onStartWorkflowRun}
+            onCancelWorkflowRun={onCancelWorkflowRun}
+            onResumeWorkflowRun={onResumeWorkflowRun}
             onSelectAgent={onSelectAgent}
             onEditAgent={onEditAgent}
             onRequestDeleteAgent={setDeleteTarget}
@@ -326,6 +438,20 @@ export function WorkflowsSidebar({
           setDeleteTarget(null)
         }}
       />
+      {canCreateWorkflow ? (
+        <CreateWorkflowDialog
+          open={createWorkflowDialogOpen}
+          onOpenChange={handleCreateWorkflowDialogOpenChange}
+          view={createWorkflowDialogView}
+          onSetView={setCreateWorkflowDialogView}
+          canStartBlank={Boolean(onCreateWorkflow)}
+          canUseAgentCreate={Boolean(onCreateWorkflowWithAgentCreate)}
+          canPickTemplate={Boolean(onCreateWorkflowFromTemplate)}
+          onStartBlank={handleCreateWorkflowBlank}
+          onUseAgentCreate={handleCreateWorkflowWithAgentCreate}
+          onPickTemplate={handleCreateWorkflowFromTemplate}
+        />
+      ) : null}
     </aside>
   )
 }
@@ -342,6 +468,7 @@ function Header({
   onToggleSearch,
   onCreateAgent,
   onCreateAgentByHand,
+  onCreateWorkflow,
 }: {
   tab: LibraryTab
   agentsCount: number
@@ -350,12 +477,17 @@ function Header({
   onToggleSearch: () => void
   onCreateAgent?: () => void
   onCreateAgentByHand?: () => void
+  onCreateWorkflow?: () => void
 }) {
   const isWorkflowsTab = tab === "workflows"
-  const newLabel = isWorkflowsTab ? "New workflow (Coming soon)" : "New agent"
-  const searchLabel = searchOpen ? "Close search" : "Search agents"
-  const directCreate = isWorkflowsTab ? undefined : onCreateAgent ?? onCreateAgentByHand
-  const createDisabled = isWorkflowsTab || !directCreate
+  const newLabel = isWorkflowsTab ? "New workflow" : "New agent"
+  const searchLabel = searchOpen
+    ? "Close search"
+    : isWorkflowsTab
+      ? "Search workflows"
+      : "Search agents"
+  const directCreate = isWorkflowsTab ? onCreateWorkflow : onCreateAgent ?? onCreateAgentByHand
+  const createDisabled = !directCreate
 
   return (
     <div
@@ -392,23 +524,21 @@ function Header({
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
-        {isWorkflowsTab ? null : (
-          <button
-            aria-label={searchLabel}
-            aria-pressed={searchOpen}
-            className={cn(
-              "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
-              searchOpen
-                ? "bg-primary/10 text-primary"
-                : "text-muted-foreground hover:bg-primary/10 hover:text-primary",
-            )}
-            onClick={onToggleSearch}
-            title={searchLabel}
-            type="button"
-          >
-            <Search className="h-3.5 w-3.5" />
-          </button>
-        )}
+        <button
+          aria-label={searchLabel}
+          aria-pressed={searchOpen}
+          className={cn(
+            "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
+            searchOpen
+              ? "bg-primary/10 text-primary"
+              : "text-muted-foreground hover:bg-primary/10 hover:text-primary",
+          )}
+          onClick={onToggleSearch}
+          title={searchLabel}
+          type="button"
+        >
+          <Search className="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
   )
@@ -498,12 +628,24 @@ function Toolbar({
 function LibraryList({
   tab,
   agents,
+  workflowDefinitions,
+  workflowRuns,
   activeCount,
   totalCount,
   hasQuery,
   agentsLoading,
   agentsError,
+  workflowsLoading,
+  workflowsError,
+  selectedWorkflowId,
+  selectedWorkflowRunId,
   selectedAgentRef,
+  onSelectWorkflow,
+  onSelectWorkflowRun,
+  onCreateWorkflowFromTemplate,
+  onStartWorkflowRun,
+  onCancelWorkflowRun,
+  onResumeWorkflowRun,
   onSelectAgent,
   onEditAgent,
   onRequestDeleteAgent,
@@ -512,12 +654,24 @@ function LibraryList({
 }: {
   tab: LibraryTab
   agents: WorkflowAgentSummaryDto[]
+  workflowDefinitions: WorkflowDefinitionSummaryDto[]
+  workflowRuns: WorkflowRunDto[]
   activeCount: number
   totalCount: number
   hasQuery: boolean
   agentsLoading: boolean
   agentsError: Error | null
+  workflowsLoading: boolean
+  workflowsError: Error | null
+  selectedWorkflowId: string | null
+  selectedWorkflowRunId: string | null
   selectedAgentRef: AgentRefDto | null
+  onSelectWorkflow?: (workflowId: string) => void
+  onSelectWorkflowRun?: (runId: string) => void
+  onCreateWorkflowFromTemplate?: (templateId: WorkflowTemplateIdDto) => void
+  onStartWorkflowRun?: (workflowId: string) => void
+  onCancelWorkflowRun?: (runId: string) => void
+  onResumeWorkflowRun?: (runId: string, nodeRunId: string, decision: string) => void
   onSelectAgent?: (ref: AgentRefDto) => void
   onEditAgent?: (ref: AgentRefDto) => void
   onRequestDeleteAgent?: (agent: WorkflowAgentSummaryDto) => void
@@ -525,7 +679,25 @@ function LibraryList({
   onConfigureDefaultModel?: (agent: WorkflowAgentSummaryDto) => void
 }) {
   if (tab === "workflows") {
-    return <WorkflowsComingSoon />
+    return (
+      <WorkflowsList
+        definitions={workflowDefinitions}
+        runs={workflowRuns}
+        activeCount={activeCount}
+        totalCount={totalCount}
+        hasQuery={hasQuery}
+        loading={workflowsLoading}
+        error={workflowsError}
+        selectedWorkflowId={selectedWorkflowId}
+        selectedWorkflowRunId={selectedWorkflowRunId}
+        onSelectWorkflow={onSelectWorkflow}
+        onSelectWorkflowRun={onSelectWorkflowRun}
+        onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
+        onStartWorkflowRun={onStartWorkflowRun}
+        onCancelWorkflowRun={onCancelWorkflowRun}
+        onResumeWorkflowRun={onResumeWorkflowRun}
+      />
+    )
   }
   if (agentsError) {
     return (
@@ -579,19 +751,401 @@ function agentsEmptyStateMessage(hasQuery: boolean, totalCount: number): string 
   return "No agents match."
 }
 
-function WorkflowsComingSoon() {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-10 text-center">
-      <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-border/70 bg-card/80 shadow-sm">
-        <WorkflowIcon className="h-5 w-5 text-foreground/70" aria-hidden="true" />
+function humanizeWorkflowStatus(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function workflowRunTone(status: WorkflowRunDto["status"]): string {
+  switch (status) {
+    case "running":
+    case "completed":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+    case "paused":
+      return "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+    case "failed":
+      return "border-destructive/35 bg-destructive/10 text-destructive"
+    case "cancelled":
+      return "border-muted-foreground/25 bg-muted text-muted-foreground"
+    case "queued":
+    default:
+      return "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+  }
+}
+
+function WorkflowsList({
+  definitions,
+  runs,
+  activeCount,
+  totalCount,
+  hasQuery,
+  loading,
+  error,
+  selectedWorkflowId,
+  selectedWorkflowRunId,
+  onSelectWorkflow,
+  onSelectWorkflowRun,
+  onCreateWorkflowFromTemplate,
+  onStartWorkflowRun,
+  onCancelWorkflowRun,
+  onResumeWorkflowRun,
+}: {
+  definitions: WorkflowDefinitionSummaryDto[]
+  runs: WorkflowRunDto[]
+  activeCount: number
+  totalCount: number
+  hasQuery: boolean
+  loading: boolean
+  error: Error | null
+  selectedWorkflowId: string | null
+  selectedWorkflowRunId: string | null
+  onSelectWorkflow?: (workflowId: string) => void
+  onSelectWorkflowRun?: (runId: string) => void
+  onCreateWorkflowFromTemplate?: (templateId: WorkflowTemplateIdDto) => void
+  onStartWorkflowRun?: (workflowId: string) => void
+  onCancelWorkflowRun?: (runId: string) => void
+  onResumeWorkflowRun?: (runId: string, nodeRunId: string, decision: string) => void
+}) {
+  if (error) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-1 px-3 py-8 text-center text-[11px] leading-relaxed text-destructive">
+        <span>Failed to load workflows.</span>
+        <span className="text-muted-foreground">{error.message}</span>
       </div>
-      <Badge
-        variant="outline"
-        className="text-[9.5px] uppercase tracking-[0.14em] font-semibold text-muted-foreground"
-      >
-        Coming soon
-      </Badge>
+    )
+  }
+  if (loading && definitions.length === 0) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-3 py-8 text-center text-[11px] leading-relaxed text-muted-foreground/80">
+        Loading workflows…
+      </div>
+    )
+  }
+  if (activeCount === 0 && (totalCount > 0 || hasQuery)) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-3 py-8 text-center text-[11px] leading-relaxed text-muted-foreground/80">
+        No workflows match.
+      </div>
+    )
+  }
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
+      {definitions.length === 0 && !hasQuery ? (
+        <WorkflowTemplates onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate} />
+      ) : (
+        <ul className="flex flex-col py-1">
+          {definitions.map((definition) => {
+            const latestRun = runs.find((run) => run.workflowId === definition.id) ?? null
+            return (
+              <li key={definition.id}>
+                <WorkflowRow
+                  definition={definition}
+                  latestRun={latestRun}
+                  selected={definition.id === selectedWorkflowId}
+                  onSelect={onSelectWorkflow}
+                  onStart={onStartWorkflowRun}
+                />
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {definitions.length > 0 ? (
+        <WorkflowTemplates compact onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate} />
+      ) : null}
+      {runs.length > 0 ? (
+        <WorkflowRunsTimeline
+          runs={runs}
+          selectedWorkflowRunId={selectedWorkflowRunId}
+          onSelectWorkflowRun={onSelectWorkflowRun}
+          onCancelWorkflowRun={onCancelWorkflowRun}
+          onResumeWorkflowRun={onResumeWorkflowRun}
+        />
+      ) : null}
     </div>
+  )
+}
+
+interface LibraryEntityRowProps {
+  name: string
+  description?: ReactNode
+  icon: LucideIcon
+  selected?: boolean
+  disabled?: boolean
+  ariaLabel: string
+  ariaPressed?: boolean
+  badges?: ReactNode
+  action?: ReactNode
+  onActivate?: () => void
+}
+
+function LibraryEntityRow({
+  name,
+  description,
+  icon: Icon,
+  selected = false,
+  disabled = false,
+  ariaLabel,
+  ariaPressed,
+  badges,
+  action,
+  onActivate,
+}: LibraryEntityRowProps) {
+  const clickable = Boolean(onActivate) && !disabled
+  return (
+    <div
+      className={cn(
+        "group relative flex items-start gap-3 px-3 py-3 transition-colors",
+        selected ? "bg-primary/10" : clickable && "hover:bg-secondary/30",
+        disabled && "opacity-60",
+      )}
+    >
+      {onActivate ? (
+        <button
+          type="button"
+          onClick={clickable ? onActivate : undefined}
+          className={cn("absolute inset-0", clickable ? "cursor-pointer" : "cursor-default")}
+          aria-label={ariaLabel}
+          aria-pressed={ariaPressed}
+          disabled={!clickable}
+        />
+      ) : null}
+      <Icon
+        aria-hidden="true"
+        className={cn(
+          "mt-[3px] h-3.5 w-3.5 shrink-0",
+          selected ? "text-primary" : "text-muted-foreground/70",
+        )}
+      />
+
+      <div className="pointer-events-none relative min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-[13px] font-medium leading-tight text-foreground">
+            {name}
+          </span>
+          {badges ? (
+            <span className="flex min-w-0 shrink-0 items-center gap-1">{badges}</span>
+          ) : null}
+        </div>
+        {description ? (
+          <p className="mt-0.5 line-clamp-1 text-[11.5px] leading-snug text-muted-foreground">
+            {description}
+          </p>
+        ) : null}
+      </div>
+
+      {action ? (
+        <div className="relative flex shrink-0 items-center gap-0.5 self-center">{action}</div>
+      ) : null}
+    </div>
+  )
+}
+
+function WorkflowTemplates({
+  compact = false,
+  onCreateWorkflowFromTemplate,
+}: {
+  compact?: boolean
+  onCreateWorkflowFromTemplate?: (templateId: WorkflowTemplateIdDto) => void
+}) {
+  return (
+    <section className={cn("border-b border-border/60", compact ? "py-1" : "py-2")}>
+      <div className="flex items-center gap-2 px-3 py-2">
+        <WorkflowIcon className="h-3.5 w-3.5 text-muted-foreground/70" aria-hidden="true" />
+        <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Templates
+        </h3>
+      </div>
+      <div className="flex flex-col">
+        {WORKFLOW_TEMPLATE_LIBRARY.map((template) => (
+          <LibraryEntityRow
+            key={template.id}
+            name={template.name}
+            description={compact ? undefined : template.description}
+            icon={Sparkles}
+            ariaLabel={`Create workflow from ${template.name}`}
+            disabled={!onCreateWorkflowFromTemplate}
+            onActivate={() => onCreateWorkflowFromTemplate?.(template.id)}
+            badges={
+              <>
+                <Badge variant="secondary" className="px-1 py-0 text-[9px] leading-tight">
+                  Template
+                </Badge>
+                <Badge variant="outline" className="px-1 py-0 text-[9px] leading-tight">
+                  {template.nodeCount} nodes
+                </Badge>
+              </>
+            }
+            action={
+              <LibraryEntityRowMenu
+                name={template.name}
+                actions={[
+                  {
+                    label: "Use template",
+                    icon: <Sparkles className="mr-2 h-3.5 w-3.5" />,
+                    onSelect: onCreateWorkflowFromTemplate
+                      ? () => onCreateWorkflowFromTemplate(template.id)
+                      : undefined,
+                  },
+                ]}
+              />
+            }
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function WorkflowRow({
+  definition,
+  latestRun,
+  selected,
+  onSelect,
+  onStart,
+}: {
+  definition: WorkflowDefinitionSummaryDto
+  latestRun: WorkflowRunDto | null
+  selected: boolean
+  onSelect?: (workflowId: string) => void
+  onStart?: (workflowId: string) => void
+}) {
+  const runBadge = latestRun ? (
+    <Badge
+      variant="outline"
+      className={cn("px-1 py-0 text-[9px] leading-tight", workflowRunTone(latestRun.status))}
+    >
+      {humanizeWorkflowStatus(latestRun.status)}
+    </Badge>
+  ) : null
+
+  return (
+    <LibraryEntityRow
+      name={definition.name}
+      description={definition.description}
+      icon={WorkflowIcon}
+      selected={selected}
+      ariaLabel={`Open workflow ${definition.name}`}
+      ariaPressed={selected}
+      onActivate={() => onSelect?.(definition.id)}
+      badges={
+        <>
+          <Badge variant="outline" className="px-1 py-0 text-[9px] leading-tight">
+            v{definition.activeVersionNumber}
+          </Badge>
+          {runBadge}
+        </>
+      }
+      action={
+        <LibraryEntityRowMenu
+          name={definition.name}
+          actions={[
+            {
+              label: "Open workflow",
+              icon: <WorkflowIcon className="mr-2 h-3.5 w-3.5" />,
+              onSelect: onSelect ? () => onSelect(definition.id) : undefined,
+            },
+            {
+              label: "Start run",
+              icon: <Play className="mr-2 h-3.5 w-3.5" />,
+              onSelect: onStart ? () => onStart(definition.id) : undefined,
+            },
+          ]}
+        />
+      }
+    />
+  )
+}
+
+function WorkflowRunsTimeline({
+  runs,
+  selectedWorkflowRunId,
+  onSelectWorkflowRun,
+  onCancelWorkflowRun,
+  onResumeWorkflowRun,
+}: {
+  runs: WorkflowRunDto[]
+  selectedWorkflowRunId: string | null
+  onSelectWorkflowRun?: (runId: string) => void
+  onCancelWorkflowRun?: (runId: string) => void
+  onResumeWorkflowRun?: (runId: string, nodeRunId: string, decision: string) => void
+}) {
+  return (
+    <section className="px-3 py-3">
+      <div className="mb-2 flex items-center gap-2">
+        <History className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+        <h3 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Runs
+        </h3>
+      </div>
+      <div className="space-y-2">
+        {runs.slice(0, 12).map((run) => {
+          const waiting = run.nodes.find((node) => node.status === "waiting_on_gate") ?? null
+          const activeNode =
+            run.nodes.find((node) => node.status === "running") ??
+            waiting ??
+            run.nodes.at(-1) ??
+            null
+          return (
+            <div
+              key={run.id}
+              className={cn(
+                "rounded-md border px-2.5 py-2 text-[11.5px]",
+                selectedWorkflowRunId === run.id
+                  ? "border-primary/35 bg-primary/5"
+                  : "border-border/50 bg-card/55",
+              )}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-2 text-left"
+                onClick={() => onSelectWorkflowRun?.(run.id)}
+              >
+                <span className="min-w-0 truncate font-medium text-foreground/90">
+                  {run.definitionSnapshot.name}
+                </span>
+                <span className={cn("shrink-0 rounded border px-1.5 py-[1px] text-[10px]", workflowRunTone(run.status))}>
+                  {humanizeWorkflowStatus(run.status)}
+                </span>
+              </button>
+              {activeNode ? (
+                <p className="mt-1 truncate text-[10.5px] text-muted-foreground">
+                  {activeNode.nodeId} · {humanizeWorkflowStatus(activeNode.status)}
+                </p>
+              ) : null}
+              {run.edgeDecisions.length > 0 ? (
+                <p className="mt-1 truncate text-[10.5px] text-muted-foreground/80">
+                  Route: {run.edgeDecisions.at(-1)?.edgeId}
+                </p>
+              ) : null}
+              {waiting && onResumeWorkflowRun ? (
+                <div className="mt-2 flex gap-1.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-6 px-2 text-[10.5px]"
+                    onClick={() => onResumeWorkflowRun(run.id, waiting.id, "continue")}
+                  >
+                    Continue
+                  </Button>
+                </div>
+              ) : null}
+              {(run.status === "running" || run.status === "paused" || run.status === "queued") &&
+              onCancelWorkflowRun ? (
+                <button
+                  type="button"
+                  className="mt-2 text-[10.5px] font-medium text-muted-foreground hover:text-destructive"
+                  onClick={() => onCancelWorkflowRun(run.id)}
+                >
+                  Cancel run
+                </button>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -621,51 +1175,26 @@ function AgentRow({
   }
 
   return (
-    <div
-      className={cn(
-        "group relative flex items-start gap-3 px-3 py-3 transition-colors",
-        selected ? "bg-primary/10" : "hover:bg-secondary/30",
-      )}
-    >
-      <button
-        type="button"
-        onClick={handleActivate}
-        className="absolute inset-0 cursor-pointer"
-        aria-label={`Inspect ${agent.displayName}`}
-        aria-pressed={selected}
-      />
-      <Icon
-        aria-hidden="true"
-        className={cn(
-          "mt-[3px] h-3.5 w-3.5 shrink-0",
-          selected ? "text-primary" : "text-muted-foreground/70",
-        )}
-      />
-
-      <div className="min-w-0 flex-1 relative pointer-events-none">
-        <div className="flex items-center gap-1.5">
-          <span
-            className={cn(
-              "truncate text-[13px] font-medium leading-tight",
-              selected ? "text-foreground" : "text-foreground",
-            )}
-          >
-            {agent.displayName}
-          </span>
-          <Badge
-            variant={SCOPE_BADGE_VARIANT[agent.scope]}
-            className="text-[9px] px-1 py-0 leading-tight"
-          >
-            {getAgentDefinitionScopeLabel(agent.scope)}
-          </Badge>
-        </div>
-        <p className="mt-0.5 line-clamp-1 text-[11.5px] leading-snug text-muted-foreground">
-          {agent.description || getAgentDefinitionBaseCapabilityLabel(agent.baseCapabilityProfile)}
-        </p>
-      </div>
-
-      <div className="relative flex shrink-0 items-center gap-0.5 self-center">
-        <RowMenu
+    <LibraryEntityRow
+      name={agent.displayName}
+      description={
+        agent.description || getAgentDefinitionBaseCapabilityLabel(agent.baseCapabilityProfile)
+      }
+      icon={Icon}
+      selected={selected}
+      ariaLabel={`Inspect ${agent.displayName}`}
+      ariaPressed={selected}
+      onActivate={handleActivate}
+      badges={
+        <Badge
+          variant={SCOPE_BADGE_VARIANT[agent.scope]}
+          className="px-1 py-0 text-[9px] leading-tight"
+        >
+          {getAgentDefinitionScopeLabel(agent.scope)}
+        </Badge>
+      }
+      action={
+        <AgentRowMenu
           name={agent.displayName}
           showEdit={showEdit}
           deleteDisabled={isBuiltIn}
@@ -676,12 +1205,12 @@ function AgentRow({
             onConfigureDefaultModel ? () => onConfigureDefaultModel(agent) : undefined
           }
         />
-      </div>
-    </div>
+      }
+    />
   )
 }
 
-function RowMenu({
+function AgentRowMenu({
   name,
   showEdit,
   deleteDisabled,
@@ -702,6 +1231,61 @@ function RowMenu({
   const editEnabled = showEdit && Boolean(onEdit)
   const defaultModelEnabled = Boolean(onConfigureDefaultModel)
   const deleteEnabled = !deleteDisabled && Boolean(onDelete)
+  const actions: LibraryEntityRowMenuAction[] = [
+    {
+      label: "Use in Chat",
+      icon: <MessageCircle className="mr-2 h-3.5 w-3.5" />,
+      onSelect: onUseInChat,
+      disabled: !useInChatEnabled,
+    },
+    ...(showEdit
+      ? [
+          {
+            label: "Edit",
+            icon: <Pencil className="mr-2 h-3.5 w-3.5" />,
+            onSelect: onEdit,
+            disabled: !editEnabled,
+          },
+        ]
+      : []),
+    {
+      label: "Default model",
+      icon: <SlidersHorizontal className="mr-2 h-3.5 w-3.5" />,
+      onSelect: onConfigureDefaultModel,
+      disabled: !defaultModelEnabled,
+    },
+    ...(deleteEnabled
+      ? [
+          {
+            label: "Delete",
+            icon: <Trash2 className="mr-2 h-3.5 w-3.5" />,
+            onSelect: onDelete,
+            destructive: true,
+            separatorBefore: true,
+          },
+        ]
+      : []),
+  ]
+
+  return <LibraryEntityRowMenu name={name} actions={actions} />
+}
+
+interface LibraryEntityRowMenuAction {
+  label: string
+  icon: ReactNode
+  onSelect?: () => void
+  disabled?: boolean
+  destructive?: boolean
+  separatorBefore?: boolean
+}
+
+function LibraryEntityRowMenu({
+  name,
+  actions,
+}: {
+  name: string
+  actions: LibraryEntityRowMenuAction[]
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -715,44 +1299,25 @@ function RowMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sideOffset={4}>
-        <DropdownMenuItem
-          className="cursor-pointer text-[12px]"
-          disabled={!useInChatEnabled}
-          onSelect={useInChatEnabled ? onUseInChat : undefined}
-        >
-          <MessageCircle className="mr-2 h-3.5 w-3.5" />
-          Use in Chat
-        </DropdownMenuItem>
-        {showEdit ? (
-          <DropdownMenuItem
-            className="cursor-pointer text-[12px]"
-            disabled={!editEnabled}
-            onSelect={editEnabled ? onEdit : undefined}
-          >
-            <Pencil className="mr-2 h-3.5 w-3.5" />
-            Edit
-          </DropdownMenuItem>
-        ) : null}
-        <DropdownMenuItem
-          className="cursor-pointer text-[12px]"
-          disabled={!defaultModelEnabled}
-          onSelect={defaultModelEnabled ? onConfigureDefaultModel : undefined}
-        >
-          <SlidersHorizontal className="mr-2 h-3.5 w-3.5" />
-          Default model
-        </DropdownMenuItem>
-        {deleteEnabled ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="cursor-pointer text-[12px] text-destructive focus:text-destructive"
-              onSelect={onDelete}
-            >
-              <Trash2 className="mr-2 h-3.5 w-3.5" />
-              Delete
-            </DropdownMenuItem>
-          </>
-        ) : null}
+        {actions.map((action) => {
+          const disabled = action.disabled ?? !action.onSelect
+          return (
+            <Fragment key={action.label}>
+              {action.separatorBefore ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuItem
+                className={cn(
+                  "cursor-pointer text-[12px]",
+                  action.destructive && "text-destructive focus:text-destructive",
+                )}
+                disabled={disabled}
+                onSelect={disabled ? undefined : action.onSelect}
+              >
+                {action.icon}
+                {action.label}
+              </DropdownMenuItem>
+            </Fragment>
+          )
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   )

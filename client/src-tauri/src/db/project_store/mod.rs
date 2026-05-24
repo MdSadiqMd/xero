@@ -29,6 +29,7 @@ mod runtime;
 mod runtime_boundary;
 mod skills;
 mod storage_observability;
+mod workflows;
 
 pub use agent_audit::*;
 pub use agent_context::*;
@@ -79,3 +80,4 @@ pub(crate) use runtime_boundary::classify_operator_answer_requirement;
 pub use runtime_boundary::*;
 pub use skills::*;
 pub use storage_observability::*;
+pub use workflows::*;

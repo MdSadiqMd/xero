@@ -1420,7 +1420,7 @@ fn ensure_context_write_allowed(
     if runtime_agent_id == RuntimeAgentIdDto::AgentCreate {
         return Err(CommandError::user_fixable(
             "project_context_write_forbidden_for_agent_create",
-            "Agent Create can search and read durable project context, but records agent definitions through the agent_definition tool.",
+            "Agent Create can search and read durable project context, but records agent and Workflow definitions through the definition registry tools.",
         ));
     }
     if runtime_agent_id == RuntimeAgentIdDto::Crawl {

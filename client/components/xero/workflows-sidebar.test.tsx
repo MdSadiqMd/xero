@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest'
 
 import type { WorkflowAgentSummaryDto } from '@/src/lib/xero-model/workflow-agents'
+import type { WorkflowDefinitionSummaryDto } from '@/src/lib/xero-model/workflow-definition'
 
 import { WorkflowsSidebar } from './workflows-sidebar'
 
@@ -38,6 +39,19 @@ const REAL_AGENTS: WorkflowAgentSummaryDto[] = [
     baseCapabilityProfile: 'engineering',
     lastUsedAt: null,
     useCount: 0,
+  },
+]
+
+const WORKFLOWS: WorkflowDefinitionSummaryDto[] = [
+  {
+    id: 'release-pipeline',
+    projectId: 'project-1',
+    name: 'Release pipeline',
+    description: 'Build, verify, and hand off a release.',
+    activeVersionId: 'release-pipeline-v1',
+    activeVersionNumber: 1,
+    createdAt: '2026-05-23T00:00:00.000Z',
+    updatedAt: '2026-05-23T00:00:00.000Z',
   },
 ]
 
@@ -226,5 +240,145 @@ describe('WorkflowsSidebar', () => {
     expect(onCreateAgentByHand).not.toHaveBeenCalled()
     expect(screen.queryByText('Build with AI')).not.toBeInTheDocument()
     expect(screen.queryByText('Build by hand')).not.toBeInTheDocument()
+  })
+
+  it('opens the shared workflow creation dialog from the workflows header', () => {
+    const onCreateWorkflow = vi.fn()
+    render(
+      <WorkflowsSidebar
+        open
+        agents={REAL_AGENTS}
+        workflowDefinitions={WORKFLOWS}
+        onCreateWorkflow={onCreateWorkflow}
+        onCreateWorkflowFromTemplate={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'New workflow' }))
+
+    expect(onCreateWorkflow).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: 'Create workflow' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Blank workflow/ }))
+    expect(onCreateWorkflow).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('routes workflow creation to Agent Create from the shared dialog', () => {
+    const onCreateWorkflowWithAgentCreate = vi.fn()
+    render(
+      <WorkflowsSidebar
+        open
+        agents={REAL_AGENTS}
+        workflowDefinitions={WORKFLOWS}
+        onCreateWorkflow={vi.fn()}
+        onCreateWorkflowWithAgentCreate={onCreateWorkflowWithAgentCreate}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'New workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: /Use Agent Create/ }))
+
+    expect(onCreateWorkflowWithAgentCreate).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('uses the shared row action menu for workflow-specific actions', async () => {
+    const onSelectWorkflow = vi.fn()
+    const onStartWorkflowRun = vi.fn()
+    render(
+      <WorkflowsSidebar
+        open
+        agents={REAL_AGENTS}
+        workflowDefinitions={WORKFLOWS}
+        onSelectWorkflow={onSelectWorkflow}
+        onStartWorkflowRun={onStartWorkflowRun}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for Release pipeline' }), {
+      button: 0,
+      ctrlKey: false,
+    })
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open workflow' }))
+    expect(onSelectWorkflow).toHaveBeenCalledWith('release-pipeline')
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for Release pipeline' }), {
+      button: 0,
+      ctrlKey: false,
+    })
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Start run' }))
+    expect(onStartWorkflowRun).toHaveBeenCalledWith('release-pipeline')
+  })
+
+  it('uses the shared row action menu for workflow template actions', async () => {
+    const onCreateWorkflowFromTemplate = vi.fn()
+    render(
+      <WorkflowsSidebar
+        open
+        agents={REAL_AGENTS}
+        workflowDefinitions={[]}
+        onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for Agent handoff' }), {
+      button: 0,
+      ctrlKey: false,
+    })
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Use template' }))
+
+    expect(onCreateWorkflowFromTemplate).toHaveBeenCalledWith('linear_handoff')
+  })
+
+  it('uses the same library row shell for agents, workflows, and workflow templates', () => {
+    render(
+      <WorkflowsSidebar
+        open
+        agents={REAL_AGENTS}
+        workflowDefinitions={WORKFLOWS}
+        onSelectWorkflow={vi.fn()}
+        onCreateWorkflowFromTemplate={vi.fn()}
+      />,
+    )
+
+    const agentShell = screen.getByLabelText('Inspect Engineer').parentElement
+    expect(agentShell).toHaveClass(
+      'group',
+      'relative',
+      'flex',
+      'items-start',
+      'gap-3',
+      'px-3',
+      'py-3',
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
+
+    const workflowShell = screen.getByLabelText('Open workflow Release pipeline').parentElement
+    const templateShell = screen.getByLabelText('Create workflow from Agent handoff').parentElement
+    expect(workflowShell).toHaveClass(
+      'group',
+      'relative',
+      'flex',
+      'items-start',
+      'gap-3',
+      'px-3',
+      'py-3',
+    )
+    expect(templateShell).toHaveClass(
+      'group',
+      'relative',
+      'flex',
+      'items-start',
+      'gap-3',
+      'px-3',
+      'py-3',
+    )
   })
 })

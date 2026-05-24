@@ -51,6 +51,60 @@ describe('WorkflowCanvasEmptyState', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('opens the shared starting-point dialog before creating a workflow', () => {
+    const onCreateWorkflow = vi.fn()
+
+    render(<WorkflowCanvasEmptyState onCreateWorkflow={onCreateWorkflow} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create workflow' }))
+    expect(onCreateWorkflow).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: 'Create workflow' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Blank workflow/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /From template/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Blank workflow/ }))
+
+    expect(onCreateWorkflow).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('routes workflow template selection through the shared create dialog', () => {
+    const onCreateWorkflowFromTemplate = vi.fn()
+
+    render(
+      <WorkflowCanvasEmptyState
+        onCreateWorkflow={vi.fn()}
+        onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: /From template/ }))
+
+    expect(screen.getByText(/Templates open as editable workflow drafts/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Agent handoff/ }))
+    expect(onCreateWorkflowFromTemplate).toHaveBeenCalledWith('linear_handoff')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('routes workflow Agent Create selection through the shared create dialog', () => {
+    const onCreateWorkflowWithAgentCreate = vi.fn()
+
+    render(
+      <WorkflowCanvasEmptyState
+        onCreateWorkflow={vi.fn()}
+        onCreateWorkflowWithAgentCreate={onCreateWorkflowWithAgentCreate}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: /Use Agent Create/ }))
+
+    expect(onCreateWorkflowWithAgentCreate).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('does not show a separate "Start from template" action in the main list', () => {
     render(
       <WorkflowCanvasEmptyState

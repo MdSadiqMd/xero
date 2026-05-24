@@ -12,6 +12,7 @@ pub mod provider;
 pub(crate) mod redaction;
 pub mod supervisor;
 pub mod usage_events;
+pub mod workflow_orchestrator;
 
 pub use agent_core::{
     append_user_message, cancel_owned_agent_run, cancelled_error, continue_owned_agent_run,
@@ -179,7 +180,9 @@ pub use autonomous_tool_runtime::{
     AutonomousToolAccessOutput, AutonomousToolAccessRequest, AutonomousToolCommandResult,
     AutonomousToolOutput, AutonomousToolRequest, AutonomousToolResult, AutonomousToolRuntime,
     AutonomousToolRuntimeLimits, AutonomousToolSearchMatch, AutonomousToolSearchOutput,
-    AutonomousToolSearchRequest, AutonomousWriteOutput, AutonomousWriteRequest,
+    AutonomousToolSearchRequest, AutonomousWorkflowDefinitionAction,
+    AutonomousWorkflowDefinitionOutput, AutonomousWorkflowDefinitionRequest,
+    AutonomousWorkflowDefinitionSummary, AutonomousWriteOutput, AutonomousWriteRequest,
     AUTONOMOUS_TOOL_AGENT_COORDINATION, AUTONOMOUS_TOOL_AGENT_DEFINITION,
     AUTONOMOUS_TOOL_BROWSER_CONTROL, AUTONOMOUS_TOOL_BROWSER_OBSERVE, AUTONOMOUS_TOOL_CODE_INTEL,
     AUTONOMOUS_TOOL_COMMAND, AUTONOMOUS_TOOL_COMMAND_PROBE, AUTONOMOUS_TOOL_COMMAND_RUN,
@@ -201,8 +204,8 @@ pub use autonomous_tool_runtime::{
     AUTONOMOUS_TOOL_SEARCH, AUTONOMOUS_TOOL_SKILL, AUTONOMOUS_TOOL_STAT, AUTONOMOUS_TOOL_SUBAGENT,
     AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS, AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_OBSERVE,
     AUTONOMOUS_TOOL_SYSTEM_DIAGNOSTICS_PRIVILEGED, AUTONOMOUS_TOOL_TODO, AUTONOMOUS_TOOL_TOML_EDIT,
-    AUTONOMOUS_TOOL_TOOL_ACCESS, AUTONOMOUS_TOOL_TOOL_SEARCH, AUTONOMOUS_TOOL_WORKSPACE_INDEX,
-    AUTONOMOUS_TOOL_WRITE, AUTONOMOUS_TOOL_YAML_EDIT,
+    AUTONOMOUS_TOOL_TOOL_ACCESS, AUTONOMOUS_TOOL_TOOL_SEARCH, AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+    AUTONOMOUS_TOOL_WORKSPACE_INDEX, AUTONOMOUS_TOOL_WRITE, AUTONOMOUS_TOOL_YAML_EDIT,
 };
 pub use autonomous_web_runtime::{
     AutonomousWebConfig, AutonomousWebFetchContentKind, AutonomousWebFetchOutput,

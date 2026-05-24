@@ -72,6 +72,16 @@ import type {
   WorkflowAgentDetailDto,
   WorkflowAgentSummaryDto,
 } from '@/src/lib/xero-model/workflow-agents'
+import type {
+  WorkflowDefinitionDto,
+  WorkflowDefinitionSummaryDto,
+} from '@/src/lib/xero-model/workflow-definition'
+import type { WorkflowRunDto } from '@/src/lib/xero-model/workflow-run'
+import {
+  instantiateBlankWorkflow,
+  instantiateWorkflowTemplate,
+  type WorkflowTemplateIdDto,
+} from '@/src/lib/xero-model/workflow-templates'
 import { useWorkflowAgentInspector } from '@/src/features/xero/use-workflow-agent-inspector'
 import {
   persistToolCallGroupingPreference,
@@ -1283,6 +1293,18 @@ export function XeroApp({ adapter }: XeroAppProps) {
   const [solanaOpen, setSolanaOpen] = useState(false)
   const [vcsOpen, setVcsOpen] = useState(false)
   const [workflowsOpen, setWorkflowsOpen] = useState(false)
+  const [workflowDefinitions, setWorkflowDefinitions] = useState<WorkflowDefinitionSummaryDto[]>([])
+  const [workflowDefinitionsStatus, setWorkflowDefinitionsStatus] =
+    useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [workflowDefinitionsError, setWorkflowDefinitionsError] = useState<Error | null>(null)
+  const [workflowRuns, setWorkflowRuns] = useState<WorkflowRunDto[]>([])
+  const [workflowRunsStatus, setWorkflowRunsStatus] =
+    useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [selectedWorkflowDefinition, setSelectedWorkflowDefinition] =
+    useState<WorkflowDefinitionDto | null>(null)
+  const [selectedWorkflowRun, setSelectedWorkflowRun] = useState<WorkflowRunDto | null>(null)
+  const [selectedWorkflowIsDraft, setSelectedWorkflowIsDraft] = useState(false)
+  const [workflowActionRunning, setWorkflowActionRunning] = useState(false)
   const workflowAgentInspector = useWorkflowAgentInspector({
     adapter: resolvedAdapter,
     projectId: activeProjectId,
@@ -1350,6 +1372,51 @@ export function XeroApp({ adapter }: XeroAppProps) {
     }
     return defaults
   }, [customAgentDefinitions, workflowAgentInspector.agents])
+  const refreshWorkflowDefinitions = useCallback(async () => {
+    if (!activeProjectId || !resolvedAdapter.listWorkflowDefinitions) {
+      setWorkflowDefinitions([])
+      setWorkflowDefinitionsStatus('idle')
+      setWorkflowDefinitionsError(null)
+      return
+    }
+    setWorkflowDefinitionsStatus('loading')
+    setWorkflowDefinitionsError(null)
+    try {
+      const response = await resolvedAdapter.listWorkflowDefinitions({ projectId: activeProjectId })
+      setWorkflowDefinitions(response.definitions)
+      setWorkflowDefinitionsStatus('ready')
+    } catch (error) {
+      setWorkflowDefinitionsError(error instanceof Error ? error : new Error(String(error)))
+      setWorkflowDefinitionsStatus('error')
+    }
+  }, [activeProjectId, resolvedAdapter])
+
+  const refreshWorkflowRuns = useCallback(async () => {
+    if (!activeProjectId || !resolvedAdapter.listWorkflowRuns) {
+      setWorkflowRuns([])
+      setWorkflowRunsStatus('idle')
+      return
+    }
+    setWorkflowRunsStatus('loading')
+    try {
+      const response = await resolvedAdapter.listWorkflowRuns({ projectId: activeProjectId })
+      setWorkflowRuns(response.runs)
+      setWorkflowRunsStatus('ready')
+      setSelectedWorkflowRun((current) =>
+        current ? response.runs.find((run) => run.id === current.id) ?? current : current,
+      )
+    } catch {
+      setWorkflowRunsStatus('error')
+    }
+  }, [activeProjectId, resolvedAdapter])
+
+  useEffect(() => {
+    setSelectedWorkflowDefinition(null)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(false)
+    void refreshWorkflowDefinitions()
+    void refreshWorkflowRuns()
+  }, [activeProjectId, refreshWorkflowDefinitions, refreshWorkflowRuns])
   const shouldRestoreExplorerFromAutoCollapseRef = useRef(false)
   const previousBrowserOpenRef = useRef<boolean>(browserOpen)
 
@@ -2118,6 +2185,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
   }, [resolvedAdapter, retry])
   const workflowAgentCreateActive =
     activeView === 'phases' && agentAuthoringSession?.mode === 'create'
+  const agentCreateCanvasIncluded =
+    activeView === 'phases' &&
+    (agentAuthoringSession?.mode === 'create' || selectedWorkflowDefinition !== null)
   const pendingAgentDockSelection =
     workflowAgentCreateActive && isCreatingAgentSession
       ? ({ runtimeAgentId: 'agent_create', agentDefinitionId: null } satisfies RuntimeAgentSelection)
@@ -2454,6 +2524,9 @@ export function XeroApp({ adapter }: XeroAppProps) {
     () => {
       if (!activeProjectId) return
       preloadSurfaceChunk('agent-dock')
+      setSelectedWorkflowDefinition(null)
+      setSelectedWorkflowRun(null)
+      setSelectedWorkflowIsDraft(false)
       setWorkflowsOpen(false)
       setBrowserOpen(false)
       setIosOpen(false)
@@ -2597,6 +2670,16 @@ export function XeroApp({ adapter }: XeroAppProps) {
 
   const handleStartWorkflowAgentCreate = useCallback(() => {
     if (!activeProjectId) return
+    preloadSurfaceChunk('agent-dock')
+    const definition = instantiateBlankWorkflow({
+      projectId: activeProjectId,
+      name: 'New workflow',
+    })
+    setSelectedWorkflowDefinition(definition)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(true)
+    setAgentAuthoringSession(null)
+    workflowAgentInspector.selectAgent(null)
     setWorkflowsOpen(false)
     setBrowserOpen(false)
     setIosOpen(false)
@@ -2604,16 +2687,34 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setVcsOpen(false)
     setUsageOpen(false)
     setActiveView('phases')
-    setAgentAuthoringSession({ mode: 'create', initialDetail: null })
     setAgentDockOpen(true)
-    if (activeProject?.selectedAgentSessionId) {
+    const selectAgentCreate = (agentSessionId: string) => {
       setPendingInitialRuntimeAgent({
-        agentSessionId: activeProject.selectedAgentSessionId,
+        agentSessionId,
         runtimeAgentId: 'agent_create',
         agentDefinitionId: null,
       })
     }
-  }, [activeProject?.selectedAgentSessionId, activeProjectId, setActiveView])
+    if (activeProject?.selectedAgentSessionId) {
+      selectAgentCreate(activeProject.selectedAgentSessionId)
+      return
+    }
+    setIsCreatingAgentSession(true)
+    void createAgentSession()
+      .then((updatedProject) => {
+        const newSessionId = updatedProject?.selectedAgentSessionId
+        if (newSessionId) selectAgentCreate(newSessionId)
+      })
+      .finally(() => {
+        setIsCreatingAgentSession(false)
+      })
+  }, [
+    activeProject?.selectedAgentSessionId,
+    activeProjectId,
+    createAgentSession,
+    setActiveView,
+    workflowAgentInspector.selectAgent,
+  ])
 
   const handleStartAgentAuthoringFromRef = useCallback(
     async (mode: 'edit' | 'duplicate', ref: AgentRefDto) => {
@@ -2690,9 +2791,245 @@ export function XeroApp({ adapter }: XeroAppProps) {
     workflowAgentInspector.selectAgent(null)
   }, [workflowAgentInspector.selectAgent])
 
+  const handleSelectWorkflowDefinition = useCallback(
+    async (workflowId: string) => {
+      if (!activeProjectId || !resolvedAdapter.getWorkflowDefinition) return
+      try {
+        const response = await resolvedAdapter.getWorkflowDefinition({
+          projectId: activeProjectId,
+          workflowId,
+        })
+        setSelectedWorkflowDefinition(response.definition)
+        setSelectedWorkflowIsDraft(false)
+        setAgentAuthoringSession(null)
+        setSelectedWorkflowRun((current) =>
+          current?.workflowId === workflowId ? current : workflowRuns.find((run) => run.workflowId === workflowId) ?? null,
+        )
+        workflowAgentInspector.selectAgent(null)
+        setActiveView('phases')
+      } catch (error) {
+        console.error('Failed to load workflow definition', error)
+      }
+    },
+    [activeProjectId, resolvedAdapter, setActiveView, workflowAgentInspector, workflowRuns],
+  )
+
+  const handleSelectWorkflowRun = useCallback(
+    async (runId: string) => {
+      if (!activeProjectId || !resolvedAdapter.getWorkflowRun) return
+      try {
+        const response = await resolvedAdapter.getWorkflowRun({ projectId: activeProjectId, runId })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        setAgentAuthoringSession(null)
+        workflowAgentInspector.selectAgent(null)
+        setActiveView('phases')
+      } catch (error) {
+        console.error('Failed to load workflow run', error)
+      }
+    },
+    [activeProjectId, resolvedAdapter, setActiveView, workflowAgentInspector],
+  )
+
+  const handleCreateWorkflow = useCallback(() => {
+    if (!activeProjectId) {
+      setWorkflowsOpen(true)
+      return
+    }
+    const definition = instantiateBlankWorkflow({
+      projectId: activeProjectId,
+      name: 'New workflow',
+    })
+    setSelectedWorkflowDefinition(definition)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(true)
+    setAgentAuthoringSession(null)
+    workflowAgentInspector.selectAgent(null)
+    setWorkflowsOpen(false)
+    setActiveView('phases')
+  }, [
+    activeProjectId,
+    setActiveView,
+    workflowAgentInspector,
+  ])
+
+  const handleCreateWorkflowFromTemplate = useCallback(
+    async (templateId: WorkflowTemplateIdDto) => {
+      if (!activeProjectId) return
+      const definition = instantiateWorkflowTemplate({
+        projectId: activeProjectId,
+        templateId,
+        agents: workflowAgentInspector.agents,
+      })
+      setSelectedWorkflowDefinition(definition)
+      setSelectedWorkflowRun(null)
+      setSelectedWorkflowIsDraft(true)
+      setAgentAuthoringSession(null)
+      workflowAgentInspector.selectAgent(null)
+      setWorkflowsOpen(false)
+      setActiveView('phases')
+    },
+    [
+      activeProjectId,
+      setActiveView,
+      workflowAgentInspector,
+      workflowAgentInspector.agents,
+    ],
+  )
+
+  const handleSaveWorkflowDefinition = useCallback(
+    async (definition: WorkflowDefinitionDto) => {
+      if (!activeProjectId) {
+        throw new Error('Select a project before saving a Workflow.')
+      }
+      setWorkflowActionRunning(true)
+      try {
+        const response = selectedWorkflowIsDraft
+          ? await resolvedAdapter.createWorkflowDefinition?.({ definition })
+          : await resolvedAdapter.updateWorkflowDefinition?.({
+              workflowId: definition.id,
+              definition,
+            })
+        if (!response) {
+          throw new Error('Workflow persistence is unavailable in this build.')
+        }
+        setSelectedWorkflowDefinition(response.definition)
+        setSelectedWorkflowIsDraft(false)
+        await refreshWorkflowDefinitions()
+        return response.definition
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowDefinitions, resolvedAdapter, selectedWorkflowIsDraft],
+  )
+
+  const handleCancelWorkflowEditing = useCallback(() => {
+    if (!selectedWorkflowIsDraft) return
+    setSelectedWorkflowDefinition(null)
+    setSelectedWorkflowRun(null)
+    setSelectedWorkflowIsDraft(false)
+  }, [selectedWorkflowIsDraft])
+
+  const handleStartWorkflowDefinitionRun = useCallback(
+    async (workflowId: string, initialInput: unknown) => {
+      if (!activeProjectId || !resolvedAdapter.startWorkflowRun) {
+        throw new Error('Select a project before starting a Workflow.')
+      }
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.startWorkflowRun({
+          projectId: activeProjectId,
+          workflowId,
+          initialInput,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleCancelWorkflowRun = useCallback(
+    async (runId: string) => {
+      if (!activeProjectId || !resolvedAdapter.cancelWorkflowRun) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.cancelWorkflowRun({
+          projectId: activeProjectId,
+          runId,
+          reason: 'Cancelled by user.',
+        })
+        setSelectedWorkflowRun(response.run)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleRetryWorkflowNodeRun = useCallback(
+    async (runId: string, nodeRunId: string) => {
+      if (!activeProjectId || !resolvedAdapter.retryWorkflowNodeRun) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.retryWorkflowNodeRun({
+          projectId: activeProjectId,
+          runId,
+          nodeRunId,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleSkipWorkflowBranch = useCallback(
+    async (runId: string, nodeRunId: string, reason = 'Skipped by user.') => {
+      if (!activeProjectId || !resolvedAdapter.skipWorkflowBranch) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.skipWorkflowBranch({
+          projectId: activeProjectId,
+          runId,
+          nodeRunId,
+          reason,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
+  const handleResumeWorkflowCheckpoint = useCallback(
+    async (runId: string, nodeRunId: string, decision: string, payload: unknown = null) => {
+      if (!activeProjectId || !resolvedAdapter.resumeWorkflowCheckpoint) return
+      setWorkflowActionRunning(true)
+      try {
+        const response = await resolvedAdapter.resumeWorkflowCheckpoint({
+          projectId: activeProjectId,
+          runId,
+          nodeRunId,
+          decision,
+          payload,
+        })
+        setSelectedWorkflowRun(response.run)
+        setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        await refreshWorkflowRuns()
+        return response.run
+      } finally {
+        setWorkflowActionRunning(false)
+      }
+    },
+    [activeProjectId, refreshWorkflowRuns, resolvedAdapter],
+  )
+
   const handleInspectWorkflowAgent = useCallback(
     (ref: AgentRefDto) => {
       workflowAgentInspector.selectAgent(ref)
+      setSelectedWorkflowDefinition(null)
+      setSelectedWorkflowRun(null)
+      setSelectedWorkflowIsDraft(false)
       setActiveView('phases')
     },
     [setActiveView, workflowAgentInspector.selectAgent],
@@ -3267,6 +3604,21 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 workflowsOpen={workflowsOpen}
                 onCreateAgent={handleCreateAgent}
                 onCreateAgentFromTemplate={handleCreateAgentFromTemplate}
+                onEditAgentFromWorkflow={(ref) => handleStartAgentAuthoringFromRef('edit', ref)}
+                selectedWorkflowDefinition={selectedWorkflowDefinition}
+                selectedWorkflowRun={selectedWorkflowRun}
+                selectedWorkflowIsDraft={selectedWorkflowIsDraft}
+                workflowActionRunning={workflowActionRunning}
+                onCreateWorkflow={handleCreateWorkflow}
+                onCreateWorkflowWithAgentCreate={handleStartWorkflowAgentCreate}
+                onCreateWorkflowFromTemplate={handleCreateWorkflowFromTemplate}
+                onSaveWorkflowDefinition={handleSaveWorkflowDefinition}
+                onCancelWorkflowEditing={handleCancelWorkflowEditing}
+                onStartWorkflowDefinitionRun={handleStartWorkflowDefinitionRun}
+                onCancelWorkflowRun={handleCancelWorkflowRun}
+                onRetryWorkflowNodeRun={handleRetryWorkflowNodeRun}
+                onSkipWorkflowBranch={handleSkipWorkflowBranch}
+                onResumeWorkflowCheckpoint={handleResumeWorkflowCheckpoint}
                 templates={workflowAgentInspector.agents}
                 templatesLoading={workflowAgentInspector.agentsStatus === 'loading'}
                 templatesError={workflowAgentInspector.agentsError}
@@ -3665,6 +4017,28 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 agents={workflowAgentInspector.agents}
                 agentsLoading={workflowAgentInspector.agentsStatus === 'loading'}
                 agentsError={workflowAgentInspector.agentsError}
+                workflowDefinitions={workflowDefinitions}
+                workflowRuns={workflowRuns}
+                workflowsLoading={
+                  workflowDefinitionsStatus === 'loading' || workflowRunsStatus === 'loading'
+                }
+                workflowsError={workflowDefinitionsError}
+                selectedWorkflowId={selectedWorkflowIsDraft ? null : selectedWorkflowDefinition?.id ?? null}
+                selectedWorkflowRunId={selectedWorkflowRun?.id ?? null}
+                onSelectWorkflow={handleSelectWorkflowDefinition}
+                onSelectWorkflowRun={handleSelectWorkflowRun}
+                onCreateWorkflow={handleCreateWorkflow}
+                onCreateWorkflowWithAgentCreate={handleStartWorkflowAgentCreate}
+                onCreateWorkflowFromTemplate={handleCreateWorkflowFromTemplate}
+                onStartWorkflowRun={(workflowId) => {
+                  void handleStartWorkflowDefinitionRun(workflowId, { goal: '' })
+                }}
+                onCancelWorkflowRun={(runId) => {
+                  void handleCancelWorkflowRun(runId)
+                }}
+                onResumeWorkflowRun={(runId, nodeRunId, decision) => {
+                  void handleResumeWorkflowCheckpoint(runId, nodeRunId, decision, { decision })
+                }}
                 selectedAgentRef={workflowAgentInspector.selectedRef}
                 onSelectAgent={handleInspectWorkflowAgent}
                 onCreateAgent={handleCreateAgent}
@@ -3775,7 +4149,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 onUpsertNotificationRoute={(request) => upsertNotificationRoute(request)}
                 onCodeUndoApplied={handleAgentCodeUndoApplied}
                 onRetryStream={retry}
-                agentCreateCanvasIncluded={workflowAgentCreateActive}
+                agentCreateCanvasIncluded={agentCreateCanvasIncluded}
                 pendingInitialRuntimeAgentId={pendingAgentDockRuntimeAgentId}
                 pendingInitialAgentDefinitionId={pendingAgentDockAgentDefinitionId}
                 onPendingInitialRuntimeAgentIdConsumed={() => {

@@ -14,14 +14,10 @@ import {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
-  Background,
-  ControlButton,
-  Controls,
   Position,
   ReactFlow,
   ReactFlowProvider,
   useNodesState,
-  useOnViewportChange,
   useReactFlow,
   useUpdateNodeInternals,
   type Connection,
@@ -35,15 +31,6 @@ import {
   type Viewport,
   type XYPosition,
 } from '@xyflow/react'
-import {
-  Lock,
-  Magnet,
-  Maximize,
-  RotateCcw,
-  Unlock,
-  ZoomIn,
-  ZoomOut,
-} from 'lucide-react'
 
 import '@xyflow/react/dist/style.css'
 
@@ -117,6 +104,13 @@ import {
   AgentCanvasExpansionContext,
   type AgentCanvasExpansionContextValue,
 } from './expansion-context'
+import {
+  AgentCanvasControls,
+  AgentCanvasDots,
+  AGENT_CANVAS_CONTROL_ZOOM_TRANSITION_MS,
+  AGENT_CANVAS_EMPTY_VIEWPORT,
+  AGENT_CANVAS_SNAP_GRID,
+} from './canvas-shell'
 import { AgentApprovalReviewDialog } from './agent-approval-review-dialog'
 import { EditingSmoothStepEdge } from './edges/editing-smoothstep-edge'
 import { PhaseBranchEdge } from './edges/phase-branch-edge'
@@ -170,8 +164,6 @@ const EDGE_TYPES = {
 const REACT_FLOW_PRO_OPTIONS = { hideAttribution: true } as const
 const FIT_VIEW_OPTIONS = { padding: 0.16, includeHiddenNodes: false } as const
 const FIT_VIEW_TRANSITION_MS = 420
-const CONTROL_ZOOM_TRANSITION_MS = 180
-const CANVAS_CONTROL_ICON_CLASS = 'h-[18px] w-[18px]'
 const PROPERTIES_PANEL_FOCUS_FOOTPRINT_PX = 320
 // Initial authoring can mount while app chrome is opening or after a blank
 // canvas was already shown; allow a couple of measured-size corrections
@@ -187,7 +179,7 @@ const CREATE_MODE_FIT_MIN_PADDING = 72
 const CREATE_MODE_FIT_MAX_PADDING = 144
 const CREATE_MODE_FIT_PADDING_RATIO = 0.14
 const AGENT_EXIT_TRANSITION_MS = 220
-const EMPTY_CANVAS_DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 0.72 } as const
+const EMPTY_CANVAS_DEFAULT_VIEWPORT = AGENT_CANVAS_EMPTY_VIEWPORT
 const DEFAULT_EDGE_OPTIONS = {
   type: 'smoothstep',
   animated: false,
@@ -227,14 +219,10 @@ const SNAP_TO_GRID_STORAGE_KEY = 'xero.workflows.canvas-snap-to-grid'
 const SNAP_TO_GRID_APP_STATE_KEY = 'workflow.canvas.snapToGrid.v1'
 const INTERACTION_SETTLE_MS = 110
 const EXPANSION_MEASUREMENT_SETTLE_MS = 280
-const DOT_GRID_GAP = 32
 // Snap step is locked to half the visual dot-grid spacing so every snap stop
 // is either directly on a dot or exactly between two adjacent dots. Keeps the
 // snapping visually tied to the canvas pattern instead of feeling arbitrary.
-const SNAP_GRID_SIZE = DOT_GRID_GAP / 2
-const SNAP_GRID: [number, number] = [SNAP_GRID_SIZE, SNAP_GRID_SIZE]
-const DOT_COORD_PRECISION = 10
-const DOT_ZOOM_PRECISION = 1000
+const SNAP_GRID: [number, number] = AGENT_CANVAS_SNAP_GRID
 // React Flow's visibility culling recomputes visible node/edge id arrays on
 // every viewport transform. Agent canvases are dense enough that a stable DOM
 // moved by the viewport transform is smoother than per-frame culling work.
@@ -381,11 +369,6 @@ interface FocusDomCache {
   // Trigger edges can render multiple label spans (rare, but the original
   // bulk-lookup path handled it). Keep an array per id.
   labels: Map<string, HTMLElement[]>
-}
-
-interface DotViewportElement extends HTMLElement {
-  __agentDotTransform?: string
-  __agentDotZoomKey?: string
 }
 
 interface DbTableCardHeightInput {
@@ -1433,78 +1416,6 @@ function getFocusedDomElements(
   return { nodeElements, edgeElements, edgeLabelElements }
 }
 
-function applyDotViewport(element: HTMLElement | null, viewport: Viewport): void {
-  if (!element) return
-  const dotElement = element as DotViewportElement
-  const zoom = Number.isFinite(viewport.zoom) && viewport.zoom > 0 ? viewport.zoom : 1
-  const roundedZoom = Math.max(
-    1 / DOT_ZOOM_PRECISION,
-    Math.round(zoom * DOT_ZOOM_PRECISION) / DOT_ZOOM_PRECISION,
-  )
-  const scaledGap = Math.max(1, DOT_GRID_GAP * zoom)
-  const dotX = `${Math.round((viewport.x % scaledGap) * DOT_COORD_PRECISION) / DOT_COORD_PRECISION}px`
-  const dotY = `${Math.round((viewport.y % scaledGap) * DOT_COORD_PRECISION) / DOT_COORD_PRECISION}px`
-  const transform = `translate3d(${dotX}, ${dotY}, 0) scale(${roundedZoom})`
-  if (dotElement.__agentDotTransform !== transform) {
-    dotElement.__agentDotTransform = transform
-    dotElement.style.transform = transform
-  }
-
-  const zoomKey = String(Math.round(zoom * DOT_ZOOM_PRECISION))
-  if (dotElement.__agentDotZoomKey !== zoomKey) {
-    dotElement.__agentDotZoomKey = zoomKey
-    const size = `calc(${100 / roundedZoom}% + ${DOT_GRID_GAP * 2}px)`
-    dotElement.style.width = size
-    dotElement.style.height = size
-  }
-}
-
-function WorkflowCanvasDots() {
-  const ref = useRef<HTMLDivElement | null>(null)
-  const reactFlow = useReactFlow()
-  const pendingViewportRef = useRef<Viewport | null>(null)
-  const pendingFrameRef = useRef<number | null>(null)
-
-  const flushDots = useCallback(() => {
-    pendingFrameRef.current = null
-    const viewport = pendingViewportRef.current
-    pendingViewportRef.current = null
-    if (viewport) applyDotViewport(ref.current, viewport)
-  }, [])
-
-  const updateDots = useCallback((viewport: Viewport) => {
-    pendingViewportRef.current = viewport
-    if (pendingFrameRef.current !== null) return
-
-    pendingFrameRef.current = -1
-    const frame = window.requestAnimationFrame(flushDots)
-    if (pendingFrameRef.current === -1) {
-      pendingFrameRef.current = frame
-    }
-  }, [flushDots])
-
-  useEffect(
-    () => () => {
-      if (pendingFrameRef.current !== null && pendingFrameRef.current !== -1) {
-        window.cancelAnimationFrame(pendingFrameRef.current)
-      }
-      pendingFrameRef.current = null
-      pendingViewportRef.current = null
-    },
-    [],
-  )
-
-  useEffect(() => {
-    updateDots(reactFlow.getViewport())
-  }, [reactFlow, updateDots])
-
-  useOnViewportChange({
-    onChange: updateDots,
-  })
-
-  return <div ref={ref} className="agent-visualization__dots" aria-hidden="true" />
-}
-
 // Validator codes that the granular policy editor knows how to surface.
 // Everything else falls out to the global diagnostic banner so we don't
 // crowd the per-control inline hints with unrelated errors.
@@ -1729,10 +1640,10 @@ function AgentVisualizationInner({
     setCanvasLocked((prev) => !prev)
   }, [])
   const handleZoomIn = useCallback(() => {
-    void reactFlow.zoomIn({ duration: CONTROL_ZOOM_TRANSITION_MS })
+    void reactFlow.zoomIn({ duration: AGENT_CANVAS_CONTROL_ZOOM_TRANSITION_MS })
   }, [reactFlow])
   const handleZoomOut = useCallback(() => {
-    void reactFlow.zoomOut({ duration: CONTROL_ZOOM_TRANSITION_MS })
+    void reactFlow.zoomOut({ duration: AGENT_CANVAS_CONTROL_ZOOM_TRANSITION_MS })
   }, [reactFlow])
   const handleFitView = useCallback(() => {
     void reactFlow.fitView({
@@ -4635,7 +4546,7 @@ function AgentVisualizationInner({
             defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
             deleteKeyCode={editing ? ['Delete', 'Backspace'] : null}
           >
-            <WorkflowCanvasDots />
+            <AgentCanvasDots />
             <StageToolFanOverlay ref={stageToolFanRef} entries={stageToolFanEntries} />
             {showEmptyState ? (
               <div
@@ -4651,71 +4562,18 @@ function AgentVisualizationInner({
               </div>
             ) : null}
             {showCanvasControls ? (
-              <Controls
-                position="bottom-right"
-                showZoom={false}
-                showFitView={false}
-                showInteractive={false}
-                className="!bg-card !border !border-border !rounded-md !shadow-sm"
-              >
-                <ControlButton
-                  className="react-flow__controls-zoomin"
-                  onClick={handleZoomIn}
-                  aria-label="Zoom in"
-                >
-                  <ZoomIn className={CANVAS_CONTROL_ICON_CLASS} aria-hidden="true" />
-                </ControlButton>
-                <ControlButton
-                  className="react-flow__controls-zoomout"
-                  onClick={handleZoomOut}
-                  aria-label="Zoom out"
-                >
-                  <ZoomOut className={CANVAS_CONTROL_ICON_CLASS} aria-hidden="true" />
-                </ControlButton>
-                <ControlButton
-                  className="react-flow__controls-fitview"
-                  onClick={handleFitView}
-                  aria-label="Fit view"
-                >
-                  <Maximize className={CANVAS_CONTROL_ICON_CLASS} aria-hidden="true" />
-                </ControlButton>
-                {showLayoutControls ? (
-                  <>
-                    <ControlButton
-                      onClick={handleToggleCanvasLock}
-                      aria-label={canvasLocked ? 'Unlock canvas' : 'Lock canvas'}
-                      aria-pressed={canvasLocked}
-                      style={canvasLocked ? { color: 'var(--primary)' } : undefined}
-                    >
-                      {canvasLocked ? (
-                        <Lock className={CANVAS_CONTROL_ICON_CLASS} aria-hidden="true" />
-                      ) : (
-                        <Unlock className={CANVAS_CONTROL_ICON_CLASS} aria-hidden="true" />
-                      )}
-                    </ControlButton>
-                    <ControlButton
-                      onClick={handleToggleSnapToGrid}
-                      aria-label={snapToGrid ? 'Disable snap to grid' : 'Enable snap to grid'}
-                      aria-pressed={snapToGrid}
-                      disabled={canvasInteractionsLocked}
-                      style={
-                        snapToGrid && !canvasInteractionsLocked
-                          ? { color: 'var(--primary)' }
-                          : undefined
-                      }
-                    >
-                      <Magnet className={CANVAS_CONTROL_ICON_CLASS} aria-hidden="true" />
-                    </ControlButton>
-                    <ControlButton
-                      onClick={handleResetLayout}
-                      aria-label="Reset layout"
-                      disabled={canvasInteractionsLocked}
-                    >
-                      <RotateCcw className={CANVAS_CONTROL_ICON_CLASS} aria-hidden="true" />
-                    </ControlButton>
-                  </>
-                ) : null}
-              </Controls>
+              <AgentCanvasControls
+                showLayoutControls={showLayoutControls}
+                layoutControlsDisabled={canvasInteractionsLocked}
+                locked={canvasLocked}
+                snapToGrid={snapToGrid}
+                onZoomIn={handleZoomIn}
+                onZoomOut={handleZoomOut}
+                onFitView={handleFitView}
+                onToggleLock={handleToggleCanvasLock}
+                onToggleSnapToGrid={handleToggleSnapToGrid}
+                onResetLayout={handleResetLayout}
+              />
             ) : null}
           </ReactFlow>
           {editing && dropPicker ? (

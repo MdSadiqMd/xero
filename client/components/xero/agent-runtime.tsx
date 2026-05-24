@@ -2346,7 +2346,7 @@ export const AgentRuntime = memo(function AgentRuntime({
           !agentRuntimeBlocked &&
           runtimeSession?.isAuthenticated &&
           !renderableRuntimeRun?.isTerminal
-        ? 'Describe the agent...'
+        ? 'Describe the agent or workflow...'
       : controller.composerRuntimeAgentId === 'crawl' &&
           !agentRuntimeBlocked &&
           runtimeSession?.isAuthenticated &&

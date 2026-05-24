@@ -12,7 +12,8 @@ use super::{
     AutonomousProjectContextAction, AutonomousSafetyApprovalGrant, AutonomousSafetyPolicyAction,
     AutonomousSafetyPolicyDecision, AutonomousSystemDiagnosticsAction,
     AutonomousSystemDiagnosticsPolicyTrace, AutonomousToolRequest, AutonomousToolRuntime,
-    AUTONOMOUS_TOOL_COMMAND_PROBE, AUTONOMOUS_TOOL_COMMAND_VERIFY, DEFAULT_COMMAND_TIMEOUT_MS,
+    AutonomousWorkflowDefinitionAction, AUTONOMOUS_TOOL_COMMAND_PROBE,
+    AUTONOMOUS_TOOL_COMMAND_VERIFY, DEFAULT_COMMAND_TIMEOUT_MS,
 };
 use crate::commands::{
     validate_non_empty, CommandError, CommandErrorClass, CommandResult, RuntimeRunApprovalModeDto,
@@ -430,6 +431,23 @@ fn safety_policy_metadata(request: &AutonomousToolRequest) -> SafetyPolicyMetada
                 requires_approval,
                 require_approval_code: "policy_requires_approval_agent_definition_mutation",
                 require_approval_reason: "Saving, updating, archiving, or cloning agent definitions requires explicit operator approval.",
+            }
+        }
+        AutonomousToolRequest::WorkflowDefinition(request) => {
+            let requires_approval = matches!(
+                request.action,
+                AutonomousWorkflowDefinitionAction::Save
+                    | AutonomousWorkflowDefinitionAction::Update
+            );
+            SafetyPolicyMetadata {
+                risk_class: "workflow_definition_state",
+                network_intent: "none",
+                credential_sensitivity: "possible",
+                os_target: None,
+                prior_observation_required: false,
+                requires_approval,
+                require_approval_code: "policy_requires_approval_workflow_definition_mutation",
+                require_approval_reason: "Saving or updating Workflow definitions requires explicit operator approval.",
             }
         }
         AutonomousToolRequest::SolanaDeploy(_)

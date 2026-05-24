@@ -154,6 +154,20 @@
   pointer-events: none;
 }
 
+.agent-visualization.is-workflow-entering .react-flow__nodes,
+.agent-visualization.is-workflow-entering .react-flow__edges,
+.agent-visualization.is-workflow-entering .react-flow__edge-labels {
+  transform: translate3d(0, 10px, 0) scale(0.985);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.agent-visualization.is-workflow-entering .react-flow__controls {
+  transform: translate3d(0, 6px, 0) scale(0.985);
+  opacity: 0;
+  pointer-events: none;
+}
+
 .agent-visualization.is-agent-exiting .react-flow__nodes,
 .agent-visualization.is-agent-exiting .react-flow__edges,
 .agent-visualization.is-agent-exiting .react-flow__edge-labels {
@@ -276,6 +290,19 @@
 
 .agent-visualization .react-flow__edge {
   transition: opacity 120ms ease;
+}
+
+.agent-visualization .react-flow__edge.workflow-definition-edge--matched .react-flow__edge-path {
+  stroke: hsl(var(--primary));
+  stroke-width: 2.2;
+}
+
+.agent-visualization .react-flow__edge.workflow-definition-edge--loop .react-flow__edge-path {
+  stroke-dasharray: 7 5;
+}
+
+.agent-visualization .react-flow__edge.workflow-definition-edge--recovery .react-flow__edge-path {
+  stroke: hsl(var(--destructive) / 0.72);
 }
 
 /* During focus, the edge-wrapper opacity transition fires on 100+ edges

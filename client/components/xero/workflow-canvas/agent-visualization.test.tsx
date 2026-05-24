@@ -1061,7 +1061,7 @@ describe('AgentVisualization', () => {
     expect(onCreateAgent).toHaveBeenCalledTimes(1)
   })
 
-  it('marks workflow actions as coming soon in the empty state', () => {
+  it('enables browsing existing workflows in the empty state', () => {
     const onBrowseWorkflows = vi.fn()
 
     const { getAllByRole, getAllByText, getByRole } = render(
@@ -1080,11 +1080,11 @@ describe('AgentVisualization', () => {
     const runExistingWorkflow = getByRole('button', {
       name: /Run an existing workflow/i,
     })
-    expect(runExistingWorkflow).toBeDisabled()
-    expect(getAllByText('Coming soon')).toHaveLength(2)
+    expect(runExistingWorkflow).not.toBeDisabled()
+    expect(getAllByText('Coming soon')).toHaveLength(1)
 
     fireEvent.click(runExistingWorkflow)
-    expect(onBrowseWorkflows).not.toHaveBeenCalled()
+    expect(onBrowseWorkflows).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the selected graph mounted while closing back to the empty canvas', () => {

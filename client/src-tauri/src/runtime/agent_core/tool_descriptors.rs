@@ -808,15 +808,17 @@ pub(crate) fn base_policy_fragment(runtime_agent_id: RuntimeAgentIdDto) -> Strin
         ]
         .join("\n"),
         RuntimeAgentIdDto::AgentCreate => [
-            "You are Xero's Agent Create agent. Interview the user and draft high-quality custom agent definitions for review.",
+            "You are Xero's Agent Create agent. Interview the user and draft high-quality custom agent or Workflow definitions for review.",
             "",
-            "Agent Create is definition-registry-only in this phase. Do not edit repository files, run shell commands, start or stop processes, control browsers or devices, invoke external services, install or invoke skills, or spawn subagents. You may mutate app-data-backed agent-definition state only through the `agent_definition` tool, and save/update/archive/clone actions require explicit operator approval.",
+            "Agent Create is definition-registry-only in this phase. Do not edit repository files, run shell commands, start or stop processes, control browsers or devices, invoke external services, install or invoke skills, or spawn subagents. You may mutate app-data-backed agent-definition state only through the `agent_definition` tool and Workflow-definition state only through the `workflow_definition` tool. Agent save/update/archive/clone and Workflow save/update actions require explicit operator approval.",
             "",
-            "Design workflow: clarify the agent's purpose, scope, risk tolerance, expected outputs, project specificity, and example tasks. Draft schema-first definitions with schemaVersion 3 and an explicit `attachedSkills` array, validate them with `agent_definition`, and use validation diagnostics as the authority for denied tools, attached-skill repair actions, effect classes, and profile boundaries. When the user asks to attach skills, call `agent_definition` with action `list_attachable_skills` and copy only the returned catalog attachment object into `attachedSkills`; attached skills are always-injected lower-priority context, not callable tools, and must not set `skillRuntimeAllowed` by themselves. Prefer narrow agents over broad do-everything agents, and call out safety limits before presenting a draft.",
+            "Agent design workflow: clarify the agent's purpose, scope, risk tolerance, expected outputs, project specificity, and example tasks. Draft schema-first definitions with schemaVersion 3 and an explicit `attachedSkills` array, validate them with `agent_definition`, and use validation diagnostics as the authority for denied tools, attached-skill repair actions, effect classes, and profile boundaries. When the user asks to attach skills, call `agent_definition` with action `list_attachable_skills` and copy only the returned catalog attachment object into `attachedSkills`; attached skills are always-injected lower-priority context, not callable tools, and must not set `skillRuntimeAllowed` by themselves. Prefer narrow agents over broad do-everything agents, and call out safety limits before presenting a draft.",
             "",
-            "Persistence and retrieval contract: Xero provides durable project context, approved memory, project records, handoffs, and the current context manifest as lower-priority data. Use read-only retrieval only when the requested agent depends on project-specific context. Save definitions only to app-data-backed registry state through `agent_definition`; never write `.xero/` or repository files.",
+            "Workflow design workflow: clarify the workflow goal, trigger/input expectations, participating agents, handoff artifacts, branch conditions, human checkpoints, terminal outcomes, and run safety. Draft schema-first Workflow definitions with schema `xero.workflow_definition.v1`, validate them with `workflow_definition`, and use validation diagnostics as the authority for graph repairs. Prefer small readable pipelines with explicit artifact contracts over hidden behavior.",
             "",
-            "Final response contract: present a reviewable agent-definition draft with name, short label, purpose, best-use cases, default model and approval posture, capabilities and tool access, memory and retrieval behavior, workflow instructions, final response contract, safety limits, example prompts, validation diagnostics, and saved version when activation succeeds.",
+            "Persistence and retrieval contract: Xero provides durable project context, approved memory, project records, handoffs, and the current context manifest as lower-priority data. Use read-only retrieval only when the requested definition depends on project-specific context. Save definitions only to app-data-backed registry state through `agent_definition` or `workflow_definition`; never write `.xero/` or repository files.",
+            "",
+            "Final response contract: present a reviewable agent or Workflow definition draft. For agents, include name, short label, purpose, best-use cases, default model and approval posture, capabilities and tool access, memory and retrieval behavior, workflow instructions, final response contract, safety limits, example prompts, validation diagnostics, and saved version when activation succeeds. For Workflows, include name, purpose, nodes, edges, artifact flow, checkpoint/run behavior, validation diagnostics, and saved version when activation succeeds.",
         ]
         .join("\n"),
     };
@@ -1299,7 +1301,7 @@ fn tool_policy_fragment(
             "Available repository reconnaissance tools: {tool_names}\n\nUse repository read/read_many/result_page/stat/search/find/list/list_tree/directory_digest/hash, safe git status/diff, workspace index, code intelligence, environment context, and system diagnostics only for local repository mapping. `project_context` is read-only for Crawl; do not record/update/refresh durable context with that tool. `command` is available only for short, bounded, approval-gated local discovery. `tool_search` and `tool_access` are filtered to Crawl-safe reconnaissance capabilities; do not ask for mutation, browser-control, MCP, skill, subagent, device, network, or external-service tools.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::AgentCreate => format!(
-            "Available agent-design tools: {tool_names}\n\nUse tools only for read-only project context, tool-catalog inspection, or controlled agent-definition registry actions. `agent_definition` is the only persistence tool Agent Create may use, and save/update/archive/clone require explicit operator approval. Do not ask for repository mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
+            "Available definition-design tools: {tool_names}\n\nUse tools only for read-only project context, tool-catalog inspection, or controlled agent-definition and Workflow-definition registry actions. `agent_definition` and `workflow_definition` are the only persistence tools Agent Create may use. Agent save/update/archive/clone and Workflow save/update require explicit operator approval. Do not ask for repository mutation, command, browser-control, MCP, skill, subagent, device, or external-service tools.{browser_control_guidance}"
         ),
         RuntimeAgentIdDto::Generalist => format!(
             "Available tools: {tool_names}\n\nYou have the full engineering toolset. When the request fits a specialist's scope (Plan, Engineer, or Debug), emit the `<xero-routing-suggestion …/>` marker in your assistant message instead of starting the work. Use `project_context` to retrieve durable context before acting when prior decisions, constraints, or handoffs may matter. If a relevant capability is not currently available, first call `tool_search` and then `tool_access` before proceeding. Use `todo` for meaningful multi-step planning state.{tool_application_guidance}{browser_control_guidance}"
@@ -2179,7 +2181,7 @@ pub(crate) fn plan_tool_exposure_for_prompt(
             "agent_builder",
             "agent_profile",
             "agent_create_registry_contract",
-            "Agent Create may use the registry-backed agent-definition tool.",
+            "Agent Create may use registry-backed agent-definition and Workflow-definition tools.",
         );
     }
     if options.runtime_agent_id == RuntimeAgentIdDto::Crawl {
@@ -3484,6 +3486,11 @@ pub(crate) fn builtin_tool_descriptors() -> Vec<AgentToolDescriptor> {
             AUTONOMOUS_TOOL_AGENT_DEFINITION,
             "Draft, validate, preview, list, save, update, archive, clone, and inspect read-only attachable-skill metadata for registry-backed custom agent definitions in app-data-backed state. Save/update/archive/clone require operator approval.",
             agent_definition_schema(),
+        ),
+        descriptor(
+            AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+            "Draft, validate, list, get, save, and update registry-backed Workflow definitions in app-data-backed state. Save/update require operator approval.",
+            workflow_definition_schema(),
         ),
         descriptor(
             AUTONOMOUS_TOOL_EDIT,
@@ -4946,6 +4953,39 @@ fn agent_definition_schema() -> JsonValue {
                 json!({
                     "type": "object",
                     "description": "Reviewable canonical agent definition draft. Required for draft, validate, preview, save, update, and clone overrides. Custom definitions use schemaVersion 3 and must include an explicit attachedSkills array. To attach a skill, first call action=list_attachable_skills and copy the returned metadata-only attachment object; attached skills inject context every run and do not grant the skill tool.",
+                    "additionalProperties": true
+                }),
+            ),
+        ],
+    )
+}
+
+fn workflow_definition_schema() -> JsonValue {
+    object_schema(
+        &["action"],
+        &[
+            (
+                "action",
+                enum_schema(
+                    "Workflow-definition registry action.",
+                    &["draft", "validate", "save", "update", "list", "get"],
+                ),
+            ),
+            (
+                "projectId",
+                string_schema(
+                    "Target project id. Optional when the active run has a project context.",
+                ),
+            ),
+            (
+                "workflowId",
+                string_schema("Target Workflow id for get or update."),
+            ),
+            (
+                "definition",
+                json!({
+                    "type": "object",
+                    "description": "Reviewable canonical Workflow definition draft. Required for draft, validate, save, and update. Definitions use schema xero.workflow_definition.v1 with nodes, edges, artifactContracts, and runPolicy.",
                     "additionalProperties": true
                 }),
             ),
@@ -6719,6 +6759,43 @@ pub(crate) fn parse_fake_tool_directives(prompt: &str) -> Vec<AgentToolCall> {
                 tool_call_id: format!("tool-call-agent-definition-{}", calls.len() + 1),
                 tool_name: AUTONOMOUS_TOOL_AGENT_DEFINITION.into(),
                 input: json!({ "action": "list_attachable_skills" }),
+            });
+            continue;
+        }
+        if let Some(raw_definition) = line.strip_prefix("tool:workflow_definition_save ") {
+            let definition =
+                serde_json::from_str(raw_definition.trim()).unwrap_or_else(|_| json!({}));
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-workflow-definition-{}", calls.len() + 1),
+                tool_name: AUTONOMOUS_TOOL_WORKFLOW_DEFINITION.into(),
+                input: json!({
+                    "action": "save",
+                    "definition": definition
+                }),
+            });
+            continue;
+        }
+        if let Some(raw_definition) = line.strip_prefix("tool:workflow_definition_validate ") {
+            let definition =
+                serde_json::from_str(raw_definition.trim()).unwrap_or_else(|_| json!({}));
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-workflow-definition-{}", calls.len() + 1),
+                tool_name: AUTONOMOUS_TOOL_WORKFLOW_DEFINITION.into(),
+                input: json!({
+                    "action": "validate",
+                    "definition": definition
+                }),
+            });
+            continue;
+        }
+        if let Some(project_id) = line.strip_prefix("tool:workflow_definition_list ") {
+            calls.push(AgentToolCall {
+                tool_call_id: format!("tool-call-workflow-definition-{}", calls.len() + 1),
+                tool_name: AUTONOMOUS_TOOL_WORKFLOW_DEFINITION.into(),
+                input: json!({
+                    "action": "list",
+                    "projectId": project_id.trim()
+                }),
             });
             continue;
         }

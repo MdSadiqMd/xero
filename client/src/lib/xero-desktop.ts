@@ -91,6 +91,38 @@ import {
   type WorkflowAgentGraphProjectionDto,
 } from '@/src/lib/xero-model/workflow-agents'
 import {
+  cancelWorkflowRunRequestSchema,
+  createWorkflowDefinitionRequestSchema,
+  getWorkflowDefinitionRequestSchema,
+  getWorkflowRunRequestSchema,
+  listWorkflowDefinitionsRequestSchema,
+  listWorkflowDefinitionsResponseSchema,
+  listWorkflowRunsRequestSchema,
+  listWorkflowRunsResponseSchema,
+  resumeWorkflowCheckpointRequestSchema,
+  retryWorkflowNodeRunRequestSchema,
+  skipWorkflowBranchRequestSchema,
+  startWorkflowRunRequestSchema,
+  updateWorkflowDefinitionRequestSchema,
+  workflowDefinitionResponseSchema,
+  workflowRunResponseSchema,
+  type CancelWorkflowRunRequestDto,
+  type CreateWorkflowDefinitionRequestDto,
+  type GetWorkflowDefinitionRequestDto,
+  type GetWorkflowRunRequestDto,
+  type ListWorkflowDefinitionsRequestDto,
+  type ListWorkflowDefinitionsResponseDto,
+  type ListWorkflowRunsRequestDto,
+  type ListWorkflowRunsResponseDto,
+  type ResumeWorkflowCheckpointRequestDto,
+  type RetryWorkflowNodeRunRequestDto,
+  type SkipWorkflowBranchRequestDto,
+  type StartWorkflowRunRequestDto,
+  type UpdateWorkflowDefinitionRequestDto,
+  type WorkflowDefinitionResponseDto,
+  type WorkflowRunResponseDto,
+} from '@/src/lib/xero-model/workflow-run'
+import {
   agentRunEventSchema,
   agentRunSchema,
   agentTraceExportSchema,
@@ -640,6 +672,17 @@ const COMMANDS = {
   listWorkflowAgents: 'list_workflow_agents',
   getWorkflowAgentDetail: 'get_workflow_agent_detail',
   getWorkflowAgentGraphProjection: 'get_workflow_agent_graph_projection',
+  createWorkflowDefinition: 'create_workflow_definition',
+  updateWorkflowDefinition: 'update_workflow_definition',
+  listWorkflowDefinitions: 'list_workflow_definitions',
+  getWorkflowDefinition: 'get_workflow_definition',
+  startWorkflowRun: 'start_workflow_run',
+  getWorkflowRun: 'get_workflow_run',
+  listWorkflowRuns: 'list_workflow_runs',
+  cancelWorkflowRun: 'cancel_workflow_run',
+  retryWorkflowNodeRun: 'retry_workflow_node_run',
+  skipWorkflowBranch: 'skip_workflow_branch',
+  resumeWorkflowCheckpoint: 'resume_workflow_checkpoint',
   getAgentAuthoringCatalog: 'get_agent_authoring_catalog',
   getAgentToolPackCatalog: 'get_agent_tool_pack_catalog',
   searchAgentAuthoringSkills: 'search_agent_authoring_skills',
@@ -1149,6 +1192,31 @@ export interface XeroDesktopAdapter {
   getWorkflowAgentGraphProjection?(
     request: GetWorkflowAgentGraphProjectionRequestDto,
   ): Promise<WorkflowAgentGraphProjectionDto>
+  createWorkflowDefinition?(
+    request: CreateWorkflowDefinitionRequestDto,
+  ): Promise<WorkflowDefinitionResponseDto>
+  updateWorkflowDefinition?(
+    request: UpdateWorkflowDefinitionRequestDto,
+  ): Promise<WorkflowDefinitionResponseDto>
+  listWorkflowDefinitions?(
+    request: ListWorkflowDefinitionsRequestDto,
+  ): Promise<ListWorkflowDefinitionsResponseDto>
+  getWorkflowDefinition?(
+    request: GetWorkflowDefinitionRequestDto,
+  ): Promise<WorkflowDefinitionResponseDto>
+  startWorkflowRun?(request: StartWorkflowRunRequestDto): Promise<WorkflowRunResponseDto>
+  getWorkflowRun?(request: GetWorkflowRunRequestDto): Promise<WorkflowRunResponseDto>
+  listWorkflowRuns?(
+    request: ListWorkflowRunsRequestDto,
+  ): Promise<ListWorkflowRunsResponseDto>
+  cancelWorkflowRun?(request: CancelWorkflowRunRequestDto): Promise<WorkflowRunResponseDto>
+  retryWorkflowNodeRun?(
+    request: RetryWorkflowNodeRunRequestDto,
+  ): Promise<WorkflowRunResponseDto>
+  skipWorkflowBranch?(request: SkipWorkflowBranchRequestDto): Promise<WorkflowRunResponseDto>
+  resumeWorkflowCheckpoint?(
+    request: ResumeWorkflowCheckpointRequestDto,
+  ): Promise<WorkflowRunResponseDto>
   getAgentAuthoringCatalog(
     request: GetAgentAuthoringCatalogRequestDto,
   ): Promise<AgentAuthoringCatalogDto>
@@ -2706,6 +2774,83 @@ export const XeroDesktopAdapter: XeroDesktopAdapter = {
         request: parsed,
       },
     )
+  },
+
+  createWorkflowDefinition(request) {
+    const parsed = createWorkflowDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.createWorkflowDefinition, workflowDefinitionResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  updateWorkflowDefinition(request) {
+    const parsed = updateWorkflowDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.updateWorkflowDefinition, workflowDefinitionResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  listWorkflowDefinitions(request) {
+    const parsed = listWorkflowDefinitionsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.listWorkflowDefinitions, listWorkflowDefinitionsResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  getWorkflowDefinition(request) {
+    const parsed = getWorkflowDefinitionRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getWorkflowDefinition, workflowDefinitionResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  startWorkflowRun(request) {
+    const parsed = startWorkflowRunRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.startWorkflowRun, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  getWorkflowRun(request) {
+    const parsed = getWorkflowRunRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.getWorkflowRun, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  listWorkflowRuns(request) {
+    const parsed = listWorkflowRunsRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.listWorkflowRuns, listWorkflowRunsResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  cancelWorkflowRun(request) {
+    const parsed = cancelWorkflowRunRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.cancelWorkflowRun, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  retryWorkflowNodeRun(request) {
+    const parsed = retryWorkflowNodeRunRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.retryWorkflowNodeRun, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  skipWorkflowBranch(request) {
+    const parsed = skipWorkflowBranchRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.skipWorkflowBranch, workflowRunResponseSchema, {
+      request: parsed,
+    })
+  },
+
+  resumeWorkflowCheckpoint(request) {
+    const parsed = resumeWorkflowCheckpointRequestSchema.parse(request)
+    return invokeTyped(COMMANDS.resumeWorkflowCheckpoint, workflowRunResponseSchema, {
+      request: parsed,
+    })
   },
 
   getAgentAuthoringCatalog(request) {

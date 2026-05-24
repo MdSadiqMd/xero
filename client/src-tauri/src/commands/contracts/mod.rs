@@ -13,3 +13,4 @@ pub mod surface;
 pub mod usage;
 pub mod workflow;
 pub mod workflow_agents;
+pub mod workflows;

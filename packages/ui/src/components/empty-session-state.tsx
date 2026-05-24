@@ -1,4 +1,4 @@
-import { ChevronRight, GitBranch, Hammer, Lightbulb, Search, ShieldCheck, Sparkles, Workflow } from 'lucide-react'
+import { ChevronRight, GitBranch, Hammer, Lightbulb, Search, Sparkles, Workflow } from 'lucide-react'
 
 import { AppLogo } from './app-logo'
 import { cn } from '../lib/utils'
@@ -46,10 +46,10 @@ const AGENT_CREATE_SUGGESTIONS: Suggestion[] = [
       'Create a project agent that can make focused code changes, run scoped verification, and summarize the result.',
   },
   {
-    icon: ShieldCheck,
-    label: 'Create a read-only analyst',
+    icon: Workflow,
+    label: 'Create a workflow',
     prompt:
-      'Create an observe-only agent that explores this repository, answers project questions, and does not edit files.',
+      'Create a Workflow that passes intake from a planning agent to an engineering agent and ends with a terminal success.',
   },
 ]
 
@@ -73,7 +73,7 @@ export function EmptySessionState({
       <div className="relative flex min-h-full w-full items-center justify-center overflow-hidden">
         <div className="agent-empty-fade-in relative flex w-full max-w-[260px] flex-col items-stretch px-3 py-4">
           <h2 className="text-center text-[13px] font-semibold tracking-tight text-foreground">
-            {isAgentCreate ? 'Shape this new agent' : <span className="text-primary">{projectLabel}</span>}
+            {isAgentCreate ? 'Shape a definition' : <span className="text-primary">{projectLabel}</span>}
           </h2>
           {onSelectSuggestion || showWorkflowCanvasAction ? (
             <ul className="mt-3 flex w-full flex-col divide-y divide-border/40 overflow-hidden rounded-md border border-border/60 bg-card/30">
@@ -146,7 +146,7 @@ export function EmptySessionState({
 
         <h2 className="mt-3 text-2xl font-semibold tracking-tight text-foreground sm:text-[26px]">
           {isAgentCreate ? (
-            'Shape this new agent'
+            'Shape a definition'
           ) : (
             <>
               What can we build together in <span className="text-primary">{projectLabel}</span>?
@@ -156,8 +156,8 @@ export function EmptySessionState({
         <p className="mt-3 max-w-md text-[13px] leading-relaxed text-muted-foreground">
           {isAgentCreate
             ? agentCreateCanvasIncluded
-              ? 'The canvas is already included. Describe the role, boundaries, and workflow to draft the agent.'
-              : 'Start from a description. Agent Create will draft a definition for review.'
+              ? 'The canvas is already included. Describe the agent or Workflow, then approve the saved definition when it is ready.'
+              : 'Start from a description. Agent Create will draft an agent or Workflow definition for review.'
             : 'Just ask — I can read your code, suggest changes, or run a task for you. Everything we do will show up right here.'}
         </p>
 

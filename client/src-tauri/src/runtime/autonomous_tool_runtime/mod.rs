@@ -15,6 +15,7 @@ mod repo_scope;
 mod skills;
 pub mod solana;
 mod system_diagnostics;
+mod workflow_definition;
 mod workspace_index;
 
 use std::{
@@ -118,6 +119,11 @@ pub use solana::{
     AUTONOMOUS_TOOL_SOLANA_VERIFIED_BUILD,
 };
 pub(crate) use system_diagnostics::system_diagnostics_action_approval_id;
+pub use workflow_definition::{
+    AutonomousWorkflowDefinitionAction, AutonomousWorkflowDefinitionOutput,
+    AutonomousWorkflowDefinitionRequest, AutonomousWorkflowDefinitionSummary,
+    AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+};
 pub use workspace_index::{
     AutonomousWorkspaceIndexAction, AutonomousWorkspaceIndexOutput, AutonomousWorkspaceIndexRequest,
 };
@@ -361,7 +367,10 @@ const TOOL_ACCESS_PROJECT_CONTEXT_WRITE_TOOLS: &[&str] = &[
     AUTONOMOUS_TOOL_PROJECT_CONTEXT_REFRESH,
 ];
 const TOOL_ACCESS_SKILL_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_SKILL];
-const TOOL_ACCESS_AGENT_DEFINITION_TOOLS: &[&str] = &[AUTONOMOUS_TOOL_AGENT_DEFINITION];
+const TOOL_ACCESS_AGENT_DEFINITION_TOOLS: &[&str] = &[
+    AUTONOMOUS_TOOL_AGENT_DEFINITION,
+    AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ToolAccessGroupDefinition {
@@ -564,9 +573,9 @@ const TOOL_ACCESS_GROUP_DEFINITIONS: &[ToolAccessGroupDefinition] = &[
     },
     ToolAccessGroupDefinition {
         name: "agent_builder",
-        description: "Draft, validate, list, save, update, archive, and clone registry-backed agent definitions.",
+        description: "Draft, validate, list, save, update, archive, and clone registry-backed agent definitions and Workflow definitions.",
         tools: TOOL_ACCESS_AGENT_DEFINITION_TOOLS,
-        risk_class: "agent_definition_state",
+        risk_class: "definition_state",
     },
 ];
 
@@ -851,7 +860,11 @@ impl AutonomousAgentToolPolicy {
                     .into_iter()
                     .map(ToOwned::to_owned)
                     .collect(),
-                allowed_tools: [AUTONOMOUS_TOOL_AGENT_DEFINITION.to_string()].into(),
+                allowed_tools: [
+                    AUTONOMOUS_TOOL_AGENT_DEFINITION.to_string(),
+                    AUTONOMOUS_TOOL_WORKFLOW_DEFINITION.to_string(),
+                ]
+                .into(),
                 denied_tools: BTreeSet::new(),
                 allowed_tool_packs: BTreeSet::new(),
                 denied_tool_packs: BTreeSet::new(),
@@ -1588,6 +1601,7 @@ pub fn tool_effect_class(tool_name: &str) -> AutonomousToolEffectClass {
         | AUTONOMOUS_TOOL_TODO
         | AUTONOMOUS_TOOL_AGENT_COORDINATION
         | AUTONOMOUS_TOOL_AGENT_DEFINITION
+        | AUTONOMOUS_TOOL_WORKFLOW_DEFINITION
         | AUTONOMOUS_TOOL_PROJECT_CONTEXT
         | AUTONOMOUS_TOOL_PROJECT_CONTEXT_RECORD
         | AUTONOMOUS_TOOL_PROJECT_CONTEXT_UPDATE
@@ -1662,7 +1676,10 @@ pub fn tool_allowed_for_runtime_agent(agent_id: RuntimeAgentIdDto, tool_name: &s
     if tool_name == AUTONOMOUS_TOOL_HARNESS_RUNNER {
         return false;
     }
-    if tool_name == AUTONOMOUS_TOOL_AGENT_DEFINITION {
+    if matches!(
+        tool_name,
+        AUTONOMOUS_TOOL_AGENT_DEFINITION | AUTONOMOUS_TOOL_WORKFLOW_DEFINITION
+    ) {
         return agent_id == RuntimeAgentIdDto::AgentCreate;
     }
     match agent_id {
@@ -2094,6 +2111,25 @@ pub fn deferred_tool_catalog(skill_tool_enabled: bool) -> Vec<AutonomousToolCata
                 "Save an approved custom agent definition after operator approval.",
             ],
             "agent_definition_state",
+        ),
+        catalog_entry(
+            AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
+            "agent_builder",
+            "Draft, validate, list, get, save, and update registry-backed Workflow definitions in app-data-backed state.",
+            &[
+                "workflow",
+                "definition",
+                "multi_agent",
+                "registry",
+                "validation",
+                "app_data",
+            ],
+            &["action", "projectId", "workflowId", "definition"],
+            &[
+                "Validate a multi-agent Workflow definition before saving.",
+                "Save an approved Workflow definition after operator approval.",
+            ],
+            "workflow_definition_state",
         ),
         catalog_entry(
             AUTONOMOUS_TOOL_ENVIRONMENT_CONTEXT,
@@ -3736,6 +3772,7 @@ impl AutonomousToolRuntime {
             AutonomousToolRequest::WorkspaceIndex(request) => self.workspace_index(request),
             AutonomousToolRequest::AgentCoordination(request) => self.agent_coordination(request),
             AutonomousToolRequest::AgentDefinition(request) => self.agent_definition(request),
+            AutonomousToolRequest::WorkflowDefinition(request) => self.workflow_definition(request),
             AutonomousToolRequest::Skill(request) => self.skill(request),
             AutonomousToolRequest::Browser(request) => self.browser(request),
             AutonomousToolRequest::Emulator(request) => self.emulator(request),
@@ -3884,6 +3921,9 @@ impl AutonomousToolRuntime {
             }
             AutonomousToolRequest::AgentDefinition(request) => {
                 self.agent_definition_with_operator_approval(request)
+            }
+            AutonomousToolRequest::WorkflowDefinition(request) => {
+                self.workflow_definition_with_operator_approval(request)
             }
             request => self.execute_without_workflow(request),
         };
@@ -4338,6 +4378,7 @@ pub enum AutonomousToolRequest {
     WorkspaceIndex(AutonomousWorkspaceIndexRequest),
     AgentCoordination(AutonomousAgentCoordinationRequest),
     AgentDefinition(AutonomousAgentDefinitionRequest),
+    WorkflowDefinition(AutonomousWorkflowDefinitionRequest),
     Skill(XeroSkillToolInput),
     Browser(AutonomousBrowserRequest),
     Emulator(AutonomousEmulatorRequest),
@@ -4417,6 +4458,7 @@ impl AutonomousToolRequest {
             Self::WorkspaceIndex(_) => AUTONOMOUS_TOOL_WORKSPACE_INDEX,
             Self::AgentCoordination(_) => AUTONOMOUS_TOOL_AGENT_COORDINATION,
             Self::AgentDefinition(_) => AUTONOMOUS_TOOL_AGENT_DEFINITION,
+            Self::WorkflowDefinition(_) => AUTONOMOUS_TOOL_WORKFLOW_DEFINITION,
             Self::Skill(_) => AUTONOMOUS_TOOL_SKILL,
             Self::Browser(request) => browser_tool_name(&request.action),
             Self::Emulator(_) => AUTONOMOUS_TOOL_EMULATOR,
@@ -6032,6 +6074,7 @@ pub enum AutonomousToolOutput {
     WorkspaceIndex(AutonomousWorkspaceIndexOutput),
     AgentCoordination(AutonomousAgentCoordinationOutput),
     AgentDefinition(AutonomousAgentDefinitionOutput),
+    WorkflowDefinition(AutonomousWorkflowDefinitionOutput),
     Skill(AutonomousSkillToolOutput),
     Browser(AutonomousBrowserOutput),
     Emulator(AutonomousEmulatorOutput),

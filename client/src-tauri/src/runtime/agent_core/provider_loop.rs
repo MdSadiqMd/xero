@@ -1062,6 +1062,9 @@ fn registered_model_visible_projection(
         "agent_definition" => Some(ModelVisibleProjection::CompactJson {
             format: "agent_definition_summary_json",
         }),
+        "workflow_definition" => Some(ModelVisibleProjection::CompactJson {
+            format: "workflow_definition_summary_json",
+        }),
         "skill" => Some(ModelVisibleProjection::CompactJson {
             format: "skill_lifecycle_summary_json",
         }),
@@ -2186,6 +2189,7 @@ fn compact_tool_result_output(tool_name: &str, output: &JsonValue) -> JsonValue 
         "workspace_index" => compact_workspace_index_output(actual_output),
         "agent_coordination" => compact_agent_coordination_output(actual_output),
         "agent_definition" => compact_agent_definition_output(actual_output),
+        "workflow_definition" => compact_workflow_definition_output(actual_output),
         "skill" => compact_skill_output(actual_output),
         "browser" | "emulator" | "solana" => compact_value_json_output(actual_output),
         _ => compact_json_for_model(actual_output, 0),
@@ -4141,6 +4145,82 @@ fn compact_agent_definition_summary(definition: &JsonValue) -> JsonValue {
         );
     }
     compact
+}
+
+fn compact_workflow_definition_output(output: &JsonValue) -> JsonValue {
+    let mut compact = compact_fields(
+        output,
+        &[
+            "kind",
+            "action",
+            "message",
+            "applied",
+            "approvalRequired",
+            "validationReport",
+        ],
+    );
+    if let Some(definition) = output.get("definition") {
+        insert_value(
+            &mut compact,
+            "definition",
+            compact_workflow_definition_summary(definition),
+        );
+    }
+    insert_array(
+        &mut compact,
+        "definitions",
+        output
+            .get("definitions")
+            .and_then(JsonValue::as_array)
+            .map(|definitions| {
+                JsonValue::Array(
+                    definitions
+                        .iter()
+                        .take(MODEL_VISIBLE_MAX_ITEMS)
+                        .map(compact_workflow_definition_list_summary)
+                        .collect(),
+                )
+            }),
+    );
+    compact
+}
+
+fn compact_workflow_definition_summary(definition: &JsonValue) -> JsonValue {
+    let mut compact = compact_fields(
+        definition,
+        &[
+            "id",
+            "projectId",
+            "name",
+            "description",
+            "version",
+            "startNodeId",
+            "nodeCount",
+            "edgeCount",
+        ],
+    );
+    if let Some(snapshot) = definition.get("snapshot") {
+        insert_value(
+            &mut compact,
+            "snapshot",
+            compact_json_for_model(snapshot, 0),
+        );
+    }
+    compact
+}
+
+fn compact_workflow_definition_list_summary(definition: &JsonValue) -> JsonValue {
+    compact_fields(
+        definition,
+        &[
+            "id",
+            "projectId",
+            "name",
+            "description",
+            "activeVersionId",
+            "activeVersionNumber",
+        ],
+    )
 }
 
 fn compact_skill_output(output: &JsonValue) -> JsonValue {

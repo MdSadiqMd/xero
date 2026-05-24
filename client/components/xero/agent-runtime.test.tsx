@@ -3171,9 +3171,9 @@ describe('AgentRuntime current UI', () => {
     )
 
     expect(
-      screen.getByPlaceholderText('Describe the agent...'),
+      screen.getByPlaceholderText('Describe the agent or workflow...'),
     ).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Shape this new agent' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Shape a definition' })).toBeVisible()
     expect(screen.getByText(/Start from a description\./)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: /Start on workflow canvas/i }))
     expect(onStartWorkflowAgentCreate).toHaveBeenCalledTimes(1)

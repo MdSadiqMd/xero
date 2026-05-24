@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use rusqlite_migration::{Migrations, M};
 
-pub const PROJECT_DATABASE_SCHEMA_VERSION: i64 = 31;
+pub const PROJECT_DATABASE_SCHEMA_VERSION: i64 = 33;
 
 pub fn migrations() -> &'static Migrations<'static> {
     static MIGRATIONS: LazyLock<Migrations<'static>> = LazyLock::new(|| {
@@ -38,6 +38,8 @@ pub fn migrations() -> &'static Migrations<'static> {
             M::up(MIGRATION_024_AGENT_SESSION_REMOTE_VISIBILITY_SQL),
             M::up(NOOP_SCHEMA_VERSION_MARKER_SQL),
             M::up(NOOP_SCHEMA_VERSION_MARKER_SQL),
+            M::up(MIGRATION_025_MULTI_AGENT_WORKFLOWS_SQL),
+            M::up(MIGRATION_026_AGENT_CREATE_WORKFLOW_DEFINITIONS_SQL),
         ])
     });
 
@@ -45,6 +47,259 @@ pub fn migrations() -> &'static Migrations<'static> {
 }
 
 const NOOP_SCHEMA_VERSION_MARKER_SQL: &str = "";
+
+const MIGRATION_026_AGENT_CREATE_WORKFLOW_DEFINITIONS_SQL: &str = r#"
+    INSERT OR IGNORE INTO agent_definition_versions (
+        definition_id,
+        version,
+        snapshot_json,
+        validation_report_json,
+        created_at
+    )
+    VALUES
+        ('agent_create', 3, '{"schema":"xero.agent_definition.v1","id":"agent_create","version":3,"displayName":"Agent Create","shortLabel":"Create","description":"Interview the user and draft high-quality custom agent or Workflow definitions.","taskPurpose":"Interview the user for agent or Workflow purpose, scope, risk tolerance, participating agents, and expected outputs, then draft schema-validated definitions.","scope":"built_in","lifecycleState":"active","baseCapabilityProfile":"agent_builder","defaultApprovalMode":"suggest","allowedApprovalModes":["suggest"],"promptPolicy":"agent_create","toolPolicy":"agent_builder","workflowContract":"Complete the interview before drafting. Close the `interview_complete` todo to enter the drafting phase.","finalResponseContract":"Present a reviewable agent or Workflow definition draft with validation diagnostics.","workflowStructure":{"startPhaseId":"interview","phases":[{"id":"interview","title":"Interview","description":"Clarify purpose, scope, risk tolerance, required agents or Workflow nodes, and example tasks. Close the `interview_complete` todo when the interview is finished.","allowedTools":["read","search","find","tool_access","tool_search","todo"],"requiredChecks":[{"kind":"todo_completed","todoId":"interview_complete","description":"Close the `interview_complete` todo when the interview is finished."}]},{"id":"draft","title":"Draft","description":"Validate and save a draft definition through `agent_definition` or `workflow_definition`.","allowedTools":["read","search","find","tool_access","tool_search","agent_definition","workflow_definition","todo"]}]},"attachedSkills":[]}', '{"status":"valid","source":"seed"}', '2026-05-24T00:00:00Z');
+
+    UPDATE agent_definitions
+    SET current_version = 3,
+        description = 'Interview the user and draft high-quality custom agent or Workflow definitions.',
+        updated_at = '2026-05-24T00:00:00Z'
+    WHERE definition_id = 'agent_create'
+      AND current_version < 3;
+"#;
+
+const MIGRATION_025_MULTI_AGENT_WORKFLOWS_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS workflow_definitions (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        active_version_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (id <> ''),
+        CHECK (name <> ''),
+        CHECK (active_version_id <> ''),
+        CHECK (created_at <> ''),
+        CHECK (updated_at <> '')
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_definition_versions (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        workflow_id TEXT NOT NULL,
+        version_number INTEGER NOT NULL CHECK (version_number > 0),
+        definition_json TEXT NOT NULL CHECK (definition_json <> '' AND json_valid(definition_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        UNIQUE (project_id, workflow_id, version_number),
+        CHECK (id <> ''),
+        CHECK (workflow_id <> ''),
+        CHECK (created_at <> ''),
+        FOREIGN KEY (project_id, workflow_id)
+            REFERENCES workflow_definitions(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_definition_versions_workflow
+        ON workflow_definition_versions(project_id, workflow_id, version_number DESC);
+
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        workflow_id TEXT NOT NULL,
+        workflow_version_id TEXT NOT NULL,
+        workflow_version_number INTEGER NOT NULL CHECK (workflow_version_number > 0),
+        status TEXT NOT NULL,
+        terminal_status TEXT,
+        definition_json TEXT NOT NULL CHECK (definition_json <> '' AND json_valid(definition_json)),
+        initial_input_json TEXT CHECK (initial_input_json IS NULL OR json_valid(initial_input_json)),
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        cancellation_reason TEXT,
+        PRIMARY KEY (project_id, id),
+        CHECK (id <> ''),
+        CHECK (workflow_id <> ''),
+        CHECK (workflow_version_id <> ''),
+        CHECK (status IN ('queued', 'running', 'paused', 'completed', 'failed', 'cancelled')),
+        CHECK (terminal_status IS NULL OR terminal_status IN ('success', 'failure', 'cancelled', 'needs_human')),
+        CHECK (started_at <> ''),
+        CHECK (updated_at <> ''),
+        CHECK (completed_at IS NULL OR completed_at <> ''),
+        FOREIGN KEY (project_id, workflow_version_id)
+            REFERENCES workflow_definition_versions(project_id, id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_project_updated
+        ON workflow_runs(project_id, updated_at DESC, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_updated
+        ON workflow_runs(project_id, workflow_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
+        ON workflow_runs(project_id, status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS workflow_run_nodes (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        workflow_run_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        node_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt_number INTEGER NOT NULL CHECK (attempt_number >= 0),
+        runtime_run_id TEXT,
+        agent_session_id TEXT,
+        failure_class TEXT,
+        started_at TEXT,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        idempotency_key TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        UNIQUE (project_id, workflow_run_id, node_id, attempt_number),
+        UNIQUE (project_id, idempotency_key),
+        CHECK (id <> ''),
+        CHECK (workflow_run_id <> ''),
+        CHECK (node_id <> ''),
+        CHECK (node_type IN ('agent', 'router', 'gate', 'human_checkpoint', 'merge', 'terminal')),
+        CHECK (status IN ('pending', 'eligible', 'starting', 'running', 'waiting_on_gate', 'succeeded', 'failed', 'stalled', 'skipped', 'cancelled')),
+        CHECK (runtime_run_id IS NULL OR runtime_run_id <> ''),
+        CHECK (agent_session_id IS NULL OR agent_session_id <> ''),
+        CHECK (failure_class IS NULL OR failure_class <> ''),
+        CHECK (started_at IS NULL OR started_at <> ''),
+        CHECK (updated_at <> ''),
+        CHECK (completed_at IS NULL OR completed_at <> ''),
+        CHECK (idempotency_key <> ''),
+        FOREIGN KEY (project_id, workflow_run_id)
+            REFERENCES workflow_runs(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, runtime_run_id)
+            REFERENCES agent_runs(project_id, run_id) ON DELETE SET NULL,
+        FOREIGN KEY (project_id, agent_session_id)
+            REFERENCES agent_sessions(project_id, agent_session_id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_run_nodes_run_status
+        ON workflow_run_nodes(project_id, workflow_run_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_run_nodes_runtime
+        ON workflow_run_nodes(project_id, runtime_run_id);
+
+    CREATE TABLE IF NOT EXISTS workflow_run_edges (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        workflow_run_id TEXT NOT NULL,
+        from_node_id TEXT NOT NULL,
+        to_node_id TEXT NOT NULL,
+        edge_id TEXT NOT NULL,
+        matched INTEGER NOT NULL DEFAULT 1 CHECK (matched IN (0, 1)),
+        condition_json TEXT NOT NULL CHECK (condition_json <> '' AND json_valid(condition_json)),
+        evidence_json TEXT NOT NULL CHECK (evidence_json <> '' AND json_valid(evidence_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (workflow_run_id <> ''),
+        CHECK (from_node_id <> ''),
+        CHECK (to_node_id <> ''),
+        CHECK (edge_id <> ''),
+        CHECK (created_at <> ''),
+        FOREIGN KEY (project_id, workflow_run_id)
+            REFERENCES workflow_runs(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_run_edges_run_created
+        ON workflow_run_edges(project_id, workflow_run_id, created_at ASC);
+
+    CREATE TABLE IF NOT EXISTS workflow_artifacts (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        workflow_run_id TEXT NOT NULL,
+        producer_node_run_id TEXT NOT NULL,
+        artifact_type TEXT NOT NULL,
+        schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+        payload_json TEXT NOT NULL CHECK (payload_json <> '' AND json_valid(payload_json)),
+        render_text TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (workflow_run_id <> ''),
+        CHECK (producer_node_run_id <> ''),
+        CHECK (artifact_type <> ''),
+        CHECK (created_at <> ''),
+        FOREIGN KEY (project_id, workflow_run_id)
+            REFERENCES workflow_runs(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, producer_node_run_id)
+            REFERENCES workflow_run_nodes(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_artifacts_run_type
+        ON workflow_artifacts(project_id, workflow_run_id, artifact_type, created_at ASC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_artifacts_producer
+        ON workflow_artifacts(project_id, producer_node_run_id);
+
+    CREATE TABLE IF NOT EXISTS workflow_gate_decisions (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        workflow_run_id TEXT NOT NULL,
+        node_run_id TEXT NOT NULL,
+        checkpoint_type TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        decision_payload_json TEXT CHECK (decision_payload_json IS NULL OR json_valid(decision_payload_json)),
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (workflow_run_id <> ''),
+        CHECK (node_run_id <> ''),
+        CHECK (checkpoint_type IN ('human_verify', 'decision', 'human_action')),
+        CHECK (decision <> ''),
+        CHECK (decided_at <> ''),
+        FOREIGN KEY (project_id, workflow_run_id)
+            REFERENCES workflow_runs(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, node_run_id)
+            REFERENCES workflow_run_nodes(project_id, id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_gate_decisions_run
+        ON workflow_gate_decisions(project_id, workflow_run_id, decided_at ASC);
+
+    CREATE TABLE IF NOT EXISTS workflow_loop_attempts (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        workflow_run_id TEXT NOT NULL,
+        loop_key TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        last_node_run_id TEXT,
+        exhausted INTEGER NOT NULL DEFAULT 0 CHECK (exhausted IN (0, 1)),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        UNIQUE (project_id, workflow_run_id, loop_key),
+        CHECK (workflow_run_id <> ''),
+        CHECK (loop_key <> ''),
+        CHECK (last_node_run_id IS NULL OR last_node_run_id <> ''),
+        CHECK (updated_at <> ''),
+        FOREIGN KEY (project_id, workflow_run_id)
+            REFERENCES workflow_runs(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, last_node_run_id)
+            REFERENCES workflow_run_nodes(project_id, id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_loop_attempts_run
+        ON workflow_loop_attempts(project_id, workflow_run_id);
+
+    CREATE TABLE IF NOT EXISTS workflow_events (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        workflow_run_id TEXT NOT NULL,
+        node_run_id TEXT,
+        event_type TEXT NOT NULL,
+        event_json TEXT NOT NULL CHECK (event_json <> '' AND json_valid(event_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        CHECK (workflow_run_id <> ''),
+        CHECK (node_run_id IS NULL OR node_run_id <> ''),
+        CHECK (event_type <> ''),
+        CHECK (created_at <> ''),
+        FOREIGN KEY (project_id, workflow_run_id)
+            REFERENCES workflow_runs(project_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (project_id, node_run_id)
+            REFERENCES workflow_run_nodes(project_id, id) ON DELETE SET NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_events_run_created
+        ON workflow_events(project_id, workflow_run_id, created_at ASC);
+"#;
 
 const MIGRATION_001_AGENT_MESSAGE_ATTACHMENTS_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS agent_message_attachments (
@@ -2821,6 +3076,15 @@ mod tests {
             "agent_messages",
             "agent_definition_versions",
             "agent_definitions",
+            "workflow_definitions",
+            "workflow_definition_versions",
+            "workflow_runs",
+            "workflow_run_nodes",
+            "workflow_run_edges",
+            "workflow_artifacts",
+            "workflow_gate_decisions",
+            "workflow_loop_attempts",
+            "workflow_events",
             "runtime_run_attached_skill_snapshots",
             "workspace_index_metadata",
             "agent_embedding_backfill_jobs",
@@ -2865,7 +3129,7 @@ mod tests {
             "#,
         );
 
-        assert!(built_ins.contains(&"agent_create:2:Agent Create".to_string()));
+        assert!(built_ins.contains(&"agent_create:3:Agent Create".to_string()));
         assert!(built_ins.contains(&"debug:2:Debug".to_string()));
         assert!(built_ins.contains(&"engineer:2:Engineer".to_string()));
         assert!(built_ins.contains(&"generalist:1:Agent".to_string()));

@@ -1,37 +1,30 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowLeft,
   Bot,
-  ChevronRight,
-  Copy,
   Play,
   Plus,
-  Sparkles,
   Workflow as WorkflowIcon,
   type LucideIcon,
 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import type {
   AgentRefDto,
   WorkflowAgentSummaryDto,
 } from '@/src/lib/xero-model/workflow-agents'
+import type { WorkflowTemplateIdDto } from '@/src/lib/xero-model/workflow-templates'
 
-import { AgentTemplatePicker } from './agent-template-picker'
+import { CreateAgentDialog } from './create-agent-dialog'
+import type { CreateEntityDialogView } from './create-entity-dialog'
+import { CreateWorkflowDialog } from './create-workflow-dialog'
 
 interface WorkflowCanvasEmptyStateProps {
   onCreateAgent?: () => void
   onCreateAgentFromTemplate?: (ref: AgentRefDto) => void
+  onCreateWorkflow?: () => void
+  onCreateWorkflowWithAgentCreate?: () => void
+  onCreateWorkflowFromTemplate?: (templateId: WorkflowTemplateIdDto) => void
   onBrowseWorkflows?: () => void
   templates?: WorkflowAgentSummaryDto[]
   templatesLoading?: boolean
@@ -47,23 +40,31 @@ interface Action {
   exiting?: boolean
 }
 
-type DialogView = 'choice' | 'templates'
+type CreateDialogKind = 'agent' | 'workflow'
 
 export function WorkflowCanvasEmptyState({
   onCreateAgent,
   onCreateAgentFromTemplate,
+  onCreateWorkflow,
+  onCreateWorkflowWithAgentCreate,
+  onCreateWorkflowFromTemplate,
   onBrowseWorkflows,
   templates = [],
   templatesLoading = false,
   templatesError = null,
   className,
 }: WorkflowCanvasEmptyStateProps) {
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [dialogView, setDialogView] = useState<DialogView>('choice')
+  const [dialogKind, setDialogKind] = useState<CreateDialogKind | null>(null)
+  const [dialogView, setDialogView] = useState<CreateEntityDialogView>('choice')
 
-  const canStartBlank = Boolean(onCreateAgent)
-  const canPickTemplate = Boolean(onCreateAgentFromTemplate)
-  const canCreateAgent = canStartBlank || canPickTemplate
+  const canStartBlankAgent = Boolean(onCreateAgent)
+  const canPickAgentTemplate = Boolean(onCreateAgentFromTemplate)
+  const canCreateAgent = canStartBlankAgent || canPickAgentTemplate
+  const canStartBlankWorkflow = Boolean(onCreateWorkflow)
+  const canUseAgentCreateForWorkflow = Boolean(onCreateWorkflowWithAgentCreate)
+  const canPickWorkflowTemplate = Boolean(onCreateWorkflowFromTemplate)
+  const canCreateWorkflow =
+    canStartBlankWorkflow || canUseAgentCreateForWorkflow || canPickWorkflowTemplate
   const canBrowseWorkflows = Boolean(onBrowseWorkflows)
   const [browseWorkflowsMounted, setBrowseWorkflowsMounted] = useState(canBrowseWorkflows)
   const [browseWorkflowsVisible, setBrowseWorkflowsVisible] = useState(canBrowseWorkflows)
@@ -79,19 +80,51 @@ export function WorkflowCanvasEmptyState({
 
   function openCreateAgentDialog() {
     setDialogView('choice')
-    setDialogOpen(true)
+    setDialogKind('agent')
   }
 
-  function handleStartBlank() {
+  function openCreateWorkflowDialog() {
+    setDialogView('choice')
+    setDialogKind('workflow')
+  }
+
+  function closeCreateDialog() {
+    setDialogKind(null)
+    setDialogView('choice')
+  }
+
+  function handleDialogOpenChange(open: boolean) {
+    if (!open) closeCreateDialog()
+  }
+
+  function handleStartBlankAgent() {
     if (!onCreateAgent) return
-    setDialogOpen(false)
+    closeCreateDialog()
     onCreateAgent()
   }
 
-  function handlePickTemplate(ref: AgentRefDto) {
+  function handlePickAgentTemplate(ref: AgentRefDto) {
     if (!onCreateAgentFromTemplate) return
-    setDialogOpen(false)
+    closeCreateDialog()
     onCreateAgentFromTemplate(ref)
+  }
+
+  function handleStartBlankWorkflow() {
+    if (!onCreateWorkflow) return
+    closeCreateDialog()
+    onCreateWorkflow()
+  }
+
+  function handleCreateWorkflowWithAgentCreate() {
+    if (!onCreateWorkflowWithAgentCreate) return
+    closeCreateDialog()
+    onCreateWorkflowWithAgentCreate()
+  }
+
+  function handlePickWorkflowTemplate(templateId: WorkflowTemplateIdDto) {
+    if (!onCreateWorkflowFromTemplate) return
+    closeCreateDialog()
+    onCreateWorkflowFromTemplate(templateId)
   }
 
   useEffect(() => {
@@ -122,13 +155,14 @@ export function WorkflowCanvasEmptyState({
 
   const actions: Action[] = [
     { icon: Bot, label: 'Create agent', onSelect: canCreateAgent ? openCreateAgentDialog : undefined },
-    { icon: Plus, label: 'Create workflow', comingSoon: true },
+    { icon: Plus, label: 'Create workflow', onSelect: canCreateWorkflow ? openCreateWorkflowDialog : undefined, comingSoon: !canCreateWorkflow },
     ...(browseWorkflowsMounted
       ? [
           {
             icon: Play,
             label: 'Run an existing workflow',
-            comingSoon: true,
+            onSelect: onBrowseWorkflows,
+            comingSoon: !canBrowseWorkflows,
             exiting: !browseWorkflowsVisible,
           },
         ]
@@ -222,193 +256,37 @@ export function WorkflowCanvasEmptyState({
         </ul>
       </div>
 
-      {canCreateAgent ? (
+      {dialogKind === 'agent' && canCreateAgent ? (
         <CreateAgentDialog
-          open={dialogOpen}
-          onOpenChange={setDialogOpen}
+          open
+          onOpenChange={handleDialogOpenChange}
           view={dialogView}
           onSetView={setDialogView}
-          canStartBlank={canStartBlank}
-          canPickTemplate={canPickTemplate}
+          canStartBlank={canStartBlankAgent}
+          canPickTemplate={canPickAgentTemplate}
           templates={visibleTemplates}
           templatesLoading={templatesLoading}
           templatesError={templatesError}
-          onStartBlank={handleStartBlank}
-          onPickTemplate={handlePickTemplate}
+          onStartBlank={handleStartBlankAgent}
+          onPickTemplate={handlePickAgentTemplate}
+        />
+      ) : null}
+
+      {dialogKind === 'workflow' && canCreateWorkflow ? (
+        <CreateWorkflowDialog
+          open
+          onOpenChange={handleDialogOpenChange}
+          view={dialogView}
+          onSetView={setDialogView}
+          canStartBlank={canStartBlankWorkflow}
+          canUseAgentCreate={canUseAgentCreateForWorkflow}
+          canPickTemplate={canPickWorkflowTemplate}
+          onStartBlank={handleStartBlankWorkflow}
+          onUseAgentCreate={handleCreateWorkflowWithAgentCreate}
+          onPickTemplate={handlePickWorkflowTemplate}
         />
       ) : null}
     </div>
-  )
-}
-
-interface CreateAgentDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  view: DialogView
-  onSetView: (view: DialogView) => void
-  canStartBlank: boolean
-  canPickTemplate: boolean
-  templates: WorkflowAgentSummaryDto[]
-  templatesLoading: boolean
-  templatesError: Error | null
-  onStartBlank: () => void
-  onPickTemplate: (ref: AgentRefDto) => void
-}
-
-function CreateAgentDialog({
-  open,
-  onOpenChange,
-  view,
-  onSetView,
-  canStartBlank,
-  canPickTemplate,
-  templates,
-  templatesLoading,
-  templatesError,
-  onStartBlank,
-  onPickTemplate,
-}: CreateAgentDialogProps) {
-  const isChoice = view === 'choice'
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[460px]">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-primary/[0.06] to-transparent"
-        />
-
-        <div className="relative px-6 pb-2 pt-6">
-          <DialogHeader className="space-y-2">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-primary">
-                <Sparkles className="h-4 w-4" />
-              </span>
-              <DialogTitle className="text-[15px]">Create agent</DialogTitle>
-            </div>
-            <DialogDescription className="text-[12.5px] leading-relaxed">
-              {isChoice
-                ? 'Start from scratch or copy an existing agent as a template.'
-                : 'Templates open on the canvas with “(copy)” appended so you can edit freely.'}
-            </DialogDescription>
-          </DialogHeader>
-        </div>
-
-        <div className="relative px-6 pb-5 mt-4">
-          {isChoice ? (
-            <div className="flex flex-col gap-2">
-              <ChoiceCard
-                icon={<Plus className="h-4 w-4" />}
-                title="New agent"
-                description="Open the canvas with an empty agent header."
-                onClick={onStartBlank}
-                disabled={!canStartBlank}
-              />
-              {canPickTemplate ? (
-                <ChoiceCard
-                  icon={<Copy className="h-4 w-4" />}
-                  title="From template"
-                  description="Copy a built-in or saved agent and tweak it."
-                  onClick={() => onSetView('templates')}
-                />
-              ) : null}
-            </div>
-          ) : (
-            <AgentTemplatePicker
-              agents={templates}
-              loading={templatesLoading}
-              error={templatesError}
-              onSelectTemplate={onPickTemplate}
-              onStartBlank={onStartBlank}
-              headless
-              hideStartBlank
-              className="max-w-none gap-0 rounded-lg border-0 bg-transparent p-0 shadow-none"
-            />
-          )}
-        </div>
-
-        <DialogFooter className="border-t border-border/60 bg-secondary/20 px-6 py-3 sm:justify-between">
-          {isChoice ? (
-            <>
-              <p className="hidden text-[11px] text-muted-foreground/70 sm:block">
-                Agents become reusable building blocks across workflows.
-              </p>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onOpenChange(false)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                Cancel
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onSetView('choice')}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Back
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => onOpenChange(false)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                Cancel
-              </Button>
-            </>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-interface ChoiceCardProps {
-  icon: ReactNode
-  title: string
-  description: string
-  onClick: () => void
-  disabled?: boolean
-}
-
-function ChoiceCard({ icon, title, description, onClick, disabled = false }: ChoiceCardProps) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'group relative flex items-center gap-3 rounded-lg border border-border/60 bg-card/40 px-3.5 py-3 text-left transition-all',
-        disabled
-          ? 'cursor-not-allowed opacity-50'
-          : 'hover:border-primary/40 hover:bg-primary/[0.04] focus-visible:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
-      )}
-    >
-      <span
-        className={cn(
-          'flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition-colors',
-          'border-border/60 bg-secondary/60 text-muted-foreground',
-          'group-hover:border-primary/40 group-hover:bg-primary/10 group-hover:text-primary',
-        )}
-      >
-        {icon}
-      </span>
-      <div className="min-w-0 flex-1 space-y-0.5">
-        <div className="text-[13px] font-medium text-foreground">{title}</div>
-        <div className="text-[11.5px] leading-snug text-muted-foreground">{description}</div>
-      </div>
-      <ChevronRight
-        className={cn(
-          'h-4 w-4 shrink-0 text-muted-foreground/50 transition-all',
-          !disabled && 'group-hover:translate-x-0.5 group-hover:text-primary',
-        )}
-      />
-    </button>
   )
 }
 
