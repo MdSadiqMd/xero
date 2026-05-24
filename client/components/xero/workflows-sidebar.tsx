@@ -106,9 +106,11 @@ interface WorkflowsSidebarProps {
   workflowsLoading?: boolean
   workflowsError?: Error | null
   selectedWorkflowId?: string | null
+  selectedWorkflowTemplateId?: WorkflowTemplateIdDto | null
   selectedWorkflowRunId?: string | null
   selectedAgentRef?: AgentRefDto | null
   onSelectWorkflow?: (workflowId: string) => void
+  onSelectWorkflowTemplate?: (templateId: WorkflowTemplateIdDto) => void
   onSelectWorkflowRun?: (runId: string) => void
   onCreateWorkflow?: () => void
   onCreateWorkflowWithAgentCreate?: () => void
@@ -154,9 +156,11 @@ export function WorkflowsSidebar({
   workflowsLoading = false,
   workflowsError = null,
   selectedWorkflowId = null,
+  selectedWorkflowTemplateId = null,
   selectedWorkflowRunId = null,
   selectedAgentRef = null,
   onSelectWorkflow,
+  onSelectWorkflowTemplate,
   onSelectWorkflowRun,
   onCreateWorkflow,
   onCreateWorkflowWithAgentCreate,
@@ -397,9 +401,11 @@ export function WorkflowsSidebar({
             workflowsLoading={workflowsLoading}
             workflowsError={workflowsError}
             selectedWorkflowId={selectedWorkflowId}
+            selectedWorkflowTemplateId={selectedWorkflowTemplateId}
             selectedWorkflowRunId={selectedWorkflowRunId}
             selectedAgentRef={selectedAgentRef}
             onSelectWorkflow={onSelectWorkflow}
+            onSelectWorkflowTemplate={onSelectWorkflowTemplate}
             onSelectWorkflowRun={onSelectWorkflowRun}
             onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
             onStartWorkflowRun={onStartWorkflowRun}
@@ -638,9 +644,11 @@ function LibraryList({
   workflowsLoading,
   workflowsError,
   selectedWorkflowId,
+  selectedWorkflowTemplateId,
   selectedWorkflowRunId,
   selectedAgentRef,
   onSelectWorkflow,
+  onSelectWorkflowTemplate,
   onSelectWorkflowRun,
   onCreateWorkflowFromTemplate,
   onStartWorkflowRun,
@@ -664,9 +672,11 @@ function LibraryList({
   workflowsLoading: boolean
   workflowsError: Error | null
   selectedWorkflowId: string | null
+  selectedWorkflowTemplateId: WorkflowTemplateIdDto | null
   selectedWorkflowRunId: string | null
   selectedAgentRef: AgentRefDto | null
   onSelectWorkflow?: (workflowId: string) => void
+  onSelectWorkflowTemplate?: (templateId: WorkflowTemplateIdDto) => void
   onSelectWorkflowRun?: (runId: string) => void
   onCreateWorkflowFromTemplate?: (templateId: WorkflowTemplateIdDto) => void
   onStartWorkflowRun?: (workflowId: string) => void
@@ -689,7 +699,9 @@ function LibraryList({
         loading={workflowsLoading}
         error={workflowsError}
         selectedWorkflowId={selectedWorkflowId}
+        selectedWorkflowTemplateId={selectedWorkflowTemplateId}
         selectedWorkflowRunId={selectedWorkflowRunId}
+        onSelectWorkflowTemplate={onSelectWorkflowTemplate}
         onSelectWorkflow={onSelectWorkflow}
         onSelectWorkflowRun={onSelectWorkflowRun}
         onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
@@ -783,8 +795,10 @@ function WorkflowsList({
   loading,
   error,
   selectedWorkflowId,
+  selectedWorkflowTemplateId,
   selectedWorkflowRunId,
   onSelectWorkflow,
+  onSelectWorkflowTemplate,
   onSelectWorkflowRun,
   onCreateWorkflowFromTemplate,
   onStartWorkflowRun,
@@ -799,8 +813,10 @@ function WorkflowsList({
   loading: boolean
   error: Error | null
   selectedWorkflowId: string | null
+  selectedWorkflowTemplateId: WorkflowTemplateIdDto | null
   selectedWorkflowRunId: string | null
   onSelectWorkflow?: (workflowId: string) => void
+  onSelectWorkflowTemplate?: (templateId: WorkflowTemplateIdDto) => void
   onSelectWorkflowRun?: (runId: string) => void
   onCreateWorkflowFromTemplate?: (templateId: WorkflowTemplateIdDto) => void
   onStartWorkflowRun?: (workflowId: string) => void
@@ -832,7 +848,11 @@ function WorkflowsList({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
       {definitions.length === 0 && !hasQuery ? (
-        <WorkflowTemplates onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate} />
+        <WorkflowTemplates
+          selectedTemplateId={selectedWorkflowTemplateId}
+          onSelectWorkflowTemplate={onSelectWorkflowTemplate}
+          onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
+        />
       ) : (
         <ul className="flex flex-col py-1">
           {definitions.map((definition) => {
@@ -852,7 +872,12 @@ function WorkflowsList({
         </ul>
       )}
       {definitions.length > 0 ? (
-        <WorkflowTemplates compact onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate} />
+        <WorkflowTemplates
+          compact
+          selectedTemplateId={selectedWorkflowTemplateId}
+          onSelectWorkflowTemplate={onSelectWorkflowTemplate}
+          onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
+        />
       ) : null}
       {runs.length > 0 ? (
         <WorkflowRunsTimeline
@@ -944,9 +969,13 @@ function LibraryEntityRow({
 
 function WorkflowTemplates({
   compact = false,
+  selectedTemplateId = null,
+  onSelectWorkflowTemplate,
   onCreateWorkflowFromTemplate,
 }: {
   compact?: boolean
+  selectedTemplateId?: WorkflowTemplateIdDto | null
+  onSelectWorkflowTemplate?: (templateId: WorkflowTemplateIdDto) => void
   onCreateWorkflowFromTemplate?: (templateId: WorkflowTemplateIdDto) => void
 }) {
   return (
@@ -964,9 +993,11 @@ function WorkflowTemplates({
             name={template.name}
             description={compact ? undefined : template.description}
             icon={Sparkles}
-            ariaLabel={`Create workflow from ${template.name}`}
-            disabled={!onCreateWorkflowFromTemplate}
-            onActivate={() => onCreateWorkflowFromTemplate?.(template.id)}
+            selected={template.id === selectedTemplateId}
+            ariaLabel={`Inspect workflow template ${template.name}`}
+            ariaPressed={template.id === selectedTemplateId}
+            disabled={!onSelectWorkflowTemplate}
+            onActivate={() => onSelectWorkflowTemplate?.(template.id)}
             badges={
               <>
                 <Badge variant="secondary" className="px-1 py-0 text-[9px] leading-tight">

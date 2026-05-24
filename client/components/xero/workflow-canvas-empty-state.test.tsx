@@ -83,8 +83,8 @@ describe('WorkflowCanvasEmptyState', () => {
 
     expect(screen.getByText(/Templates open as editable workflow drafts/i)).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /Continuous delivery/ }))
-    expect(onCreateWorkflowFromTemplate).toHaveBeenCalledWith('continuous_delivery')
+    fireEvent.click(screen.getByRole('button', { name: /GSD Auto/ }))
+    expect(onCreateWorkflowFromTemplate).toHaveBeenCalledWith('gsd_auto')
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 

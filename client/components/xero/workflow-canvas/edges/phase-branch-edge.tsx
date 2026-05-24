@@ -22,6 +22,7 @@ interface PhaseBranchEdgeData extends Record<string, unknown> {
   labelBackground?: string
   labelBorderColor?: string
   labelTextColor?: string
+  focused?: boolean
 }
 
 function describeCondition(condition: CustomAgentWorkflowBranchConditionDto | undefined): string {
@@ -133,7 +134,7 @@ export const PhaseBranchEdge = memo(function PhaseBranchEdge(props: EdgeProps) {
       <EdgeLabelRenderer>
         <div
           data-edge-id={id}
-          className="agent-edge-phase-branch-label"
+          className={branchData?.focused ? 'agent-edge-phase-branch-label is-active' : 'agent-edge-phase-branch-label'}
           style={labelStyle}
         >
           {label}

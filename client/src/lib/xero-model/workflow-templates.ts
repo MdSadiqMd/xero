@@ -25,32 +25,11 @@ export interface WorkflowTemplateSummaryDto {
 
 export const WORKFLOW_TEMPLATE_LIBRARY: WorkflowTemplateSummaryDto[] = [
   {
-    id: 'continuous_delivery',
-    name: 'Continuous delivery',
-    description: 'Plan, build, check, recover through bounded gap/debug/review loops, then summarize.',
-    nodeCount: 15,
-    tags: ['recovery', 'gates', 'loops'],
-  },
-  {
     id: 'gsd_auto',
     name: 'GSD Auto',
-    description: 'Continue milestones through durable delivery phases, executable verification, audit, and archive.',
-    nodeCount: 13,
-    tags: ['delivery-state', 'collections', 'verification'],
-  },
-  {
-    id: 'release_train',
-    name: 'Release train',
-    description: 'Collect release candidates, verify each one, and archive release evidence.',
-    nodeCount: 9,
-    tags: ['release', 'collections', 'checks'],
-  },
-  {
-    id: 'bug_triage_fix_loop',
-    name: 'Bug triage and fix',
-    description: 'Query open defects, fix one at a time, verify with commands, and close durable records.',
-    nodeCount: 10,
-    tags: ['bugs', 'state', 'recovery'],
+    description: 'Run the GSD project and milestone loop with visible ideation, planning, execution, review, audit, and archive nodes.',
+    nodeCount: 47,
+    tags: ['gsd', 'delivery-state', 'collections', 'verification'],
   },
 ]
 
@@ -75,19 +54,53 @@ export const WORKFLOW_TEMPLATE_DEFAULT_NODE_POSITIONS: Readonly<
     needs_human: { x: 2140, y: 740 },
   },
   gsd_auto: {
-    load_milestones: { x: 40, y: 300 },
-    milestone_route: { x: 340, y: 300 },
-    query_phases: { x: 640, y: 260 },
-    next_phase: { x: 940, y: 260 },
-    phase_router: { x: 1240, y: 430 },
-    milestone_intake_flow: { x: 940, y: 720 },
-    partial_success: { x: 1240, y: 240 },
-    process_phase_flow: { x: 1540, y: 430 },
-    mark_phase_complete: { x: 1240, y: 20 },
-    milestone_audit_flow: { x: 1540, y: 620 },
-    next_milestone_offer: { x: 1240, y: 720 },
-    success: { x: 1540, y: 820 },
-    needs_human: { x: 2140, y: 620 },
+    gsd_start: { x: 40, y: 420 },
+    load_milestones: { x: 340, y: 420 },
+    milestone_route: { x: 640, y: 420 },
+    query_phases: { x: 940, y: 260 },
+    next_phase: { x: 1240, y: 260 },
+    phase_router: { x: 1540, y: 260 },
+    project_ideation: { x: 940, y: 720 },
+    new_milestone_intake: { x: 940, y: 940 },
+    project_requirements: { x: 1240, y: 720 },
+    project_roadmap: { x: 1540, y: 720 },
+    milestone_intake: { x: 1840, y: 720 },
+    write_milestone: { x: 2140, y: 720 },
+    seed_requirement: { x: 2440, y: 720 },
+    seed_phase_1: { x: 2740, y: 720 },
+    seed_phase_2: { x: 3040, y: 720 },
+    seed_phase_3: { x: 3340, y: 720 },
+    smart_discuss: { x: 1840, y: 260 },
+    phase_plan: { x: 2140, y: 260 },
+    phase_execute: { x: 2440, y: 260 },
+    debug_phase: { x: 2440, y: 480 },
+    verify_command: { x: 2740, y: 260 },
+    phase_verify: { x: 3040, y: 260 },
+    verification_router: { x: 3340, y: 260 },
+    gap_closure: { x: 3340, y: 480 },
+    phase_review: { x: 3640, y: 260 },
+    human_verify: { x: 3640, y: 480 },
+    review_router: { x: 3940, y: 260 },
+    phase_fix: { x: 3940, y: 480 },
+    write_phase_context: { x: 4240, y: 260 },
+    write_phase_plan: { x: 4540, y: 260 },
+    write_phase_summary: { x: 4840, y: 260 },
+    write_verification_evidence: { x: 5140, y: 260 },
+    mark_phase_complete: { x: 5440, y: 260 },
+    partial_success: { x: 1540, y: 480 },
+    reload_milestones: { x: 1540, y: 40 },
+    query_remaining_phases: { x: 1840, y: 40 },
+    query_requirements: { x: 2140, y: 40 },
+    audit_milestone: { x: 2440, y: 40 },
+    audit_router: { x: 2740, y: 40 },
+    human_audit: { x: 3040, y: -180 },
+    complete_requirement: { x: 3040, y: 40 },
+    complete_milestone: { x: 3340, y: 40 },
+    write_milestone_archive: { x: 3640, y: 40 },
+    archive_milestone: { x: 3940, y: 40 },
+    next_milestone_offer: { x: 4240, y: 40 },
+    success: { x: 4540, y: 40 },
+    needs_human: { x: 4540, y: 720 },
   },
   release_train: {
     query_candidates: { x: 40, y: 300 },
@@ -333,35 +346,66 @@ function instantiateGsdAutoTemplate(
   const planAgent = resolveBuiltInAgentRef(agents, 'plan')
   const workAgent = resolveBuiltInAgentRef(agents, 'engineer')
   const verifyAgent = resolveBuiltInAgentRef(agents, 'engineer')
+  const debugAgent = resolveBuiltInAgentRef(agents, 'debug')
+  const reviewAgent = resolveBuiltInAgentRef(agents, 'engineer')
   const auditAgent = resolveBuiltInAgentRef(agents, 'generalist')
   const id = createWorkflowId('gsd-auto')
-  const milestoneIntakeSubgraph: WorkflowDefinitionDto['subgraphs'][number] = {
-    id: 'gsd_milestone_intake',
-    title: 'Milestone intake',
-    description: 'Create or refresh the active milestone, requirement, and starter delivery phases.',
-    startNodeId: 'milestone_intake',
-    inputBindings: [runInputBinding('goal', 'Goal', true)],
-    outputContract: subgraphResultOutputContract(),
+
+  return withBaseDefinition({
+    id,
+    projectId,
+    name: name?.trim() || 'GSD Auto',
+    description:
+      'A durable milestone workflow that discovers incomplete delivery phases, iterates them, verifies work, audits coverage, and archives completion state.',
+    startNodeId: 'gsd_start',
     nodes: [
-      agentNode('milestone_intake', 'Milestone intake', 40, 120, planAgent, 'task_brief', [
+      agentNode('gsd_start', 'GSD start', ...templateNodePosition('gsd_auto', 'gsd_start'), planAgent, 'task_brief', [
         runInputBinding('goal', 'Goal', true),
+        runInputBinding('only', 'Only phase', false),
+        runInputBinding('from', 'From phase', false),
+        runInputBinding('to', 'To phase', false),
       ]),
-      stateWriteNode('write_milestone', 'Write milestone', 340, 120, 'milestone', 'upsert', {
+      stateQueryNode('load_milestones', 'Load milestones', ...templateNodePosition('gsd_auto', 'load_milestones'), 'milestone', 'state_milestones', [
+        { path: '$.status', operator: 'neq', value: 'archived', values: [] },
+      ], '$.updatedAt', 1),
+      routerNode('milestone_route', 'Milestone route', ...templateNodePosition('gsd_auto', 'milestone_route')),
+      agentNode('project_ideation', 'Project ideation', ...templateNodePosition('gsd_auto', 'project_ideation'), planAgent, 'task_brief', [
+        runInputBinding('goal', 'Goal', true),
+        artifactBinding('gsd_start.task_brief', 'GSD start brief'),
+      ]),
+      agentNode('new_milestone_intake', 'New milestone intake', ...templateNodePosition('gsd_auto', 'new_milestone_intake'), planAgent, 'task_brief', [
+        runInputBinding('goal', 'Goal', true),
+        artifactBinding('audit_milestone.milestone_audit', 'Previous milestone audit', false),
+      ]),
+      agentNode('project_requirements', 'Requirements', ...templateNodePosition('gsd_auto', 'project_requirements'), planAgent, 'task_brief', [
+        runInputBinding('goal', 'Goal', true),
+        artifactBinding('project_ideation.task_brief', 'Project ideation', false),
+        artifactBinding('new_milestone_intake.task_brief', 'New milestone intake', false),
+      ]),
+      agentNode('project_roadmap', 'Roadmap', ...templateNodePosition('gsd_auto', 'project_roadmap'), planAgent, 'delivery_plan', [
+        artifactBinding('project_requirements.task_brief', 'Requirements'),
+      ]),
+      agentNode('milestone_intake', 'Create milestone', ...templateNodePosition('gsd_auto', 'milestone_intake'), planAgent, 'task_brief', [
+        runInputBinding('goal', 'Goal', true),
+        artifactBinding('project_roadmap.delivery_plan', 'Roadmap'),
+        artifactBinding('project_requirements.task_brief', 'Requirements'),
+      ]),
+      stateWriteNode('write_milestone', 'Write milestone', ...templateNodePosition('gsd_auto', 'write_milestone'), 'milestone', 'upsert', {
         id: 'gsd-current-milestone',
         title: '{{input.goal}}',
-        summary: '{{input.goal}}',
+        summary: '{{artifact:project_roadmap.delivery_plan}}',
         goal: '{{input.goal}}',
         status: 'active',
       }, 'gsd-current-milestone'),
-      stateWriteNode('seed_requirement', 'Seed requirement', 640, 120, 'requirement', 'upsert', {
+      stateWriteNode('seed_requirement', 'Seed requirement', ...templateNodePosition('gsd_auto', 'seed_requirement'), 'requirement', 'upsert', {
         id: 'gsd-requirement-1',
         milestoneId: '{{state.write_milestone.state_write_result.id}}',
         title: '{{input.goal}}',
-        description: 'Primary requirement generated from the run goal.',
+        description: '{{artifact:project_requirements.task_brief}}',
         status: 'open',
         priority: 100,
       }, 'gsd-requirement-1'),
-      stateWriteNode('seed_phase_1', 'Seed phase 1', 940, 0, 'delivery_phase', 'upsert', {
+      stateWriteNode('seed_phase_1', 'Seed phase 1', ...templateNodePosition('gsd_auto', 'seed_phase_1'), 'delivery_phase', 'upsert', {
         id: 'gsd-phase-1',
         milestoneId: '{{state.write_milestone.state_write_result.id}}',
         phaseKey: '1',
@@ -370,7 +414,7 @@ function instantiateGsdAutoTemplate(
         status: 'incomplete',
         sortOrder: 1,
       }, 'gsd-phase-1'),
-      stateWriteNode('seed_phase_2', 'Seed phase 2', 1240, 0, 'delivery_phase', 'upsert', {
+      stateWriteNode('seed_phase_2', 'Seed phase 2', ...templateNodePosition('gsd_auto', 'seed_phase_2'), 'delivery_phase', 'upsert', {
         id: 'gsd-phase-2',
         milestoneId: '{{state.write_milestone.state_write_result.id}}',
         phaseKey: '2',
@@ -379,7 +423,7 @@ function instantiateGsdAutoTemplate(
         status: 'incomplete',
         sortOrder: 2,
       }, 'gsd-phase-2'),
-      stateWriteNode('seed_phase_3', 'Seed phase 3', 1540, 0, 'delivery_phase', 'upsert', {
+      stateWriteNode('seed_phase_3', 'Seed phase 3', ...templateNodePosition('gsd_auto', 'seed_phase_3'), 'delivery_phase', 'upsert', {
         id: 'gsd-phase-3',
         milestoneId: '{{state.write_milestone.state_write_result.id}}',
         phaseKey: '3',
@@ -388,183 +432,6 @@ function instantiateGsdAutoTemplate(
         status: 'incomplete',
         sortOrder: 3,
       }, 'gsd-phase-3'),
-      terminalNode('milestone_ready', 'Milestone ready', 1840, 120, 'success'),
-    ],
-    edges: [
-      edge('intake_to_write', 'milestone_intake', 'write_milestone', 'success', 'create', 10),
-      edge('write_to_requirement', 'write_milestone', 'seed_requirement', 'success', 'requirement', 10),
-      edge('requirement_to_seed_1', 'seed_requirement', 'seed_phase_1', 'success', 'seed', 10),
-      edge('seed_1_to_seed_2', 'seed_phase_1', 'seed_phase_2', 'success', 'seed', 10),
-      edge('seed_2_to_seed_3', 'seed_phase_2', 'seed_phase_3', 'success', 'seed', 10),
-      edge('seed_3_to_ready', 'seed_phase_3', 'milestone_ready', 'success', 'ready', 10),
-    ],
-  }
-  const phaseExecutionSubgraph: WorkflowDefinitionDto['subgraphs'][number] = {
-    id: 'gsd_phase_execution',
-    title: 'Phase execution',
-    description: 'Discuss, plan, execute, verify, and close gaps for one selected delivery phase.',
-    startNodeId: 'smart_discuss',
-    inputBindings: [
-      runInputBinding('goal', 'Goal', true),
-      stateBinding('next_phase.collection_item', 'Delivery phase', true, '$.item'),
-    ],
-    outputContract: subgraphResultOutputContract(),
-    nodes: [
-      agentNode('smart_discuss', 'Smart discuss', 40, 80, planAgent, 'task_brief'),
-      agentNode('phase_plan', 'Phase plan', 340, 80, planAgent, 'delivery_plan', [
-        artifactBinding('smart_discuss.task_brief', 'Phase discussion'),
-      ]),
-      agentNode('phase_execute', 'Phase execute', 640, 80, workAgent, 'implementation_summary', [
-        artifactBinding('phase_plan.delivery_plan', 'Phase plan'),
-      ]),
-      commandNode('verify_command', 'Verification command', 940, 80, 'git', ['status', '--short']),
-      agentNode('phase_verify', 'Verification review', 1240, 80, verifyAgent, 'verification_result', [
-        artifactBinding('phase_execute.implementation_summary', 'Implementation summary'),
-        artifactBinding('verify_command.command_result', 'Command result'),
-      ]),
-      routerNode('verification_router', 'Verification route', 1540, 80),
-      agentNode('gap_closure', 'Gap closure', 1540, 300, planAgent, 'gap_list', [
-        artifactBinding('phase_verify.verification_result', 'Verification result'),
-      ]),
-      humanCheckpointNode('human_verify', 'Human verification', 1840, 300, ['passed', 'gaps_found', 'stop']),
-      terminalNode('phase_processed', 'Phase processed', 1840, 80, 'success'),
-      terminalNode('phase_needs_human', 'Needs human', 2140, 300, 'failure'),
-    ],
-    edges: [
-      edge('discuss_to_plan', 'smart_discuss', 'phase_plan', 'success', 'plan', 10),
-      edge('plan_to_execute', 'phase_plan', 'phase_execute', 'success', 'execute', 10),
-      edge('execute_to_command', 'phase_execute', 'verify_command', 'success', 'check', 10),
-      edge('command_to_verify', 'verify_command', 'phase_verify', 'success', 'review', 10),
-      edge('verify_to_router', 'phase_verify', 'verification_router', 'success', 'route', 10),
-      edge('verify_passed', 'verification_router', 'phase_processed', 'conditional', 'passed', 10, {
-        kind: 'artifact_field_equals',
-        artifactRef: 'phase_verify.verification_result',
-        path: '$.status',
-        value: 'passed',
-      }),
-      edge('verify_gaps_to_closure', 'verification_router', 'gap_closure', 'conditional', 'gaps', 20, {
-        kind: 'artifact_field_in',
-        artifactRef: 'phase_verify.verification_result',
-        path: '$.status',
-        values: ['gaps_found', 'needs_changes'],
-      }),
-      edge('verify_human_needed', 'verification_router', 'human_verify', 'conditional', 'needs human', 30, {
-        kind: 'artifact_field_in',
-        artifactRef: 'phase_verify.verification_result',
-        path: '$.status',
-        values: ['human_needed', 'failed'],
-      }),
-      loopEdge('gap_closure_to_execute', 'gap_closure', 'phase_execute', 'close gaps', 'gap_closure', 2, 'human_verify'),
-      edge('human_verify_passed', 'human_verify', 'phase_processed', 'manual_override', 'passed', 10, {
-        kind: 'human_decision_is',
-        checkpointNodeId: 'human_verify',
-        decision: 'passed',
-      }),
-      edge('human_verify_gaps', 'human_verify', 'gap_closure', 'manual_override', 'gaps', 20, {
-        kind: 'human_decision_is',
-        checkpointNodeId: 'human_verify',
-        decision: 'gaps_found',
-      }),
-      edge('human_verify_stop', 'human_verify', 'phase_needs_human', 'manual_override', 'stop', 90, {
-        kind: 'human_decision_is',
-        checkpointNodeId: 'human_verify',
-        decision: 'stop',
-      }),
-      edge('command_failed', 'verify_command', 'human_verify', 'failure', 'check failed', 10),
-    ],
-  }
-  const milestoneAuditSubgraph: WorkflowDefinitionDto['subgraphs'][number] = {
-    id: 'gsd_milestone_audit',
-    title: 'Milestone audit and archive',
-    description: 'Satisfy the seeded requirement, audit milestone coverage, complete the milestone, and archive it.',
-    startNodeId: 'satisfy_requirement',
-    inputBindings: [runInputBinding('goal', 'Goal', true)],
-    outputContract: subgraphResultOutputContract(),
-    nodes: [
-      stateWriteNode('satisfy_requirement', 'Satisfy requirement', 40, 160, 'requirement', 'mark_complete', {}, undefined, 'gsd-requirement-1'),
-      stateQueryNode('reload_milestones', 'Reload milestone', 340, 160, 'milestone', 'state_milestones', [
-        { path: '$.status', operator: 'neq', value: 'archived', values: [] },
-      ], '$.updatedAt', 1),
-      stateQueryNode('query_remaining_phases', 'Remaining phases', 640, 160, 'delivery_phase', 'state_incomplete_phases', [
-        { path: '$.status', operator: 'not_in', values: ['complete', 'archived'] },
-      ], '$.sortOrder'),
-      agentNode('audit_milestone', 'Audit milestone', 940, 160, auditAgent, 'milestone_audit', [
-        runInputBinding('goal', 'Goal', true),
-        stateBinding('reload_milestones.state_milestones', 'Milestone state', true),
-        stateBinding('query_remaining_phases.state_incomplete_phases', 'Remaining phases', false),
-      ]),
-      routerNode('audit_router', 'Audit route', 1240, 160),
-      stateWriteNode('complete_milestone', 'Complete milestone', 1540, 80, 'milestone', 'mark_complete', {}, undefined, '{{state.reload_milestones.state_milestones.records[0].id}}'),
-      stateWriteNode('write_milestone_archive', 'Write archive', 1840, 80, 'milestone_archive', 'upsert', {
-        id: '{{state.reload_milestones.state_milestones.records[0].id}}-archive',
-        milestoneId: '{{state.reload_milestones.state_milestones.records[0].id}}',
-        summary: '{{input.goal}}',
-        goal: '{{input.goal}}',
-        runId: '{{run.id}}',
-      }, '{{state.reload_milestones.state_milestones.records[0].id}}-archive'),
-      stateWriteNode('archive_milestone', 'Archive milestone', 2140, 80, 'milestone', 'archive', {}, undefined, '{{state.reload_milestones.state_milestones.records[0].id}}'),
-      humanCheckpointNode('human_audit', 'Audit decision', 1540, 360, ['passed', 'gaps_found', 'stop']),
-      terminalNode('milestone_archived', 'Milestone archived', 2440, 80, 'success'),
-      terminalNode('audit_needs_human', 'Needs human', 1840, 360, 'failure'),
-    ],
-    edges: [
-      edge('requirement_to_reload', 'satisfy_requirement', 'reload_milestones', 'success', 'reload', 10),
-      edge('reload_to_remaining', 'reload_milestones', 'query_remaining_phases', 'success', 'remaining', 10),
-      edge('remaining_to_audit', 'query_remaining_phases', 'audit_milestone', 'success', 'audit', 10),
-      edge('audit_to_router', 'audit_milestone', 'audit_router', 'success', 'route', 10),
-      edge('audit_passed', 'audit_router', 'complete_milestone', 'conditional', 'passed', 10, {
-        kind: 'artifact_field_equals',
-        artifactRef: 'audit_milestone.milestone_audit',
-        path: '$.status',
-        value: 'passed',
-      }),
-      edge('audit_needs_human', 'audit_router', 'human_audit', 'conditional', 'review', 20, {
-        kind: 'artifact_field_in',
-        artifactRef: 'audit_milestone.milestone_audit',
-        path: '$.status',
-        values: ['gaps_found', 'tech_debt', 'human_needed', 'failed'],
-      }),
-      edge('complete_to_write_archive', 'complete_milestone', 'write_milestone_archive', 'success', 'record archive', 10),
-      edge('write_archive_to_archive', 'write_milestone_archive', 'archive_milestone', 'success', 'archive', 10),
-      edge('archive_to_done', 'archive_milestone', 'milestone_archived', 'success', 'done', 10),
-      edge('human_audit_passed', 'human_audit', 'complete_milestone', 'manual_override', 'passed', 10, {
-        kind: 'human_decision_is',
-        checkpointNodeId: 'human_audit',
-        decision: 'passed',
-      }),
-      edge('human_audit_stop', 'human_audit', 'audit_needs_human', 'manual_override', 'stop', 20, {
-        kind: 'any',
-        conditions: [
-          {
-            kind: 'human_decision_is',
-            checkpointNodeId: 'human_audit',
-            decision: 'gaps_found',
-          },
-          {
-            kind: 'human_decision_is',
-            checkpointNodeId: 'human_audit',
-            decision: 'stop',
-          },
-        ],
-      }),
-    ],
-  }
-
-  return withBaseDefinition({
-    id,
-    projectId,
-    name: name?.trim() || 'GSD Auto',
-    description:
-      'A durable milestone workflow that discovers incomplete delivery phases, iterates them, verifies work, audits coverage, and archives completion state.',
-    startNodeId: 'load_milestones',
-    nodes: [
-      stateQueryNode('load_milestones', 'Load milestones', ...templateNodePosition('gsd_auto', 'load_milestones'), 'milestone', 'state_milestones', [
-        { path: '$.status', operator: 'neq', value: 'archived', values: [] },
-      ], '$.updatedAt', 1),
-      routerNode('milestone_route', 'Milestone route', ...templateNodePosition('gsd_auto', 'milestone_route')),
-      subgraphNode('milestone_intake_flow', 'Milestone intake', ...templateNodePosition('gsd_auto', 'milestone_intake_flow'), 'gsd_milestone_intake', [
-        runInputBinding('goal', 'Goal', true),
-      ]),
       stateQueryNode('query_phases', 'Query incomplete phases', ...templateNodePosition('gsd_auto', 'query_phases'), 'delivery_phase', 'state_incomplete_phases', [
         { path: '$.status', operator: 'not_in', values: ['complete', 'archived'] },
       ], '$.sortOrder'),
@@ -576,23 +443,103 @@ function instantiateGsdAutoTemplate(
         onlyInputPath: '$.only',
       }),
       routerNode('phase_router', 'Phase route', ...templateNodePosition('gsd_auto', 'phase_router')),
-      subgraphNode('process_phase_flow', 'Process phase', ...templateNodePosition('gsd_auto', 'process_phase_flow'), 'gsd_phase_execution', [
+      agentNode('smart_discuss', 'Smart discuss', ...templateNodePosition('gsd_auto', 'smart_discuss'), planAgent, 'task_brief', [
         runInputBinding('goal', 'Goal', true),
         runInputBinding('only', 'Only phase', false),
         runInputBinding('from', 'From phase', false),
         runInputBinding('to', 'To phase', false),
         stateBinding('next_phase.collection_item', 'Delivery phase', true, '$.item'),
       ]),
-      stateWriteNode('mark_phase_complete', 'Mark phase complete', ...templateNodePosition('gsd_auto', 'mark_phase_complete'), 'delivery_phase', 'mark_complete', {}, undefined, '{{state.next_phase.collection_item.itemId}}'),
-      subgraphNode('milestone_audit_flow', 'Audit and archive', ...templateNodePosition('gsd_auto', 'milestone_audit_flow'), 'gsd_milestone_audit', [
-        runInputBinding('goal', 'Goal', true),
+      agentNode('phase_plan', 'Phase plan', ...templateNodePosition('gsd_auto', 'phase_plan'), planAgent, 'delivery_plan', [
+        artifactBinding('smart_discuss.task_brief', 'Phase discussion'),
+        stateBinding('next_phase.collection_item', 'Delivery phase', true, '$.item'),
       ]),
+      agentNode('phase_execute', 'Phase execute', ...templateNodePosition('gsd_auto', 'phase_execute'), workAgent, 'implementation_summary', [
+        artifactBinding('phase_plan.delivery_plan', 'Phase plan'),
+        artifactBinding('gap_closure.gap_list', 'Gap closure plan', false),
+      ]),
+      agentNode('debug_phase', 'Debug', ...templateNodePosition('gsd_auto', 'debug_phase'), debugAgent, 'debug_report', [
+        artifactBinding('phase_execute.implementation_summary', 'Implementation summary', false),
+        artifactBinding('verify_command.command_result', 'Verification command', false),
+      ]),
+      commandNode('verify_command', 'Verification command', ...templateNodePosition('gsd_auto', 'verify_command'), 'git', ['status', '--short']),
+      agentNode('phase_verify', 'Verification review', ...templateNodePosition('gsd_auto', 'phase_verify'), verifyAgent, 'verification_result', [
+        artifactBinding('phase_execute.implementation_summary', 'Implementation summary'),
+        artifactBinding('verify_command.command_result', 'Command result'),
+      ]),
+      routerNode('verification_router', 'Verification route', ...templateNodePosition('gsd_auto', 'verification_router')),
+      agentNode('gap_closure', 'Gap closure', ...templateNodePosition('gsd_auto', 'gap_closure'), planAgent, 'gap_list', [
+        artifactBinding('phase_verify.verification_result', 'Verification result'),
+      ]),
+      agentNode('phase_review', 'Code review', ...templateNodePosition('gsd_auto', 'phase_review'), reviewAgent, 'review_findings', [
+        artifactBinding('phase_verify.verification_result', 'Verification result'),
+        artifactBinding('phase_execute.implementation_summary', 'Implementation summary'),
+      ]),
+      humanCheckpointNode('human_verify', 'Human verification', ...templateNodePosition('gsd_auto', 'human_verify'), ['passed', 'gaps_found', 'stop']),
+      routerNode('review_router', 'Review route', ...templateNodePosition('gsd_auto', 'review_router')),
+      agentNode('phase_fix', 'Fix review findings', ...templateNodePosition('gsd_auto', 'phase_fix'), workAgent, 'implementation_summary', [
+        artifactBinding('phase_review.review_findings', 'Review findings'),
+      ]),
+      stateWriteNode('write_phase_context', 'Record context', ...templateNodePosition('gsd_auto', 'write_phase_context'), 'phase_context', 'upsert', {
+        id: '{{state.next_phase.collection_item.itemId}}-context',
+        phaseId: '{{state.next_phase.collection_item.itemId}}',
+        context: '{{artifact:smart_discuss.task_brief}}',
+      }, '{{state.next_phase.collection_item.itemId}}-context'),
+      stateWriteNode('write_phase_plan', 'Record plan', ...templateNodePosition('gsd_auto', 'write_phase_plan'), 'phase_plan', 'upsert', {
+        id: '{{state.next_phase.collection_item.itemId}}-plan',
+        phaseId: '{{state.next_phase.collection_item.itemId}}',
+        plan: '{{artifact:phase_plan.delivery_plan}}',
+      }, '{{state.next_phase.collection_item.itemId}}-plan'),
+      stateWriteNode('write_phase_summary', 'Record summary', ...templateNodePosition('gsd_auto', 'write_phase_summary'), 'phase_summary', 'upsert', {
+        id: '{{state.next_phase.collection_item.itemId}}-summary',
+        phaseId: '{{state.next_phase.collection_item.itemId}}',
+        summary: '{{artifact:phase_execute.implementation_summary}}',
+        review: '{{artifact:phase_review.review_findings}}',
+      }, '{{state.next_phase.collection_item.itemId}}-summary'),
+      stateWriteNode('write_verification_evidence', 'Record verification', ...templateNodePosition('gsd_auto', 'write_verification_evidence'), 'verification_evidence', 'upsert', {
+        id: '{{state.next_phase.collection_item.itemId}}-verification',
+        phaseId: '{{state.next_phase.collection_item.itemId}}',
+        status: '{{artifact:phase_verify.verification_result $.status}}',
+        verification: '{{artifact:phase_verify.verification_result}}',
+        commandResult: '{{artifact:verify_command.command_result}}',
+        review: '{{artifact:phase_review.review_findings}}',
+      }, '{{state.next_phase.collection_item.itemId}}-verification'),
+      stateWriteNode('mark_phase_complete', 'Mark phase complete', ...templateNodePosition('gsd_auto', 'mark_phase_complete'), 'delivery_phase', 'mark_complete', {}, undefined, '{{state.next_phase.collection_item.itemId}}'),
+      stateQueryNode('reload_milestones', 'Reload milestone', ...templateNodePosition('gsd_auto', 'reload_milestones'), 'milestone', 'state_milestones', [
+        { path: '$.status', operator: 'neq', value: 'archived', values: [] },
+      ], '$.updatedAt', 1),
+      stateQueryNode('query_remaining_phases', 'Remaining phases', ...templateNodePosition('gsd_auto', 'query_remaining_phases'), 'delivery_phase', 'state_incomplete_phases', [
+        { path: '$.status', operator: 'not_in', values: ['complete', 'archived'] },
+      ], '$.sortOrder'),
+      stateQueryNode('query_requirements', 'Requirements', ...templateNodePosition('gsd_auto', 'query_requirements'), 'requirement', 'state_requirements', [
+        { path: '$.status', operator: 'neq', value: 'archived', values: [] },
+      ], '$.priority'),
+      agentNode('audit_milestone', 'Audit milestone', ...templateNodePosition('gsd_auto', 'audit_milestone'), auditAgent, 'milestone_audit', [
+        runInputBinding('goal', 'Goal', true),
+        stateBinding('reload_milestones.state_milestones', 'Milestone state', true),
+        stateBinding('query_remaining_phases.state_incomplete_phases', 'Remaining phases', false),
+        stateBinding('query_requirements.state_requirements', 'Requirements', true),
+      ]),
+      routerNode('audit_router', 'Audit route', ...templateNodePosition('gsd_auto', 'audit_router')),
+      humanCheckpointNode('human_audit', 'Audit decision', ...templateNodePosition('gsd_auto', 'human_audit'), ['passed', 'gaps_found', 'stop']),
+      stateWriteNode('complete_requirement', 'Complete requirement', ...templateNodePosition('gsd_auto', 'complete_requirement'), 'requirement', 'mark_complete', {}, undefined, 'gsd-requirement-1'),
+      stateWriteNode('complete_milestone', 'Complete milestone', ...templateNodePosition('gsd_auto', 'complete_milestone'), 'milestone', 'mark_complete', {}, undefined, '{{state.reload_milestones.state_milestones.records[0].id}}'),
+      stateWriteNode('write_milestone_archive', 'Write archive', ...templateNodePosition('gsd_auto', 'write_milestone_archive'), 'milestone_archive', 'upsert', {
+        id: '{{state.reload_milestones.state_milestones.records[0].id}}-archive',
+        milestoneId: '{{state.reload_milestones.state_milestones.records[0].id}}',
+        summary: '{{input.goal}}',
+        goal: '{{input.goal}}',
+        runId: '{{run.id}}',
+      }, '{{state.reload_milestones.state_milestones.records[0].id}}-archive'),
+      stateWriteNode('archive_milestone', 'Archive milestone', ...templateNodePosition('gsd_auto', 'archive_milestone'), 'milestone', 'archive', {}, undefined, '{{state.reload_milestones.state_milestones.records[0].id}}'),
       humanCheckpointNode('next_milestone_offer', 'Next milestone', ...templateNodePosition('gsd_auto', 'next_milestone_offer'), ['finish', 'start_next', 'pause']),
       terminalNode('success', 'Success', ...templateNodePosition('gsd_auto', 'success'), 'success'),
       terminalNode('partial_success', 'Partial run complete', ...templateNodePosition('gsd_auto', 'partial_success'), 'success'),
       terminalNode('needs_human', 'Needs human', ...templateNodePosition('gsd_auto', 'needs_human'), 'needs_human'),
     ],
     edges: [
+      edge('start_to_load', 'gsd_start', 'load_milestones', 'success', 'load state', 10),
+      edge('start_failed', 'gsd_start', 'needs_human', 'failure', 'blocked', 10),
       edge('load_to_route', 'load_milestones', 'milestone_route', 'success', 'route', 10),
       edge('milestone_exists', 'milestone_route', 'query_phases', 'conditional', 'continue', 10, {
         kind: 'state_collection_count_compare',
@@ -600,12 +547,25 @@ function instantiateGsdAutoTemplate(
         operator: 'gt',
         value: 0,
       }),
-      edge('milestone_missing', 'milestone_route', 'milestone_intake_flow', 'conditional', 'intake', 20),
-      edge('intake_to_query', 'milestone_intake_flow', 'query_phases', 'success', 'query', 10),
-      edge('intake_failed', 'milestone_intake_flow', 'needs_human', 'failure', 'blocked', 10),
+      edge('milestone_missing', 'milestone_route', 'project_ideation', 'conditional', 'ideate', 20),
+      edge('ideation_to_requirements', 'project_ideation', 'project_requirements', 'success', 'requirements', 10),
+      edge('ideation_failed', 'project_ideation', 'needs_human', 'failure', 'blocked', 10),
+      edge('new_milestone_to_requirements', 'new_milestone_intake', 'project_requirements', 'success', 'requirements', 10),
+      edge('new_milestone_failed', 'new_milestone_intake', 'needs_human', 'failure', 'blocked', 10),
+      edge('requirements_to_roadmap', 'project_requirements', 'project_roadmap', 'success', 'roadmap', 10),
+      edge('requirements_failed', 'project_requirements', 'needs_human', 'failure', 'blocked', 10),
+      edge('roadmap_to_milestone', 'project_roadmap', 'milestone_intake', 'success', 'create milestone', 10),
+      edge('roadmap_failed', 'project_roadmap', 'needs_human', 'failure', 'blocked', 10),
+      edge('intake_to_write', 'milestone_intake', 'write_milestone', 'success', 'create', 10),
+      edge('intake_failed', 'milestone_intake', 'needs_human', 'failure', 'blocked', 10),
+      edge('write_to_requirement', 'write_milestone', 'seed_requirement', 'success', 'requirement', 10),
+      edge('requirement_to_seed_1', 'seed_requirement', 'seed_phase_1', 'success', 'seed', 10),
+      edge('seed_1_to_seed_2', 'seed_phase_1', 'seed_phase_2', 'success', 'seed', 10),
+      edge('seed_2_to_seed_3', 'seed_phase_2', 'seed_phase_3', 'success', 'seed', 10),
+      edge('seed_3_to_query', 'seed_phase_3', 'query_phases', 'success', 'query', 10),
       edge('query_to_loop', 'query_phases', 'next_phase', 'success', 'select', 10),
       edge('loop_to_router', 'next_phase', 'phase_router', 'success', 'route', 10),
-      edge('phase_available', 'phase_router', 'process_phase_flow', 'conditional', 'phase', 10, {
+      edge('phase_available', 'phase_router', 'smart_discuss', 'conditional', 'phase', 10, {
         kind: 'artifact_field_equals',
         artifactRef: 'next_phase.collection_item',
         path: '$.hasItem',
@@ -628,14 +588,99 @@ function instantiateGsdAutoTemplate(
           },
         ],
       }),
-      edge('no_phase_to_audit', 'phase_router', 'milestone_audit_flow', 'conditional', 'audit', 30, {
+      edge('no_phase_to_audit', 'phase_router', 'reload_milestones', 'conditional', 'audit', 30, {
         kind: 'artifact_field_equals',
         artifactRef: 'next_phase.collection_item',
         path: '$.hasItem',
         value: false,
       }),
-      edge('phase_processed', 'process_phase_flow', 'mark_phase_complete', 'success', 'complete phase', 10),
-      edge('phase_blocked', 'process_phase_flow', 'needs_human', 'failure', 'blocked', 10),
+      edge('discuss_to_plan', 'smart_discuss', 'phase_plan', 'success', 'plan', 10),
+      edge('plan_to_execute', 'phase_plan', 'phase_execute', 'success', 'execute', 10),
+      edge('execute_failed_to_debug', 'phase_execute', 'debug_phase', 'recovery', 'debug', 5, {
+        kind: 'node_status',
+        nodeId: 'phase_execute',
+        status: 'failed',
+      }),
+      edge('execute_to_command', 'phase_execute', 'verify_command', 'success', 'check', 10),
+      edge('command_to_verify', 'verify_command', 'phase_verify', 'success', 'review', 10),
+      edge('command_failed', 'verify_command', 'debug_phase', 'failure', 'debug check', 10),
+      edge('verify_to_router', 'phase_verify', 'verification_router', 'success', 'route', 10),
+      edge('verify_passed', 'verification_router', 'phase_review', 'conditional', 'review', 10, {
+        kind: 'artifact_field_equals',
+        artifactRef: 'phase_verify.verification_result',
+        path: '$.status',
+        value: 'passed',
+      }),
+      edge('verify_gaps_to_closure', 'verification_router', 'gap_closure', 'conditional', 'gaps', 20, {
+        kind: 'artifact_field_in',
+        artifactRef: 'phase_verify.verification_result',
+        path: '$.status',
+        values: ['gaps_found', 'needs_changes'],
+      }),
+      edge('verify_human_needed', 'verification_router', 'human_verify', 'conditional', 'needs human', 30, {
+        kind: 'artifact_field_in',
+        artifactRef: 'phase_verify.verification_result',
+        path: '$.status',
+        values: ['human_needed', 'failed'],
+      }),
+      loopEdge('gap_closure_to_execute', 'gap_closure', 'phase_execute', 'close gaps', 'gap_closure', 2, 'human_verify'),
+      edge('debug_to_execute', 'debug_phase', 'phase_execute', 'loop', 'retry execute', 30, {
+        kind: 'artifact_field_equals',
+        artifactRef: 'debug_phase.debug_report',
+        path: '$.recommended_route',
+        value: 'retry_work',
+      }, {
+        loopKey: 'debug_recovery',
+        maxAttempts: 2,
+        attemptScope: 'run',
+        carryoverPolicy: 'all',
+        selectedArtifactRefs: [],
+        resetPolicy: 'never',
+        stallDetector: 'same_failure_class_repeated',
+        onExhausted: 'human_verify',
+      }),
+      edge('debug_needs_human', 'debug_phase', 'human_verify', 'conditional', 'human', 40, {
+        kind: 'artifact_field_in',
+        artifactRef: 'debug_phase.debug_report',
+        path: '$.recommended_route',
+        values: ['ask_human', 'fail'],
+      }),
+      edge('debug_to_human', 'debug_phase', 'human_verify', 'failure', 'human', 90),
+      edge('review_to_router', 'phase_review', 'review_router', 'success', 'route', 10),
+      edge('review_clear', 'review_router', 'write_phase_context', 'conditional', 'clear', 10, {
+        kind: 'artifact_field_number_compare',
+        artifactRef: 'phase_review.review_findings',
+        path: '$.high_count',
+        operator: 'eq',
+        value: 0,
+      }),
+      edge('review_high_findings', 'review_router', 'phase_fix', 'conditional', 'fix', 20, {
+        kind: 'artifact_field_number_compare',
+        artifactRef: 'phase_review.review_findings',
+        path: '$.high_count',
+        operator: 'gt',
+        value: 0,
+      }),
+      loopEdge('fix_back_to_review', 'phase_fix', 'phase_review', 'review fix', 'review_fix', 3, 'human_verify'),
+      edge('context_to_plan_record', 'write_phase_context', 'write_phase_plan', 'success', 'record plan', 10),
+      edge('plan_record_to_summary_record', 'write_phase_plan', 'write_phase_summary', 'success', 'record summary', 10),
+      edge('summary_record_to_verification_record', 'write_phase_summary', 'write_verification_evidence', 'success', 'record verification', 10),
+      edge('verification_record_to_complete', 'write_verification_evidence', 'mark_phase_complete', 'success', 'complete phase', 10),
+      edge('human_verify_passed', 'human_verify', 'mark_phase_complete', 'manual_override', 'passed', 10, {
+        kind: 'human_decision_is',
+        checkpointNodeId: 'human_verify',
+        decision: 'passed',
+      }),
+      edge('human_verify_gaps', 'human_verify', 'gap_closure', 'manual_override', 'gaps', 20, {
+        kind: 'human_decision_is',
+        checkpointNodeId: 'human_verify',
+        decision: 'gaps_found',
+      }),
+      edge('human_verify_stop', 'human_verify', 'needs_human', 'manual_override', 'stop', 90, {
+        kind: 'human_decision_is',
+        checkpointNodeId: 'human_verify',
+        decision: 'stop',
+      }),
       edge('phase_complete_to_query', 'mark_phase_complete', 'query_phases', 'loop', 'next phase', 10, { kind: 'always' }, {
         loopKey: 'delivery_phase_iteration',
         maxAttempts: 100,
@@ -646,14 +691,52 @@ function instantiateGsdAutoTemplate(
         stallDetector: 'no_artifact_progress',
         onExhausted: 'needs_human',
       }),
-      edge('audit_to_next_milestone', 'milestone_audit_flow', 'next_milestone_offer', 'success', 'next', 10),
-      edge('audit_blocked', 'milestone_audit_flow', 'needs_human', 'failure', 'blocked', 10),
+      edge('reload_to_remaining', 'reload_milestones', 'query_remaining_phases', 'success', 'remaining', 10),
+      edge('remaining_to_requirements', 'query_remaining_phases', 'query_requirements', 'success', 'requirements', 10),
+      edge('requirements_to_audit', 'query_requirements', 'audit_milestone', 'success', 'audit', 10),
+      edge('audit_to_router', 'audit_milestone', 'audit_router', 'success', 'route', 10),
+      edge('audit_passed', 'audit_router', 'complete_requirement', 'conditional', 'passed', 10, {
+        kind: 'artifact_field_equals',
+        artifactRef: 'audit_milestone.milestone_audit',
+        path: '$.status',
+        value: 'passed',
+      }),
+      edge('audit_needs_human', 'audit_router', 'human_audit', 'conditional', 'review', 20, {
+        kind: 'artifact_field_in',
+        artifactRef: 'audit_milestone.milestone_audit',
+        path: '$.status',
+        values: ['gaps_found', 'tech_debt', 'human_needed', 'failed'],
+      }),
+      edge('requirement_to_complete', 'complete_requirement', 'complete_milestone', 'success', 'complete milestone', 10),
+      edge('complete_to_write_archive', 'complete_milestone', 'write_milestone_archive', 'success', 'record archive', 10),
+      edge('write_archive_to_archive', 'write_milestone_archive', 'archive_milestone', 'success', 'archive', 10),
+      edge('archive_to_next_milestone', 'archive_milestone', 'next_milestone_offer', 'success', 'next', 10),
+      edge('human_audit_passed', 'human_audit', 'complete_requirement', 'manual_override', 'passed', 10, {
+        kind: 'human_decision_is',
+        checkpointNodeId: 'human_audit',
+        decision: 'passed',
+      }),
+      edge('human_audit_stop', 'human_audit', 'needs_human', 'manual_override', 'stop', 20, {
+        kind: 'any',
+        conditions: [
+          {
+            kind: 'human_decision_is',
+            checkpointNodeId: 'human_audit',
+            decision: 'gaps_found',
+          },
+          {
+            kind: 'human_decision_is',
+            checkpointNodeId: 'human_audit',
+            decision: 'stop',
+          },
+        ],
+      }),
       edge('next_milestone_finish', 'next_milestone_offer', 'success', 'manual_override', 'finish', 10, {
         kind: 'human_decision_is',
         checkpointNodeId: 'next_milestone_offer',
         decision: 'finish',
       }),
-      edge('next_milestone_start', 'next_milestone_offer', 'milestone_intake_flow', 'loop', 'start next', 20, {
+      edge('next_milestone_start', 'next_milestone_offer', 'new_milestone_intake', 'loop', 'start next', 20, {
         kind: 'human_decision_is',
         checkpointNodeId: 'next_milestone_offer',
         decision: 'start_next',
@@ -673,7 +756,6 @@ function instantiateGsdAutoTemplate(
         decision: 'pause',
       }),
     ],
-    subgraphs: [milestoneIntakeSubgraph, phaseExecutionSubgraph, milestoneAuditSubgraph],
   })
 }
 
@@ -846,36 +928,6 @@ function withBaseDefinition(params: {
     },
     createdAt: null,
     updatedAt: null,
-  }
-}
-
-function subgraphNode(
-  id: string,
-  title: string,
-  x: number,
-  y: number,
-  subgraphId: string,
-  inputBindings: Extract<WorkflowNodeDto, { type: 'subgraph' }>['inputBindings'] = [],
-): WorkflowNodeDto {
-  return {
-    id,
-    title,
-    description: '',
-    position: { x, y },
-    type: 'subgraph',
-    subgraphId,
-    inputBindings,
-    outputContract: subgraphResultOutputContract(),
-  }
-}
-
-function subgraphResultOutputContract(): Extract<WorkflowNodeDto, { type: 'subgraph' }>['outputContract'] {
-  return {
-    artifactType: 'subgraph_result',
-    schemaVersion: 1,
-    extraction: 'json_object',
-    required: true,
-    renderTextPath: '$.summary',
   }
 }
 

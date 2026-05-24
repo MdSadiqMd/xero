@@ -327,13 +327,37 @@ describe('WorkflowsSidebar', () => {
     )
 
     fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for Continuous delivery' }), {
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More actions for GSD Auto' }), {
       button: 0,
       ctrlKey: false,
     })
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Use template' }))
 
-    expect(onCreateWorkflowFromTemplate).toHaveBeenCalledWith('continuous_delivery')
+    expect(onCreateWorkflowFromTemplate).toHaveBeenCalledWith('gsd_auto')
+  })
+
+  it('inspects workflow templates from row selection without creating a draft', () => {
+    const onSelectWorkflowTemplate = vi.fn()
+    const onCreateWorkflowFromTemplate = vi.fn()
+    render(
+      <WorkflowsSidebar
+        open
+        agents={REAL_AGENTS}
+        workflowDefinitions={[]}
+        selectedWorkflowTemplateId="gsd_auto"
+        onSelectWorkflowTemplate={onSelectWorkflowTemplate}
+        onCreateWorkflowFromTemplate={onCreateWorkflowFromTemplate}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
+    fireEvent.click(screen.getByLabelText('Inspect workflow template GSD Auto'))
+
+    expect(onSelectWorkflowTemplate).toHaveBeenCalledWith('gsd_auto')
+    expect(onCreateWorkflowFromTemplate).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Inspect workflow template GSD Auto').parentElement).toHaveClass(
+      'bg-primary/10',
+    )
   })
 
   it('uses the same library row shell for agents, workflows, and workflow templates', () => {
@@ -343,6 +367,7 @@ describe('WorkflowsSidebar', () => {
         agents={REAL_AGENTS}
         workflowDefinitions={WORKFLOWS}
         onSelectWorkflow={vi.fn()}
+        onSelectWorkflowTemplate={vi.fn()}
         onCreateWorkflowFromTemplate={vi.fn()}
       />,
     )
@@ -361,7 +386,7 @@ describe('WorkflowsSidebar', () => {
     fireEvent.click(screen.getByRole('tab', { name: /workflows/i }))
 
     const workflowShell = screen.getByLabelText('Open workflow Release pipeline').parentElement
-    const templateShell = screen.getByLabelText('Create workflow from Continuous delivery').parentElement
+    const templateShell = screen.getByLabelText('Inspect workflow template GSD Auto').parentElement
     expect(workflowShell).toHaveClass(
       'group',
       'relative',

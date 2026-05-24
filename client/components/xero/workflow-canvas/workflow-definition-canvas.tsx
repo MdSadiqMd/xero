@@ -194,6 +194,7 @@ type WorkflowReactEdge = Edge<{
   labelBackground: string
   labelBorderColor: string
   labelTextColor: string
+  focused?: boolean
   visualOnly?: boolean
 }>
 type WorkflowEdgeTone = {
@@ -420,6 +421,7 @@ function WorkflowDefinitionCanvasInner({
   const selectedNode = selection?.kind === 'node'
     ? effectiveDefinition.nodes.find((node) => node.id === selection.id) ?? null
     : null
+  const selectedNodeId = selectedNode?.id ?? null
   const selectedEdge = selection?.kind === 'edge'
     ? effectiveDefinition.edges.find((edge) => edge.id === selection.id) ?? null
     : null
@@ -484,6 +486,8 @@ function WorkflowDefinitionCanvasInner({
       return effectiveDefinition.edges.flatMap((edge) => {
         const reactEdges = [
           workflowReactEdgeFromDefinitionEdge(edge, nodeById, {
+            editing: editable,
+            selectedNodeId,
             matched: matchedEdgeIds.has(edge.id),
             running: run?.status === 'running',
           }),
@@ -496,6 +500,8 @@ function WorkflowDefinitionCanvasInner({
               visualEdge,
               nodeById,
               {
+                editing: editable,
+                selectedNodeId,
                 visualOnly: true,
                 className: 'workflow-definition-edge--exhausted workflow-definition-edge--loop',
               },
@@ -505,7 +511,7 @@ function WorkflowDefinitionCanvasInner({
         return reactEdges
       })
     },
-    [effectiveDefinition.edges, effectiveDefinition.nodes, matchedEdgeIds, run?.status],
+    [editable, effectiveDefinition.edges, effectiveDefinition.nodes, matchedEdgeIds, run?.status, selectedNodeId],
   )
 
   const canSave = editable && validation.status === 'valid' && Boolean(onSaveDefinition)
@@ -904,6 +910,7 @@ function WorkflowDefinitionCanvasInner({
     <div
       className={cn(
         'agent-visualization relative h-full w-full overflow-hidden',
+        'is-workflow-definition',
         canvasInteractionsLocked && 'is-locked',
         entering && 'is-workflow-entering',
         dragging && 'is-dragging',
@@ -988,6 +995,7 @@ function WorkflowDefinitionCanvasInner({
         />
       ) : !editable && (selectedNode || selectedEdge) ? (
         <WorkflowDetailsPanel
+          definition={effectiveDefinition}
           node={selectedNode}
           edge={selectedEdge}
           runNode={selectedNode ? latestRunNodeByNodeId.get(selectedNode.id) ?? null : null}
@@ -2496,6 +2504,7 @@ function WorkflowRunRecoveryPanel({
 }
 
 function WorkflowDetailsPanel({
+  definition,
   node,
   edge,
   runNode,
@@ -2510,6 +2519,7 @@ function WorkflowDetailsPanel({
   onSkipBranch,
   onClose,
 }: {
+  definition: WorkflowDefinitionDto
   node: WorkflowNodeDto | null
   edge: WorkflowEdgeDto | null
   runNode: WorkflowRunNodeDto | null
@@ -2527,9 +2537,23 @@ function WorkflowDetailsPanel({
   const canRetry = runNode ? isRetryableRunNodeStatus(runNode.status) && onRetryNodeRun : false
   const canSkip = runNode ? isSkippableRunNodeStatus(runNode.status) && onSkipBranch : false
   const timeline = workflowTimelineEvents(events, runNode, edge).slice(0, 6)
+  const nodeById = useMemo(
+    () => new Map(definition.nodes.map((definitionNode) => [definitionNode.id, definitionNode])),
+    [definition.nodes],
+  )
+  const incomingEdges = useMemo(
+    () => node ? workflowSortedEdges(definition.edges.filter((candidate) => candidate.toNodeId === node.id)) : [],
+    [definition.edges, node],
+  )
+  const outgoingEdges = useMemo(
+    () => node ? workflowSortedEdges(definition.edges.filter((candidate) => candidate.fromNodeId === node.id)) : [],
+    [definition.edges, node],
+  )
+  const fromNode = edge ? nodeById.get(edge.fromNodeId) ?? null : null
+  const toNode = edge ? nodeById.get(edge.toNodeId) ?? null : null
   return (
     <div
-      className="agent-properties-panel pointer-events-auto absolute bottom-4 left-5 z-30 flex max-h-[calc(100%-5rem)] w-[300px] flex-col overflow-hidden rounded-lg border border-border/60 bg-card/95 text-[12px] text-card-foreground shadow-[0_8px_28px_-12px_rgba(0,0,0,0.55)] backdrop-blur-md"
+      className="agent-properties-panel pointer-events-auto absolute bottom-4 left-5 z-30 flex max-h-[calc(100%-5rem)] w-[360px] max-w-[calc(100%-2.5rem)] flex-col overflow-hidden rounded-lg border border-border/60 bg-card/95 text-[12px] text-card-foreground shadow-[0_8px_28px_-12px_rgba(0,0,0,0.55)] backdrop-blur-md"
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
@@ -2548,20 +2572,15 @@ function WorkflowDetailsPanel({
         {node ? (
           <>
             <ReadOnlyRow label="Type" value={NODE_KIND_LABEL[node.type]} />
+            <ReadOnlyRow label="Node ID" value={node.id} />
+            {node.description.trim() ? <ReadOnlyRow label="Description" value={node.description} /> : null}
             {agentLabel ? <ReadOnlyRow label="Agent" value={agentLabel} /> : null}
-            {node.type === 'state_read' || node.type === 'state_query' ? (
-              <ReadOnlyRow label="Entity" value={humanize(node.query.entityType)} />
-            ) : null}
-            {node.type === 'state_write' || node.type === 'state_patch' ? (
-              <ReadOnlyRow label="State action" value={`${humanize(node.operation.action)} ${humanize(node.operation.entityType)}`} />
-            ) : null}
-            {node.type === 'collection_loop' ? (
-              <ReadOnlyRow label="Collection" value={`${humanize(node.collection.entityType)}, max ${node.maxItemCount}`} />
-            ) : null}
-            {node.type === 'command' ? (
-              <ReadOnlyRow label="Command" value={[node.command, ...node.args].join(' ')} />
-            ) : null}
-            {node.type === 'subgraph' ? <ReadOnlyRow label="Subgraph" value={node.subgraphId} /> : null}
+            <WorkflowNodeReadOnlyDetails node={node} agentLabel={agentLabel} />
+            <WorkflowConnectionSummary
+              incomingEdges={incomingEdges}
+              outgoingEdges={outgoingEdges}
+              nodeById={nodeById}
+            />
             {runNode ? <ReadOnlyRow label="Status" value={humanize(runNode.status)} /> : null}
             {runNode?.failureClass ? <ReadOnlyRow label="Failure" value={runNode.failureClass} /> : null}
             {runNode && (canRetry || canSkip) ? (
@@ -2654,10 +2673,13 @@ function WorkflowDetailsPanel({
         ) : edge ? (
           <>
             <ReadOnlyRow label="Type" value={EDGE_TYPE_LABEL[edge.type]} />
-            <ReadOnlyRow label="From" value={edge.fromNodeId} />
-            <ReadOnlyRow label="To" value={edge.toNodeId} />
+            <ReadOnlyRow label="Edge ID" value={edge.id} />
+            <ReadOnlyRow label="From" value={fromNode ? `${fromNode.title} (${edge.fromNodeId})` : edge.fromNodeId} />
+            <ReadOnlyRow label="To" value={toNode ? `${toNode.title} (${edge.toNodeId})` : edge.toNodeId} />
+            {edge.label ? <ReadOnlyRow label="Label" value={edge.label} /> : null}
+            <ReadOnlyRow label="Priority" value={String(edge.priority)} />
             <ReadOnlyRow label="Condition" value={conditionSummary(edge.condition)} />
-            {edge.loopPolicy ? <ReadOnlyRow label="Loop" value={`${edge.loopPolicy.loopKey}, max ${edge.loopPolicy.maxAttempts}`} /> : null}
+            {edge.loopPolicy ? <ReadOnlyRow label="Loop" value={loopPolicySummary(edge.loopPolicy)} /> : null}
             {edgeDecision ? (
               <section className="space-y-1.5">
                 <h3 className="text-[9.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
@@ -2672,6 +2694,174 @@ function WorkflowDetailsPanel({
           </>
         ) : null}
       </div>
+    </div>
+  )
+}
+
+function WorkflowNodeReadOnlyDetails({
+  node,
+  agentLabel,
+}: {
+  node: WorkflowNodeDto
+  agentLabel: string | null
+}) {
+  if (node.type === 'agent') {
+    return (
+      <>
+        {agentLabel ? null : <ReadOnlyRow label="Agent" value={labelForAgentRef(node.agentRef, [])} />}
+        <ReadOnlyRow label="Output" value={outputContractSummary(node.outputContract)} />
+        <ReadOnlyRow label="Inputs" value={inputBindingsSummary(node.inputBindings)} />
+        {node.resourceScopes.length > 0 ? <ReadOnlyRow label="Resource scopes" value={node.resourceScopes.join(', ')} /> : null}
+        {node.runOverrides ? <ReadOnlyRow label="Run overrides" value={runOverrideSummary(node.runOverrides)} /> : null}
+      </>
+    )
+  }
+
+  if (node.type === 'state_read' || node.type === 'state_query') {
+    return (
+      <>
+        <ReadOnlyRow label="Entity" value={humanize(node.query.entityType)} />
+        <ReadOnlyRow label="Filters" value={stateFiltersSummary(node.query.filters)} />
+        <ReadOnlyRow label="Order" value={stateQueryOrderSummary(node.query)} />
+        <ReadOnlyRow label="Output" value={node.outputArtifactType} />
+      </>
+    )
+  }
+
+  if (node.type === 'state_write' || node.type === 'state_patch') {
+    return (
+      <>
+        <ReadOnlyRow label="State action" value={`${humanize(node.operation.action)} ${humanize(node.operation.entityType)}`} />
+        <ReadOnlyRow label="Target" value={node.operation.targetId ?? 'Created from payload'} />
+        {node.operation.idempotencyKey ? <ReadOnlyRow label="Idempotency key" value={node.operation.idempotencyKey} /> : null}
+        <ReadOnlyRow label="Payload" value={jsonPreview(node.operation.payload)} />
+        <ReadOnlyRow label="Output" value={node.operation.outputArtifactType} />
+        {node.inputBindings.length > 0 ? <ReadOnlyRow label="Inputs" value={inputBindingsSummary(node.inputBindings)} /> : null}
+      </>
+    )
+  }
+
+  if (node.type === 'collection_loop') {
+    return (
+      <>
+        <ReadOnlyRow label="Collection" value={`${humanize(node.collection.entityType)}, max ${node.maxItemCount}`} />
+        <ReadOnlyRow label="Filters" value={stateFiltersSummary(node.collection.filters)} />
+        <ReadOnlyRow label="Sort" value={node.sortKey ?? node.collection.orderBy ?? 'Insertion order'} />
+        <ReadOnlyRow label="Window controls" value={loopControlsSummary(node.controls)} />
+        <ReadOnlyRow label="Item artifact" value={`${node.itemArtifactType} as ${node.itemVariableName}`} />
+        <ReadOnlyRow label="After item" value={node.afterItemRequery ? 'Requery collection before continuing' : 'Continue without requery'} />
+        {node.maxRuntimeSeconds ? <ReadOnlyRow label="Max runtime" value={`${node.maxRuntimeSeconds}s`} /> : null}
+      </>
+    )
+  }
+
+  if (node.type === 'command') {
+    return (
+      <>
+        <ReadOnlyRow label="Command" value={[node.command, ...node.args].join(' ')} />
+        <ReadOnlyRow label="Allowed commands" value={node.allowedCommands.length > 0 ? node.allowedCommands.join(', ') : node.command} />
+        <ReadOnlyRow label="Working directory" value={node.workingDirectory ?? 'Project workspace'} />
+        <ReadOnlyRow label="Timeout" value={`${node.timeoutSeconds}s`} />
+        <ReadOnlyRow label="Success exits" value={node.successExitCodes.join(', ')} />
+        <ReadOnlyRow label="Output" value={outputContractSummary(node.outputContract)} />
+      </>
+    )
+  }
+
+  if (node.type === 'human_checkpoint') {
+    return (
+      <>
+        <ReadOnlyRow label="Checkpoint" value={humanize(node.checkpointType)} />
+        <ReadOnlyRow label="Prompt" value={node.prompt} />
+        <ReadOnlyRow label="Decisions" value={node.decisionOptions.join(', ') || 'continue'} />
+        {node.stateUpdates.length > 0 ? <ReadOnlyRow label="State updates" value={stateWriteOperationsSummary(node.stateUpdates)} /> : null}
+      </>
+    )
+  }
+
+  if (node.type === 'gate' || node.type === 'state_checkpoint') {
+    return (
+      <>
+        <ReadOnlyRow label="Required checks" value={conditionsSummary(node.requiredChecks)} />
+        <ReadOnlyRow label="Blocked behavior" value={humanize(node.onBlocked)} />
+      </>
+    )
+  }
+
+  if (node.type === 'merge') {
+    return (
+      <>
+        <ReadOnlyRow label="Wait policy" value={humanize(node.waitPolicy)} />
+        {node.quorum ? <ReadOnlyRow label="Quorum" value={String(node.quorum)} /> : null}
+        <ReadOnlyRow label="Fail fast" value={node.failFast ? 'Yes' : 'No'} />
+      </>
+    )
+  }
+
+  if (node.type === 'terminal') {
+    return <ReadOnlyRow label="Terminal status" value={humanize(node.terminalStatus)} />
+  }
+
+  if (node.type === 'subgraph') {
+    return (
+      <>
+        <ReadOnlyRow label="Subgraph" value={node.subgraphId} />
+        <ReadOnlyRow label="Inputs" value={inputBindingsSummary(node.inputBindings)} />
+        <ReadOnlyRow label="Output" value={outputContractSummary(node.outputContract)} />
+      </>
+    )
+  }
+
+  return null
+}
+
+function WorkflowConnectionSummary({
+  incomingEdges,
+  outgoingEdges,
+  nodeById,
+}: {
+  incomingEdges: readonly WorkflowEdgeDto[]
+  outgoingEdges: readonly WorkflowEdgeDto[]
+  nodeById: ReadonlyMap<string, WorkflowNodeDto>
+}) {
+  if (incomingEdges.length === 0 && outgoingEdges.length === 0) return null
+  return (
+    <section className="space-y-2">
+      <h3 className="text-[9.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        Connections
+      </h3>
+      <div className="grid gap-2">
+        {incomingEdges.length > 0 ? (
+          <WorkflowConnectionList
+            label="Incoming"
+            items={incomingEdges.map((connection) => incomingEdgeSummary(connection, nodeById))}
+          />
+        ) : null}
+        {outgoingEdges.length > 0 ? (
+          <WorkflowConnectionList
+            label="Outgoing"
+            items={outgoingEdges.map((connection) => outgoingEdgeSummary(connection, nodeById))}
+          />
+        ) : null}
+      </div>
+    </section>
+  )
+}
+
+function WorkflowConnectionList({ label, items }: { label: string; items: readonly string[] }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-[10.5px] font-medium text-foreground/80">{label}</p>
+      <ul className="space-y-1">
+        {items.map((item) => (
+          <li
+            key={item}
+            className="rounded-md border border-border/45 bg-background/35 px-2 py-1.5 text-[11px] leading-relaxed text-muted-foreground"
+          >
+            {item}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -2783,15 +2973,184 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-function ReadOnlyRow({ label, value }: { label: string; value: string }) {
+function ReadOnlyRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="space-y-0.5">
       <dt className="text-[9.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
         {label}
       </dt>
-      <dd className="break-words text-[12px] text-foreground/90">{value}</dd>
+      <dd className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/90">{value}</dd>
     </div>
   )
+}
+
+function workflowSortedEdges(edges: readonly WorkflowEdgeDto[]): WorkflowEdgeDto[] {
+  return [...edges].sort((left, right) => {
+    const byPriority = left.priority - right.priority
+    return byPriority === 0 ? left.id.localeCompare(right.id) : byPriority
+  })
+}
+
+function incomingEdgeSummary(edge: WorkflowEdgeDto, nodeById: ReadonlyMap<string, WorkflowNodeDto>): string {
+  const source = nodeById.get(edge.fromNodeId)
+  return `${source?.title ?? edge.fromNodeId} -> ${edge.label || EDGE_TYPE_LABEL[edge.type]}`
+}
+
+function outgoingEdgeSummary(edge: WorkflowEdgeDto, nodeById: ReadonlyMap<string, WorkflowNodeDto>): string {
+  const target = nodeById.get(edge.toNodeId)
+  return `${edge.label || EDGE_TYPE_LABEL[edge.type]} -> ${target?.title ?? edge.toNodeId}`
+}
+
+function outputContractSummary(contract: WorkflowOutputContractLike): string {
+  const extraction = humanize(contract.extraction)
+  const required = contract.required ? 'required' : 'optional'
+  const renderText = contract.renderTextPath ? `, render ${contract.renderTextPath}` : ''
+  return `${contract.artifactType} v${contract.schemaVersion}, ${extraction}, ${required}${renderText}`
+}
+
+type WorkflowOutputContractLike = {
+  artifactType: string
+  schemaVersion: number
+  extraction: WorkflowOutputExtractionDto
+  required: boolean
+  renderTextPath?: string | null
+}
+
+function inputBindingsSummary(bindings: readonly WorkflowInputBindingDto[]): string {
+  if (bindings.length === 0) return 'None'
+  return bindings.map(inputBindingSummary).join('\n')
+}
+
+function inputBindingSummary(binding: WorkflowInputBindingDto): string {
+  const label = binding.promptLabel ?? humanize(binding.name)
+  const required = binding.required ? 'required' : 'optional'
+  if (binding.source === 'run_input') {
+    const path = binding.path ? ` ${binding.path}` : ''
+    return `${label} <- run input ${binding.name}${path} (${required})`
+  }
+  if (binding.source === 'artifact') {
+    const path = binding.path ? ` ${binding.path}` : ''
+    return `${label} <- artifact ${binding.artifactRef}${path} (${required})`
+  }
+  const path = binding.path ? ` ${binding.path}` : ''
+  return `${label} <- state ${binding.stateRef}${path} (${required})`
+}
+
+function stateFiltersSummary(filters: readonly WorkflowStateQueryFilterDto[]): string {
+  if (filters.length === 0) return 'None'
+  return filters.map(stateFilterSummary).join('\n')
+}
+
+function stateFilterSummary(filter: WorkflowStateQueryFilterDto): string {
+  if (filter.operator === 'exists' || filter.operator === 'missing') {
+    return `${filter.path} ${filter.operator}`
+  }
+  if (filter.operator === 'in' || filter.operator === 'not_in') {
+    return `${filter.path} ${filter.operator.replace('_', ' ')} ${formatJsonValues(filter.values ?? [])}`
+  }
+  return `${filter.path} ${filter.operator} ${formatJsonValue(filter.value)}`
+}
+
+function stateQueryOrderSummary(query: {
+  orderBy?: string | null
+  limit?: number | null
+  includeArchived: boolean
+}): string {
+  const parts = [
+    query.orderBy ? `order ${query.orderBy}` : 'default order',
+    query.limit ? `limit ${query.limit}` : 'no limit',
+    query.includeArchived ? 'includes archived' : 'active only',
+  ]
+  return parts.join(', ')
+}
+
+function loopControlsSummary(controls: {
+  onlyInputPath?: string | null
+  fromInputPath?: string | null
+  toInputPath?: string | null
+}): string {
+  const rows = [
+    controls.onlyInputPath ? `only <- ${controls.onlyInputPath}` : null,
+    controls.fromInputPath ? `from <- ${controls.fromInputPath}` : null,
+    controls.toInputPath ? `to <- ${controls.toInputPath}` : null,
+  ].filter(Boolean)
+  return rows.length > 0 ? rows.join('\n') : 'None'
+}
+
+function stateWriteOperationsSummary(
+  operations: readonly {
+    entityType: string
+    action: string
+    targetId?: string | null
+    idempotencyKey?: string | null
+  }[],
+): string {
+  return operations.map((operation) => {
+    const target = operation.targetId ? ` -> ${operation.targetId}` : ''
+    const idempotency = operation.idempotencyKey ? ` (${operation.idempotencyKey})` : ''
+    return `${humanize(operation.action)} ${humanize(operation.entityType)}${target}${idempotency}`
+  }).join('\n')
+}
+
+function conditionsSummary(conditions: readonly WorkflowConditionDto[]): string {
+  if (conditions.length === 0) return 'None'
+  return conditions.map(conditionSummary).join('\n')
+}
+
+function conditionsSummaryInline(conditions: readonly WorkflowConditionDto[]): string {
+  if (conditions.length === 0) return 'None'
+  return conditions.map(conditionSummary).join('; ')
+}
+
+function runOverrideSummary(overrides: {
+  providerProfileId?: string | null
+  modelId?: string | null
+  thinkingEffort?: string | null
+  approvalMode?: string | null
+  promptPreface?: string
+  planModeRequired?: boolean
+  autoCompactEnabled?: boolean
+}): string {
+  const parts = [
+    overrides.providerProfileId ? `provider ${overrides.providerProfileId}` : null,
+    overrides.modelId ? `model ${overrides.modelId}` : null,
+    overrides.thinkingEffort ? `thinking ${overrides.thinkingEffort}` : null,
+    overrides.approvalMode ? `approval ${humanize(overrides.approvalMode)}` : null,
+    overrides.planModeRequired ? 'plan mode required' : null,
+    overrides.autoCompactEnabled === false ? 'auto compact disabled' : null,
+    overrides.promptPreface?.trim() ? 'prompt preface set' : null,
+  ].filter(Boolean)
+  return parts.length > 0 ? parts.join(', ') : 'Default runtime'
+}
+
+function loopPolicySummary(policy: NonNullable<WorkflowEdgeDto['loopPolicy']>): string {
+  const parts = [
+    `${policy.loopKey}, max ${policy.maxAttempts}`,
+    `scope ${humanize(policy.attemptScope)}`,
+    `carry ${humanize(policy.carryoverPolicy)}`,
+    `reset ${humanize(policy.resetPolicy)}`,
+    policy.stallDetector ? `stall ${humanize(policy.stallDetector)}` : null,
+    `exhausted -> ${policy.onExhausted}`,
+  ].filter(Boolean)
+  return parts.join('\n')
+}
+
+function jsonPreview(value: unknown, maxLength = 480): string {
+  const summary = summarizeJson(value)
+  if (summary.length <= maxLength) return summary
+  return `${summary.slice(0, maxLength - 1)}...`
+}
+
+function formatJsonValues(values: readonly unknown[]): string {
+  if (values.length === 0) return '[]'
+  return values.map(formatJsonValue).join(', ')
+}
+
+function formatJsonValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === null) return 'null'
+  if (value === undefined) return 'undefined'
+  return summarizeJson(value)
 }
 
 function stateFilterValueText(filter: WorkflowStateQueryFilterDto | undefined): string {
@@ -3517,6 +3876,8 @@ function workflowReactEdgeFromDefinitionEdge(
   edge: WorkflowEdgeDto,
   nodeById: ReadonlyMap<string, WorkflowNodeDto>,
   options: {
+    editing?: boolean
+    selectedNodeId?: string | null
     matched?: boolean
     running?: boolean
     visualOnly?: boolean
@@ -3526,6 +3887,9 @@ function workflowReactEdgeFromDefinitionEdge(
   const handleSides = workflowEdgeHandleSides(edge, nodeById)
   const sourceNode = nodeById.get(edge.fromNodeId)
   const edgeTone = workflowEdgeToneForSource(sourceNode)
+  const focused = options.selectedNodeId
+    ? edge.fromNodeId === options.selectedNodeId || edge.toNodeId === options.selectedNodeId
+    : false
   return {
     id: edge.id,
     source: edge.fromNodeId,
@@ -3537,11 +3901,12 @@ function workflowReactEdgeFromDefinitionEdge(
     data: {
       workflowEdge: edge,
       label: edge.label || EDGE_TYPE_LABEL[edge.type],
-      targetClearance: WORKFLOW_EDGE_TARGET_CLEARANCE,
+      targetClearance: options.editing === true ? WORKFLOW_EDGE_TARGET_CLEARANCE : 0,
       edgeColor: edgeTone.color,
       labelBackground: edgeTone.labelBackground,
       labelBorderColor: edgeTone.labelBorderColor,
       labelTextColor: edgeTone.labelTextColor,
+      focused,
       visualOnly: options.visualOnly,
     },
     animated: !options.visualOnly && options.running === true && options.matched === true,
@@ -3550,6 +3915,7 @@ function workflowReactEdgeFromDefinitionEdge(
       'workflow-definition-edge',
       'agent-edge-phase-branch',
       !options.visualOnly && options.matched && 'workflow-definition-edge--matched',
+      focused && 'workflow-definition-edge--related',
       edge.type === 'loop' && 'workflow-definition-edge--loop',
       edge.type === 'recovery' && 'workflow-definition-edge--recovery',
       options.className,
@@ -3741,25 +4107,25 @@ function conditionSummary(condition: WorkflowConditionDto): string {
     case 'artifact_exists':
       return `${condition.artifactRef} exists`
     case 'artifact_field_equals':
-      return `${condition.artifactRef}${condition.path} = ${String(condition.value)}`
+      return `${condition.artifactRef}${condition.path} = ${formatJsonValue(condition.value)}`
     case 'artifact_field_number_compare':
       return `${condition.artifactRef}${condition.path} ${condition.operator} ${condition.value}`
     case 'human_decision_is':
       return `${condition.checkpointNodeId} decision is ${condition.decision}`
     case 'state_field_equals':
-      return `${condition.stateRef}${condition.path} = ${String(condition.value)}`
+      return `${condition.stateRef}${condition.path} = ${formatJsonValue(condition.value)}`
     case 'state_collection_count_compare':
       return `${condition.stateRef} count ${condition.operator} ${condition.value}`
     case 'all':
-      return 'All conditions'
+      return `All: ${conditionsSummaryInline(condition.conditions)}`
     case 'any':
-      return 'Any condition'
+      return `Any: ${conditionsSummaryInline(condition.conditions)}`
     case 'not':
-      return 'Not condition'
+      return `Not: ${conditionSummary(condition.condition)}`
     case 'node_status':
       return `${condition.nodeId} is ${humanize(condition.status)}`
     case 'artifact_field_in':
-      return `${condition.artifactRef}${condition.path} in ${condition.values.length} values`
+      return `${condition.artifactRef}${condition.path} in ${formatJsonValues(condition.values)}`
     case 'failure_class_is':
       return `Failure class is ${condition.failureClass}`
     case 'loop_attempt_lt':

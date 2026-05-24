@@ -182,7 +182,7 @@ describe('WorkflowDefinitionCanvas', () => {
       templateId: 'continuous_delivery',
     })
 
-    render(<WorkflowDefinitionCanvas definition={definition} />)
+    const view = render(<WorkflowDefinitionCanvas definition={definition} />)
 
     expect(screen.getByTestId('workflow-edge-plan_to_work')).toHaveAttribute(
       'data-source-handle',
@@ -195,7 +195,7 @@ describe('WorkflowDefinitionCanvas', () => {
     expect(screen.getByTestId('workflow-edge-plan_to_work')).toHaveAttribute('data-marker-end', 'arrowclosed')
     expect(screen.getByTestId('workflow-edge-plan_to_work')).toHaveAttribute('data-marker-width', '18')
     expect(screen.getByTestId('workflow-edge-plan_to_work')).toHaveAttribute('data-marker-height', '18')
-    expect(screen.getByTestId('workflow-edge-plan_to_work')).toHaveAttribute('data-target-clearance', '15')
+    expect(screen.getByTestId('workflow-edge-plan_to_work')).toHaveAttribute('data-target-clearance', '0')
     expect(screen.getByTestId('workflow-edge-plan_to_work').getAttribute('data-edge-color')).toContain('--color-amber-500')
     expect(screen.getByTestId('workflow-edge-plan_to_work').getAttribute('data-marker-color')).toContain('--color-amber-500')
     expect(screen.getByTestId('workflow-edge-verification_passed').getAttribute('data-edge-color')).toContain('--color-sky-500')
@@ -255,6 +255,18 @@ describe('WorkflowDefinitionCanvas', () => {
       'data-target',
       'human_verify',
     )
+
+    view.unmount()
+
+    render(
+      <WorkflowDefinitionCanvas
+        definition={definition}
+        initialMode="edit"
+        onSaveDefinition={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('workflow-edge-plan_to_work')).toHaveAttribute('data-target-clearance', '15')
   })
 
   it('opens workflow definitions in the same compact layout produced by reset', () => {
@@ -305,6 +317,53 @@ describe('WorkflowDefinitionCanvas', () => {
       'needs_human',
     ])).toEqual(editableInitialPositions)
     expect(editableInitialPositions).toEqual(openedPositions)
+  })
+
+  it('shows workflow configuration details when inspecting a readonly node', () => {
+    const definition = instantiateWorkflowTemplate({
+      projectId: 'project-1',
+      templateId: 'gsd_auto',
+    })
+
+    render(<WorkflowDefinitionCanvas definition={definition} />)
+
+    fireEvent.click(screen.getByTestId('workflow-node-next_phase'))
+
+    expect(screen.getByText('Node ID')).toBeInTheDocument()
+    expect(screen.getAllByText('next_phase').length).toBeGreaterThan(1)
+    expect(screen.getByText('Filters')).toBeInTheDocument()
+    expect(screen.getByText(/\$\.status not in complete, archived/)).toBeInTheDocument()
+    expect(screen.getByText('Window controls')).toBeInTheDocument()
+    expect(screen.getByText(/only <- \$\.only/)).toBeInTheDocument()
+    expect(screen.getByText(/from <- \$\.from/)).toBeInTheDocument()
+    expect(screen.getByText(/to <- \$\.to/)).toBeInTheDocument()
+    expect(screen.getByText('Connections')).toBeInTheDocument()
+    expect(screen.getByText('Query incomplete phases -> select')).toBeInTheDocument()
+    expect(screen.getByText('route -> Phase route')).toBeInTheDocument()
+  })
+
+  it('marks incoming and outgoing workflow edges as related when selecting a node', () => {
+    const definition = instantiateWorkflowTemplate({
+      projectId: 'project-1',
+      templateId: 'gsd_auto',
+    })
+
+    render(<WorkflowDefinitionCanvas definition={definition} />)
+
+    fireEvent.click(screen.getByTestId('workflow-node-project_ideation'))
+
+    expect(screen.getByTestId('workflow-edge-milestone_missing').getAttribute('data-class-name')).toContain(
+      'workflow-definition-edge--related',
+    )
+    expect(screen.getByTestId('workflow-edge-ideation_to_requirements').getAttribute('data-class-name')).toContain(
+      'workflow-definition-edge--related',
+    )
+    expect(screen.getByTestId('workflow-edge-ideation_failed').getAttribute('data-class-name')).toContain(
+      'workflow-definition-edge--related',
+    )
+    expect(screen.getByTestId('workflow-edge-requirements_to_roadmap').getAttribute('data-class-name')).not.toContain(
+      'workflow-definition-edge--related',
+    )
   })
 
   it('collects required run input before starting a workflow', async () => {

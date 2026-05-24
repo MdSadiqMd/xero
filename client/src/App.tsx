@@ -1308,6 +1308,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
     useState<WorkflowDefinitionDto | null>(null)
   const [selectedWorkflowRun, setSelectedWorkflowRun] = useState<WorkflowRunDto | null>(null)
   const [selectedWorkflowIsDraft, setSelectedWorkflowIsDraft] = useState(false)
+  const [selectedWorkflowTemplatePreviewId, setSelectedWorkflowTemplatePreviewId] =
+    useState<WorkflowTemplateIdDto | null>(null)
   const [workflowActionRunning, setWorkflowActionRunning] = useState(false)
   const workflowAgentInspector = useWorkflowAgentInspector({
     adapter: resolvedAdapter,
@@ -1418,6 +1420,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setSelectedWorkflowDefinition(null)
     setSelectedWorkflowRun(null)
     setSelectedWorkflowIsDraft(false)
+    setSelectedWorkflowTemplatePreviewId(null)
     void refreshWorkflowDefinitions()
     void refreshWorkflowRuns()
   }, [activeProjectId, refreshWorkflowDefinitions, refreshWorkflowRuns])
@@ -2531,6 +2534,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
       setSelectedWorkflowDefinition(null)
       setSelectedWorkflowRun(null)
       setSelectedWorkflowIsDraft(false)
+      setSelectedWorkflowTemplatePreviewId(null)
       setWorkflowsOpen(false)
       setBrowserOpen(false)
       setIosOpen(false)
@@ -2682,6 +2686,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setSelectedWorkflowDefinition(definition)
     setSelectedWorkflowRun(null)
     setSelectedWorkflowIsDraft(true)
+    setSelectedWorkflowTemplatePreviewId(null)
     setAgentAuthoringSession(null)
     workflowAgentInspector.selectAgent(null)
     setWorkflowsOpen(false)
@@ -2805,6 +2810,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         })
         setSelectedWorkflowDefinition(response.definition)
         setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
         setAgentAuthoringSession(null)
         setSelectedWorkflowRun((current) =>
           current?.workflowId === workflowId ? current : workflowRuns.find((run) => run.workflowId === workflowId) ?? null,
@@ -2826,6 +2832,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSelectedWorkflowRun(response.run)
         setSelectedWorkflowDefinition(response.run.definitionSnapshot)
         setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
         setAgentAuthoringSession(null)
         workflowAgentInspector.selectAgent(null)
         setActiveView('phases')
@@ -2848,6 +2855,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setSelectedWorkflowDefinition(definition)
     setSelectedWorkflowRun(null)
     setSelectedWorkflowIsDraft(true)
+    setSelectedWorkflowTemplatePreviewId(null)
     setAgentAuthoringSession(null)
     workflowAgentInspector.selectAgent(null)
     setWorkflowsOpen(false)
@@ -2869,9 +2877,34 @@ export function XeroApp({ adapter }: XeroAppProps) {
       setSelectedWorkflowDefinition(definition)
       setSelectedWorkflowRun(null)
       setSelectedWorkflowIsDraft(true)
+      setSelectedWorkflowTemplatePreviewId(null)
       setAgentAuthoringSession(null)
       workflowAgentInspector.selectAgent(null)
       setWorkflowsOpen(false)
+      setActiveView('phases')
+    },
+    [
+      activeProjectId,
+      setActiveView,
+      workflowAgentInspector,
+      workflowAgentInspector.agents,
+    ],
+  )
+
+  const handlePreviewWorkflowTemplate = useCallback(
+    (templateId: WorkflowTemplateIdDto) => {
+      if (!activeProjectId) return
+      const definition = instantiateWorkflowTemplate({
+        projectId: activeProjectId,
+        templateId,
+        agents: workflowAgentInspector.agents,
+      })
+      setSelectedWorkflowDefinition(definition)
+      setSelectedWorkflowRun(null)
+      setSelectedWorkflowIsDraft(false)
+      setSelectedWorkflowTemplatePreviewId(templateId)
+      setAgentAuthoringSession(null)
+      workflowAgentInspector.selectAgent(null)
       setActiveView('phases')
     },
     [
@@ -2900,6 +2933,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         }
         setSelectedWorkflowDefinition(response.definition)
         setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
         await refreshWorkflowDefinitions()
         return response.definition
       } finally {
@@ -2914,6 +2948,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
     setSelectedWorkflowDefinition(null)
     setSelectedWorkflowRun(null)
     setSelectedWorkflowIsDraft(false)
+    setSelectedWorkflowTemplatePreviewId(null)
   }, [selectedWorkflowIsDraft])
 
   const handleStartWorkflowDefinitionRun = useCallback(
@@ -2931,6 +2966,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSelectedWorkflowRun(response.run)
         setSelectedWorkflowDefinition(response.run.definitionSnapshot)
         setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
         await refreshWorkflowRuns()
         return response.run
       } finally {
@@ -2973,6 +3009,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSelectedWorkflowRun(response.run)
         setSelectedWorkflowDefinition(response.run.definitionSnapshot)
         setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
         await refreshWorkflowRuns()
         return response.run
       } finally {
@@ -2996,6 +3033,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSelectedWorkflowRun(response.run)
         setSelectedWorkflowDefinition(response.run.definitionSnapshot)
         setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
         await refreshWorkflowRuns()
         return response.run
       } finally {
@@ -3019,6 +3057,8 @@ export function XeroApp({ adapter }: XeroAppProps) {
         })
         setSelectedWorkflowRun(response.run)
         setSelectedWorkflowDefinition(response.run.definitionSnapshot)
+        setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
         await refreshWorkflowRuns()
         return response.run
       } finally {
@@ -3072,6 +3112,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
         setSelectedWorkflowRun(response.run)
         setSelectedWorkflowDefinition(response.run.definitionSnapshot)
         setSelectedWorkflowIsDraft(false)
+        setSelectedWorkflowTemplatePreviewId(null)
         await refreshWorkflowRuns()
         return response.run
       } finally {
@@ -3087,6 +3128,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
       setSelectedWorkflowDefinition(null)
       setSelectedWorkflowRun(null)
       setSelectedWorkflowIsDraft(false)
+      setSelectedWorkflowTemplatePreviewId(null)
       setActiveView('phases')
     },
     [setActiveView, workflowAgentInspector.selectAgent],
@@ -3665,6 +3707,7 @@ export function XeroApp({ adapter }: XeroAppProps) {
                 selectedWorkflowDefinition={selectedWorkflowDefinition}
                 selectedWorkflowRun={selectedWorkflowRun}
                 selectedWorkflowIsDraft={selectedWorkflowIsDraft}
+                selectedWorkflowIsTemplatePreview={selectedWorkflowTemplatePreviewId !== null}
                 workflowActionRunning={workflowActionRunning}
                 onCreateWorkflow={handleCreateWorkflow}
                 onCreateWorkflowWithAgentCreate={handleStartWorkflowAgentCreate}
@@ -4083,9 +4126,15 @@ export function XeroApp({ adapter }: XeroAppProps) {
                   workflowDefinitionsStatus === 'loading' || workflowRunsStatus === 'loading'
                 }
                 workflowsError={workflowDefinitionsError}
-                selectedWorkflowId={selectedWorkflowIsDraft ? null : selectedWorkflowDefinition?.id ?? null}
+                selectedWorkflowId={
+                  selectedWorkflowIsDraft || selectedWorkflowTemplatePreviewId
+                    ? null
+                    : selectedWorkflowDefinition?.id ?? null
+                }
+                selectedWorkflowTemplateId={selectedWorkflowTemplatePreviewId}
                 selectedWorkflowRunId={selectedWorkflowRun?.id ?? null}
                 onSelectWorkflow={handleSelectWorkflowDefinition}
+                onSelectWorkflowTemplate={handlePreviewWorkflowTemplate}
                 onSelectWorkflowRun={handleSelectWorkflowRun}
                 onCreateWorkflow={handleCreateWorkflow}
                 onCreateWorkflowWithAgentCreate={handleStartWorkflowAgentCreate}

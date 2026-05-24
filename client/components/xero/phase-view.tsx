@@ -70,6 +70,7 @@ interface PhaseViewProps {
   selectedWorkflowDefinition?: WorkflowDefinitionDto | null
   selectedWorkflowRun?: WorkflowRunDto | null
   selectedWorkflowIsDraft?: boolean
+  selectedWorkflowIsTemplatePreview?: boolean
   workflowActionRunning?: boolean
   onCreateWorkflow?: () => void
   onCreateWorkflowWithAgentCreate?: () => void
@@ -154,6 +155,7 @@ export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
     selectedWorkflowDefinition = null,
     selectedWorkflowRun = null,
     selectedWorkflowIsDraft = false,
+    selectedWorkflowIsTemplatePreview = false,
     workflowActionRunning = false,
     onCreateWorkflow,
     onCreateWorkflowWithAgentCreate,
@@ -276,7 +278,11 @@ export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
           }}
         >
           {showWorkflowDefinition && workflowHeaderDefinition ? (
-            <WorkflowTopLeftHeader status={workflowCanvasStatus} definition={workflowHeaderDefinition} />
+            <WorkflowTopLeftHeader
+              status={workflowCanvasStatus}
+              definition={workflowHeaderDefinition}
+              templatePreview={selectedWorkflowIsTemplatePreview}
+            />
           ) : (
             <>
               <Bot
@@ -354,10 +360,10 @@ export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
           isCreating={selectedWorkflowIsDraft}
           saving={workflowActionRunning}
           runningAction={workflowActionRunning}
-          onSaveDefinition={onSaveWorkflowDefinition}
+          onSaveDefinition={selectedWorkflowIsTemplatePreview ? undefined : onSaveWorkflowDefinition}
           onCancelEditing={onCancelWorkflowEditing}
           onCanvasStatusChange={handleWorkflowCanvasStatusChange}
-          onStartRun={onStartWorkflowDefinitionRun}
+          onStartRun={selectedWorkflowIsTemplatePreview ? undefined : onStartWorkflowDefinitionRun}
           onCancelRun={onCancelWorkflowRun}
           onRetryNodeRun={onRetryWorkflowNodeRun}
           onSkipBranch={onSkipWorkflowBranch}
@@ -462,6 +468,7 @@ export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
           {showWorkflowDefinition &&
           workflowCanvasStatus &&
           !workflowCanvasStatus.editing &&
+          !selectedWorkflowIsTemplatePreview &&
           onSaveWorkflowDefinition ? (
             <Button
               type="button"
@@ -481,6 +488,7 @@ export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
           {showWorkflowDefinition &&
           workflowCanvasStatus &&
           !workflowCanvasStatus.editing &&
+          !selectedWorkflowIsTemplatePreview &&
           onStartWorkflowDefinitionRun ? (
             <Button
               type="button"
@@ -605,9 +613,11 @@ export const PhaseView = memo(function PhaseView(props: PhaseViewProps) {
 function WorkflowTopLeftHeader({
   status,
   definition,
+  templatePreview,
 }: {
   status: WorkflowDefinitionCanvasStatus | null
   definition: WorkflowDefinitionDto
+  templatePreview: boolean
 }) {
   const run = status?.run ?? null
   const editing = status?.editing ?? false
@@ -636,6 +646,14 @@ function WorkflowTopLeftHeader({
       >
         v{definition.version}
       </Badge>
+      {templatePreview ? (
+        <Badge
+          variant="secondary"
+          className="h-[18px] shrink-0 rounded px-1.5 py-0 text-[10px] font-semibold text-muted-foreground"
+        >
+          template
+        </Badge>
+      ) : null}
       {run ? (
         <Badge
           variant="outline"

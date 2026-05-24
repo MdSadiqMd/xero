@@ -396,12 +396,7 @@ describe('validateWorkflowDefinition', () => {
   })
 
   it('exposes only the current starter workflow templates', () => {
-    expect(WORKFLOW_TEMPLATE_LIBRARY.map((template) => template.id)).toEqual([
-      'continuous_delivery',
-      'gsd_auto',
-      'release_train',
-      'bug_triage_fix_loop',
-    ])
+    expect(WORKFLOW_TEMPLATE_LIBRARY.map((template) => template.id)).toEqual(['gsd_auto'])
   })
 
   it('spaces starter workflow templates into readable lanes', () => {
@@ -432,7 +427,7 @@ describe('validateWorkflowDefinition', () => {
     }
   })
 
-  it('models GSD Auto as top-level lifecycle nodes backed by reusable subgraphs', () => {
+  it('models GSD Auto as a visible milestone and phase delivery loop', () => {
     const workflow = instantiateWorkflowTemplate({
       projectId: 'project-1',
       templateId: 'gsd_auto',
@@ -440,24 +435,50 @@ describe('validateWorkflowDefinition', () => {
     const report = validateWorkflowDefinition(workflow)
 
     expect(report, JSON.stringify(report.diagnostics)).toEqual({ status: 'valid', diagnostics: [] })
-    expect(workflow.nodes).toHaveLength(13)
-    expect(workflow.nodes.filter((node) => node.type === 'subgraph').map((node) => node.id)).toEqual([
-      'milestone_intake_flow',
-      'process_phase_flow',
-      'milestone_audit_flow',
-    ])
-    expect(workflow.subgraphs.map((subgraph) => subgraph.id)).toEqual([
-      'gsd_milestone_intake',
-      'gsd_phase_execution',
-      'gsd_milestone_audit',
-    ])
-    expect(workflow.subgraphs.find((subgraph) => subgraph.id === 'gsd_phase_execution')?.nodes.map((node) => node.type)).toEqual(
-      expect.arrayContaining(['agent', 'command', 'human_checkpoint', 'terminal']),
+    expect(workflow.startNodeId).toBe('gsd_start')
+    expect(workflow.nodes).toHaveLength(47)
+    expect(workflow.subgraphs).toEqual([])
+    expect(workflow.nodes.filter((node) => node.type === 'subgraph')).toEqual([])
+    expect(workflow.nodes.map((node) => node.id)).toEqual(
+      expect.arrayContaining([
+        'gsd_start',
+        'project_ideation',
+        'project_requirements',
+        'project_roadmap',
+        'new_milestone_intake',
+        'milestone_intake',
+        'seed_phase_1',
+        'smart_discuss',
+        'phase_plan',
+        'phase_execute',
+        'debug_phase',
+        'phase_verify',
+        'phase_review',
+        'phase_fix',
+        'write_verification_evidence',
+        'mark_phase_complete',
+        'audit_milestone',
+        'archive_milestone',
+      ]),
+    )
+    expect(workflow.edges.map((edge) => edge.id)).toEqual(
+      expect.arrayContaining([
+        'start_to_load',
+        'milestone_missing',
+        'ideation_to_requirements',
+        'new_milestone_to_requirements',
+        'requirements_to_roadmap',
+        'roadmap_to_milestone',
+        'phase_available',
+        'gap_closure_to_execute',
+        'debug_to_execute',
+        'fix_back_to_review',
+        'verification_record_to_complete',
+        'archive_to_next_milestone',
+      ]),
     )
     expect(
-      workflow.subgraphs
-        .find((subgraph) => subgraph.id === 'gsd_milestone_audit')
-        ?.nodes.some((node) => node.type === 'state_write' && node.operation.entityType === 'milestone_archive'),
+      workflow.nodes.some((node) => node.type === 'state_write' && node.operation.entityType === 'milestone_archive'),
     ).toBe(true)
     expect(workflow.edges).toEqual(
       expect.arrayContaining([
@@ -465,6 +486,10 @@ describe('validateWorkflowDefinition', () => {
           id: 'partial_run_done',
           toNodeId: 'partial_success',
           condition: expect.objectContaining({ kind: 'all' }),
+        }),
+        expect.objectContaining({
+          id: 'next_milestone_start',
+          toNodeId: 'new_milestone_intake',
         }),
       ]),
     )
