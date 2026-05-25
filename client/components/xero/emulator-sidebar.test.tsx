@@ -90,6 +90,17 @@ describe("EmulatorSidebar", () => {
     expect(screen.getByText("iOS Simulator")).toBeVisible()
   })
 
+  it("stops showing Loading once an empty iOS device refresh finishes", async () => {
+    render(<EmulatorSidebar open openImmediately platform="ios" />)
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Refresh devices" })).toBeVisible(),
+    )
+
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument()
+    expect(screen.getByText("No iOS simulators found")).toBeVisible()
+  })
+
   it("resizes with ArrowLeft on the resize handle", () => {
     const { container } = render(<EmulatorSidebar open platform="android" />)
     const separator = container.querySelector("[role='separator']") as HTMLElement

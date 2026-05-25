@@ -71,6 +71,8 @@ export interface UseEmulatorSession {
   frame: EmulatorFrameInfo | null
   currentDevice: DeviceDescriptor | null
   devices: DeviceDescriptor[]
+  isLoadingDevices: boolean
+  hasLoadedDevices: boolean
   isStarting: boolean
   isStopping: boolean
   /** Session-level error (boot failure, broken stream) — the canvas
@@ -100,14 +102,6 @@ interface Options {
   active: boolean
 }
 
-function asTauri<T>(command: string, args?: Record<string, unknown>): Promise<T | null> {
-  if (!isTauri()) return Promise.resolve(null)
-  return invoke<T>(command, args).catch((err) => {
-    console.error(`[emulator] ${command} failed:`, err)
-    return null
-  })
-}
-
 function errorMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {
     const message = (error as { message?: unknown }).message
@@ -121,6 +115,8 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
   const [status, setStatus] = useState<EmulatorStatus>({ phase: "idle" })
   const [frame, setFrame] = useState<EmulatorFrameInfo | null>(null)
   const [devices, setDevices] = useState<DeviceDescriptor[]>([])
+  const [isLoadingDevices, setIsLoadingDevices] = useState(false)
+  const [hasLoadedDevices, setHasLoadedDevices] = useState(false)
   const [currentDevice, setCurrentDevice] = useState<DeviceDescriptor | null>(null)
   const [isStarting, setIsStarting] = useState(false)
   const [isStopping, setIsStopping] = useState(false)
@@ -236,13 +232,26 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
 
   const refreshDevices = useCallback(async (): Promise<DeviceDescriptor[]> => {
     setError(null)
-    const list = await asTauri<DeviceDescriptor[]>("emulator_list_devices", { request: { platform: platformTag } })
-    if (!list) {
+    setIsLoadingDevices(true)
+    try {
+      if (!isTauri()) {
+        setDevices([])
+        return []
+      }
+      const list = await invoke<DeviceDescriptor[]>("emulator_list_devices", {
+        request: { platform: platformTag },
+      })
+      setDevices(list)
+      return list
+    } catch (err) {
+      console.error("[emulator] emulator_list_devices failed:", err)
+      setError(errorMessage(err))
       setDevices([])
       return []
+    } finally {
+      setHasLoadedDevices(true)
+      setIsLoadingDevices(false)
     }
-    setDevices(list)
-    return list
   }, [platformTag])
 
   useEffect(() => {
@@ -397,6 +406,8 @@ export function useEmulatorSession({ platform, active }: Options): UseEmulatorSe
     frame,
     currentDevice,
     devices,
+    isLoadingDevices,
+    hasLoadedDevices,
     isStarting,
     isStopping,
     error,

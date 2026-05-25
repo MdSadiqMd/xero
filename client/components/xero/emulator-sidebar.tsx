@@ -6,6 +6,7 @@ import {
   Apple,
   Loader2,
   Play,
+  RefreshCw,
   RotateCcw,
   Square,
   Smartphone,
@@ -432,8 +433,21 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
   }, [meta.storageKey])
 
   const Icon = platform === "ios" ? Apple : Smartphone
+  const hasNoDevices =
+    session.hasLoadedDevices && !session.isLoadingDevices && session.devices.length === 0
+  const emptyDeviceCopy =
+    platform === "ios"
+      ? {
+          headline: "No iOS simulators found",
+          detail: "Install an iOS runtime in Xcode, then refresh the simulator list.",
+        }
+      : {
+          headline: "No Android emulators found",
+          detail: "Create an Android virtual device, then refresh the emulator list.",
+        }
 
   const handleStart = useCallback(() => {
+    if (session.isLoadingDevices) return
     // Use selected device, or auto-pick first available device.
     const deviceId = selectedDeviceId ?? session.devices[0]?.id
     if (!deviceId) {
@@ -443,6 +457,10 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
     }
     void session.start(deviceId)
   }, [selectedDeviceId, session])
+
+  const handleRefreshDevices = useCallback(() => {
+    void session.refreshDevices()
+  }, [session])
 
   const handleStop = useCallback(() => {
     void session.stop()
@@ -617,18 +635,26 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
             </>
           ) : (
             <button
-              aria-label="Start device"
+              aria-label={hasNoDevices ? "Refresh devices" : "Start device"}
               className="flex h-6 items-center gap-1 rounded-md border border-border/70 bg-background/60 px-2 text-[11px] text-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:opacity-60"
-              disabled={session.isStarting}
-              onClick={handleStart}
+              disabled={session.isStarting || session.isLoadingDevices}
+              onClick={hasNoDevices ? handleRefreshDevices : handleStart}
               type="button"
             >
-              {session.isStarting ? (
+              {session.isStarting || session.isLoadingDevices ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
+              ) : hasNoDevices ? (
+                <RefreshCw className="h-3 w-3" />
               ) : (
                 <Play className="h-3 w-3" />
               )}
-              {session.devices.length === 0 ? "Loading..." : "Start"}
+              {session.isStarting
+                ? "Starting..."
+                : session.isLoadingDevices
+                  ? "Loading..."
+                  : hasNoDevices
+                    ? "Refresh"
+                    : "Start"}
             </button>
           )}
         </div>
@@ -643,6 +669,7 @@ export function EmulatorSidebar({ open, openImmediately = false, platform }: Emu
         inputError={session.inputError}
         inspector={inspector}
         isStreaming={isStreaming}
+        noDevicesCopy={hasNoDevices ? emptyDeviceCopy : null}
         onDismissInputError={session.dismissInputError}
         onInput={(payload) => void session.sendInput(payload)}
         onKeyDown={handleKeyDown}
@@ -669,6 +696,7 @@ interface ViewportProps {
   inputError: string | null
   inspector: ReturnType<typeof useInspector>
   isStreaming: boolean
+  noDevicesCopy: { headline: string; detail: string } | null
   onDismissInputError: () => void
   onInput: (input: { kind: EmulatorInputKind; x?: number; y?: number }) => void
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void
@@ -685,6 +713,7 @@ function EmulatorViewport({
   inputError,
   inspector,
   isStreaming,
+  noDevicesCopy,
   onDismissInputError,
   onInput,
   onKeyDown,
@@ -753,13 +782,12 @@ function EmulatorViewport({
     )
   }
 
-  // DEBUG: log every render to find why frames don't show
-  console.log("[viewport] isStreaming:", isStreaming, "frameSrc:", frameSrc?.slice(0, 50), "currentDevice:", !!currentDevice, "frameSeq:", frameSeq, "status:", status.phase)
-
   if (!isStreaming || frameSrc === null || !currentDevice) {
     const headline =
       status.phase === "booting" || status.phase === "connecting"
         ? `Starting ${platformLabel}…`
+        : noDevicesCopy
+          ? noDevicesCopy.headline
         : isStreaming && !currentDevice
           ? `${platformLabel} streaming`
           : isStreaming
@@ -769,7 +797,8 @@ function EmulatorViewport({
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 bg-background/40 px-6 text-center">
         <div className="text-[12px] font-medium text-foreground/85">{headline}</div>
         <div className="text-[11px] leading-relaxed text-muted-foreground">
-          {status.message ??
+          {noDevicesCopy?.detail ??
+            status.message ??
             `Pick a device above and hit Start to stream the ${platformLabel.toLowerCase()}.`}
         </div>
       </div>
